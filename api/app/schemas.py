@@ -14,6 +14,10 @@ class LabOut(BaseModel):
     name: str
     owner_id: str | None
     workspace_path: str
+    state: str = "stopped"
+    agent_id: str | None = None
+    state_updated_at: datetime | None = None
+    state_error: str | None = None
     created_at: datetime
 
     class Config:
@@ -88,7 +92,11 @@ class JobOut(BaseModel):
     user_id: str | None
     action: str
     status: str
+    agent_id: str | None = None
     log_path: str | None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    retry_count: int = 0
     created_at: datetime
 
     class Config:

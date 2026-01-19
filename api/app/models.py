@@ -29,6 +29,14 @@ class Lab(Base):
     name: Mapped[str] = mapped_column(String(200))
     owner_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     workspace_path: Mapped[str] = mapped_column(String(500), default="")
+    # Lab state: stopped, starting, running, stopping, error, unknown
+    state: Mapped[str] = mapped_column(String(50), default="stopped")
+    # Agent currently managing this lab (for multi-host support)
+    agent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("hosts.id"), nullable=True)
+    # Last state update timestamp
+    state_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Error message if state is 'error'
+    state_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -59,6 +67,42 @@ class Job(Base):
     lab_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("labs.id"), nullable=True)
     user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     action: Mapped[str] = mapped_column(String(50))
+    # Status: queued, running, completed, failed, cancelled
     status: Mapped[str] = mapped_column(String(50), default="queued")
+    # Agent executing this job
+    agent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("hosts.id"), nullable=True)
+    # Log content (stored directly instead of file path for simplicity)
     log_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Timestamps for tracking job lifecycle
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Number of retry attempts
+    retry_count: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Host(Base):
+    """Compute host running an agent that can execute labs."""
+    __tablename__ = "hosts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    address: Mapped[str] = mapped_column(String(255))  # host:port for reaching agent
+    status: Mapped[str] = mapped_column(String(50), default="offline")  # online/offline/degraded
+    capabilities: Mapped[str] = mapped_column(Text, default="{}")  # JSON: providers, features
+    version: Mapped[str] = mapped_column(String(50), default="")
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NodePlacement(Base):
+    """Tracks which host is running which node for a lab."""
+    __tablename__ = "node_placements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id"))
+    node_name: Mapped[str] = mapped_column(String(100))
+    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id"))
+    runtime_id: Mapped[str | None] = mapped_column(String(255), nullable=True)  # container/domain ID
+    status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,0 +1,189 @@
+"""Agent-Controller protocol schemas.
+
+These Pydantic models define the data structures exchanged between
+the agent and the controller via HTTP/WebSocket.
+"""
+
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class AgentStatus(str, Enum):
+    """Agent health status."""
+    ONLINE = "online"
+    DEGRADED = "degraded"
+    OFFLINE = "offline"
+
+
+class NodeStatus(str, Enum):
+    """Container/VM node status."""
+    PENDING = "pending"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    ERROR = "error"
+    UNKNOWN = "unknown"
+
+
+class JobStatus(str, Enum):
+    """Job execution status."""
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class Provider(str, Enum):
+    """Supported infrastructure providers."""
+    CONTAINERLAB = "containerlab"
+    LIBVIRT = "libvirt"
+
+
+# --- Agent Registration ---
+
+class AgentCapabilities(BaseModel):
+    """What the agent can do."""
+    providers: list[Provider] = Field(default_factory=list)
+    max_concurrent_jobs: int = 4
+    features: list[str] = Field(default_factory=list)  # e.g., ["vxlan", "console"]
+
+
+class AgentInfo(BaseModel):
+    """Agent identification and capabilities."""
+    agent_id: str
+    name: str
+    address: str  # host:port for controller to reach agent
+    capabilities: AgentCapabilities
+    version: str = "0.1.0"
+
+
+class RegistrationRequest(BaseModel):
+    """Agent -> Controller: Register this agent."""
+    agent: AgentInfo
+    token: str | None = None  # Optional auth token
+
+
+class RegistrationResponse(BaseModel):
+    """Controller -> Agent: Registration result."""
+    success: bool
+    message: str = ""
+    assigned_id: str | None = None  # Controller may assign/confirm ID
+
+
+# --- Heartbeat ---
+
+class HeartbeatRequest(BaseModel):
+    """Agent -> Controller: I'm still alive."""
+    agent_id: str
+    status: AgentStatus = AgentStatus.ONLINE
+    active_jobs: int = 0
+    resource_usage: dict[str, Any] = Field(default_factory=dict)  # cpu, memory, etc.
+
+
+class HeartbeatResponse(BaseModel):
+    """Controller -> Agent: Acknowledged, here's any pending work."""
+    acknowledged: bool
+    pending_jobs: list[str] = Field(default_factory=list)  # Job IDs to fetch
+
+
+# --- Job Execution ---
+
+class DeployRequest(BaseModel):
+    """Controller -> Agent: Deploy a lab topology."""
+    job_id: str
+    lab_id: str
+    topology_yaml: str
+    provider: Provider = Provider.CONTAINERLAB
+
+
+class DestroyRequest(BaseModel):
+    """Controller -> Agent: Tear down a lab."""
+    job_id: str
+    lab_id: str
+
+
+class NodeActionRequest(BaseModel):
+    """Controller -> Agent: Start/stop a specific node."""
+    job_id: str
+    lab_id: str
+    node_name: str
+    action: str  # "start" or "stop"
+
+
+class JobResult(BaseModel):
+    """Agent -> Controller: Job completed."""
+    job_id: str
+    status: JobStatus
+    exit_code: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    error_message: str | None = None
+    completed_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# --- Status Queries ---
+
+class LabStatusRequest(BaseModel):
+    """Controller -> Agent: Get status of a lab."""
+    lab_id: str
+
+
+class NodeInfo(BaseModel):
+    """Status of a single node."""
+    name: str
+    status: NodeStatus
+    container_id: str | None = None
+    image: str | None = None
+    ip_addresses: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class LabStatusResponse(BaseModel):
+    """Agent -> Controller: Lab status."""
+    lab_id: str
+    nodes: list[NodeInfo] = Field(default_factory=list)
+    error: str | None = None
+
+
+# --- Console ---
+
+class ConsoleRequest(BaseModel):
+    """Request to open console to a node."""
+    lab_id: str
+    node_name: str
+    shell: str = "/bin/sh"
+
+
+class ConsoleInfo(BaseModel):
+    """Info needed to connect to console WebSocket."""
+    websocket_path: str
+    session_id: str
+
+
+# --- Reconciliation ---
+
+class DiscoveredLab(BaseModel):
+    """A lab discovered via container inspection."""
+    lab_id: str
+    nodes: list[NodeInfo] = Field(default_factory=list)
+
+
+class DiscoverLabsResponse(BaseModel):
+    """Response from lab discovery endpoint."""
+    labs: list[DiscoveredLab] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CleanupOrphansRequest(BaseModel):
+    """Request to clean up orphan containers."""
+    valid_lab_ids: list[str] = Field(default_factory=list)
+
+
+class CleanupOrphansResponse(BaseModel):
+    """Response from orphan cleanup endpoint."""
+    removed_containers: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)

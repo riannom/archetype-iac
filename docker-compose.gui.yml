@@ -87,6 +87,30 @@ services:
     ports:
       - "16379:6379"
 
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    network_mode: host
+    privileged: true
+    depends_on:
+      - api
+    environment:
+      - AURA_AGENT_AGENT_NAME=local-agent
+      - AURA_AGENT_AGENT_PORT=8001
+      - AURA_AGENT_CONTROLLER_URL=http://localhost:8000
+      - AURA_AGENT_ENABLE_CONTAINERLAB=true
+      - AURA_AGENT_WORKSPACE_PATH=/var/lib/aura-agent
+    volumes:
+      - agent_workspaces:/var/lib/aura-agent
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 volumes:
   netlab_workspaces:
+  agent_workspaces:
   pg_data:
