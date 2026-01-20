@@ -82,14 +82,19 @@ def register_agent(
     request: RegistrationRequest,
     database: Session = Depends(db.get_db),
 ) -> RegistrationResponse:
-    """Register a new agent or update existing registration."""
+    """Register a new agent or update existing registration.
+
+    Prevents duplicate agents by checking name and address.
+    If an agent with the same name or address already exists,
+    updates that record instead of creating a new one.
+    """
     agent = request.agent
 
-    # Check if agent already exists
+    # First check if agent already exists by ID
     existing = database.get(models.Host, agent.agent_id)
 
     if existing:
-        # Update existing registration
+        # Update existing registration (same agent reconnecting)
         existing.name = agent.name
         existing.address = agent.address
         existing.status = "online"
@@ -104,7 +109,55 @@ def register_agent(
             assigned_id=agent.agent_id,
         )
 
-    # Create new agent
+    # Check for existing agent with same name or address (agent restarted with new ID)
+    existing_by_name = (
+        database.query(models.Host)
+        .filter(models.Host.name == agent.name)
+        .first()
+    )
+    existing_by_address = (
+        database.query(models.Host)
+        .filter(models.Host.address == agent.address)
+        .first()
+    )
+
+    # Prefer matching by name, fall back to address
+    existing_duplicate = existing_by_name or existing_by_address
+
+    if existing_duplicate:
+        # Delete old record and any other duplicates with same name/address
+        duplicates = (
+            database.query(models.Host)
+            .filter(
+                (models.Host.name == agent.name) |
+                (models.Host.address == agent.address)
+            )
+            .all()
+        )
+        for dup in duplicates:
+            database.delete(dup)
+        database.flush()
+
+        # Create new record with the new agent_id
+        host = models.Host(
+            id=agent.agent_id,
+            name=agent.name,
+            address=agent.address,
+            status="online",
+            capabilities=json.dumps(agent.capabilities.model_dump()),
+            version=agent.version,
+            last_heartbeat=datetime.now(timezone.utc),
+        )
+        database.add(host)
+        database.commit()
+
+        return RegistrationResponse(
+            success=True,
+            message="Agent re-registered (replaced previous registration)",
+            assigned_id=agent.agent_id,
+        )
+
+    # Create new agent (first time registration)
     host = models.Host(
         id=agent.agent_id,
         name=agent.name,
