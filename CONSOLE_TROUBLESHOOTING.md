@@ -125,3 +125,16 @@ socket.onmessage = (event) => {
 ## Notes
 - Multi-host placement must match agent names (`host-b`, `local-agent`).
 - Console routing uses topology parsing; falls back to lab agent if not found.
+
+## Controller Checks (2026-01-20)
+- UI served bundle includes `binaryType="arraybuffer"` and `TextDecoder` handling.
+- Nginx `/api/` proxy works: `curl http://127.0.0.1:8080/api/health` returns OK.
+- Local WebSocket tests show binary frames delivered through both API and web proxy:
+  - `ws://127.0.0.1:8000/labs/<lab>/nodes/r1/console`
+  - `ws://127.0.0.1:8080/api/labs/<lab>/nodes/r1/console`
+- WebSocket stays open when idle; backend does not auto-disconnect during a 5s wait.
+
+## Controller Fix Applied (2026-01-20)
+- Updated `/opt/aura-controller/web/src/pages/LabDetailPage.tsx` to write `Uint8Array` directly to xterm for ArrayBuffer/Blob frames while still capturing decoded text for `consoleOutput`.
+- Rebuilt and restarted web container: `docker compose -f /opt/aura-controller/docker-compose.gui.yml up -d --build web`.
+- New bundle is `http://127.0.0.1:8080/assets/index-u7EUbNhD.js` and includes `Uint8Array` handling in console message path.
