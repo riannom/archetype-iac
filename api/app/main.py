@@ -69,6 +69,30 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Aura API controller")
 
+    # Create database tables
+    logger.info("Creating database tables")
+    models.Base.metadata.create_all(bind=db.engine)
+
+    # Seed admin user if configured
+    if settings.admin_email and settings.admin_password:
+        session = SessionLocal()
+        try:
+            existing = session.query(models.User).filter(models.User.email == settings.admin_email).first()
+            if not existing:
+                if len(settings.admin_password.encode("utf-8")) > 72:
+                    logger.warning("Skipping admin seed: ADMIN_PASSWORD must be 72 bytes or fewer")
+                else:
+                    admin = models.User(
+                        email=settings.admin_email,
+                        hashed_password=hash_password(settings.admin_password),
+                        is_admin=True,
+                    )
+                    session.add(admin)
+                    session.commit()
+                    logger.info(f"Created admin user: {settings.admin_email}")
+        finally:
+            session.close()
+
     # Start agent health monitor background task
     _agent_monitor_task = asyncio.create_task(agent_health_monitor())
 
@@ -98,28 +122,6 @@ app.add_middleware(
 app.add_middleware(CurrentUserMiddleware)
 app.include_router(auth.router)
 app.include_router(agents.router)
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    models.Base.metadata.create_all(bind=db.engine)
-    if settings.admin_email and settings.admin_password:
-        session = SessionLocal()
-        try:
-            existing = session.query(models.User).filter(models.User.email == settings.admin_email).first()
-            if not existing:
-                if len(settings.admin_password.encode("utf-8")) > 72:
-                    print("Skipping admin seed: ADMIN_PASSWORD must be 72 bytes or fewer")
-                    return
-                admin = models.User(
-                    email=settings.admin_email,
-                    hashed_password=hash_password(settings.admin_password),
-                    is_admin=True,
-                )
-                session.add(admin)
-                session.commit()
-        finally:
-            session.close()
 
 
 @app.get("/health")
