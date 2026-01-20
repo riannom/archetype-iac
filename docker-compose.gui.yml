@@ -99,6 +99,7 @@ services:
       context: .
       dockerfile: Dockerfile.agent
     network_mode: host
+    pid: host  # Required for overlay networking to access container namespaces
     privileged: true
     depends_on:
       - api
@@ -108,6 +109,7 @@ services:
       - AURA_AGENT_CONTROLLER_URL=http://localhost:8000
       - AURA_AGENT_LOCAL_IP=${AURA_AGENT_LOCAL_IP:-}
       - AURA_AGENT_ENABLE_CONTAINERLAB=true
+      - AURA_AGENT_ENABLE_VXLAN=true
       - AURA_AGENT_WORKSPACE_PATH=/var/lib/aura-agent
     volumes:
       - agent_workspaces:/var/lib/aura-agent
