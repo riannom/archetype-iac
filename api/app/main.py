@@ -29,7 +29,7 @@ from app import agent_client
 from app.agent_client import AgentError, AgentUnavailableError, AgentJobError
 from app.storage import ensure_topology_file, lab_workspace, topology_path
 from app.image_store import qcow2_path, ensure_image_store, load_manifest, save_manifest, detect_device_from_filename
-from app.topology import graph_to_yaml, yaml_to_graph
+from app.topology import graph_to_yaml, yaml_to_graph, analyze_topology, split_topology_by_host
 
 
 logger = logging.getLogger(__name__)
@@ -515,6 +515,358 @@ async def run_agent_job(
         session.close()
 
 
+async def run_multihost_deploy(
+    job_id: str,
+    lab_id: str,
+    topology_yaml: str,
+    required_provider: str = "containerlab",
+):
+    """Deploy a lab across multiple hosts.
+
+    This function:
+    1. Parses the topology to find host assignments
+    2. Splits the topology by host
+    3. Deploys sub-topologies to each agent in parallel
+    4. Sets up VXLAN overlay links for cross-host connections
+
+    Args:
+        job_id: The job ID
+        lab_id: The lab ID
+        topology_yaml: Full topology YAML
+        required_provider: Provider required for the job
+    """
+    import yaml as pyyaml
+
+    session = SessionLocal()
+    try:
+        job = session.get(models.Job, job_id)
+        if not job:
+            logger.error(f"Job {job_id} not found in database")
+            return
+
+        lab = session.get(models.Lab, lab_id)
+        if not lab:
+            logger.error(f"Lab {lab_id} not found in database")
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = f"ERROR: Lab {lab_id} not found"
+            session.commit()
+            return
+
+        # Parse topology YAML to graph
+        graph = yaml_to_graph(topology_yaml)
+
+        # Analyze for multi-host deployment
+        analysis = analyze_topology(graph)
+
+        logger.info(
+            f"Multi-host deployment for lab {lab_id}: "
+            f"{len(analysis.placements)} hosts, "
+            f"{len(analysis.cross_host_links)} cross-host links"
+        )
+
+        # Update job status
+        job.status = "running"
+        job.started_at = datetime.utcnow()
+        session.commit()
+
+        update_lab_state(session, lab_id, "starting")
+
+        # Map host names to agents
+        host_to_agent: dict[str, models.Host] = {}
+        missing_hosts = []
+
+        for host_name in analysis.placements:
+            agent = await agent_client.get_agent_by_name(
+                session, host_name, required_provider=required_provider
+            )
+            if agent:
+                host_to_agent[host_name] = agent
+            else:
+                missing_hosts.append(host_name)
+
+        if missing_hosts:
+            error_msg = f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = f"ERROR: {error_msg}"
+            update_lab_state(session, lab_id, "error", error=error_msg)
+            session.commit()
+            logger.error(f"Job {job_id} failed: {error_msg}")
+            return
+
+        # Split topology by host
+        host_topologies = split_topology_by_host(graph, analysis)
+
+        # Deploy to each host in parallel
+        deploy_tasks = []
+        deploy_results: dict[str, dict] = {}
+        log_parts = []
+
+        for host_name, sub_graph in host_topologies.items():
+            agent = host_to_agent[host_name]
+            sub_yaml = graph_to_yaml(sub_graph)
+
+            logger.info(
+                f"Deploying to host {host_name} (agent {agent.id}): "
+                f"{len(sub_graph.nodes)} nodes"
+            )
+            log_parts.append(f"=== Host: {host_name} ({agent.id}) ===")
+            log_parts.append(f"Nodes: {', '.join(n.name for n in sub_graph.nodes)}")
+
+            deploy_tasks.append(
+                agent_client.deploy_to_agent(agent, job_id, lab_id, sub_yaml)
+            )
+
+        # Wait for all deployments
+        results = await asyncio.gather(*deploy_tasks, return_exceptions=True)
+
+        deploy_success = True
+        for i, (host_name, result) in enumerate(zip(host_topologies.keys(), results)):
+            if isinstance(result, Exception):
+                log_parts.append(f"\nDeploy to {host_name} FAILED: {result}")
+                deploy_success = False
+            else:
+                deploy_results[host_name] = result
+                status = result.get("status", "unknown")
+                log_parts.append(f"\nDeploy to {host_name}: {status}")
+                if result.get("stdout"):
+                    log_parts.append(f"STDOUT:\n{result['stdout']}")
+                if result.get("stderr"):
+                    log_parts.append(f"STDERR:\n{result['stderr']}")
+                if status != "completed":
+                    deploy_success = False
+
+        if not deploy_success:
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = "\n".join(log_parts)
+            update_lab_state(session, lab_id, "error", error="Deployment failed on one or more hosts")
+            session.commit()
+            logger.error(f"Job {job_id} failed: deployment error on one or more hosts")
+            return
+
+        # Set up cross-host links via VXLAN overlay
+        if analysis.cross_host_links:
+            log_parts.append("\n=== Cross-Host Links ===")
+            logger.info(f"Setting up {len(analysis.cross_host_links)} cross-host links")
+
+            for chl in analysis.cross_host_links:
+                agent_a = host_to_agent.get(chl.host_a)
+                agent_b = host_to_agent.get(chl.host_b)
+
+                if not agent_a or not agent_b:
+                    log_parts.append(
+                        f"SKIP {chl.link_id}: missing agent for {chl.host_a} or {chl.host_b}"
+                    )
+                    continue
+
+                # Get container names from containerlab naming convention
+                # Containerlab names containers as: clab-{lab_id}-{node_name}
+                import re
+                safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
+                container_a = f"clab-{safe_lab_id}-{chl.node_a}"
+                container_b = f"clab-{safe_lab_id}-{chl.node_b}"
+
+                result = await agent_client.setup_cross_host_link(
+                    database=session,
+                    lab_id=lab_id,
+                    link_id=chl.link_id,
+                    agent_a=agent_a,
+                    agent_b=agent_b,
+                    node_a=container_a,
+                    interface_a=chl.interface_a,
+                    node_b=container_b,
+                    interface_b=chl.interface_b,
+                )
+
+                if result.get("success"):
+                    log_parts.append(
+                        f"Link {chl.link_id}: OK (VNI {result.get('vni')})"
+                    )
+                else:
+                    log_parts.append(
+                        f"Link {chl.link_id}: FAILED - {result.get('error')}"
+                    )
+                    # Don't fail the whole job for overlay issues - containers are running
+
+        # Mark job as completed
+        job.status = "completed"
+        job.completed_at = datetime.utcnow()
+        job.log_path = "\n".join(log_parts)
+
+        # Update lab state - use first agent as primary
+        first_agent = list(host_to_agent.values())[0] if host_to_agent else None
+        update_lab_state(
+            session, lab_id, "running",
+            agent_id=first_agent.id if first_agent else None
+        )
+        session.commit()
+
+        logger.info(f"Job {job_id} completed: multi-host deployment successful")
+
+    except Exception as e:
+        logger.exception(f"Job {job_id} failed with unexpected error: {e}")
+        try:
+            job = session.get(models.Job, job_id)
+            if job:
+                job.status = "failed"
+                job.completed_at = datetime.utcnow()
+                job.log_path = f"ERROR: Unexpected error: {e}"
+                update_lab_state(session, lab_id, "error", error=str(e))
+                session.commit()
+        except Exception:
+            pass
+    finally:
+        session.close()
+
+
+async def run_multihost_destroy(
+    job_id: str,
+    lab_id: str,
+    topology_yaml: str,
+    required_provider: str = "containerlab",
+):
+    """Destroy a multi-host lab.
+
+    This function:
+    1. Parses the topology to find host assignments
+    2. Cleans up overlay networks on each agent
+    3. Destroys containers on each agent
+
+    Args:
+        job_id: The job ID
+        lab_id: The lab ID
+        topology_yaml: Full topology YAML (to identify hosts)
+        required_provider: Provider required for the job
+    """
+    session = SessionLocal()
+    try:
+        job = session.get(models.Job, job_id)
+        if not job:
+            logger.error(f"Job {job_id} not found in database")
+            return
+
+        lab = session.get(models.Lab, lab_id)
+        if not lab:
+            logger.error(f"Lab {lab_id} not found in database")
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = f"ERROR: Lab {lab_id} not found"
+            session.commit()
+            return
+
+        # Parse topology YAML to find hosts
+        graph = yaml_to_graph(topology_yaml)
+        analysis = analyze_topology(graph)
+
+        logger.info(
+            f"Multi-host destroy for lab {lab_id}: "
+            f"{len(analysis.placements)} hosts"
+        )
+
+        # Update job status
+        job.status = "running"
+        job.started_at = datetime.utcnow()
+        session.commit()
+
+        update_lab_state(session, lab_id, "stopping")
+
+        # Map host names to agents
+        host_to_agent: dict[str, models.Host] = {}
+        log_parts = []
+
+        for host_name in analysis.placements:
+            agent = await agent_client.get_agent_by_name(
+                session, host_name, required_provider=required_provider
+            )
+            if agent:
+                host_to_agent[host_name] = agent
+            else:
+                log_parts.append(f"WARNING: Agent '{host_name}' not found, skipping")
+
+        if not host_to_agent:
+            # No agents found, try single-agent destroy as fallback
+            error_msg = "No agents found for multi-host destroy"
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = f"ERROR: {error_msg}"
+            update_lab_state(session, lab_id, "error", error=error_msg)
+            session.commit()
+            logger.error(f"Job {job_id} failed: {error_msg}")
+            return
+
+        # First, clean up overlay networks on all agents
+        if analysis.cross_host_links:
+            log_parts.append("=== Cleaning up overlay networks ===")
+            for host_name, agent in host_to_agent.items():
+                result = await agent_client.cleanup_overlay_on_agent(agent, lab_id)
+                log_parts.append(
+                    f"{host_name}: {result.get('tunnels_deleted', 0)} tunnels, "
+                    f"{result.get('bridges_deleted', 0)} bridges deleted"
+                )
+                if result.get("errors"):
+                    log_parts.append(f"  Errors: {result['errors']}")
+
+        # Destroy containers on each host in parallel
+        log_parts.append("\n=== Destroying containers ===")
+        destroy_tasks = []
+
+        for host_name, agent in host_to_agent.items():
+            logger.info(f"Destroying on host {host_name} (agent {agent.id})")
+            destroy_tasks.append(
+                agent_client.destroy_on_agent(agent, job_id, lab_id)
+            )
+
+        # Wait for all destroys
+        results = await asyncio.gather(*destroy_tasks, return_exceptions=True)
+
+        all_success = True
+        for host_name, result in zip(host_to_agent.keys(), results):
+            if isinstance(result, Exception):
+                log_parts.append(f"{host_name}: FAILED - {result}")
+                all_success = False
+            else:
+                status = result.get("status", "unknown")
+                log_parts.append(f"{host_name}: {status}")
+                if result.get("stdout"):
+                    log_parts.append(f"  STDOUT: {result['stdout'][:200]}")
+                if result.get("stderr"):
+                    log_parts.append(f"  STDERR: {result['stderr'][:200]}")
+                if status != "completed":
+                    all_success = False
+
+        # Update job status
+        if all_success:
+            job.status = "completed"
+            update_lab_state(session, lab_id, "stopped")
+        else:
+            job.status = "completed"  # Mark as completed even with partial failures
+            update_lab_state(session, lab_id, "stopped")
+            log_parts.append("\nWARNING: Some hosts may have had issues during destroy")
+
+        job.completed_at = datetime.utcnow()
+        job.log_path = "\n".join(log_parts)
+        session.commit()
+
+        logger.info(f"Job {job_id} completed: multi-host destroy {'successful' if all_success else 'with warnings'}")
+
+    except Exception as e:
+        logger.exception(f"Job {job_id} failed with unexpected error: {e}")
+        try:
+            job = session.get(models.Job, job_id)
+            if job:
+                job.status = "failed"
+                job.completed_at = datetime.utcnow()
+                job.log_path = f"ERROR: Unexpected error: {e}"
+                update_lab_state(session, lab_id, "error", error=str(e))
+                session.commit()
+        except Exception:
+            pass
+    finally:
+        session.close()
+
+
 @app.post("/labs/{lab_id}/up")
 async def lab_up(
     lab_id: str,
@@ -523,10 +875,46 @@ async def lab_up(
 ) -> schemas.JobOut:
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Check for healthy agent with required capability, respecting affinity
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider="containerlab")
-    if not agent:
-        raise HTTPException(status_code=503, detail="No healthy agent available with containerlab support")
+    # Get topology YAML
+    topo_path = topology_path(lab.id)
+    topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+
+    # Analyze topology for multi-host deployment
+    is_multihost = False
+    if topology_yaml:
+        try:
+            graph = yaml_to_graph(topology_yaml)
+            analysis = analyze_topology(graph)
+            is_multihost = not analysis.single_host
+            logger.info(
+                f"Lab {lab_id} topology analysis: "
+                f"single_host={analysis.single_host}, "
+                f"hosts={list(analysis.placements.keys())}, "
+                f"cross_host_links={len(analysis.cross_host_links)}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+
+    if is_multihost:
+        # Multi-host deployment: validate all required agents exist
+        missing_hosts = []
+        for host_name in analysis.placements:
+            agent = await agent_client.get_agent_by_name(
+                database, host_name, required_provider="containerlab"
+            )
+            if not agent:
+                missing_hosts.append(host_name)
+
+        if missing_hosts:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
+            )
+    else:
+        # Single-host deployment: check for any healthy agent
+        agent = await agent_client.get_agent_for_lab(database, lab, required_provider="containerlab")
+        if not agent:
+            raise HTTPException(status_code=503, detail="No healthy agent available with containerlab support")
 
     # Create job record
     job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")
@@ -534,12 +922,15 @@ async def lab_up(
     database.commit()
     database.refresh(job)
 
-    # Get topology YAML
-    topo_path = topology_path(lab.id)
-    topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
-
-    # Start background task
-    asyncio.create_task(run_agent_job(job.id, lab.id, "up", topology_yaml=topology_yaml, required_provider="containerlab"))
+    # Start background task - choose deployment method based on topology
+    if is_multihost:
+        asyncio.create_task(run_multihost_deploy(
+            job.id, lab.id, topology_yaml, required_provider="containerlab"
+        ))
+    else:
+        asyncio.create_task(run_agent_job(
+            job.id, lab.id, "up", topology_yaml=topology_yaml, required_provider="containerlab"
+        ))
 
     return schemas.JobOut.model_validate(job)
 
@@ -552,11 +943,25 @@ async def lab_down(
 ) -> schemas.JobOut:
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Check for healthy agent with required capability, respecting affinity
-    # For down, we must use the same agent that deployed the lab
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider="containerlab")
-    if not agent:
-        raise HTTPException(status_code=503, detail="No healthy agent available with containerlab support")
+    # Get topology YAML to check for multi-host
+    topo_path = topology_path(lab.id)
+    topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+
+    # Analyze topology for multi-host deployment
+    is_multihost = False
+    if topology_yaml:
+        try:
+            graph = yaml_to_graph(topology_yaml)
+            analysis = analyze_topology(graph)
+            is_multihost = not analysis.single_host
+        except Exception as e:
+            logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+
+    if not is_multihost:
+        # Single-host: check for healthy agent with required capability
+        agent = await agent_client.get_agent_for_lab(database, lab, required_provider="containerlab")
+        if not agent:
+            raise HTTPException(status_code=503, detail="No healthy agent available with containerlab support")
 
     # Create job record
     job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
@@ -564,8 +969,15 @@ async def lab_down(
     database.commit()
     database.refresh(job)
 
-    # Start background task
-    asyncio.create_task(run_agent_job(job.id, lab.id, "down", required_provider="containerlab"))
+    # Start background task - choose destroy method based on topology
+    if is_multihost:
+        asyncio.create_task(run_multihost_destroy(
+            job.id, lab.id, topology_yaml, required_provider="containerlab"
+        ))
+    else:
+        asyncio.create_task(run_agent_job(
+            job.id, lab.id, "down", required_provider="containerlab"
+        ))
 
     return schemas.JobOut.model_validate(job)
 

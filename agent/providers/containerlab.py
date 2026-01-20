@@ -65,14 +65,23 @@ class ContainerlabProvider(Provider):
 
         The 'host' field is used by Aura for multi-host placement but is not
         a valid containerlab field.
+
+        Handles both formats:
+        - GUI format: {nodes: {...}, links: [...]}
+        - Containerlab format: {topology: {nodes: {...}, links: [...]}}
         """
         try:
             topo = yaml.safe_load(topology_yaml)
             if not topo:
                 return topology_yaml
 
-            # Strip 'host' field from nodes
-            nodes = topo.get("topology", {}).get("nodes", {})
+            # Strip 'host' field from nodes - handle both YAML formats
+            # Format 1: nodes at top level (from GUI)
+            nodes = topo.get("nodes", {})
+            # Format 2: nodes under 'topology' key (containerlab native format)
+            if not nodes:
+                nodes = topo.get("topology", {}).get("nodes", {})
+
             if isinstance(nodes, dict):
                 for node_name, node_config in nodes.items():
                     if isinstance(node_config, dict) and "host" in node_config:

@@ -420,6 +420,45 @@ async def get_all_agents(database: Session) -> list[models.Host]:
     return database.query(models.Host).all()
 
 
+async def get_agent_by_name(
+    database: Session,
+    name: str,
+    required_provider: str | None = None,
+) -> models.Host | None:
+    """Get a healthy agent by name.
+
+    Args:
+        database: Database session
+        name: Agent name to look for
+        required_provider: Optional provider the agent must support
+
+    Returns:
+        Agent if found and healthy, None otherwise
+    """
+    cutoff = datetime.utcnow() - timedelta(seconds=60)
+
+    agent = (
+        database.query(models.Host)
+        .filter(
+            models.Host.name == name,
+            models.Host.status == "online",
+            models.Host.last_heartbeat >= cutoff,
+        )
+        .first()
+    )
+
+    if not agent:
+        logger.warning(f"Agent '{name}' not found or not healthy")
+        return None
+
+    # Check provider capability if required
+    if required_provider and required_provider not in get_agent_providers(agent):
+        logger.warning(f"Agent '{name}' does not support provider '{required_provider}'")
+        return None
+
+    return agent
+
+
 async def update_stale_agents(database: Session, timeout_seconds: int = 90) -> list[str]:
     """Mark agents as offline if their heartbeat is stale.
 

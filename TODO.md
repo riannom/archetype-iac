@@ -10,63 +10,66 @@
 - [x] Topology parsing strips `host` field for containerlab compatibility
 - [x] JWT authentication
 - [x] Database auto-creation on startup
+- [x] Multi-host deployment (nodes go to correct agents based on `host` field)
+- [x] VXLAN overlay networking between hosts
 
 ### Not Working / Incomplete
-- [ ] Multi-host deployment (nodes go to correct agents based on `host` field)
-- [ ] VXLAN overlay networking between hosts
 - [ ] Agent installer interactive prompts when piped through curl
 - [ ] Stale agent cleanup (old registrations linger as "online")
 
 ---
 
-## Priority 1: Multi-Host Deployment
+## Priority 1: Multi-Host Deployment ✅ IMPLEMENTED
 
 **Goal:** When topology specifies `host: agent-name` on nodes, deploy those nodes to the specified agent.
 
-### Current Behavior
-- `host` field is stripped from topology before containerlab deploy
-- All nodes deploy to a single agent (whichever is selected first)
+### Implementation (Completed 2026-01-19)
 
-### Required Changes
+The multi-host deployment is now fully implemented:
 
-#### 1. API: Parse host assignments from topology
-**File:** `api/app/main.py` (around `lab_up` function)
+1. **API Detection** (`api/app/main.py`)
+   - `lab_up()` now analyzes topology using `analyze_topology()` from topology.py
+   - If `single_host=False`, routes to `run_multihost_deploy()`
+   - `lab_down()` similarly uses `run_multihost_destroy()` for multi-host labs
 
-```python
-# Pseudocode:
-def lab_up():
-    topology = load_topology(lab_id)
+2. **Topology Splitting** (`api/app/topology.py`)
+   - `analyze_topology()` detects host assignments and cross-host links
+   - `split_topology_by_host()` creates per-host sub-topologies
+   - Cross-host links are excluded from sub-topologies (handled by overlay)
 
-    # Group nodes by host
-    nodes_by_host = {}
-    for node_name, node_config in topology['nodes'].items():
-        host = node_config.get('host', 'default')
-        nodes_by_host.setdefault(host, []).append(node_name)
+3. **Multi-Host Deploy** (`api/app/main.py:run_multihost_deploy()`)
+   - Maps host names in topology to registered agents via `get_agent_by_name()`
+   - Deploys sub-topology to each agent in parallel
+   - Sets up VXLAN overlay links for cross-host connections
 
-    # Deploy to each host
-    for host_name, nodes in nodes_by_host.items():
-        agent = get_agent_by_name(host_name)
-        subset_topology = create_subset_topology(topology, nodes)
-        deploy_to_agent(agent, subset_topology)
+4. **VXLAN Overlay** (`agent/network/overlay.py`, `api/app/agent_client.py`)
+   - Agent has `/overlay/tunnel`, `/overlay/attach`, `/overlay/cleanup` endpoints
+   - Controller calls `setup_cross_host_link()` to create bidirectional VXLAN tunnels
+   - Containers are attached to overlay bridges for L2 connectivity
 
-    # Set up overlay links between hosts
-    setup_overlay_links(topology['links'], nodes_by_host)
+### Usage
+
+Create a topology with `host:` field on nodes:
+
+```yaml
+nodes:
+  r1:
+    image: alpine:latest
+    host: local-agent    # Deploy to agent named "local-agent"
+  r2:
+    image: alpine:latest
+    host: host-b         # Deploy to agent named "host-b"
+links:
+  - r1:
+      ifname: eth1
+    r2:
+      ifname: eth1
 ```
 
-#### 2. API: Create subset topology for each agent
-**File:** `api/app/topology.py` (new function)
-
-- Extract only the nodes assigned to a specific host
-- Include only links where both endpoints are on the same host
-- Cross-host links handled separately via overlay
-
-#### 3. Agent: Wire up VXLAN overlay for cross-host links
-**File:** `agent/network/overlay.py` (exists, needs integration)
-**File:** `agent/main.py` (add overlay setup endpoint)
-
-The overlay code exists but isn't called. Need to:
-- Add API endpoint to create VXLAN tunnel
-- Call from controller when setting up cross-host links
+The system will:
+1. Deploy r1 to local-agent, r2 to host-b
+2. Create VXLAN tunnel between agents
+3. Attach container interfaces to overlay bridge
 
 ---
 
