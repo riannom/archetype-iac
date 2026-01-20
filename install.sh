@@ -6,7 +6,7 @@ set -e
 # Usage:
 #   ./install.sh                              # Install controller + local agent
 #   ./install.sh --controller                 # Install controller only
-#   ./install.sh --agent --controller URL     # Install agent only (for remote hosts)
+#   ./install.sh --agent --controller-url URL # Install agent only (for remote hosts)
 #
 # Options:
 #   --controller           Install controller (uses Docker Compose)
@@ -16,6 +16,7 @@ set -e
 #   --ip IP                Local IP for VXLAN networking (auto-detected)
 #   --port PORT            Agent port (default: 8001)
 #   --uninstall            Remove installation
+#   --fresh                Clean reinstall (removes database/volumes)
 
 INSTALL_DIR="/opt/aura-controller"
 AGENT_INSTALL_DIR="/opt/aura-agent"
@@ -42,6 +43,7 @@ CONTROLLER_URL=""
 LOCAL_IP=""
 AGENT_PORT="8001"
 UNINSTALL=false
+FRESH_INSTALL=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -74,6 +76,10 @@ while [[ $# -gt 0 ]]; do
             UNINSTALL=true
             shift
             ;;
+        --fresh)
+            FRESH_INSTALL=true
+            shift
+            ;;
         --help|-h)
             echo "Aura Infrastructure-as-Code Installer"
             echo ""
@@ -89,7 +95,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --controller-url URL Controller URL for remote agents"
             echo "  --ip IP              Local IP for VXLAN (auto-detected)"
             echo "  --port PORT          Agent port (default: 8001)"
-            echo "  --uninstall          Remove installation"
+            echo "  --uninstall          Remove installation completely"
+            echo "  --fresh              Clean reinstall (removes database/volumes)"
             exit 0
             ;;
         *)
@@ -105,15 +112,32 @@ if [ "$INSTALL_CONTROLLER" = false ] && [ "$INSTALL_AGENT" = false ]; then
     INSTALL_AGENT=true
 fi
 
+# Clean up overlay network interfaces
+cleanup_overlay() {
+    log_info "Cleaning up overlay network interfaces..."
+    # Remove any aura bridges and vxlan interfaces
+    for br in $(ip link show 2>/dev/null | grep -oP 'aura-br-\d+' || true); do
+        ip link set "$br" down 2>/dev/null || true
+        ip link delete "$br" 2>/dev/null || true
+    done
+    for vx in $(ip link show 2>/dev/null | grep -oP 'vxlan\d+' || true); do
+        ip link delete "$vx" 2>/dev/null || true
+    done
+    # Clean up any orphaned veth pairs from overlay
+    for veth in $(ip link show 2>/dev/null | grep -oP 'v\d+[a-f0-9]+h' || true); do
+        ip link delete "$veth" 2>/dev/null || true
+    done
+}
+
 # Uninstall
 if [ "$UNINSTALL" = true ]; then
     log_section "Uninstalling Aura"
 
     if [ -d "$INSTALL_DIR" ]; then
         log_info "Stopping controller services..."
-        cd $INSTALL_DIR 2>/dev/null && docker compose -f docker-compose.gui.yml down 2>/dev/null || true
+        cd $INSTALL_DIR 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null || true
         rm -rf $INSTALL_DIR
-        log_info "Controller removed"
+        log_info "Controller removed (including database volumes)"
     fi
 
     if systemctl is-active --quiet aura-agent 2>/dev/null; then
@@ -129,6 +153,14 @@ if [ "$UNINSTALL" = true ]; then
         log_info "Agent removed"
     fi
 
+    # Clean up agent workspace
+    if [ -d "/var/lib/aura-agent" ]; then
+        rm -rf /var/lib/aura-agent
+        log_info "Agent workspace removed"
+    fi
+
+    cleanup_overlay
+
     log_info "Uninstall complete"
     exit 0
 fi
@@ -137,6 +169,30 @@ fi
 if [ "$EUID" -ne 0 ]; then
     log_error "Please run as root (sudo)"
     exit 1
+fi
+
+# Fresh install - remove existing and start clean
+if [ "$FRESH_INSTALL" = true ]; then
+    log_section "Fresh Install Requested"
+
+    if [ -d "$INSTALL_DIR" ]; then
+        log_info "Removing existing controller (including database)..."
+        cd $INSTALL_DIR 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null || true
+        rm -rf $INSTALL_DIR
+    fi
+
+    if systemctl is-active --quiet aura-agent 2>/dev/null; then
+        log_info "Stopping existing agent..."
+        systemctl stop aura-agent
+        systemctl disable aura-agent 2>/dev/null || true
+    fi
+
+    if [ -d "$AGENT_INSTALL_DIR" ]; then
+        rm -rf $AGENT_INSTALL_DIR
+    fi
+
+    cleanup_overlay
+    log_info "Cleaned up previous installation"
 fi
 
 # Detect OS
@@ -223,10 +279,10 @@ install_base_deps() {
     case $OS in
         ubuntu|debian)
             apt-get update -qq
-            apt-get install -y -qq git curl iproute2 jq
+            apt-get install -y -qq git curl iproute2 jq bridge-utils
             ;;
         centos|rhel|rocky|almalinux|fedora)
-            dnf install -y git curl iproute jq
+            dnf install -y git curl iproute jq bridge-utils
             ;;
     esac
 }
@@ -306,20 +362,32 @@ EOF
     fi
 
     # Start services
-    log_info "Building and starting controller services (this may take a few minutes on first run)..."
+    log_info "Building and starting controller services..."
+    log_info "(First run may take several minutes to build containers)"
     docker compose -f docker-compose.gui.yml up -d --build
 
     # Wait for API
     log_info "Waiting for API to be ready..."
-    for i in {1..30}; do
+    for i in {1..60}; do
         if curl -s http://localhost:8000/health > /dev/null 2>&1; then
             break
         fi
-        sleep 1
+        sleep 2
     done
 
     if curl -s http://localhost:8000/health > /dev/null 2>&1; then
         log_info "Controller is running!"
+
+        # Wait for agent to register
+        log_info "Waiting for local agent to register..."
+        for i in {1..30}; do
+            AGENTS=$(curl -s http://localhost:8000/agents 2>/dev/null | jq -r '.[].name' 2>/dev/null || echo "")
+            if echo "$AGENTS" | grep -q "local-agent"; then
+                log_info "Local agent registered successfully!"
+                break
+            fi
+            sleep 2
+        done
     else
         log_warn "Controller may still be starting. Check: docker compose -f docker-compose.gui.yml logs"
     fi
@@ -350,7 +418,7 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
     source $AGENT_INSTALL_DIR/venv/bin/activate
     log_info "Upgrading pip..."
     pip install --upgrade pip 2>&1 | tail -1
-    log_info "Installing Python dependencies (this may take a minute)..."
+    log_info "Installing Python dependencies..."
     pip install --progress-bar off -r $AGENT_INSTALL_DIR/repo/agent/requirements.txt 2>&1 | grep -E "^(Collecting|Installing|Successfully)" || true
     log_info "Python dependencies installed"
 
@@ -364,6 +432,7 @@ AURA_AGENT_ENABLE_CONTAINERLAB=true
 AURA_AGENT_ENABLE_VXLAN=true
 AURA_AGENT_WORKSPACE_PATH=/var/lib/aura-agent
 EOF
+    chmod 644 $AGENT_INSTALL_DIR/agent.env
 
     mkdir -p /var/lib/aura-agent
 
@@ -391,9 +460,22 @@ EOF
     systemctl enable aura-agent
     systemctl start aura-agent
 
-    sleep 2
+    # Wait and verify
+    log_info "Waiting for agent to start..."
+    sleep 3
     if systemctl is-active --quiet aura-agent; then
         log_info "Agent is running!"
+
+        # Verify registration with controller
+        log_info "Verifying agent registration..."
+        for i in {1..10}; do
+            RESPONSE=$(curl -s "${CONTROLLER_URL}/agents" 2>/dev/null || echo "")
+            if echo "$RESPONSE" | jq -e ".[] | select(.name == \"$AGENT_NAME\")" > /dev/null 2>&1; then
+                log_info "Agent registered with controller successfully!"
+                break
+            fi
+            sleep 2
+        done
     else
         log_error "Agent failed to start. Check: journalctl -u aura-agent -f"
     fi
@@ -433,6 +515,10 @@ if [ "$INSTALL_CONTROLLER" = true ]; then
     echo ""
     echo -e "${GREEN}Add Remote Agents:${NC}"
     echo "  curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \\"
-    echo "    sudo bash -s -- --agent --controller-url http://$LOCAL_IP:8000"
+    echo "    sudo bash -s -- --agent --controller-url http://$LOCAL_IP:8000 --name agent-name"
+    echo ""
+    echo -e "${GREEN}Reinstall Fresh (if needed):${NC}"
+    echo "  curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \\"
+    echo "    sudo bash -s -- --fresh"
     echo ""
 fi
