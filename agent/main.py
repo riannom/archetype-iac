@@ -122,9 +122,12 @@ def get_capabilities() -> AgentCapabilities:
 def get_agent_info() -> AgentInfo:
     """Build agent info for registration."""
     address = f"{settings.agent_host}:{settings.agent_port}"
-    # If host is 0.0.0.0, controller can't reach us - use name instead
+    # If host is 0.0.0.0, controller can't reach us - use local_ip or name
     if settings.agent_host == "0.0.0.0":
-        address = f"{settings.agent_name}:{settings.agent_port}"
+        if settings.local_ip:
+            address = f"{settings.local_ip}:{settings.agent_port}"
+        else:
+            address = f"{settings.agent_name}:{settings.agent_port}"
 
     return AgentInfo(
         agent_id=AGENT_ID,
