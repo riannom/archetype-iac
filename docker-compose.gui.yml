@@ -23,7 +23,7 @@ services:
       - redis
     env_file: .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://netlab:netlab@postgres:5432/netlab_gui}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://netlab:netlab@postgres:5432/netlab_gui}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - NETLAB_WORKSPACE=${NETLAB_WORKSPACE:-/var/lib/netlab-gui}
       - NETLAB_PROVIDER=${NETLAB_PROVIDER:-clab}
