@@ -139,7 +139,7 @@ def get_agent_info() -> AgentInfo:
 
 async def register_with_controller() -> bool:
     """Register this agent with the controller."""
-    global _registered
+    global _registered, AGENT_ID
 
     request = RegistrationRequest(
         agent=get_agent_info(),
@@ -157,6 +157,11 @@ async def register_with_controller() -> bool:
                 result = RegistrationResponse(**response.json())
                 if result.success:
                     _registered = True
+                    # Use the assigned ID from controller (may differ if we're
+                    # re-registering an existing agent with a new generated ID)
+                    if result.assigned_id and result.assigned_id != AGENT_ID:
+                        print(f"Controller assigned existing ID: {result.assigned_id}")
+                        AGENT_ID = result.assigned_id
                     print(f"Registered with controller as {AGENT_ID}")
                     return True
                 else:

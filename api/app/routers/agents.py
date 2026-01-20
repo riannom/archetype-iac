@@ -125,36 +125,21 @@ def register_agent(
     existing_duplicate = existing_by_name or existing_by_address
 
     if existing_duplicate:
-        # Delete old record and any other duplicates with same name/address
-        duplicates = (
-            database.query(models.Host)
-            .filter(
-                (models.Host.name == agent.name) |
-                (models.Host.address == agent.address)
-            )
-            .all()
-        )
-        for dup in duplicates:
-            database.delete(dup)
-        database.flush()
-
-        # Create new record with the new agent_id
-        host = models.Host(
-            id=agent.agent_id,
-            name=agent.name,
-            address=agent.address,
-            status="online",
-            capabilities=json.dumps(agent.capabilities.model_dump()),
-            version=agent.version,
-            last_heartbeat=datetime.now(timezone.utc),
-        )
-        database.add(host)
+        # Update existing record in place to preserve foreign key references
+        # (labs and jobs may reference this agent)
+        existing_duplicate.name = agent.name
+        existing_duplicate.address = agent.address
+        existing_duplicate.status = "online"
+        existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
+        existing_duplicate.version = agent.version
+        existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
         database.commit()
 
+        # Return the existing ID so agent can use it for heartbeats
         return RegistrationResponse(
             success=True,
-            message="Agent re-registered (replaced previous registration)",
-            assigned_id=agent.agent_id,
+            message="Agent re-registered (updated existing record)",
+            assigned_id=existing_duplicate.id,
         )
 
     # Create new agent (first time registration)
