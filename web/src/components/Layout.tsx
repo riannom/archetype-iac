@@ -47,6 +47,13 @@ export function Layout() {
             </svg>
             Labs
           </NavLink>
+          <NavLink to="/studio">
+            <svg viewBox="0 0 24 24" className="nav-icon" aria-hidden="true">
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <path d="M7 9h10M7 13h6" strokeWidth="1.4" />
+            </svg>
+            Studio
+          </NavLink>
           {!token && (
             <NavLink to="/auth/login">
               <svg viewBox="0 0 24 24" className="nav-icon" aria-hidden="true">

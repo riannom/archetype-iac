@@ -1,0 +1,329 @@
+
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { Node, Link, DeviceType, Annotation, DeviceModel } from '../types';
+import { RuntimeStatus } from './RuntimeControl';
+import { useTheme } from '../StudioPage';
+
+interface CanvasProps {
+  nodes: Node[];
+  links: Link[];
+  annotations: Annotation[];
+  runtimeStates: Record<string, RuntimeStatus>;
+  deviceModels: DeviceModel[];
+  onNodeMove: (id: string, x: number, y: number) => void;
+  onAnnotationMove: (id: string, x: number, y: number) => void;
+  onConnect: (sourceId: string, targetId: string) => void;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  onOpenConsole: (nodeId: string) => void;
+  onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
+  onDelete: (id: string) => void;
+}
+
+interface ContextMenu {
+  x: number;
+  y: number;
+  id: string;
+  type: 'node' | 'link';
+}
+
+const Canvas: React.FC<CanvasProps> = ({ 
+  nodes, links, annotations, runtimeStates, deviceModels, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete
+}) => {
+  const { theme } = useTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [draggingNode, setDraggingNode] = useState<string | null>(null);
+  const [draggingAnnotation, setDraggingAnnotation] = useState<string | null>(null);
+  const [linkingNode, setLinkingNode] = useState<string | null>(null);
+  const [hoveredLinkId, setHoveredLinkId] = useState<string | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+        const target = e.target as HTMLElement;
+        if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+          onDelete(selectedId);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedId, onDelete]);
+
+  useEffect(() => {
+    const handleClickOutside = () => setContextMenu(null);
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left - offset.x) / zoom;
+    const y = (e.clientY - rect.top - offset.y) / zoom;
+    setMousePos({ x, y });
+
+    if (isPanning) {
+      setOffset(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY }));
+      return;
+    }
+
+    if (draggingNode) {
+      onNodeMove(draggingNode, x, y);
+    } else if (draggingAnnotation) {
+      onAnnotationMove(draggingAnnotation, x, y);
+    }
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const factor = Math.pow(1.1, -e.deltaY / 100);
+      const newZoom = Math.min(Math.max(0.1, zoom * factor), 5);
+      const rect = containerRef.current!.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const newOffsetX = mouseX - (mouseX - offset.x) * (newZoom / zoom);
+      const newOffsetY = mouseY - (mouseY - offset.y) * (newZoom / zoom);
+      setZoom(newZoom);
+      setOffset({ x: newOffsetX, y: newOffsetY });
+    } else {
+      setOffset(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY }));
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 1 || (e.button === 0 && (e as any).spaceKey)) {
+      setIsPanning(true);
+      return;
+    }
+    onSelect(null);
+    setContextMenu(null);
+  };
+
+  const handleMouseUp = () => {
+    setDraggingNode(null);
+    setDraggingAnnotation(null);
+    setIsPanning(false);
+    setLinkingNode(null);
+  };
+
+  const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
+    if (e.button === 2) return; 
+    e.stopPropagation();
+    setContextMenu(null);
+    if (e.shiftKey) {
+      setLinkingNode(id);
+    } else {
+      setDraggingNode(id);
+      onSelect(id);
+    }
+  };
+
+  const handleAnnotationMouseDown = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setDraggingAnnotation(id);
+    onSelect(id);
+  };
+
+  const handleNodeContextMenu = (e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onSelect(id);
+    setContextMenu({ x: e.clientX, y: e.clientY, id, type: 'node' });
+  };
+
+  const handleLinkContextMenu = (e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onSelect(id);
+    setContextMenu({ x: e.clientX, y: e.clientY, id, type: 'link' });
+  };
+
+  const handleNodeMouseUp = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (linkingNode && linkingNode !== id) {
+      onConnect(linkingNode, id);
+    }
+    setLinkingNode(null);
+    setDraggingNode(null);
+  };
+
+  const handleLinkMouseDown = (e: React.MouseEvent, id: string) => {
+    if (e.button === 2) return;
+    e.stopPropagation();
+    setContextMenu(null);
+    onSelect(id);
+  };
+
+  const centerCanvas = () => { setZoom(1); setOffset({ x: 0, y: 0 }); };
+
+  const fitToScreen = () => {
+    if (!containerRef.current || nodes.length === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach(n => {
+      minX = Math.min(minX, n.x - 50);
+      minY = Math.min(minY, n.y - 50);
+      maxX = Math.max(maxX, n.x + 50);
+      maxY = Math.max(maxY, n.y + 50);
+    });
+    const rect = containerRef.current.getBoundingClientRect();
+    const contentW = maxX - minX;
+    const contentH = maxY - minY;
+    const newZoom = Math.min(rect.width / contentW, rect.height / contentH, 1) * 0.9;
+    setZoom(newZoom);
+    setOffset({
+      x: (rect.width - contentW * newZoom) / 2 - minX * newZoom,
+      y: (rect.height - contentH * newZoom) / 2 - minY * newZoom,
+    });
+  };
+
+  const getNodeIcon = (modelId: string) => deviceModels.find(m => m.id === modelId)?.icon || 'fa-arrows-to-dot';
+
+  const handleAction = (action: string) => {
+    if (contextMenu) {
+      switch (action) {
+        case 'delete': onDelete(contextMenu.id); break;
+        case 'console': onOpenConsole(contextMenu.id); break;
+        case 'start': onUpdateStatus(contextMenu.id, 'booting'); break;
+        case 'stop': onUpdateStatus(contextMenu.id, 'stopped'); break;
+        case 'reload': onUpdateStatus(contextMenu.id, 'booting'); break;
+      }
+      setContextMenu(null);
+    }
+  };
+
+  const gridColor = theme === 'dark' ? 'text-slate-800' : 'text-slate-200';
+
+  return (
+    <div 
+      ref={containerRef}
+      className={`flex-1 relative overflow-hidden canvas-grid ${gridColor} ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseDown={handleMouseDown}
+      onWheel={handleWheel}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div 
+        className="absolute inset-0 origin-top-left"
+        style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
+      >
+        <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none">
+          {annotations.map(ann => {
+            const isSelected = selectedId === ann.id;
+            const stroke = isSelected ? (theme === 'dark' ? '#3b82f6' : '#2563eb') : (ann.color || (theme === 'dark' ? '#475569' : '#cbd5e1'));
+            return (
+              <g key={ann.id} className="pointer-events-auto cursor-move" onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)}>
+                {ann.type === 'rect' && <rect x={ann.x} y={ann.y} width={ann.width || 100} height={ann.height || 60} fill={theme === 'dark' ? "rgba(51, 65, 85, 0.2)" : "rgba(203, 213, 225, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} rx="4" />}
+                {ann.type === 'circle' && <circle cx={ann.x} cy={ann.y} r={ann.width ? ann.width / 2 : 40} fill={theme === 'dark' ? "rgba(51, 65, 85, 0.2)" : "rgba(203, 213, 225, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} />}
+                {ann.type === 'text' && <text x={ann.x} y={ann.y} fill={ann.color || (theme === 'dark' ? 'white' : '#1e293b')} fontSize={ann.fontSize || 14} className="font-black tracking-tight select-none">{ann.text || 'New Text'}</text>}
+              </g>
+            );
+          })}
+
+          {links.map(link => {
+            const source = nodes.find(n => n.id === link.source);
+            const target = nodes.find(n => n.id === link.target);
+            if (!source || !target) return null;
+            const isSelected = selectedId === link.id;
+            const isHovered = hoveredLinkId === link.id;
+            const linkColor = isSelected ? (theme === 'dark' ? '#3b82f6' : '#2563eb') : (isHovered ? (theme === 'dark' ? '#60a5fa' : '#3b82f6') : (theme === 'dark' ? '#475569' : '#cbd5e1'));
+            return (
+              <g key={link.id} className="pointer-events-auto cursor-pointer">
+                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="transparent" strokeWidth="12" onMouseDown={(e) => handleLinkMouseDown(e, link.id)} onMouseEnter={() => setHoveredLinkId(link.id)} onMouseLeave={() => setHoveredLinkId(null)} />
+                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={linkColor} strokeWidth={isSelected || isHovered ? "3" : "2"} className="transition-all" />
+              </g>
+            );
+          })}
+
+          {linkingNode && (
+            <line 
+              x1={nodes.find(n => n.id === linkingNode)?.x} 
+              y1={nodes.find(n => n.id === linkingNode)?.y} 
+              x2={mousePos.x} 
+              y2={mousePos.y} 
+              stroke="#3b82f6" 
+              strokeWidth="2" 
+              strokeDasharray="4" 
+            />
+          )}
+        </svg>
+
+        {nodes.map(node => {
+          const status = runtimeStates[node.id] || 'stopped';
+          const isRouter = node.type === DeviceType.ROUTER;
+          const isSwitch = node.type === DeviceType.SWITCH;
+          
+          let borderRadius = '8px';
+          if (isRouter) borderRadius = '50%';
+          if (isSwitch) borderRadius = '4px';
+
+          return (
+            <div
+              key={node.id}
+              style={{ left: node.x - 24, top: node.y - 24, borderRadius }}
+              onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
+              onMouseUp={(e) => handleNodeMouseUp(e, node.id)}
+              onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
+              className={`absolute w-12 h-12 flex items-center justify-center cursor-pointer transition-all shadow-sm
+                ${selectedId === node.id ? 'ring-2 ring-blue-500 bg-blue-500/10 dark:bg-blue-900/40 shadow-lg shadow-blue-500/20' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600'}
+                ${status === 'running' ? 'border-green-500/50 shadow-md shadow-green-500/10' : ''}
+                ${linkingNode === node.id ? 'ring-2 ring-blue-400 scale-110' : ''}
+                hover:border-blue-400 z-10 select-none group`}
+            >
+              <i className={`fa-solid ${getNodeIcon(node.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : 'text-slate-700 dark:text-slate-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
+              <div className="absolute top-full mt-1 text-[10px] font-bold text-slate-700 dark:text-slate-300 bg-white/90 dark:bg-slate-900/80 px-1 rounded shadow-sm border border-slate-200 dark:border-slate-700 whitespace-nowrap pointer-events-none">
+                {node.name}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="absolute bottom-6 left-6 flex flex-col gap-2 z-30">
+        <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-lg flex flex-col overflow-hidden shadow-lg">
+          <button onClick={() => setZoom(prev => Math.min(prev * 1.2, 5))} className="p-3 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors border-b border-slate-200 dark:border-slate-700"><i className="fa-solid fa-plus"></i></button>
+          <button onClick={() => setZoom(prev => Math.max(prev / 1.2, 0.1))} className="p-3 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"><i className="fa-solid fa-minus"></i></button>
+        </div>
+        <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-lg flex flex-col overflow-hidden shadow-lg">
+          <button onClick={centerCanvas} className="p-3 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors border-b border-slate-200 dark:border-slate-700"><i className="fa-solid fa-crosshairs"></i></button>
+          <button onClick={fitToScreen} className="p-3 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"><i className="fa-solid fa-maximize"></i></button>
+        </div>
+      </div>
+
+      {contextMenu && (
+        <div className="fixed z-[100] w-52 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl py-2 animate-in fade-in zoom-in duration-100" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 mb-1 flex items-center justify-between">
+            <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">{contextMenu.type === 'node' ? 'Node Actions' : 'Link Actions'}</span>
+          </div>
+          {contextMenu.type === 'node' && (
+            <>
+              <button onClick={() => handleAction('console')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-slate-700 dark:text-slate-300 hover:bg-blue-600 hover:text-white transition-colors">
+                <i className="fa-solid fa-terminal w-4"></i> Open Console
+              </button>
+              <button onClick={() => handleAction('start')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-green-600 dark:text-green-400 hover:bg-green-600 hover:text-white transition-colors">
+                <i className="fa-solid fa-play w-4"></i> Power On
+              </button>
+              <button onClick={() => handleAction('stop')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-red-600 dark:text-red-400 hover:bg-red-600 hover:text-white transition-colors">
+                <i className="fa-solid fa-power-off w-4"></i> Power Off
+              </button>
+              <div className="h-px bg-slate-100 dark:bg-slate-800 my-1 mx-2"></div>
+            </>
+          )}
+          <button onClick={() => handleAction('delete')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-red-600 dark:text-red-500 hover:bg-red-600 hover:text-white transition-colors">
+            <i className="fa-solid fa-trash-can w-4"></i> {contextMenu.type === 'node' ? 'Remove Device' : 'Delete Connection'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Canvas;
