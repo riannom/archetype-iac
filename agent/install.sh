@@ -94,20 +94,26 @@ if [ -z "$LOCAL_IP" ]; then
 fi
 
 # Interactive prompts if required values not provided
+# Use /dev/tty to read from terminal even when script is piped
 if [ -z "$AGENT_NAME" ]; then
     # Generate default name from hostname
     DEFAULT_NAME=$(hostname -s)
     echo ""
-    read -p "Enter agent name [$DEFAULT_NAME]: " AGENT_NAME
+    echo -n "Enter agent name [$DEFAULT_NAME]: "
+    read AGENT_NAME < /dev/tty || AGENT_NAME=""
     AGENT_NAME=${AGENT_NAME:-$DEFAULT_NAME}
 fi
 
 if [ -z "$CONTROLLER_URL" ]; then
     echo ""
     echo "Enter the controller URL (e.g., http://192.168.1.100:8000)"
-    read -p "Controller URL: " CONTROLLER_URL
+    echo -n "Controller URL: "
+    read CONTROLLER_URL < /dev/tty || true
     if [ -z "$CONTROLLER_URL" ]; then
         log_error "Controller URL is required"
+        echo ""
+        echo "Run with arguments instead:"
+        echo "  curl ... | sudo bash -s -- --controller http://192.168.1.100:8000"
         exit 1
     fi
 fi
