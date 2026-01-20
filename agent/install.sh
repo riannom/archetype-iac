@@ -87,26 +87,29 @@ if [ "$UNINSTALL" = true ]; then
     exit 0
 fi
 
-# Validate required arguments
-if [ -z "$AGENT_NAME" ]; then
-    log_error "Agent name is required. Use --name <name>"
-    echo ""
-    echo "Usage: $0 --name <agent-name> --controller <controller-url> [--ip <local-ip>]"
-    echo ""
-    echo "Example:"
-    echo "  $0 --name host-a --controller http://192.168.1.100:8000 --ip 192.168.1.10"
-    exit 1
-fi
-
-if [ -z "$CONTROLLER_URL" ]; then
-    log_error "Controller URL is required. Use --controller <url>"
-    exit 1
-fi
-
 # Auto-detect local IP if not provided
 if [ -z "$LOCAL_IP" ]; then
     LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || hostname -I | awk '{print $1}')
-    log_info "Auto-detected local IP: $LOCAL_IP"
+    echo -e "${GREEN}[INFO]${NC} Auto-detected local IP: $LOCAL_IP"
+fi
+
+# Interactive prompts if required values not provided
+if [ -z "$AGENT_NAME" ]; then
+    # Generate default name from hostname
+    DEFAULT_NAME=$(hostname -s)
+    echo ""
+    read -p "Enter agent name [$DEFAULT_NAME]: " AGENT_NAME
+    AGENT_NAME=${AGENT_NAME:-$DEFAULT_NAME}
+fi
+
+if [ -z "$CONTROLLER_URL" ]; then
+    echo ""
+    echo "Enter the controller URL (e.g., http://192.168.1.100:8000)"
+    read -p "Controller URL: " CONTROLLER_URL
+    if [ -z "$CONTROLLER_URL" ]; then
+        log_error "Controller URL is required"
+        exit 1
+    fi
 fi
 
 # Check root
