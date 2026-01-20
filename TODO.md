@@ -167,6 +167,42 @@ agent/install.sh         # Agent installation
 
 ---
 
+## Installation
+
+### Fresh Install (Controller + Agent)
+
+```bash
+# Install everything on a single host
+curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | sudo bash
+```
+
+### Multi-Host Setup
+
+```bash
+# On controller host (Host A)
+curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | sudo bash
+
+# On agent hosts (Host B, C, etc.)
+curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \
+  sudo bash -s -- --agent --controller-url http://CONTROLLER_IP:8000 --name host-b
+```
+
+### Update Existing Installation
+
+```bash
+# Controller
+cd /opt/aura-controller
+sudo git pull origin main
+sudo docker compose -f docker-compose.gui.yml up -d --build
+
+# Standalone agent
+cd /opt/aura-agent/repo
+sudo git pull origin main
+sudo systemctl restart aura-agent
+```
+
+---
+
 ## Commands Cheatsheet
 
 ```bash
