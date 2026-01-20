@@ -250,6 +250,7 @@ export function LabDetailPage() {
   const [runtimeLog, setRuntimeLog] = useState<string>("");
   const [jobs, setJobs] = useState<any[]>([]);
   const [consoleOutput, setConsoleOutput] = useState<string>("");
+  const [terminalHostEl, setTerminalHostEl] = useState<HTMLDivElement | null>(null);
   const [deviceLog, setDeviceLog] = useState<string>("");
   const consoleSocket = useRef<WebSocket | null>(null);
   const consolePopoutRef = useRef<Window | null>(null);
@@ -645,6 +646,7 @@ export function LabDetailPage() {
     wsUrl = `${wsUrl.replace(/\/$/, "")}/labs/${labId}/nodes/${encodeURIComponent(nodeName)}/console`;
     const socket = new WebSocket(wsUrl);
     socket.binaryType = "arraybuffer";
+  
     socket.onmessage = (event) => {
       handleConsoleMessage(event.data);
     };
@@ -662,23 +664,25 @@ export function LabDetailPage() {
   function handleConsoleMessage(data: unknown) {
     if (typeof data === "string") {
       terminalRef.current?.write(data);
-      setConsoleOutput((prev) => `${prev}${data}`);
+      setConsoleOutput((prev) => prev + data);
       return;
     }
 
     if (data instanceof ArrayBuffer) {
-      const text = new TextDecoder().decode(data);
-      terminalRef.current?.write(text);
-      setConsoleOutput((prev) => `${prev}${text}`);
+      const bytes = new Uint8Array(data);
+      terminalRef.current?.write(bytes);
+      const text = new TextDecoder().decode(bytes);
+      setConsoleOutput((prev) => prev + text);
       return;
     }
 
     if (data instanceof Blob) {
       data.arrayBuffer().then((buffer) => {
-        const text = new TextDecoder().decode(buffer);
-        terminalRef.current?.write(text);
-        setConsoleOutput((prev) => `${prev}${text}`);
-      });
+        const bytes = new Uint8Array(buffer);
+        terminalRef.current?.write(bytes);
+        const text = new TextDecoder().decode(bytes);
+        setConsoleOutput((prev) => prev + text);
+        });
     }
   }
 
@@ -698,6 +702,7 @@ export function LabDetailPage() {
     wsUrl = `${wsUrl.replace(/\/$/, "")}/labs/${labId}/nodes/${encodeURIComponent(nodeName)}/console`;
     const socket = new WebSocket(wsUrl);
     socket.binaryType = "arraybuffer";
+  
     socket.onmessage = (event) => {
       handleConsoleMessage(event.data);
     };
@@ -878,10 +883,11 @@ export function LabDetailPage() {
   }, [consoleOutput, selectedNode]);
 
   useEffect(() => {
-    if (!terminalHostRef.current || terminalRef.current) return;
+    if (!terminalHostEl || terminalRef.current) return;
     const terminal = new Terminal({
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-      fontSize: 13,
+      fontSize: 15,
+      lineHeight: 1.2,
       cursorBlink: true,
       convertEol: true,
       theme: {
@@ -892,7 +898,7 @@ export function LabDetailPage() {
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
-    terminal.open(terminalHostRef.current);
+    terminal.open(terminalHostEl);
     fitAddon.fit();
     terminal.onData((data) => {
       if (consoleSocket.current && consoleSocket.current.readyState === WebSocket.OPEN) {
@@ -909,7 +915,7 @@ export function LabDetailPage() {
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, []);
+  }, [terminalHostEl]);
 
   function handleNodeContextMenu(event: React.MouseEvent, nodeId: string) {
     event.preventDefault();
@@ -1292,7 +1298,13 @@ export function LabDetailPage() {
             </button>
           </div>
           <div className="terminal">
-            <div ref={terminalHostRef} className="xterm-host" />
+            <div
+              ref={(el) => {
+                terminalHostRef.current = el;
+                setTerminalHostEl(el);
+              }}
+              className="xterm-host"
+            />
           </div>
           <div className="terminal terminal-compact">
             <div className="terminal-title">Startup output</div>
