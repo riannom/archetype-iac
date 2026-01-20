@@ -349,9 +349,10 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
     python3 -m venv $AGENT_INSTALL_DIR/venv
     source $AGENT_INSTALL_DIR/venv/bin/activate
     log_info "Upgrading pip..."
-    pip install --upgrade pip
+    pip install --upgrade pip 2>&1 | tail -1
     log_info "Installing Python dependencies (this may take a minute)..."
-    pip install -r $AGENT_INSTALL_DIR/repo/agent/requirements.txt
+    pip install --progress-bar off -r $AGENT_INSTALL_DIR/repo/agent/requirements.txt 2>&1 | grep -E "^(Collecting|Installing|Successfully)" || true
+    log_info "Python dependencies installed"
 
     # Config
     cat > $AGENT_INSTALL_DIR/agent.env << EOF
