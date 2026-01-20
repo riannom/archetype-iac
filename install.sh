@@ -1,0 +1,435 @@
+#!/bin/bash
+set -e
+
+# Aura Infrastructure-as-Code Installer
+#
+# Usage:
+#   ./install.sh                              # Install controller + local agent
+#   ./install.sh --controller                 # Install controller only
+#   ./install.sh --agent --controller URL     # Install agent only (for remote hosts)
+#
+# Options:
+#   --controller           Install controller (uses Docker Compose)
+#   --agent                Install agent (uses systemd)
+#   --name NAME            Agent name (default: hostname)
+#   --controller-url URL   Controller URL for remote agents
+#   --ip IP                Local IP for VXLAN networking (auto-detected)
+#   --port PORT            Agent port (default: 8001)
+#   --uninstall            Remove installation
+
+INSTALL_DIR="/opt/aura-controller"
+AGENT_INSTALL_DIR="/opt/aura-agent"
+REPO_URL="https://github.com/riannom/aura-iac.git"
+BRANCH="main"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_section() { echo -e "\n${BLUE}=== $1 ===${NC}\n"; }
+
+# Defaults
+INSTALL_CONTROLLER=false
+INSTALL_AGENT=false
+AGENT_NAME=""
+CONTROLLER_URL=""
+LOCAL_IP=""
+AGENT_PORT="8001"
+UNINSTALL=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --controller)
+            INSTALL_CONTROLLER=true
+            shift
+            ;;
+        --agent)
+            INSTALL_AGENT=true
+            shift
+            ;;
+        --name)
+            AGENT_NAME="$2"
+            shift 2
+            ;;
+        --controller-url)
+            CONTROLLER_URL="$2"
+            shift 2
+            ;;
+        --ip)
+            LOCAL_IP="$2"
+            shift 2
+            ;;
+        --port)
+            AGENT_PORT="$2"
+            shift 2
+            ;;
+        --uninstall)
+            UNINSTALL=true
+            shift
+            ;;
+        --help|-h)
+            echo "Aura Infrastructure-as-Code Installer"
+            echo ""
+            echo "Usage:"
+            echo "  $0                                    # Install controller + local agent"
+            echo "  $0 --controller                       # Install controller only"
+            echo "  $0 --agent --controller-url URL       # Install agent only"
+            echo ""
+            echo "Options:"
+            echo "  --controller         Install controller (Docker Compose)"
+            echo "  --agent              Install standalone agent (systemd)"
+            echo "  --name NAME          Agent name (default: hostname)"
+            echo "  --controller-url URL Controller URL for remote agents"
+            echo "  --ip IP              Local IP for VXLAN (auto-detected)"
+            echo "  --port PORT          Agent port (default: 8001)"
+            echo "  --uninstall          Remove installation"
+            exit 0
+            ;;
+        *)
+            log_error "Unknown option: $1 (use --help for usage)"
+            exit 1
+            ;;
+    esac
+done
+
+# Default: install both if neither specified
+if [ "$INSTALL_CONTROLLER" = false ] && [ "$INSTALL_AGENT" = false ]; then
+    INSTALL_CONTROLLER=true
+    INSTALL_AGENT=true
+fi
+
+# Uninstall
+if [ "$UNINSTALL" = true ]; then
+    log_section "Uninstalling Aura"
+
+    if [ -d "$INSTALL_DIR" ]; then
+        log_info "Stopping controller services..."
+        cd $INSTALL_DIR 2>/dev/null && docker compose -f docker-compose.gui.yml down 2>/dev/null || true
+        rm -rf $INSTALL_DIR
+        log_info "Controller removed"
+    fi
+
+    if systemctl is-active --quiet aura-agent 2>/dev/null; then
+        log_info "Stopping agent service..."
+        systemctl stop aura-agent
+        systemctl disable aura-agent
+        rm -f /etc/systemd/system/aura-agent.service
+        systemctl daemon-reload
+    fi
+
+    if [ -d "$AGENT_INSTALL_DIR" ]; then
+        rm -rf $AGENT_INSTALL_DIR
+        log_info "Agent removed"
+    fi
+
+    log_info "Uninstall complete"
+    exit 0
+fi
+
+# Check root
+if [ "$EUID" -ne 0 ]; then
+    log_error "Please run as root (sudo)"
+    exit 1
+fi
+
+# Detect OS
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+else
+    log_error "Cannot detect OS"
+    exit 1
+fi
+
+# Auto-detect local IP
+if [ -z "$LOCAL_IP" ]; then
+    LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || hostname -I | awk '{print $1}')
+fi
+
+# Default agent name
+if [ -z "$AGENT_NAME" ]; then
+    AGENT_NAME=$(hostname -s)
+fi
+
+# Validate: agent-only needs controller URL
+if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ] && [ -z "$CONTROLLER_URL" ]; then
+    echo ""
+    echo "Enter the controller URL (e.g., http://192.168.1.100:8000)"
+    echo -n "Controller URL: "
+    read CONTROLLER_URL < /dev/tty || true
+    if [ -z "$CONTROLLER_URL" ]; then
+        log_error "Controller URL is required for standalone agent"
+        exit 1
+    fi
+fi
+
+# Show what we're installing
+log_section "Installation Plan"
+echo "OS:              $OS"
+echo "Local IP:        $LOCAL_IP"
+if [ "$INSTALL_CONTROLLER" = true ]; then
+    echo "Controller:      YES (at $INSTALL_DIR)"
+fi
+if [ "$INSTALL_AGENT" = true ]; then
+    echo "Agent:           YES (name: $AGENT_NAME)"
+    if [ "$INSTALL_CONTROLLER" = true ]; then
+        echo "Agent connects:  http://localhost:8000 (local controller)"
+    else
+        echo "Agent connects:  $CONTROLLER_URL"
+    fi
+fi
+echo ""
+
+# Install system dependencies
+log_section "Installing Dependencies"
+
+install_docker() {
+    if command -v docker &> /dev/null; then
+        log_info "Docker already installed"
+        return
+    fi
+
+    log_info "Installing Docker..."
+    case $OS in
+        ubuntu|debian)
+            apt-get update -qq
+            apt-get install -y -qq ca-certificates curl gnupg
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/$OS/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            chmod a+r /etc/apt/keyrings/docker.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+            apt-get update -qq
+            apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            ;;
+        centos|rhel|rocky|almalinux|fedora)
+            dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo 2>/dev/null || true
+            dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            ;;
+    esac
+    systemctl start docker
+    systemctl enable docker
+    log_info "Docker installed"
+}
+
+install_base_deps() {
+    log_info "Installing base dependencies..."
+    case $OS in
+        ubuntu|debian)
+            apt-get update -qq
+            apt-get install -y -qq git curl iproute2 jq
+            ;;
+        centos|rhel|rocky|almalinux|fedora)
+            dnf install -y git curl iproute jq
+            ;;
+    esac
+}
+
+install_agent_deps() {
+    log_info "Installing agent dependencies..."
+    case $OS in
+        ubuntu|debian)
+            apt-get install -y -qq python3 python3-venv python3-pip
+            ;;
+        centos|rhel|rocky|almalinux|fedora)
+            dnf install -y python3 python3-pip
+            ;;
+    esac
+
+    # Containerlab
+    if ! command -v containerlab &> /dev/null; then
+        log_info "Installing containerlab..."
+        curl -sL https://containerlab.dev/setup | bash -s "all"
+    fi
+}
+
+install_base_deps
+install_docker
+
+# Install Controller
+if [ "$INSTALL_CONTROLLER" = true ]; then
+    log_section "Installing Controller"
+
+    mkdir -p $INSTALL_DIR
+
+    # Clone/update repo
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        log_info "Updating repository..."
+        cd $INSTALL_DIR
+        git fetch origin
+        git reset --hard origin/$BRANCH
+    else
+        log_info "Cloning repository..."
+        git clone --branch $BRANCH $REPO_URL $INSTALL_DIR
+    fi
+
+    cd $INSTALL_DIR
+
+    # Generate .env if not exists
+    if [ ! -f .env ]; then
+        log_info "Generating configuration..."
+        ADMIN_PASS=$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-16)
+        JWT_SECRET=$(openssl rand -hex 32)
+        SESSION_SECRET=$(openssl rand -hex 32)
+
+        cat > .env << EOF
+# Aura Controller Configuration
+# Generated on $(date)
+
+# Admin credentials
+ADMIN_EMAIL=admin@localhost
+ADMIN_PASSWORD=$ADMIN_PASS
+
+# Security (change in production)
+JWT_SECRET=$JWT_SECRET
+SESSION_SECRET=$SESSION_SECRET
+
+# Ports
+API_PORT=8000
+WEB_PORT=8080
+
+# Local agent configuration
+AURA_AGENT_NAME=local-agent
+AURA_AGENT_LOCAL_IP=$LOCAL_IP
+EOF
+        chmod 600 .env
+        log_info "Generated .env with admin password: $ADMIN_PASS"
+    else
+        log_info "Using existing .env configuration"
+        ADMIN_PASS=$(grep ADMIN_PASSWORD .env | cut -d= -f2)
+    fi
+
+    # Start services
+    log_info "Starting controller services..."
+    docker compose -f docker-compose.gui.yml up -d --build
+
+    # Wait for API
+    log_info "Waiting for API to be ready..."
+    for i in {1..30}; do
+        if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+
+    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+        log_info "Controller is running!"
+    else
+        log_warn "Controller may still be starting. Check: docker compose -f docker-compose.gui.yml logs"
+    fi
+fi
+
+# Install Standalone Agent (when not using embedded agent)
+if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
+    log_section "Installing Standalone Agent"
+
+    install_agent_deps
+
+    mkdir -p $AGENT_INSTALL_DIR
+
+    # Clone/update repo
+    if [ -d "$AGENT_INSTALL_DIR/repo" ]; then
+        log_info "Updating repository..."
+        cd $AGENT_INSTALL_DIR/repo
+        git fetch origin
+        git reset --hard origin/$BRANCH
+    else
+        log_info "Cloning repository..."
+        git clone --branch $BRANCH --depth 1 $REPO_URL $AGENT_INSTALL_DIR/repo
+    fi
+
+    # Python venv
+    log_info "Setting up Python environment..."
+    python3 -m venv $AGENT_INSTALL_DIR/venv
+    source $AGENT_INSTALL_DIR/venv/bin/activate
+    pip install --quiet --upgrade pip
+    pip install --quiet -r $AGENT_INSTALL_DIR/repo/agent/requirements.txt
+
+    # Config
+    cat > $AGENT_INSTALL_DIR/agent.env << EOF
+AURA_AGENT_AGENT_NAME=$AGENT_NAME
+AURA_AGENT_CONTROLLER_URL=$CONTROLLER_URL
+AURA_AGENT_LOCAL_IP=$LOCAL_IP
+AURA_AGENT_AGENT_PORT=$AGENT_PORT
+AURA_AGENT_ENABLE_CONTAINERLAB=true
+AURA_AGENT_ENABLE_VXLAN=true
+AURA_AGENT_WORKSPACE_PATH=/var/lib/aura-agent
+EOF
+
+    mkdir -p /var/lib/aura-agent
+
+    # Systemd service
+    cat > /etc/systemd/system/aura-agent.service << EOF
+[Unit]
+Description=Aura Network Lab Agent
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$AGENT_INSTALL_DIR/repo
+EnvironmentFile=$AGENT_INSTALL_DIR/agent.env
+ExecStart=$AGENT_INSTALL_DIR/venv/bin/python -m agent.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable aura-agent
+    systemctl start aura-agent
+
+    sleep 2
+    if systemctl is-active --quiet aura-agent; then
+        log_info "Agent is running!"
+    else
+        log_error "Agent failed to start. Check: journalctl -u aura-agent -f"
+    fi
+fi
+
+# Summary
+log_section "Installation Complete"
+
+if [ "$INSTALL_CONTROLLER" = true ]; then
+    echo -e "${GREEN}Controller:${NC}"
+    echo "  Web UI:     http://$LOCAL_IP:8080"
+    echo "  API:        http://$LOCAL_IP:8000"
+    echo "  Admin:      admin@localhost"
+    echo "  Password:   $ADMIN_PASS"
+    echo ""
+    echo "  Logs:       cd $INSTALL_DIR && docker compose -f docker-compose.gui.yml logs -f"
+    echo "  Restart:    cd $INSTALL_DIR && docker compose -f docker-compose.gui.yml restart"
+    echo ""
+fi
+
+if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
+    echo -e "${GREEN}Agent:${NC}"
+    echo "  Name:       $AGENT_NAME"
+    echo "  Controller: $CONTROLLER_URL"
+    echo "  Local IP:   $LOCAL_IP"
+    echo ""
+    echo "  Status:     systemctl status aura-agent"
+    echo "  Logs:       journalctl -u aura-agent -f"
+    echo ""
+fi
+
+if [ "$INSTALL_CONTROLLER" = true ]; then
+    echo -e "${GREEN}Quick Start:${NC}"
+    echo "  1. Open http://$LOCAL_IP:8080 in your browser"
+    echo "  2. Login with admin@localhost / $ADMIN_PASS"
+    echo "  3. Create a lab and import a topology"
+    echo ""
+    echo -e "${GREEN}Add Remote Agents:${NC}"
+    echo "  curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \\"
+    echo "    sudo bash -s -- --agent --controller-url http://$LOCAL_IP:8000"
+    echo ""
+fi
