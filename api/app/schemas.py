@@ -157,3 +157,59 @@ class PermissionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Layout persistence schemas
+class NodeLayout(BaseModel):
+    """Visual position and styling for a node."""
+
+    x: float
+    y: float
+    label: str | None = None
+    color: str | None = None
+    metadata: dict | None = None  # Extensible
+
+
+class AnnotationLayout(BaseModel):
+    """Layout data for an annotation (text, rect, circle, arrow, caption)."""
+
+    id: str
+    type: str  # text, rect, circle, arrow, caption
+    x: float
+    y: float
+    width: float | None = None
+    height: float | None = None
+    text: str | None = None
+    color: str | None = None
+    fontSize: int | None = None
+    targetX: float | None = None  # For arrows
+    targetY: float | None = None  # For arrows
+    metadata: dict | None = None  # Extensible
+
+
+class LinkLayout(BaseModel):
+    """Visual styling for a link."""
+
+    color: str | None = None
+    strokeWidth: int | None = None
+    style: str | None = None  # solid, dashed, dotted
+    metadata: dict | None = None  # Extensible
+
+
+class CanvasState(BaseModel):
+    """Canvas viewport state."""
+
+    zoom: float | None = None
+    offsetX: float | None = None
+    offsetY: float | None = None
+
+
+class LabLayout(BaseModel):
+    """Complete visual layout for a lab workspace."""
+
+    version: int = 1  # Schema versioning for migrations
+    canvas: CanvasState | None = None
+    nodes: dict[str, NodeLayout] = {}  # node_id -> position
+    annotations: list[AnnotationLayout] = []
+    links: dict[str, LinkLayout] | None = None  # link_id -> styling
+    custom: dict | None = None  # Extensible user metadata

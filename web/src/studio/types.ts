@@ -83,3 +83,49 @@ export interface ConsoleWindow {
   y: number;
   isExpanded: boolean;
 }
+
+// Layout persistence types
+export interface NodeLayout {
+  x: number;
+  y: number;
+  label?: string;
+  color?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AnnotationLayout {
+  id: string;
+  type: string; // text, rect, circle, arrow, caption
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  text?: string;
+  color?: string;
+  fontSize?: number;
+  targetX?: number; // For arrows
+  targetY?: number; // For arrows
+  metadata?: Record<string, unknown>;
+}
+
+export interface LinkLayout {
+  color?: string;
+  strokeWidth?: number;
+  style?: string; // solid, dashed, dotted
+  metadata?: Record<string, unknown>;
+}
+
+export interface CanvasState {
+  zoom?: number;
+  offsetX?: number;
+  offsetY?: number;
+}
+
+export interface LabLayout {
+  version: number;
+  canvas?: CanvasState;
+  nodes: Record<string, NodeLayout>; // node_id -> position
+  annotations: AnnotationLayout[];
+  links?: Record<string, LinkLayout>; // link_id -> styling
+  custom?: Record<string, unknown>;
+}

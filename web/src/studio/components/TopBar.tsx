@@ -1,16 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useTheme, ThemeSelector } from '../../theme/index';
 
 interface TopBarProps {
   labName: string;
   onExport: () => void;
+  onExportFull?: () => void;
   onDeploy: () => void;
   onExit: () => void;
 }
 
-const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onDeploy, onExit }) => {
+const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onDeploy, onExit }) => {
   const { effectiveMode, toggleMode } = useTheme();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
+  const exportDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportDropdownRef.current && !exportDropdownRef.current.contains(event.target as Node)) {
+        setShowExportDropdown(false);
+      }
+    };
+    if (showExportDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showExportDropdown]);
 
   return (
     <>
@@ -67,13 +83,44 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onDeploy, onExit }) 
             <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'}`}></i>
           </button>
 
-          <button
-            onClick={onExport}
-            className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-stone-800 hover:bg-stone-50 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 text-xs font-semibold border border-stone-200 dark:border-stone-700 rounded-lg transition-all active:scale-95 shadow-sm"
-          >
-            <i className="fa-solid fa-file-code text-sage-600 dark:text-sage-400"></i>
-            IAC EXPORT
-          </button>
+          <div className="relative" ref={exportDropdownRef}>
+            <button
+              onClick={() => setShowExportDropdown(!showExportDropdown)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-stone-800 hover:bg-stone-50 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 text-xs font-semibold border border-stone-200 dark:border-stone-700 rounded-lg transition-all active:scale-95 shadow-sm"
+            >
+              <i className="fa-solid fa-file-code text-sage-600 dark:text-sage-400"></i>
+              EXPORT
+              <i className={`fa-solid fa-chevron-down text-[8px] transition-transform ${showExportDropdown ? 'rotate-180' : ''}`}></i>
+            </button>
+            {showExportDropdown && (
+              <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg shadow-lg overflow-hidden z-50">
+                <button
+                  onClick={() => {
+                    onExport();
+                    setShowExportDropdown(false);
+                  }}
+                  className="w-full px-3 py-2 text-left text-xs text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700 flex items-center gap-2"
+                >
+                  <i className="fa-solid fa-file-code text-sage-600 dark:text-sage-400 w-4"></i>
+                  Export YAML
+                  <span className="text-[9px] text-stone-400 dark:text-stone-500 ml-auto">IAC only</span>
+                </button>
+                {onExportFull && (
+                  <button
+                    onClick={() => {
+                      onExportFull();
+                      setShowExportDropdown(false);
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-700 flex items-center gap-2 border-t border-stone-100 dark:border-stone-700"
+                  >
+                    <i className="fa-solid fa-file-zipper text-blue-600 dark:text-blue-400 w-4"></i>
+                    Export Full
+                    <span className="text-[9px] text-stone-400 dark:text-stone-500 ml-auto">+ Layout</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           <button
             onClick={onDeploy}
             className="flex items-center gap-2 px-4 py-1.5 bg-sage-600 hover:bg-sage-500 text-white text-xs font-bold rounded-lg transition-all shadow-lg shadow-sage-900/20 active:scale-95 border border-sage-400/20"
