@@ -83,6 +83,14 @@ def delete_lab(
     lab = get_lab_or_404(lab_id, database, current_user)
     if lab.owner_id != current_user.id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # Delete related records first to avoid foreign key violations
+    database.query(models.Job).filter(models.Job.lab_id == lab_id).delete()
+    database.query(models.Permission).filter(models.Permission.lab_id == lab_id).delete()
+    database.query(models.LabFile).filter(models.LabFile.lab_id == lab_id).delete()
+    database.query(models.NodePlacement).filter(models.NodePlacement.lab_id == lab_id).delete()
+
+    # Delete workspace files
     workspace = lab_workspace(lab.id)
     if workspace.exists():
         for path in workspace.glob("**/*"):
@@ -92,6 +100,7 @@ def delete_lab(
             if path.is_dir():
                 path.rmdir()
         workspace.rmdir()
+
     database.delete(lab)
     database.commit()
     return {"status": "deleted"}
