@@ -4,31 +4,39 @@ import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { apiRequest } from '../api';
 import DeviceManager from '../studio/components/DeviceManager';
-import { DeviceModel, DeviceType, ImageLibraryEntry } from '../studio/types';
-
-interface DeviceCatalogEntry {
-  id: string;
-  label: string;
-  support?: string;
-}
+import { DeviceModel, ImageLibraryEntry } from '../studio/types';
+import { DeviceCategory } from '../studio/constants';
 
 interface CustomDevice {
   id: string;
   label: string;
 }
 
-const DEFAULT_ICON = 'fa-microchip';
-
-const guessDeviceType = (id: string, label: string): DeviceType => {
-  const token = `${id} ${label}`.toLowerCase();
-  if (token.includes('switch')) return DeviceType.SWITCH;
-  if (token.includes('router')) return DeviceType.ROUTER;
-  if (token.includes('firewall')) return DeviceType.FIREWALL;
-  if (token.includes('linux') || token.includes('server') || token.includes('host')) return DeviceType.HOST;
-  return DeviceType.CONTAINER;
+/**
+ * Flatten vendor categories into a flat list of DeviceModels
+ */
+const flattenVendorCategories = (categories: DeviceCategory[]): DeviceModel[] => {
+  return categories.flatMap(cat => {
+    if (cat.subCategories) {
+      return cat.subCategories.flatMap(sub => sub.models);
+    }
+    return cat.models || [];
+  });
 };
 
-const buildDeviceModels = (devices: DeviceCatalogEntry[], images: ImageLibraryEntry[], customDevices: CustomDevice[]): DeviceModel[] => {
+/**
+ * Build device models by merging vendor registry with image library data
+ */
+const buildDeviceModels = (
+  vendorCategories: DeviceCategory[],
+  images: ImageLibraryEntry[],
+  customDevices: CustomDevice[]
+): DeviceModel[] => {
+  // Get all devices from vendor registry
+  const vendorDevices = flattenVendorCategories(vendorCategories);
+  const vendorDeviceMap = new Map(vendorDevices.map(d => [d.id, d]));
+
+  // Collect versions from image library
   const versionsByDevice = new Map<string, Set<string>>();
   const imageDeviceIds = new Set<string>();
   images.forEach((image) => {
@@ -41,27 +49,51 @@ const buildDeviceModels = (devices: DeviceCatalogEntry[], images: ImageLibraryEn
     versionsByDevice.set(image.device_id, versions);
   });
 
-  const catalogMap = new Map(devices.map((device) => [device.id, device]));
-  const customMap = new Map(customDevices.map((device) => [device.id, device]));
-  const deviceIds = new Set<string>(devices.map((device) => device.id));
-  imageDeviceIds.forEach((deviceId) => deviceIds.add(deviceId));
-  customDevices.forEach((device) => deviceIds.add(device.id));
-
-  return Array.from(deviceIds).map((deviceId) => {
-    const device = catalogMap.get(deviceId);
-    const custom = customMap.get(deviceId);
-    const label = device?.label || custom?.label || deviceId;
-    const versions = Array.from(versionsByDevice.get(deviceId) || []);
+  // Start with vendor devices (preserves rich metadata like icons, types, vendors)
+  const result: DeviceModel[] = vendorDevices.map(device => {
+    const imageVersions = Array.from(versionsByDevice.get(device.id) || []);
     return {
-      id: deviceId,
-      type: guessDeviceType(deviceId, label),
-      name: label,
-      icon: DEFAULT_ICON,
-      versions: versions.length > 0 ? versions : ['default'],
-      isActive: true,
-      vendor: device?.support || custom?.label ? 'custom' : 'custom',
+      ...device,
+      // Merge versions from both vendor registry and image library
+      versions: imageVersions.length > 0
+        ? [...new Set([...device.versions, ...imageVersions])]
+        : device.versions,
     };
   });
+
+  // Add custom devices that aren't in vendor registry
+  customDevices.forEach(custom => {
+    if (!vendorDeviceMap.has(custom.id)) {
+      const imageVersions = Array.from(versionsByDevice.get(custom.id) || []);
+      result.push({
+        id: custom.id,
+        type: 'container' as DeviceModel['type'],
+        name: custom.label,
+        icon: 'fa-microchip',
+        versions: imageVersions.length > 0 ? imageVersions : ['default'],
+        isActive: true,
+        vendor: 'custom',
+      });
+    }
+  });
+
+  // Add devices that have images but aren't in vendor registry or custom
+  imageDeviceIds.forEach(deviceId => {
+    if (!vendorDeviceMap.has(deviceId) && !customDevices.find(c => c.id === deviceId)) {
+      const imageVersions = Array.from(versionsByDevice.get(deviceId) || []);
+      result.push({
+        id: deviceId,
+        type: 'container' as DeviceModel['type'],
+        name: deviceId,
+        icon: 'fa-microchip',
+        versions: imageVersions.length > 0 ? imageVersions : ['default'],
+        isActive: true,
+        vendor: 'unknown',
+      });
+    }
+  });
+
+  return result;
 };
 
 const ImagesPage: React.FC = () => {
@@ -70,7 +102,7 @@ const ImagesPage: React.FC = () => {
   const navigate = useNavigate();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
 
-  const [deviceCatalog, setDeviceCatalog] = useState<DeviceCatalogEntry[]>([]);
+  const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
   const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
   const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
   const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
@@ -87,8 +119,10 @@ const ImagesPage: React.FC = () => {
 
   const loadDevices = useCallback(async () => {
     try {
-      const data = await apiRequest<{ devices?: DeviceCatalogEntry[] }>('/devices');
-      setDeviceCatalog(data.devices || []);
+      // Fetch vendor categories (comprehensive device list with rich metadata)
+      const vendorData = await apiRequest<DeviceCategory[]>('/vendors');
+      setVendorCategories(vendorData || []);
+      // Fetch image catalog and library
       const imageData = await apiRequest<{ images?: Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }> }>('/images');
       setImageCatalog(imageData.images || {});
       const libraryData = await apiRequest<{ images?: ImageLibraryEntry[] }>('/images/library');
@@ -109,7 +143,7 @@ const ImagesPage: React.FC = () => {
     localStorage.setItem('aura_custom_devices', JSON.stringify(next));
   };
 
-  const deviceModels = buildDeviceModels(deviceCatalog, imageLibrary, customDevices);
+  const deviceModels = buildDeviceModels(vendorCategories, imageLibrary, customDevices);
 
   // Redirect if not authenticated
   if (!userLoading && !user) {
