@@ -1,5 +1,7 @@
 
-import React from 'react';
+import React, { useState } from 'react';
+import { useTheme, ThemeSelector } from '../../theme/index';
+import SystemStatusStrip from './SystemStatusStrip';
 
 interface LabSummary {
   id: string;
@@ -7,16 +9,37 @@ interface LabSummary {
   created_at?: string;
 }
 
+interface LabStatus {
+  running: number;
+  total: number;
+}
+
+interface SystemMetrics {
+  agents: { online: number; total: number };
+  containers: { running: number; total: number };
+  cpu_percent: number;
+  memory_percent: number;
+  labs_running: number;
+  labs_total: number;
+}
+
 interface DashboardProps {
   labs: LabSummary[];
+  labStatuses?: Record<string, LabStatus>;
+  systemMetrics?: SystemMetrics | null;
   onSelect: (lab: LabSummary) => void;
   onCreate: () => void;
   onDelete: (labId: string) => void;
   onRefresh: () => void;
+  onNavigateToImages?: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelete, onRefresh }) => {
+const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics, onSelect, onCreate, onDelete, onRefresh, onNavigateToImages }) => {
+  const { effectiveMode, toggleMode } = useTheme();
+  const [showThemeSelector, setShowThemeSelector] = useState(false);
+
   return (
+    <>
     <div className="min-h-screen bg-stone-50 dark:bg-stone-900 flex flex-col overflow-hidden">
       <header className="h-20 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10">
         <div className="flex items-center gap-3">
@@ -30,6 +53,33 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
         </div>
 
         <div className="flex items-center gap-3">
+          {onNavigateToImages && (
+            <button
+              onClick={onNavigateToImages}
+              className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+              title="Manage Images"
+            >
+              <i className="fa-solid fa-hard-drive text-xs"></i>
+              <span className="text-[10px] font-bold uppercase">Images</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => setShowThemeSelector(true)}
+            className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
+            title="Theme Settings"
+          >
+            <i className="fa-solid fa-palette text-sm"></i>
+          </button>
+
+          <button
+            onClick={toggleMode}
+            className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
+            title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
+          >
+            <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'} text-sm`}></i>
+          </button>
+
           <button
             onClick={onRefresh}
             className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
@@ -39,6 +89,8 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
           </button>
         </div>
       </header>
+
+      <SystemStatusStrip metrics={systemMetrics || null} />
 
       <main className="flex-1 overflow-y-auto p-10 custom-scrollbar">
         <div className="max-w-6xl mx-auto">
@@ -57,7 +109,13 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {labs.length > 0 ? labs.map((lab) => (
+            {labs.length > 0 ? labs.map((lab) => {
+              const status = labStatuses?.[lab.id];
+              const isRunning = status && status.running > 0;
+              const isAllRunning = status && status.running === status.total && status.total > 0;
+              const statusDotColor = isAllRunning ? 'bg-green-500' : isRunning ? 'bg-amber-500' : 'bg-stone-400 dark:bg-stone-600';
+
+              return (
               <div
                 key={lab.id}
                 className="group relative bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 hover:border-sage-500/50 hover:shadow-2xl hover:shadow-sage-900/10 transition-all cursor-default overflow-hidden"
@@ -76,10 +134,21 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
                 </div>
 
                 <h3 className="text-lg font-bold text-stone-900 dark:text-white mb-1 group-hover:text-sage-600 dark:group-hover:text-sage-400 transition-colors">{lab.name}</h3>
-                <div className="flex items-center gap-4 text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-6">
+                <div className="flex items-center gap-4 text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-3">
                    <span className="flex items-center gap-1.5"><i className="fa-solid fa-server"></i> Lab</span>
                    <span className="flex items-center gap-1.5"><i className="fa-solid fa-calendar"></i> {lab.created_at ? new Date(lab.created_at).toLocaleDateString() : 'New'}</span>
                 </div>
+
+                {status && status.total > 0 && (
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className={`w-2 h-2 rounded-full ${statusDotColor} ${isAllRunning ? 'animate-pulse' : ''}`}></div>
+                    <span className="text-xs text-stone-600 dark:text-stone-400">
+                      <span className="font-bold">{status.running}</span>
+                      <span className="text-stone-400 dark:text-stone-500">/{status.total}</span>
+                      <span className="ml-1 text-stone-500 dark:text-stone-500">nodes running</span>
+                    </span>
+                  </div>
+                )}
 
                 <div className="flex gap-2">
                   <button
@@ -93,7 +162,8 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
                   </button>
                 </div>
               </div>
-            )) : (
+              );
+            }) : (
               <div className="col-span-full py-20 bg-stone-100/50 dark:bg-stone-900/30 border-2 border-dashed border-stone-300 dark:border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-500 dark:text-stone-600">
                  <i className="fa-solid fa-folder-open text-5xl mb-4 opacity-10"></i>
                  <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">Empty Workspace</h3>
@@ -113,6 +183,12 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
         </div>
       </footer>
     </div>
+
+    <ThemeSelector
+      isOpen={showThemeSelector}
+      onClose={() => setShowThemeSelector(false)}
+    />
+    </>
   );
 };
 

@@ -75,6 +75,16 @@ class HostOut(BaseModel):
         from_attributes = True
 
 
+class DashboardMetrics(BaseModel):
+    """System-wide metrics for dashboard display."""
+    agents: dict  # {"online": int, "total": int}
+    containers: dict  # {"running": int, "total": int}
+    cpu_percent: float
+    memory_percent: float
+    labs_running: int
+    labs_total: int
+
+
 # --- Endpoints ---
 
 @router.post("/register", response_model=RegistrationResponse)
@@ -174,8 +184,9 @@ def heartbeat(
     if not host:
         raise HTTPException(status_code=404, detail="Agent not registered")
 
-    # Update status
+    # Update status and resource usage
     host.status = request.status
+    host.resource_usage = json.dumps(request.resource_usage)
     host.last_heartbeat = datetime.now(timezone.utc)
     database.commit()
 

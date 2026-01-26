@@ -227,6 +227,15 @@ const StudioPage: React.FC = () => {
   const [isTaskLogVisible, setIsTaskLogVisible] = useState(true);
   const [jobs, setJobs] = useState<any[]>([]);
   const prevJobsRef = useRef<Map<string, string>>(new Map());
+  const [labStatuses, setLabStatuses] = useState<Record<string, { running: number; total: number }>>({});
+  const [systemMetrics, setSystemMetrics] = useState<{
+    agents: { online: number; total: number };
+    containers: { running: number; total: number };
+    cpu_percent: number;
+    memory_percent: number;
+    labs_running: number;
+    labs_total: number;
+  } | null>(null);
 
   const addTaskLogEntry = useCallback((level: TaskLogEntry['level'], message: string, jobId?: string) => {
     const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -285,6 +294,40 @@ const StudioPage: React.FC = () => {
     setVendorCategories(vendorData || []);
   }, [studioRequest]);
 
+  const loadSystemMetrics = useCallback(async () => {
+    try {
+      const data = await studioRequest<{
+        agents: { online: number; total: number };
+        containers: { running: number; total: number };
+        cpu_percent: number;
+        memory_percent: number;
+        labs_running: number;
+        labs_total: number;
+      }>('/dashboard/metrics');
+      setSystemMetrics(data);
+    } catch {
+      // Metrics endpoint may fail - that's ok
+    }
+  }, [studioRequest]);
+
+  const loadLabStatuses = useCallback(async (labIds: string[]) => {
+    const statuses: Record<string, { running: number; total: number }> = {};
+    await Promise.all(
+      labIds.map(async (labId) => {
+        try {
+          const statusData = await studioRequest<{ nodes?: { name: string; status: string }[] }>(`/labs/${labId}/status`);
+          if (statusData.nodes) {
+            const running = statusData.nodes.filter((n) => n.status === 'running').length;
+            statuses[labId] = { running, total: statusData.nodes.length };
+          }
+        } catch {
+          // Lab may not be deployed - that's ok
+        }
+      })
+    );
+    setLabStatuses(statuses);
+  }, [studioRequest]);
+
   const loadGraph = useCallback(async (labId: string) => {
     const graph = await studioRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
     setNodes(buildGraphNodes(graph, deviceModels));
@@ -331,7 +374,27 @@ const StudioPage: React.FC = () => {
   useEffect(() => {
     loadLabs();
     loadDevices();
-  }, [loadLabs, loadDevices]);
+    loadSystemMetrics();
+  }, [loadLabs, loadDevices, loadSystemMetrics]);
+
+  // Load lab statuses when labs change
+  useEffect(() => {
+    if (labs.length > 0 && !activeLab) {
+      loadLabStatuses(labs.map((lab) => lab.id));
+    }
+  }, [labs, activeLab, loadLabStatuses]);
+
+  // Poll for system metrics and lab statuses when on dashboard
+  useEffect(() => {
+    if (activeLab) return;
+    const timer = setInterval(() => {
+      loadSystemMetrics();
+      if (labs.length > 0) {
+        loadLabStatuses(labs.map((lab) => lab.id));
+      }
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [activeLab, labs, loadSystemMetrics, loadLabStatuses]);
 
   useEffect(() => {
     if (!activeLab) return;
@@ -737,10 +800,22 @@ const StudioPage: React.FC = () => {
     return (
       <Dashboard
         labs={labs}
+        labStatuses={labStatuses}
+        systemMetrics={systemMetrics}
         onSelect={handleSelectLab}
         onCreate={handleCreateLab}
         onDelete={handleDeleteLab}
-        onRefresh={loadLabs}
+        onRefresh={() => {
+          loadLabs();
+          loadSystemMetrics();
+        }}
+        onNavigateToImages={() => {
+          // Set a placeholder lab to enter the studio, then switch to images view
+          if (labs.length > 0) {
+            setActiveLab(labs[0]);
+            setView('images');
+          }
+        }}
       />
     );
   }

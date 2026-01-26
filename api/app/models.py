@@ -93,6 +93,7 @@ class Host(Base):
     status: Mapped[str] = mapped_column(String(50), default="offline")  # online/offline/degraded
     capabilities: Mapped[str] = mapped_column(Text, default="{}")  # JSON: providers, features
     version: Mapped[str] = mapped_column(String(50), default="")
+    resource_usage: Mapped[str] = mapped_column(Text, default="{}")  # JSON: cpu_percent, memory_percent, etc.
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

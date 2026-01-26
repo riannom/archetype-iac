@@ -136,3 +136,54 @@ def list_vendors() -> list[dict]:
     """
     from agent.vendors import get_vendors_for_ui
     return get_vendors_for_ui()
+
+
+@app.get("/dashboard/metrics")
+def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
+    """Get aggregated system metrics for the dashboard.
+
+    Returns agent counts, container counts, CPU/memory usage, and lab stats.
+    """
+    import json
+
+    # Get all hosts
+    hosts = database.query(models.Host).all()
+    online_agents = sum(1 for h in hosts if h.status == "online")
+    total_agents = len(hosts)
+
+    # Aggregate resource usage from all online agents
+    total_cpu = 0.0
+    total_memory = 0.0
+    total_containers_running = 0
+    total_containers = 0
+    online_count = 0
+
+    for host in hosts:
+        if host.status != "online":
+            continue
+        online_count += 1
+        try:
+            usage = json.loads(host.resource_usage) if host.resource_usage else {}
+            total_cpu += usage.get("cpu_percent", 0)
+            total_memory += usage.get("memory_percent", 0)
+            total_containers_running += usage.get("containers_running", 0)
+            total_containers += usage.get("containers_total", 0)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Calculate averages
+    avg_cpu = total_cpu / online_count if online_count > 0 else 0
+    avg_memory = total_memory / online_count if online_count > 0 else 0
+
+    # Get lab counts
+    all_labs = database.query(models.Lab).all()
+    running_labs = sum(1 for lab in all_labs if lab.state in ("running", "starting"))
+
+    return {
+        "agents": {"online": online_agents, "total": total_agents},
+        "containers": {"running": total_containers_running, "total": total_containers},
+        "cpu_percent": round(avg_cpu, 1),
+        "memory_percent": round(avg_memory, 1),
+        "labs_running": running_labs,
+        "labs_total": len(all_labs),
+    }
