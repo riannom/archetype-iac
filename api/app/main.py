@@ -30,7 +30,7 @@ from app import agent_client
 from app.agent_client import AgentError, AgentUnavailableError, AgentJobError
 from app.storage import ensure_topology_file, lab_workspace, topology_path
 from app.image_store import qcow2_path, ensure_image_store, load_manifest, save_manifest, detect_device_from_filename
-from app.topology import graph_to_yaml, yaml_to_graph, analyze_topology, split_topology_by_host
+from app.topology import graph_to_yaml, graph_to_containerlab_yaml, yaml_to_graph, analyze_topology, split_topology_by_host
 
 
 logger = logging.getLogger(__name__)
@@ -606,7 +606,7 @@ async def run_multihost_deploy(
 
         for host_name, sub_graph in host_topologies.items():
             agent = host_to_agent[host_name]
-            sub_yaml = graph_to_yaml(sub_graph)
+            sub_yaml = graph_to_containerlab_yaml(sub_graph, lab_id)
 
             logger.info(
                 f"Deploying to host {host_name} (agent {agent.id}): "
@@ -878,17 +878,21 @@ async def lab_up(
 ) -> schemas.JobOut:
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Get topology YAML
+    # Get topology YAML (stored in netlab format)
     topo_path = topology_path(lab.id)
     topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
 
-    # Analyze topology for multi-host deployment
+    # Analyze topology for multi-host deployment and convert to containerlab format
     is_multihost = False
+    clab_yaml = ""
+    graph = None
     if topology_yaml:
         try:
             graph = yaml_to_graph(topology_yaml)
             analysis = analyze_topology(graph)
             is_multihost = not analysis.single_host
+            # Convert to containerlab format for deployment
+            clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
             logger.info(
                 f"Lab {lab_id} topology analysis: "
                 f"single_host={analysis.single_host}, "
@@ -926,13 +930,14 @@ async def lab_up(
     database.refresh(job)
 
     # Start background task - choose deployment method based on topology
+    # Use containerlab-formatted YAML for deployment
     if is_multihost:
         asyncio.create_task(run_multihost_deploy(
-            job.id, lab.id, topology_yaml, required_provider="containerlab"
+            job.id, lab.id, clab_yaml, required_provider="containerlab"
         ))
     else:
         asyncio.create_task(run_agent_job(
-            job.id, lab.id, "up", topology_yaml=topology_yaml, required_provider="containerlab"
+            job.id, lab.id, "up", topology_yaml=clab_yaml, required_provider="containerlab"
         ))
 
     return schemas.JobOut.model_validate(job)
@@ -1004,9 +1009,16 @@ async def lab_restart(
     database.commit()
     database.refresh(job)
 
-    # Get topology YAML for the up phase
+    # Get topology YAML for the up phase and convert to containerlab format
     topo_path = topology_path(lab.id)
-    topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+    clab_yaml = ""
+    if topo_path.exists():
+        try:
+            topology_yaml = topo_path.read_text(encoding="utf-8")
+            graph = yaml_to_graph(topology_yaml)
+            clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+        except Exception as e:
+            logger.warning(f"Failed to convert topology for restart of lab {lab.id}: {e}")
 
     # For restart, we do down then up sequentially
     async def restart_sequence():
@@ -1018,7 +1030,7 @@ async def lab_restart(
             if j and j.status != "failed":
                 j.status = "running"
                 session.commit()
-                await run_agent_job(job.id, lab.id, "up", topology_yaml=topology_yaml, required_provider="containerlab")
+                await run_agent_job(job.id, lab.id, "up", topology_yaml=clab_yaml, required_provider="containerlab")
         finally:
             session.close()
 

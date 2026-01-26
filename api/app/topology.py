@@ -305,6 +305,165 @@ def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> T
     )
 
 
+# Mapping from internal device names to containerlab kinds
+DEVICE_TO_CLAB_KIND = {
+    "eos": "ceos",
+    "arista_eos": "ceos",
+    "ceos": "ceos",
+    "arista_ceos": "ceos",
+    "srlinux": "nokia_srlinux",
+    "srl": "nokia_srlinux",
+    "nokia_srlinux": "nokia_srlinux",
+    "linux": "linux",
+    "alpine": "linux",
+    "frr": "linux",
+    "cumulus": "cvx",
+    "cvx": "cvx",
+    "sonic": "sonic-vs",
+    "crpd": "juniper_crpd",
+    "vjunos": "juniper_vjunosswitch",
+    "vqfx": "juniper_vqfx",
+    "vsrx": "juniper_vsrx3",
+    "iosxr": "cisco_iosxr",
+    "xrd": "cisco_xrd",
+    "nxos": "cisco_n9kv",
+    "iosv": "linux",  # fallback for qemu-based
+    "csr": "linux",  # fallback for qemu-based
+}
+
+# Default images for containerlab kinds (used when node doesn't specify an image)
+CLAB_DEFAULT_IMAGES = {
+    "ceos": "ceos:latest",  # User must import their own cEOS image
+    "nokia_srlinux": "ghcr.io/nokia/srlinux:latest",
+    "linux": "alpine:latest",
+    "cvx": "networkop/cx:5.4.0",
+    "sonic-vs": "docker-sonic-vs:latest",
+    "juniper_crpd": "crpd:latest",
+    "juniper_vjunosswitch": "vrnetlab/vr-vjunosswitch:latest",
+    "juniper_vqfx": "vrnetlab/vr-vqfx:latest",
+    "juniper_vsrx3": "vrnetlab/vr-vsrx3:latest",
+    "cisco_iosxr": "ios-xr:latest",
+    "cisco_xrd": "ios-xrd:latest",
+    "cisco_n9kv": "vrnetlab/vr-n9kv:latest",
+}
+
+
+def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
+    """Convert topology graph to containerlab YAML format.
+
+    Containerlab uses a different format than netlab:
+    - 'kind' instead of 'device'
+    - Links use 'endpoints' array format
+    - Topology is nested under 'topology' key
+    """
+    import re
+
+    # Create a safe lab name (max 20 chars, alphanumeric and dash)
+    safe_lab_name = re.sub(r'[^a-zA-Z0-9-]', '', lab_id)[:20]
+    if not safe_lab_name:
+        safe_lab_name = "lab"
+
+    nodes: dict[str, Any] = {}
+    name_map: dict[str, str] = {}
+    used_names: set[str] = set()
+
+    for node in graph.nodes:
+        safe_name = _safe_node_name(node.name, used_names)
+        name_map[node.name] = safe_name
+        used_names.add(safe_name)
+
+        node_data: dict[str, Any] = {}
+
+        # Map device to containerlab kind
+        kind = "linux"  # default
+        if node.device:
+            device_lower = node.device.lower()
+            kind = DEVICE_TO_CLAB_KIND.get(device_lower, device_lower)
+        node_data["kind"] = kind
+
+        # Use image if specified, otherwise use default for the kind
+        if node.image:
+            node_data["image"] = node.image
+        elif kind in CLAB_DEFAULT_IMAGES:
+            node_data["image"] = CLAB_DEFAULT_IMAGES[kind]
+
+        # Network mode
+        if node.network_mode:
+            node_data["network-mode"] = node.network_mode
+
+        # Add any other vars that containerlab might use
+        if node.vars:
+            for k, v in node.vars.items():
+                # Skip netlab-specific fields
+                if k not in ("label", "name", "device", "version", "role", "mgmt"):
+                    node_data[k] = v
+
+        nodes[safe_name] = node_data if node_data else {}
+
+    # Build links in containerlab format
+    links = []
+    interface_counters: dict[str, int] = {name: 1 for name in used_names}
+
+    for link in graph.links:
+        if len(link.endpoints) != 2:
+            continue  # Skip non-p2p links for now
+
+        ep_a, ep_b = link.endpoints
+
+        # Handle external endpoints
+        if ep_a.type != "node" or ep_b.type != "node":
+            continue  # Skip external links for basic containerlab
+
+        node_a = name_map.get(ep_a.node, ep_a.node)
+        node_b = name_map.get(ep_b.node, ep_b.node)
+
+        # Get or assign interface names
+        if ep_a.ifname:
+            iface_a = ep_a.ifname
+        else:
+            iface_a = f"eth{interface_counters.get(node_a, 1)}"
+            interface_counters[node_a] = interface_counters.get(node_a, 1) + 1
+
+        if ep_b.ifname:
+            iface_b = ep_b.ifname
+        else:
+            iface_b = f"eth{interface_counters.get(node_b, 1)}"
+            interface_counters[node_b] = interface_counters.get(node_b, 1) + 1
+
+        links.append({
+            "endpoints": [f"{node_a}:{iface_a}", f"{node_b}:{iface_b}"]
+        })
+
+    # Generate a unique subnet based on lab_id to avoid conflicts
+    # Use hash of lab_id to generate 2nd and 3rd octets (avoiding common ranges)
+    lab_hash = int(hashlib.md5(lab_id.encode()).hexdigest()[:4], 16)
+    # Use 10.x.y.0/24 range (private, less likely to conflict)
+    octet2 = (lab_hash >> 8) % 256
+    octet3 = lab_hash % 256
+    # Avoid 0 and common subnets
+    if octet2 == 0:
+        octet2 = 1
+    if octet3 == 0:
+        octet3 = 1
+
+    # Build containerlab topology structure
+    topology: dict[str, Any] = {
+        "name": safe_lab_name,
+        "mgmt": {
+            "network": f"clab-{safe_lab_name}",
+            "ipv4-subnet": f"10.{octet2}.{octet3}.0/24",
+        },
+        "topology": {
+            "nodes": nodes,
+        }
+    }
+
+    if links:
+        topology["topology"]["links"] = links
+
+    return yaml.safe_dump(topology, sort_keys=False)
+
+
 def split_topology_by_host(
     graph: TopologyGraph,
     analysis: TopologyAnalysis,
