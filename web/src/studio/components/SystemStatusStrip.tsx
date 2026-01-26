@@ -40,6 +40,7 @@ type PopupType = 'agents' | 'containers' | 'cpu' | 'memory' | 'storage' | null;
 
 const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
   const [activePopup, setActivePopup] = useState<PopupType>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
   const navigate = useNavigate();
 
   if (!metrics) {
@@ -72,7 +73,9 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
 
   return (
     <>
-      <div className="h-12 bg-stone-100/50 dark:bg-stone-800/50 border-b border-stone-200 dark:border-stone-700 flex items-center px-10 gap-8">
+      <div className="flex flex-col border-b border-stone-200 dark:border-stone-700">
+        {/* Main aggregate row */}
+        <div className="h-12 bg-stone-100/50 dark:bg-stone-800/50 flex items-center px-10 gap-8">
         {/* Agents - Click navigates to hosts page */}
         <button
           onClick={() => navigate('/hosts')}
@@ -174,13 +177,105 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
           </button>
         )}
 
-        {/* Multi-host indicator */}
+        {/* Multi-host indicator - clickable to expand/collapse */}
         {metrics.is_multi_host && (
-          <div className="flex items-center gap-1.5 ml-2 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 rounded-md">
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            aria-expanded={isExpanded}
+            className="flex items-center gap-1.5 ml-2 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 rounded-md hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors"
+          >
+            <i className={`fa-solid fa-chevron-down text-blue-500 dark:text-blue-400 text-[8px] transition-transform duration-200 ${
+              isExpanded ? '' : '-rotate-90'
+            }`}></i>
             <i className="fa-solid fa-network-wired text-blue-500 dark:text-blue-400 text-[10px]"></i>
             <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
               aggregated
             </span>
+            <span className="text-[10px] text-blue-500 dark:text-blue-400">
+              ({metrics.per_host?.length || 0})
+            </span>
+          </button>
+        )}
+        </div>
+
+        {/* Collapsible per-host rows */}
+        {metrics.is_multi_host && metrics.per_host && metrics.per_host.length > 0 && (
+          <div
+            className={`overflow-hidden transition-all duration-200 ease-in-out ${
+              isExpanded ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'
+            }`}
+          >
+            {metrics.per_host.map((host) => (
+              <div
+                key={host.id}
+                className="h-10 bg-stone-50/50 dark:bg-stone-700/30 flex items-center px-10 gap-6 border-t border-stone-200/50 dark:border-stone-600/30"
+              >
+                {/* Indent spacer to align with aggregate row content */}
+                <div className="flex items-center gap-2 min-w-[120px]">
+                  <div className="w-1 h-4 bg-stone-300 dark:bg-stone-600 rounded-full"></div>
+                  <i className="fa-solid fa-server text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                  <span className="text-[11px] font-medium text-stone-600 dark:text-stone-400 truncate">
+                    {host.name}
+                  </span>
+                </div>
+
+                {/* Containers for this host */}
+                <div className="flex items-center gap-1.5">
+                  <i className="fa-solid fa-cube text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                  <span className="text-[11px] text-stone-600 dark:text-stone-400">
+                    <span className="font-bold text-stone-700 dark:text-stone-300">{host.containers_running}</span>
+                    <span className="text-stone-400 dark:text-stone-500 ml-0.5">containers</span>
+                  </span>
+                </div>
+
+                <div className="h-4 w-px bg-stone-300/50 dark:bg-stone-600/50"></div>
+
+                {/* CPU */}
+                <div className="flex items-center gap-1.5">
+                  <i className="fa-solid fa-microchip text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                  <span className="text-[10px] text-stone-400 dark:text-stone-500 w-6">CPU</span>
+                  <div className="w-16 h-1.5 bg-stone-200 dark:bg-stone-600 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${getCpuColor(host.cpu_percent)} transition-all duration-500`}
+                      style={{ width: `${Math.min(host.cpu_percent, 100)}%` }}
+                    ></div>
+                  </div>
+                  <span className="text-[10px] font-medium text-stone-600 dark:text-stone-400 w-8 text-right">
+                    {host.cpu_percent.toFixed(0)}%
+                  </span>
+                </div>
+
+                {/* Memory */}
+                <div className="flex items-center gap-1.5">
+                  <i className="fa-solid fa-memory text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                  <span className="text-[10px] text-stone-400 dark:text-stone-500 w-6">MEM</span>
+                  <div className="w-16 h-1.5 bg-stone-200 dark:bg-stone-600 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${getMemoryColor(host.memory_percent)} transition-all duration-500`}
+                      style={{ width: `${Math.min(host.memory_percent, 100)}%` }}
+                    ></div>
+                  </div>
+                  <span className="text-[10px] font-medium text-stone-600 dark:text-stone-400 w-8 text-right">
+                    {host.memory_percent.toFixed(0)}%
+                  </span>
+                </div>
+
+                {/* Storage */}
+                <div className="flex items-center gap-1.5">
+                  <i className="fa-solid fa-hard-drive text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                  <span className="text-[10px] text-stone-400 dark:text-stone-500 w-6">DISK</span>
+                  <div className="w-16 h-1.5 bg-stone-200 dark:bg-stone-600 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${getStorageColor(host.storage_percent)} transition-all duration-500`}
+                      style={{ width: `${Math.min(host.storage_percent, 100)}%` }}
+                    ></div>
+                  </div>
+                  <span className="text-[10px] font-medium text-stone-600 dark:text-stone-400 w-8 text-right">
+                    {host.storage_percent.toFixed(0)}%
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
