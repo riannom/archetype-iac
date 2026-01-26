@@ -187,3 +187,122 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
         "labs_running": running_labs,
         "labs_total": len(all_labs),
     }
+
+
+@app.get("/dashboard/metrics/containers")
+def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
+    """Get detailed container breakdown by lab."""
+    import json
+
+    hosts = database.query(models.Host).filter(models.Host.status == "online").all()
+    all_labs = database.query(models.Lab).all()
+    # Map both full ID and truncated prefix to lab info
+    labs_by_id = {lab.id: lab.name for lab in all_labs}
+    labs_by_prefix = {lab.id[:20]: (lab.id, lab.name) for lab in all_labs}  # containerlab truncates to ~20 chars
+
+    def find_lab(prefix: str) -> tuple[str | None, str | None]:
+        """Find lab by prefix match."""
+        if not prefix:
+            return None, None
+        # Try exact match first
+        if prefix in labs_by_id:
+            return prefix, labs_by_id[prefix]
+        # Try prefix match (containerlab truncates lab IDs)
+        if prefix in labs_by_prefix:
+            return labs_by_prefix[prefix]
+        # Try partial prefix match
+        for lab_id, lab_name in labs_by_id.items():
+            if lab_id.startswith(prefix):
+                return lab_id, lab_name
+        return None, None
+
+    all_containers = []
+    for host in hosts:
+        try:
+            usage = json.loads(host.resource_usage) if host.resource_usage else {}
+            for container in usage.get("container_details", []):
+                container["agent_name"] = host.name
+                lab_id, lab_name = find_lab(container.get("lab_prefix", ""))
+                container["lab_id"] = lab_id
+                container["lab_name"] = lab_name
+                all_containers.append(container)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Group by lab
+    by_lab = {}
+    system_containers = []
+    for c in all_containers:
+        if c.get("is_system"):
+            system_containers.append(c)
+        elif c.get("lab_id"):
+            lab_id = c["lab_id"]
+            if lab_id not in by_lab:
+                by_lab[lab_id] = {"name": c["lab_name"], "containers": []}
+            by_lab[lab_id]["containers"].append(c)
+        else:
+            # Orphan containerlab container (lab deleted but container still running)
+            system_containers.append(c)
+
+    return {
+        "by_lab": by_lab,
+        "system_containers": system_containers,
+        "total_running": sum(1 for c in all_containers if c.get("status") == "running"),
+        "total_stopped": sum(1 for c in all_containers if c.get("status") != "running"),
+    }
+
+
+@app.get("/dashboard/metrics/resources")
+def get_resource_distribution(database: Session = Depends(db.get_db)) -> dict:
+    """Get resource usage distribution by agent and lab."""
+    import json
+
+    hosts = database.query(models.Host).filter(models.Host.status == "online").all()
+    all_labs = database.query(models.Lab).all()
+    labs_by_id = {lab.id: lab.name for lab in all_labs}
+
+    def find_lab_id(prefix: str) -> str | None:
+        """Find lab ID by prefix match."""
+        if not prefix:
+            return None
+        if prefix in labs_by_id:
+            return prefix
+        for lab_id in labs_by_id:
+            if lab_id.startswith(prefix):
+                return lab_id
+        return None
+
+    by_agent = []
+    lab_containers = {}  # lab_id -> container count
+
+    for host in hosts:
+        usage = json.loads(host.resource_usage) if host.resource_usage else {}
+        by_agent.append({
+            "id": host.id,
+            "name": host.name,
+            "cpu_percent": usage.get("cpu_percent", 0),
+            "memory_percent": usage.get("memory_percent", 0),
+            "containers": usage.get("containers_running", 0),
+        })
+
+        # Count containers per lab (only non-system containers)
+        for c in usage.get("container_details", []):
+            if c.get("is_system"):
+                continue
+            lab_id = find_lab_id(c.get("lab_prefix", ""))
+            if lab_id:
+                lab_containers[lab_id] = lab_containers.get(lab_id, 0) + 1
+
+    # Estimate lab resource usage by container proportion
+    total_containers = sum(lab_containers.values()) or 1
+    by_lab = [
+        {
+            "id": lab_id,
+            "name": labs_by_id[lab_id],
+            "container_count": count,
+            "estimated_percent": round(count / total_containers * 100, 1),
+        }
+        for lab_id, count in lab_containers.items()
+    ]
+
+    return {"by_agent": by_agent, "by_lab": sorted(by_lab, key=lambda x: -x["container_count"])}

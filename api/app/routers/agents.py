@@ -227,6 +227,44 @@ def list_agents(
     return result
 
 
+@router.get("/detailed")
+def list_agents_detailed(
+    database: Session = Depends(db.get_db),
+) -> list[dict]:
+    """List all agents with full details including resource usage."""
+    hosts = database.query(models.Host).order_by(models.Host.name).all()
+
+    result = []
+    for host in hosts:
+        try:
+            capabilities = json.loads(host.capabilities) if host.capabilities else {}
+        except (json.JSONDecodeError, TypeError):
+            capabilities = {}
+
+        try:
+            resource_usage = json.loads(host.resource_usage) if host.resource_usage else {}
+        except (json.JSONDecodeError, TypeError):
+            resource_usage = {}
+
+        result.append({
+            "id": host.id,
+            "name": host.name,
+            "address": host.address,
+            "status": host.status,
+            "version": host.version,
+            "capabilities": capabilities,
+            "resource_usage": {
+                "cpu_percent": resource_usage.get("cpu_percent", 0),
+                "memory_percent": resource_usage.get("memory_percent", 0),
+                "containers_running": resource_usage.get("containers_running", 0),
+                "containers_total": resource_usage.get("containers_total", 0),
+            },
+            "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
+        })
+
+    return result
+
+
 @router.get("/{agent_id}", response_model=HostOut)
 def get_agent(
     agent_id: str,
