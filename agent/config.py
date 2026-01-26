@@ -33,6 +33,24 @@ class Settings(BaseSettings):
     # Workspace for lab files
     workspace_path: str = "/var/lib/aura-agent"
 
+    # Communication timeouts (seconds)
+    registration_timeout: float = 10.0
+    heartbeat_timeout: float = 5.0
+
+    # Console I/O timeouts (seconds)
+    console_read_timeout: float = 0.05
+    console_input_timeout: float = 0.1
+
+    # Container operations
+    container_stop_timeout: int = 10
+
+    # VXLAN networking
+    vxlan_vni_base: int = 100000
+    vxlan_vni_max: int = 199999
+
+    # Concurrency limits
+    max_concurrent_jobs: int = 4
+
     class Config:
         env_prefix = "AURA_AGENT_"
 

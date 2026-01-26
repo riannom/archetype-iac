@@ -21,7 +21,8 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.config import settings
-from agent.providers import ContainerlabProvider, NodeStatus as ProviderNodeStatus
+from agent.providers import NodeStatus as ProviderNodeStatus, get_provider, list_providers
+from agent.providers.base import Provider
 from agent.schemas import (
     AgentCapabilities,
     AgentInfo,
@@ -63,9 +64,6 @@ AGENT_ID = settings.agent_id or str(uuid.uuid4())[:8]
 _registered = False
 _heartbeat_task: asyncio.Task | None = None
 
-# Provider instance
-_containerlab = ContainerlabProvider()
-
 # Overlay network manager (lazy initialized)
 _overlay_manager = None
 
@@ -84,6 +82,28 @@ def get_workspace(lab_id: str) -> Path:
     workspace = Path(settings.workspace_path) / lab_id
     workspace.mkdir(parents=True, exist_ok=True)
     return workspace
+
+
+def get_provider_for_request(provider_name: str = "containerlab") -> Provider:
+    """Get a provider instance for handling a request.
+
+    Args:
+        provider_name: Name of the provider to use (default: containerlab)
+
+    Returns:
+        Provider instance
+
+    Raises:
+        HTTPException: If the requested provider is not available
+    """
+    provider = get_provider(provider_name)
+    if provider is None:
+        available = list_providers()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Provider '{provider_name}' not available. Available: {available}"
+        )
+    return provider
 
 
 def provider_status_to_schema(status: ProviderNodeStatus) -> NodeStatus:
@@ -114,7 +134,7 @@ def get_capabilities() -> AgentCapabilities:
 
     return AgentCapabilities(
         providers=providers,
-        max_concurrent_jobs=4,
+        max_concurrent_jobs=settings.max_concurrent_jobs,
         features=features,
     )
 
@@ -151,7 +171,7 @@ async def register_with_controller() -> bool:
             response = await client.post(
                 f"{settings.controller_url}/agents/register",
                 json=request.model_dump(),
-                timeout=10.0,
+                timeout=settings.registration_timeout,
             )
             if response.status_code == 200:
                 result = RegistrationResponse(**response.json())
@@ -192,7 +212,7 @@ async def send_heartbeat() -> HeartbeatResponse | None:
             response = await client.post(
                 f"{settings.controller_url}/agents/{AGENT_ID}/heartbeat",
                 json=request.model_dump(),
-                timeout=5.0,
+                timeout=settings.heartbeat_timeout,
             )
             if response.status_code == 200:
                 return HeartbeatResponse(**response.json())
@@ -288,10 +308,11 @@ def info():
 @app.post("/jobs/deploy")
 async def deploy_lab(request: DeployRequest) -> JobResult:
     """Deploy a lab topology."""
-    print(f"Deploy request: lab={request.lab_id}, job={request.job_id}")
+    print(f"Deploy request: lab={request.lab_id}, job={request.job_id}, provider={request.provider.value}")
 
+    provider = get_provider_for_request(request.provider.value)
     workspace = get_workspace(request.lab_id)
-    result = await _containerlab.deploy(
+    result = await provider.deploy(
         lab_id=request.lab_id,
         topology_yaml=request.topology_yaml,
         workspace=workspace,
@@ -319,8 +340,11 @@ async def destroy_lab(request: DestroyRequest) -> JobResult:
     """Tear down a lab."""
     print(f"Destroy request: lab={request.lab_id}, job={request.job_id}")
 
+    # Use default provider for destroy (containerlab)
+    # In future, could get provider from request or lab metadata
+    provider = get_provider_for_request("containerlab")
     workspace = get_workspace(request.lab_id)
-    result = await _containerlab.destroy(
+    result = await provider.destroy(
         lab_id=request.lab_id,
         workspace=workspace,
     )
@@ -347,16 +371,18 @@ async def node_action(request: NodeActionRequest) -> JobResult:
     """Start or stop a specific node."""
     print(f"Node action: lab={request.lab_id}, node={request.node_name}, action={request.action}")
 
+    # Use default provider for node actions
+    provider = get_provider_for_request("containerlab")
     workspace = get_workspace(request.lab_id)
 
     if request.action == "start":
-        result = await _containerlab.start_node(
+        result = await provider.start_node(
             lab_id=request.lab_id,
             node_name=request.node_name,
             workspace=workspace,
         )
     elif request.action == "stop":
-        result = await _containerlab.stop_node(
+        result = await provider.stop_node(
             lab_id=request.lab_id,
             node_name=request.node_name,
             workspace=workspace,
@@ -392,8 +418,10 @@ async def lab_status(request: LabStatusRequest) -> LabStatusResponse:
     """Get status of all nodes in a lab."""
     print(f"Status request: lab={request.lab_id}")
 
+    # Use default provider for status queries
+    provider = get_provider_for_request("containerlab")
     workspace = get_workspace(request.lab_id)
-    result = await _containerlab.status(
+    result = await provider.status(
         lab_id=request.lab_id,
         workspace=workspace,
     )
@@ -427,7 +455,9 @@ async def discover_labs() -> DiscoverLabsResponse:
     """
     print("Discovering running labs...")
 
-    discovered = await _containerlab.discover_labs()
+    # Use default provider for discovery
+    provider = get_provider_for_request("containerlab")
+    discovered = await provider.discover_labs()
 
     labs = [
         DiscoveredLab(
@@ -461,8 +491,10 @@ async def cleanup_orphans(request: CleanupOrphansRequest) -> CleanupOrphansRespo
     """
     print(f"Cleaning up orphan containers, keeping {len(request.valid_lab_ids)} valid labs")
 
+    # Use default provider for cleanup
+    provider = get_provider_for_request("containerlab")
     valid_ids = set(request.valid_lab_ids)
-    removed = await _containerlab.cleanup_orphan_containers(valid_ids)
+    removed = await provider.cleanup_orphan_containers(valid_ids)
 
     return CleanupOrphansResponse(
         removed_containers=removed,
@@ -635,21 +667,50 @@ async def overlay_status() -> OverlayStatusResponse:
 
 # --- Console Endpoint ---
 
+# Import console shell configuration from central vendor registry
+from agent.vendors import get_console_shell
+
+
+def _get_shell_for_container(container_name: str) -> str:
+    """Get the appropriate shell command based on container's node kind.
+
+    Uses the centralized vendor registry (agent/vendors.py) to determine
+    the correct shell command for each containerlab node kind.
+    """
+    try:
+        import docker
+        client = docker.from_env()
+        container = client.containers.get(container_name)
+        kind = container.labels.get("clab-node-kind", "")
+        return get_console_shell(kind)
+    except Exception:
+        return "/bin/sh"
+
+
 @app.websocket("/console/{lab_id}/{node_name}")
 async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
     """WebSocket endpoint for console access to a node."""
     await websocket.accept()
 
-    # Get container name from provider
-    container_name = _containerlab.get_container_name(lab_id, node_name)
+    # Get container name from provider (use default containerlab for now)
+    provider = get_provider("containerlab")
+    if provider is None:
+        await websocket.send_text("\r\nError: No provider available\r\n")
+        await websocket.close(code=1011)
+        return
+
+    container_name = provider.get_container_name(lab_id, node_name)
+
+    # Determine shell based on node kind
+    shell_cmd = _get_shell_for_container(container_name)
 
     # Import console module
     from agent.console.docker_exec import DockerConsole
 
     console = DockerConsole(container_name)
 
-    # Try to start console session
-    if not console.start():
+    # Try to start console session with appropriate shell
+    if not console.start(shell=shell_cmd):
         await websocket.send_text(f"\r\nError: Could not connect to {node_name}\r\n")
         await websocket.send_text(f"Container '{container_name}' may not be running.\r\n")
         await websocket.close(code=1011)
@@ -695,7 +756,7 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
         """Read from container and send to WebSocket."""
         try:
             while console.is_running:
-                data = console.read_blocking(timeout=0.05)
+                data = console.read_blocking(timeout=settings.console_read_timeout)
                 if data is None:
                     break
                 if data:
@@ -709,7 +770,7 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
         try:
             while console.is_running:
                 try:
-                    data = await asyncio.wait_for(input_queue.get(), timeout=0.1)
+                    data = await asyncio.wait_for(input_queue.get(), timeout=settings.console_input_timeout)
                     if data is None:
                         break
                     if data:

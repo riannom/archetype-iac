@@ -25,15 +25,13 @@ from typing import Any
 import docker
 from docker.errors import NotFound
 
+from agent.config import settings
+
 
 logger = logging.getLogger(__name__)
 
 # VXLAN default port
 VXLAN_PORT = 4789
-
-# VNI range for auto-allocation (avoid conflicts with existing networks)
-VNI_BASE = 100000
-VNI_MAX = 199999
 
 
 @dataclass
@@ -508,11 +506,11 @@ class OverlayManager:
 class VniAllocator:
     """Allocates unique VNIs for VXLAN tunnels."""
 
-    def __init__(self, base: int = VNI_BASE, max_vni: int = VNI_MAX):
-        self._base = base
-        self._max = max_vni
+    def __init__(self, base: int | None = None, max_vni: int | None = None):
+        self._base = base if base is not None else settings.vxlan_vni_base
+        self._max = max_vni if max_vni is not None else settings.vxlan_vni_max
         self._allocated: dict[str, int] = {}  # key -> vni
-        self._next_vni = base
+        self._next_vni = self._base
 
     def allocate(self, lab_id: str, link_id: str) -> int:
         """Allocate a VNI for a link.

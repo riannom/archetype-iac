@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app import models
+from app.config import settings
 from app.db import SessionLocal
 
 
@@ -19,19 +20,6 @@ logger = logging.getLogger(__name__)
 
 # Cache for healthy agents
 _agent_cache: dict[str, tuple[str, datetime]] = {}  # agent_id -> (address, last_check)
-CACHE_TTL = timedelta(seconds=30)
-
-# Retry configuration
-MAX_RETRIES = 3
-RETRY_BACKOFF_BASE = 1.0  # Base delay in seconds
-RETRY_BACKOFF_MAX = 10.0  # Maximum delay in seconds
-
-# Timeout configuration
-DEPLOY_TIMEOUT = 300.0  # 5 minutes
-DESTROY_TIMEOUT = 120.0  # 2 minutes
-NODE_ACTION_TIMEOUT = 60.0
-STATUS_TIMEOUT = 30.0
-HEALTH_CHECK_TIMEOUT = 5.0
 
 
 class AgentError(Exception):
@@ -60,13 +48,16 @@ class AgentJobError(AgentError):
 async def with_retry(
     func: Callable[..., Any],
     *args,
-    max_retries: int = MAX_RETRIES,
+    max_retries: int | None = None,
     **kwargs,
 ) -> Any:
     """Execute an async function with exponential backoff retry logic.
 
     Only retries on connection errors and timeouts, not on application errors.
     """
+    if max_retries is None:
+        max_retries = settings.agent_max_retries
+
     last_exception = None
 
     for attempt in range(max_retries + 1):
@@ -75,7 +66,10 @@ async def with_retry(
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
             last_exception = e
             if attempt < max_retries:
-                delay = min(RETRY_BACKOFF_BASE * (2 ** attempt), RETRY_BACKOFF_MAX)
+                delay = min(
+                    settings.agent_retry_backoff_base * (2 ** attempt),
+                    settings.agent_retry_backoff_max,
+                )
                 logger.warning(
                     f"Agent request failed (attempt {attempt + 1}/{max_retries + 1}), "
                     f"retrying in {delay:.1f}s: {e}"
@@ -248,7 +242,7 @@ async def check_agent_health(agent: models.Host) -> bool:
 
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=HEALTH_CHECK_TIMEOUT)
+            response = await client.get(url, timeout=settings.agent_health_check_timeout)
             if response.status_code == 200:
                 return True
     except Exception as e:
@@ -270,6 +264,7 @@ async def _do_deploy(
     job_id: str,
     lab_id: str,
     topology_yaml: str,
+    provider: str = "containerlab",
 ) -> dict:
     """Internal deploy request (for retry wrapper)."""
     async with httpx.AsyncClient() as client:
@@ -279,9 +274,9 @@ async def _do_deploy(
                 "job_id": job_id,
                 "lab_id": lab_id,
                 "topology_yaml": topology_yaml,
-                "provider": "containerlab",
+                "provider": provider,
             },
-            timeout=DEPLOY_TIMEOUT,
+            timeout=settings.agent_deploy_timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -292,13 +287,25 @@ async def deploy_to_agent(
     job_id: str,
     lab_id: str,
     topology_yaml: str,
+    provider: str = "containerlab",
 ) -> dict:
-    """Send deploy request to agent with retry logic."""
+    """Send deploy request to agent with retry logic.
+
+    Args:
+        agent: The agent to deploy to
+        job_id: Job identifier
+        lab_id: Lab identifier
+        topology_yaml: Topology YAML content
+        provider: Provider to use (default: containerlab)
+
+    Returns:
+        Agent response dict
+    """
     url = f"{get_agent_url(agent)}/jobs/deploy"
-    logger.info(f"Deploying lab {lab_id} via agent {agent.id}")
+    logger.info(f"Deploying lab {lab_id} via agent {agent.id} using provider {provider}")
 
     try:
-        result = await with_retry(_do_deploy, url, job_id, lab_id, topology_yaml)
+        result = await with_retry(_do_deploy, url, job_id, lab_id, topology_yaml, provider)
         logger.info(f"Deploy completed for lab {lab_id}: {result.get('status')}")
         return result
     except AgentError as e:
@@ -315,7 +322,7 @@ async def _do_destroy(url: str, job_id: str, lab_id: str) -> dict:
                 "job_id": job_id,
                 "lab_id": lab_id,
             },
-            timeout=DESTROY_TIMEOUT,
+            timeout=settings.agent_destroy_timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -356,7 +363,7 @@ async def _do_node_action(
                 "node_name": node_name,
                 "action": action,
             },
-            timeout=NODE_ACTION_TIMEOUT,
+            timeout=settings.agent_node_action_timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -388,7 +395,7 @@ async def _do_get_status(url: str, lab_id: str) -> dict:
         response = await client.post(
             url,
             json={"lab_id": lab_id},
-            timeout=STATUS_TIMEOUT,
+            timeout=settings.agent_status_timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -461,11 +468,13 @@ async def get_agent_by_name(
     return agent
 
 
-async def update_stale_agents(database: Session, timeout_seconds: int = 90) -> list[str]:
+async def update_stale_agents(database: Session, timeout_seconds: int | None = None) -> list[str]:
     """Mark agents as offline if their heartbeat is stale.
 
     Returns list of agent IDs that were marked offline.
     """
+    if timeout_seconds is None:
+        timeout_seconds = settings.agent_stale_timeout
     from datetime import timezone
     from sqlalchemy import or_
 
