@@ -179,18 +179,18 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
   }
 
   return (
-    <div className="flex-1 bg-stone-950 flex flex-col overflow-hidden animate-in fade-in duration-300">
+    <div className="flex-1 bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden animate-in fade-in duration-300">
       <div className="p-8 max-w-7xl mx-auto w-full flex-1 flex flex-col overflow-hidden">
         <header className="mb-6 flex flex-wrap justify-between items-end gap-4">
           <div>
-            <h1 className="text-3xl font-black text-white tracking-tight">Image Management</h1>
-            <p className="text-stone-400 text-sm mt-1">Load container images and assign them to device families.</p>
+            <h1 className="text-3xl font-black text-stone-900 dark:text-white tracking-tight">Image Management</h1>
+            <p className="text-stone-500 dark:text-stone-400 text-sm mt-1">Load container images and assign them to device families.</p>
           </div>
           <div className="flex gap-3">
             <button onClick={openFilePicker} className="px-4 py-2 bg-sage-600 hover:bg-sage-500 text-white rounded-lg text-xs font-bold transition-all">
               <i className="fa-solid fa-cloud-arrow-up mr-2"></i> Upload image
             </button>
-            <button onClick={openQcow2Picker} className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-white rounded-lg border border-stone-700 text-xs font-bold transition-all">
+            <button onClick={openQcow2Picker} className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all">
               <i className="fa-solid fa-hard-drive mr-2"></i> Upload QCOW2
             </button>
             <input ref={fileInputRef} className="hidden" type="file" accept=".tar,.tgz,.tar.gz,.tar.xz,.txz" onChange={uploadImage} />
@@ -198,11 +198,11 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
           </div>
         </header>
 
-        {uploadStatus && <p className="text-xs text-stone-400 mb-4">{uploadStatus}</p>}
+        {uploadStatus && <p className="text-xs text-stone-500 dark:text-stone-400 mb-4">{uploadStatus}</p>}
         {uploadProgress !== null && (
           <div className="mb-4">
             <div className="text-[10px] font-bold text-stone-500 uppercase mb-1">Image upload {uploadProgress}%</div>
-            <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-stone-200 dark:bg-stone-800 rounded-full overflow-hidden">
               <div className="h-full bg-sage-500" style={{ width: `${uploadProgress}%` }} />
             </div>
           </div>
@@ -210,7 +210,7 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
         {qcow2Progress !== null && (
           <div className="mb-4">
             <div className="text-[10px] font-bold text-stone-500 uppercase mb-1">QCOW2 upload {qcow2Progress}%</div>
-            <div className="h-1.5 bg-stone-800 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-stone-200 dark:bg-stone-800 rounded-full overflow-hidden">
               <div className="h-full bg-emerald-500" style={{ width: `${qcow2Progress}%` }} />
             </div>
           </div>
@@ -218,17 +218,17 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
 
         <div className="grid grid-cols-12 gap-8 flex-1 overflow-hidden">
           <div className="col-span-4 flex flex-col gap-4 overflow-y-auto pr-2 custom-scrollbar">
-            <div className="bg-stone-900 border border-stone-800 rounded-xl p-4">
+            <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl p-4">
               <div className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-2">Custom device</div>
               <div className="space-y-2">
                 <input
-                  className="w-full bg-stone-950 border border-stone-700 rounded px-3 py-2 text-xs text-stone-200"
+                  className="w-full bg-stone-100 dark:bg-stone-950 border border-stone-300 dark:border-stone-700 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200"
                   placeholder="device-id (e.g. my-os)"
                   value={customDeviceId}
                   onChange={(event) => setCustomDeviceId(event.target.value)}
                 />
                 <input
-                  className="w-full bg-stone-950 border border-stone-700 rounded px-3 py-2 text-xs text-stone-200"
+                  className="w-full bg-stone-100 dark:bg-stone-950 border border-stone-300 dark:border-stone-700 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200"
                   placeholder="label (optional)"
                   value={customDeviceLabel}
                   onChange={(event) => setCustomDeviceLabel(event.target.value)}
@@ -249,9 +249,9 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
               {customDevices.length > 0 && (
                 <div className="mt-3 space-y-2">
                   {customDevices.map((device) => (
-                    <div key={device.id} className="flex items-center justify-between text-[11px] text-stone-400">
+                    <div key={device.id} className="flex items-center justify-between text-[11px] text-stone-500 dark:text-stone-400">
                       <span className="font-mono">{device.id}</span>
-                      <button onClick={() => onRemoveCustomDevice(device.id)} className="text-red-400 hover:text-red-300">Remove</button>
+                      <button onClick={() => onRemoveCustomDevice(device.id)} className="text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300">Remove</button>
                     </div>
                   ))}
                 </div>
@@ -266,18 +266,18 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
                   className={`p-4 rounded-xl border transition-all cursor-pointer group ${
                     selectedDevice?.id === model.id
                       ? 'bg-sage-600/10 border-sage-500 shadow-lg shadow-sage-900/20'
-                      : 'bg-stone-900 border-stone-800 hover:border-stone-700'
+                      : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700'
                   }`}
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-4">
                       <div className={`w-12 h-12 rounded-lg flex items-center justify-center text-xl shadow-inner ${
-                        selectedDevice?.id === model.id ? 'bg-sage-500 text-white' : 'bg-stone-800 text-stone-400 group-hover:text-sage-400 transition-colors'
+                        selectedDevice?.id === model.id ? 'bg-sage-500 text-white' : 'bg-stone-200 dark:bg-stone-800 text-stone-500 dark:text-stone-400 group-hover:text-sage-500 dark:group-hover:text-sage-400 transition-colors'
                       }`}>
                         <i className={`fa-solid ${model.icon}`}></i>
                       </div>
                       <div>
-                        <h3 className="font-bold text-white text-sm">{model.name}</h3>
+                        <h3 className="font-bold text-stone-900 dark:text-white text-sm">{model.name}</h3>
                         <span className="text-[10px] uppercase font-bold text-stone-500 tracking-wider">{model.vendor}</span>
                       </div>
                     </div>
@@ -290,30 +290,30 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
             })}
           </div>
 
-          <div className="col-span-8 bg-stone-900/50 border border-stone-800 rounded-2xl flex flex-col overflow-hidden">
+          <div className="col-span-8 bg-white/50 dark:bg-stone-900/50 border border-stone-200 dark:border-stone-800 rounded-2xl flex flex-col overflow-hidden">
             {selectedDevice ? (
               <>
-                <div className="p-6 border-b border-stone-800 bg-stone-900/50 flex justify-between items-center">
+                <div className="p-6 border-b border-stone-200 dark:border-stone-800 bg-stone-100/50 dark:bg-stone-900/50 flex justify-between items-center">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded bg-sage-500/20 flex items-center justify-center text-sage-400 border border-sage-500/30">
+                    <div className="w-10 h-10 rounded bg-sage-500/20 flex items-center justify-center text-sage-600 dark:text-sage-400 border border-sage-500/30">
                       <i className={`fa-solid ${selectedDevice.icon}`}></i>
                     </div>
                     <div>
-                      <h2 className="text-xl font-bold text-white">{selectedDevice.name}</h2>
-                      <p className="text-xs text-stone-500">Device ID: <span className="font-mono text-sage-400">{selectedDevice.id}</span></p>
+                      <h2 className="text-xl font-bold text-stone-900 dark:text-white">{selectedDevice.name}</h2>
+                      <p className="text-xs text-stone-500">Device ID: <span className="font-mono text-sage-600 dark:text-sage-400">{selectedDevice.id}</span></p>
                     </div>
                   </div>
-                  <button onClick={onRefresh} className="px-3 py-2 bg-stone-800 hover:bg-stone-700 text-xs font-bold text-stone-200 rounded-lg">
+                  <button onClick={onRefresh} className="px-3 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-xs font-bold text-stone-700 dark:text-stone-200 rounded-lg">
                     <i className="fa-solid fa-rotate mr-2"></i> Refresh
                   </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="p-4 bg-stone-950/70 rounded-xl border border-stone-800">
+                    <div className="p-4 bg-stone-100/70 dark:bg-stone-950/70 rounded-xl border border-stone-200 dark:border-stone-800">
                       <div className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-2">Catalog</div>
                       {imageCatalog[selectedDevice.id] ? (
-                        <div className="space-y-1 text-xs text-stone-300">
+                        <div className="space-y-1 text-xs text-stone-700 dark:text-stone-300">
                           {imageCatalog[selectedDevice.id].clab && <div>clab: {imageCatalog[selectedDevice.id].clab}</div>}
                           {imageCatalog[selectedDevice.id].libvirt && <div>libvirt: {imageCatalog[selectedDevice.id].libvirt}</div>}
                           {imageCatalog[selectedDevice.id].virtualbox && <div>virtualbox: {imageCatalog[selectedDevice.id].virtualbox}</div>}
@@ -325,9 +325,9 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
                         <div className="text-xs text-stone-500 italic">No catalog entry.</div>
                       )}
                     </div>
-                    <div className="p-4 bg-stone-950/70 rounded-xl border border-stone-800">
+                    <div className="p-4 bg-stone-100/70 dark:bg-stone-950/70 rounded-xl border border-stone-200 dark:border-stone-800">
                       <div className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-2">Assigned Images</div>
-                      <div className="text-2xl font-black text-sage-400">{assignedImages.length}</div>
+                      <div className="text-2xl font-black text-sage-600 dark:text-sage-400">{assignedImages.length}</div>
                       <div className="text-[10px] text-stone-500 uppercase font-bold">linked to this device</div>
                     </div>
                   </div>
@@ -337,13 +337,13 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
                     {assignedImages.length > 0 ? (
                       <div className="space-y-3">
                         {assignedImages.map((img) => (
-                          <div key={img.id} className="flex flex-col gap-3 p-4 bg-stone-900 border border-stone-800 rounded-xl">
+                          <div key={img.id} className="flex flex-col gap-3 p-4 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl">
                             <div className="flex items-center justify-between">
                               <div>
-                                <div className="text-sm font-bold text-white">{img.filename || img.reference}</div>
+                                <div className="text-sm font-bold text-stone-900 dark:text-white">{img.filename || img.reference}</div>
                                 <div className="text-[11px] text-stone-500 font-mono mt-0.5">{img.kind}</div>
                               </div>
-                              <button onClick={() => assignImage(img.id, null)} className="text-stone-500 hover:text-red-400 text-xs font-bold">
+                              <button onClick={() => assignImage(img.id, null)} className="text-stone-500 hover:text-red-500 dark:hover:text-red-400 text-xs font-bold">
                                 Unassign
                               </button>
                             </div>
@@ -351,7 +351,7 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
                               <div className="flex-1">
                                 <label className="text-[9px] font-bold text-stone-500 uppercase">Version</label>
                                 <input
-                                  className="mt-1 w-full bg-stone-950 border border-stone-700 rounded px-2 py-1 text-xs text-stone-200"
+                                  className="mt-1 w-full bg-stone-100 dark:bg-stone-950 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-900 dark:text-stone-200"
                                   defaultValue={img.version || ''}
                                   placeholder="Version"
                                   onBlur={(event) => updateVersion(img.id, event.target.value)}
@@ -371,14 +371,14 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
                     {unassignedImages.length > 0 ? (
                       <div className="space-y-3">
                         {unassignedImages.map((img) => (
-                          <div key={img.id} className="flex items-center justify-between p-3 bg-stone-900 border border-stone-800 rounded-xl">
+                          <div key={img.id} className="flex items-center justify-between p-3 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl">
                             <div>
-                              <div className="text-sm font-bold text-white">{img.filename || img.reference}</div>
+                              <div className="text-sm font-bold text-stone-900 dark:text-white">{img.filename || img.reference}</div>
                               <div className="text-[11px] text-stone-500 font-mono">{img.kind}</div>
                             </div>
                             <div className="flex items-center gap-2">
                               <input
-                                className="bg-stone-950 border border-stone-700 rounded px-2 py-1 text-[11px] text-stone-200 w-36"
+                                className="bg-stone-100 dark:bg-stone-950 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-[11px] text-stone-900 dark:text-stone-200 w-36"
                                 placeholder="device-id"
                                 value={customAssignments[img.id] || ''}
                                 onChange={(event) =>
@@ -403,11 +403,11 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
                 </div>
               </>
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-stone-600">
-                <div className="w-24 h-24 rounded-full bg-stone-900 border border-stone-800 flex items-center justify-center mb-6 shadow-2xl">
+              <div className="flex-1 flex flex-col items-center justify-center text-stone-500 dark:text-stone-600">
+                <div className="w-24 h-24 rounded-full bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 flex items-center justify-center mb-6 shadow-2xl">
                   <i className="fa-solid fa-microchip text-4xl opacity-20"></i>
                 </div>
-                <h3 className="text-lg font-bold text-stone-400">Select a device to manage</h3>
+                <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">Select a device to manage</h3>
                 <p className="text-sm max-w-xs text-center mt-2">Pick a device on the left to see its images and catalog metadata.</p>
               </div>
             )}
