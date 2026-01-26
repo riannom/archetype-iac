@@ -3,7 +3,7 @@ import React from 'react';
 import { DeviceModel, AnnotationType } from '../types';
 
 interface SidebarProps {
-  categories: { name: string; models: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
+  categories: { name: string; models?: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
   onAddDevice: (model: DeviceModel) => void;
   onAddAnnotation: (type: AnnotationType) => void;
 }

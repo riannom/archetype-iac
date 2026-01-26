@@ -34,6 +34,11 @@ RUN curl -sL https://get.containerlab.dev | bash -s -- --no-sudo
 
 COPY api/ ./
 
+# Copy agent vendors module for unified vendor registry
+RUN mkdir -p agent
+COPY agent/vendors.py ./agent/vendors.py
+RUN touch agent/__init__.py
+
 ENV PYTHONUNBUFFERED=1
 ENV NETLAB_WORKSPACE=/var/lib/netlab-gui
 

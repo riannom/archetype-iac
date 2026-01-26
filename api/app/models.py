@@ -29,6 +29,8 @@ class Lab(Base):
     name: Mapped[str] = mapped_column(String(200))
     owner_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     workspace_path: Mapped[str] = mapped_column(String(500), default="")
+    # Infrastructure provider for this lab (containerlab, libvirt, etc.)
+    provider: Mapped[str] = mapped_column(String(50), default="containerlab")
     # Lab state: stopped, starting, running, stopping, error, unknown
     state: Mapped[str] = mapped_column(String(50), default="stopped")
     # Agent currently managing this lab (for multi-host support)

@@ -1,3 +1,13 @@
+/**
+ * Device Catalog Constants
+ *
+ * NOTE: Device categories are now dynamically loaded from the /vendors API endpoint.
+ * The API returns data from the unified vendor registry (agent/vendors.py).
+ * This file contains static fallback data and type exports.
+ *
+ * See: agent/vendors.py for the single source of truth
+ * See: StudioPage.tsx for the API fetch implementation
+ */
 
 import { DeviceType, DeviceModel } from './types';
 
@@ -12,6 +22,11 @@ export interface DeviceCategory {
   models?: DeviceModel[];
 }
 
+/**
+ * Static fallback device categories.
+ * Used when /vendors API is unavailable or for offline development.
+ * Primary data now comes from agent/vendors.py via GET /vendors.
+ */
 export const DEVICE_CATEGORIES: DeviceCategory[] = [
   {
     name: 'Network',

@@ -1,0 +1,632 @@
+"""Vendor-specific configurations for network devices.
+
+This module provides a centralized registry of vendor configurations
+including console shell commands, default images, device aliases, and UI metadata.
+
+SINGLE SOURCE OF TRUTH: This is the authoritative source for all vendor/device
+configuration. The API and frontend consume this registry.
+
+When adding a new vendor:
+1. Add entry to VENDOR_CONFIGS with all fields
+2. Test console access with a running container
+3. Rebuild containers: docker compose -f docker-compose.gui.yml up -d --build
+4. New device will appear in API (/vendors) and UI automatically
+"""
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+
+class DeviceType(str, Enum):
+    """Device type classification for UI categorization."""
+    ROUTER = "router"
+    SWITCH = "switch"
+    FIREWALL = "firewall"
+    HOST = "host"
+    CONTAINER = "container"
+    EXTERNAL = "external"
+
+
+@dataclass
+class VendorConfig:
+    """Configuration for a vendor's containerlab node kind.
+
+    Fields:
+        kind: Containerlab kind identifier (e.g., "ceos")
+        vendor: Vendor name for display (e.g., "Arista")
+        console_shell: Shell command for console access
+        default_image: Default Docker image when none specified
+        notes: Usage notes and documentation
+        aliases: Alternative device names that resolve to this kind
+        device_type: Classification for UI categorization
+        category: Top-level UI category (Network, Security, Compute, Cloud & External)
+        subcategory: Optional subcategory (Routers, Switches, Load Balancers)
+        label: Display name for UI (e.g., "Arista EOS")
+        icon: FontAwesome icon class
+        versions: Available version options
+        is_active: Whether device is available in UI
+    """
+
+    # Core fields (used by agent for console access)
+    kind: str
+    vendor: str
+    console_shell: str
+    default_image: Optional[str]
+    notes: str = ""
+
+    # Alias resolution (used by topology.py)
+    aliases: list[str] = field(default_factory=list)
+
+    # UI metadata (used by frontend)
+    device_type: DeviceType = DeviceType.CONTAINER
+    category: str = "Compute"
+    subcategory: Optional[str] = None
+    label: str = ""
+    icon: str = "fa-box"
+    versions: list[str] = field(default_factory=lambda: ["latest"])
+    is_active: bool = True
+
+
+# =============================================================================
+# VENDOR CONFIGURATIONS - Single Source of Truth
+# =============================================================================
+# Add new vendors here. They will automatically appear in:
+# - Console access (agent uses console_shell)
+# - Topology generation (API uses aliases and default_image)
+# - UI device palette (frontend uses category, label, icon, versions)
+# =============================================================================
+
+VENDOR_CONFIGS: dict[str, VendorConfig] = {
+    # =========================================================================
+    # NETWORK DEVICES - Routers
+    # =========================================================================
+    "vyos": VendorConfig(
+        kind="vyos",
+        vendor="VyOS",
+        console_shell="/bin/vbash",
+        default_image="vyos/vyos:1.4-rolling",
+        aliases=["vyos"],
+        device_type=DeviceType.ROUTER,
+        category="Network",
+        subcategory="Routers",
+        label="VyOS",
+        icon="fa-arrows-to-dot",
+        versions=["1.4-rolling", "1.3.3"],
+        is_active=True,
+        notes="VyOS uses vbash for configuration mode.",
+    ),
+    "cisco_iosxr": VendorConfig(
+        kind="cisco_iosxr",
+        vendor="Cisco",
+        console_shell="/bin/bash",
+        default_image="ios-xr:latest",
+        aliases=["iosxr", "xr"],
+        device_type=DeviceType.ROUTER,
+        category="Network",
+        subcategory="Routers",
+        label="Cisco IOS-XR",
+        icon="fa-arrows-to-dot",
+        versions=["7.5.2", "7.3.2"],
+        is_active=True,
+        notes="IOS-XR starts in bash. Run 'xr' for XR CLI.",
+    ),
+    "cisco_xrd": VendorConfig(
+        kind="cisco_xrd",
+        vendor="Cisco",
+        console_shell="/bin/bash",
+        default_image="ios-xrd:latest",
+        aliases=["xrd"],
+        device_type=DeviceType.ROUTER,
+        category="Network",
+        subcategory="Routers",
+        label="Cisco XRd",
+        icon="fa-arrows-to-dot",
+        versions=["7.8.1", "7.7.1"],
+        is_active=True,
+        notes="XRd container variant of IOS-XR.",
+    ),
+    "cisco_iosv": VendorConfig(
+        kind="linux",  # Uses linux kind as fallback (QEMU-based)
+        vendor="Cisco",
+        console_shell="/bin/sh",
+        default_image=None,  # Requires user-provided image
+        aliases=["iosv"],
+        device_type=DeviceType.ROUTER,
+        category="Network",
+        subcategory="Routers",
+        label="Cisco IOSv",
+        icon="fa-arrows-to-dot",
+        versions=["15.9(3)M4", "15.8"],
+        is_active=True,
+        notes="IOSv requires vrnetlab or QEMU setup. User must import image.",
+    ),
+    "cisco_csr1000v": VendorConfig(
+        kind="linux",  # Uses linux kind as fallback (QEMU-based)
+        vendor="Cisco",
+        console_shell="/bin/sh",
+        default_image=None,  # Requires user-provided image
+        aliases=["csr1000v", "csr"],
+        device_type=DeviceType.ROUTER,
+        category="Network",
+        subcategory="Routers",
+        label="Cisco CSR1000v",
+        icon="fa-arrows-to-dot",
+        versions=["17.3.2", "17.2.1"],
+        is_active=True,
+        notes="CSR1000v requires vrnetlab or QEMU setup. User must import image.",
+    ),
+    "juniper_crpd": VendorConfig(
+        kind="juniper_crpd",
+        vendor="Juniper",
+        console_shell="cli",
+        default_image="crpd:latest",
+        aliases=["crpd"],
+        device_type=DeviceType.ROUTER,
+        category="Network",
+        subcategory="Routers",
+        label="Juniper cRPD",
+        icon="fa-arrows-to-dot",
+        versions=["23.2R1", "22.4R1"],
+        is_active=True,
+        notes="cRPD uses standard Junos CLI.",
+    ),
+    "juniper_vsrx3": VendorConfig(
+        kind="juniper_vsrx3",
+        vendor="Juniper",
+        console_shell="cli",
+        default_image="vrnetlab/vr-vsrx3:latest",
+        aliases=["vsrx", "vsrx3"],
+        device_type=DeviceType.ROUTER,
+        category="Network",
+        subcategory="Routers",
+        label="Juniper vSRX3",
+        icon="fa-arrows-to-dot",
+        versions=["23.2R1", "22.4R1"],
+        is_active=True,
+        notes="vSRX3 with standard Junos CLI.",
+    ),
+
+    # =========================================================================
+    # NETWORK DEVICES - Switches
+    # =========================================================================
+    "ceos": VendorConfig(
+        kind="ceos",
+        vendor="Arista",
+        console_shell="Cli",  # Case-sensitive! Must be "Cli" not "cli"
+        default_image="ceos:latest",
+        aliases=["eos", "arista_eos", "arista_ceos"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Switches",
+        label="Arista EOS",
+        icon="fa-arrows-left-right-to-line",
+        versions=["4.28.0F", "4.27.1F", "4.26.4M"],
+        is_active=True,
+        notes="cEOS requires 'Cli' command for EOS prompt. User must import image.",
+    ),
+    "nokia_srlinux": VendorConfig(
+        kind="nokia_srlinux",
+        vendor="Nokia",
+        console_shell="sr_cli",
+        default_image="ghcr.io/nokia/srlinux:latest",
+        aliases=["srlinux", "srl"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Switches",
+        label="Nokia SR Linux",
+        icon="fa-arrows-left-right-to-line",
+        versions=["23.10.1", "23.7.1", "latest"],
+        is_active=True,
+        notes="SR Linux uses sr_cli for its native CLI.",
+    ),
+    "cvx": VendorConfig(
+        kind="cvx",
+        vendor="NVIDIA",
+        console_shell="/bin/bash",
+        default_image="networkop/cx:5.4.0",
+        aliases=["cumulus"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Switches",
+        label="NVIDIA Cumulus",
+        icon="fa-arrows-left-right-to-line",
+        versions=["5.4.0", "4.4.0"],
+        is_active=True,
+        notes="Cumulus VX uses standard Linux bash with NCLU/NVUE.",
+    ),
+    "sonic-vs": VendorConfig(
+        kind="sonic-vs",
+        vendor="SONiC",
+        console_shell="vtysh",
+        default_image="docker-sonic-vs:latest",
+        aliases=["sonic"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Switches",
+        label="SONiC",
+        icon="fa-arrows-left-right-to-line",
+        versions=["latest", "202305"],
+        is_active=True,
+        notes="SONiC uses FRR's vtysh for routing configuration.",
+    ),
+    "juniper_vjunosswitch": VendorConfig(
+        kind="juniper_vjunosswitch",
+        vendor="Juniper",
+        console_shell="cli",
+        default_image="vrnetlab/vr-vjunosswitch:latest",
+        aliases=["vjunos"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Switches",
+        label="Juniper vJunos Switch",
+        icon="fa-arrows-left-right-to-line",
+        versions=["23.2R1", "22.4R1"],
+        is_active=True,
+        notes="vJunos Switch with standard Junos CLI.",
+    ),
+    "juniper_vqfx": VendorConfig(
+        kind="juniper_vqfx",
+        vendor="Juniper",
+        console_shell="cli",
+        default_image="vrnetlab/vr-vqfx:latest",
+        aliases=["vqfx"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Switches",
+        label="Juniper vQFX",
+        icon="fa-arrows-left-right-to-line",
+        versions=["20.2R1", "19.4R1"],
+        is_active=True,
+        notes="vQFX with standard Junos CLI.",
+    ),
+    "cisco_n9kv": VendorConfig(
+        kind="cisco_n9kv",
+        vendor="Cisco",
+        console_shell="/bin/bash",
+        default_image="vrnetlab/vr-n9kv:latest",
+        aliases=["nxos", "n9kv"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Switches",
+        label="Cisco NX-OSv",
+        icon="fa-arrows-left-right-to-line",
+        versions=["9.3.9", "9.3.8"],
+        is_active=False,  # Requires specific setup
+        notes="Nexus 9000v requires vrnetlab image.",
+    ),
+
+    # =========================================================================
+    # NETWORK DEVICES - Load Balancers
+    # =========================================================================
+    "f5_bigip": VendorConfig(
+        kind="linux",
+        vendor="F5",
+        console_shell="/bin/bash",
+        default_image=None,  # Requires user-provided image
+        aliases=["f5", "bigip"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Load Balancers",
+        label="F5 BIG-IP VE",
+        icon="fa-server",
+        versions=["16.1.0", "17.0.0"],
+        is_active=True,
+        notes="F5 BIG-IP requires licensed image. User must import.",
+    ),
+    "haproxy": VendorConfig(
+        kind="linux",
+        vendor="Open Source",
+        console_shell="/bin/sh",
+        default_image="haproxy:latest",
+        aliases=["haproxy"],
+        device_type=DeviceType.CONTAINER,
+        category="Network",
+        subcategory="Load Balancers",
+        label="HAProxy",
+        icon="fa-box",
+        versions=["2.6", "2.8", "latest"],
+        is_active=True,
+        notes="HAProxy load balancer container.",
+    ),
+    "citrix_adc": VendorConfig(
+        kind="linux",
+        vendor="Citrix",
+        console_shell="/bin/bash",
+        default_image=None,
+        aliases=["citrix", "adc"],
+        device_type=DeviceType.SWITCH,
+        category="Network",
+        subcategory="Load Balancers",
+        label="Citrix ADC",
+        icon="fa-server",
+        versions=["13.1"],
+        is_active=False,
+        notes="Citrix ADC requires licensed image.",
+    ),
+
+    # =========================================================================
+    # SECURITY DEVICES
+    # =========================================================================
+    "cisco_asav": VendorConfig(
+        kind="linux",
+        vendor="Cisco",
+        console_shell="/bin/sh",
+        default_image=None,  # Requires user-provided image
+        aliases=["asa", "asav"],
+        device_type=DeviceType.FIREWALL,
+        category="Security",
+        subcategory=None,
+        label="Cisco ASAv",
+        icon="fa-shield-halved",
+        versions=["9.16.1", "9.15.1"],
+        is_active=True,
+        notes="ASAv requires vrnetlab or QEMU setup. User must import image.",
+    ),
+    "fortinet_fortigate": VendorConfig(
+        kind="linux",
+        vendor="Fortinet",
+        console_shell="/bin/sh",
+        default_image=None,
+        aliases=["fortigate", "fortinet"],
+        device_type=DeviceType.FIREWALL,
+        category="Security",
+        subcategory=None,
+        label="FortiGate VM",
+        icon="fa-user-shield",
+        versions=["7.2.0", "7.0.5"],
+        is_active=False,
+        notes="FortiGate requires licensed image.",
+    ),
+    "paloalto_vmseries": VendorConfig(
+        kind="linux",
+        vendor="Palo Alto",
+        console_shell="/bin/sh",
+        default_image=None,
+        aliases=["paloalto", "pan", "vmseries"],
+        device_type=DeviceType.FIREWALL,
+        category="Security",
+        subcategory=None,
+        label="Palo Alto VM-Series",
+        icon="fa-lock",
+        versions=["10.1.0", "10.0.0"],
+        is_active=False,
+        notes="VM-Series requires licensed image.",
+    ),
+
+    # =========================================================================
+    # COMPUTE
+    # =========================================================================
+    "linux": VendorConfig(
+        kind="linux",
+        vendor="Open Source",
+        console_shell="/bin/sh",
+        default_image="alpine:latest",
+        aliases=["alpine", "ubuntu", "debian"],
+        device_type=DeviceType.HOST,
+        category="Compute",
+        subcategory=None,
+        label="Linux Server",
+        icon="fa-terminal",
+        versions=["Alpine", "Ubuntu 22.04", "Debian 12"],
+        is_active=True,
+        notes="Generic Linux container. Uses /bin/sh for broad compatibility.",
+    ),
+    "frr": VendorConfig(
+        kind="linux",
+        vendor="Open Source",
+        console_shell="vtysh",
+        default_image="quay.io/frrouting/frr:latest",
+        aliases=["frr", "frrouting"],
+        device_type=DeviceType.CONTAINER,
+        category="Compute",
+        subcategory=None,
+        label="FRR Container",
+        icon="fa-box-open",
+        versions=["latest", "8.4.1", "8.3"],
+        is_active=True,
+        notes="FRR uses vtysh for routing configuration.",
+    ),
+    "windows": VendorConfig(
+        kind="linux",  # Placeholder - needs special handling
+        vendor="Microsoft",
+        console_shell="/bin/sh",
+        default_image=None,
+        aliases=["windows", "win"],
+        device_type=DeviceType.HOST,
+        category="Compute",
+        subcategory=None,
+        label="Windows Server",
+        icon="fa-window-maximize",
+        versions=["2022", "2019"],
+        is_active=False,
+        notes="Windows requires special QEMU/KVM setup.",
+    ),
+
+    # =========================================================================
+    # CLOUD & EXTERNAL
+    # =========================================================================
+    "internet": VendorConfig(
+        kind="bridge",  # Special type for external connectivity
+        vendor="System",
+        console_shell="/bin/sh",
+        default_image=None,
+        aliases=["internet", "wan"],
+        device_type=DeviceType.EXTERNAL,
+        category="Cloud & External",
+        subcategory=None,
+        label="Public Internet",
+        icon="fa-cloud",
+        versions=["Default"],
+        is_active=True,
+        notes="External bridge for internet connectivity.",
+    ),
+    "mgmt_bridge": VendorConfig(
+        kind="bridge",  # Special type for management
+        vendor="System",
+        console_shell="/bin/sh",
+        default_image=None,
+        aliases=["mgmt", "management"],
+        device_type=DeviceType.EXTERNAL,
+        category="Cloud & External",
+        subcategory=None,
+        label="Management Bridge",
+        icon="fa-plug-circle-bolt",
+        versions=["br0"],
+        is_active=True,
+        notes="Management bridge for OOB access.",
+    ),
+}
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+# Build alias lookup table at module load time
+_ALIAS_TO_KIND: dict[str, str] = {}
+for config in VENDOR_CONFIGS.values():
+    # The kind itself is a valid lookup
+    _ALIAS_TO_KIND[config.kind] = config.kind
+    # All aliases map to this kind
+    for alias in config.aliases:
+        _ALIAS_TO_KIND[alias.lower()] = config.kind
+
+
+def get_console_shell(kind: str) -> str:
+    """Get the console shell command for a containerlab node kind.
+
+    Args:
+        kind: The containerlab node kind (from clab-node-kind label)
+
+    Returns:
+        Shell command to use for console access
+    """
+    config = VENDOR_CONFIGS.get(kind)
+    if config:
+        return config.console_shell
+    return "/bin/sh"  # Safe default
+
+
+def get_default_image(kind: str) -> Optional[str]:
+    """Get the default Docker image for a containerlab node kind."""
+    config = VENDOR_CONFIGS.get(kind)
+    if config:
+        return config.default_image
+    return None
+
+
+def get_vendor_config(kind: str) -> Optional[VendorConfig]:
+    """Get the full vendor configuration for a containerlab node kind."""
+    return VENDOR_CONFIGS.get(kind)
+
+
+def list_supported_kinds() -> list[str]:
+    """List all supported containerlab node kinds."""
+    return list(VENDOR_CONFIGS.keys())
+
+
+def get_kind_for_device(device: str) -> str:
+    """Resolve a device alias to its containerlab kind.
+
+    Args:
+        device: Device name or alias (e.g., "eos", "arista_eos", "ceos")
+
+    Returns:
+        The canonical containerlab kind (e.g., "ceos")
+    """
+    device_lower = device.lower()
+    return _ALIAS_TO_KIND.get(device_lower, device_lower)
+
+
+def get_all_vendors() -> list[VendorConfig]:
+    """Return all vendor configurations."""
+    return list(VENDOR_CONFIGS.values())
+
+
+def get_vendors_for_ui() -> list[dict]:
+    """Return vendors grouped by category/subcategory for frontend.
+
+    Returns data in the format expected by web/src/studio/constants.tsx:
+    [
+        {
+            "name": "Network",
+            "subCategories": [
+                {
+                    "name": "Switches",
+                    "models": [{"id": "ceos", "type": "switch", ...}]
+                }
+            ]
+        },
+        {
+            "name": "Compute",
+            "models": [{"id": "linux", ...}]
+        }
+    ]
+    """
+    # Group vendors by category -> subcategory
+    categories: dict[str, dict[str, list[dict]]] = {}
+
+    for key, config in VENDOR_CONFIGS.items():
+        cat = config.category
+        subcat = config.subcategory or "_direct"  # Use _direct for no subcategory
+
+        if cat not in categories:
+            categories[cat] = {}
+        if subcat not in categories[cat]:
+            categories[cat][subcat] = []
+
+        # Use the first alias as ID if available, otherwise use key
+        device_id = config.aliases[0] if config.aliases else key
+
+        categories[cat][subcat].append({
+            "id": device_id,
+            "type": config.device_type.value,
+            "vendor": config.vendor,
+            "name": config.label or config.vendor,
+            "icon": config.icon,
+            "versions": config.versions,
+            "isActive": config.is_active,
+        })
+
+    # Convert to output format
+    result = []
+    # Define category order
+    category_order = ["Network", "Security", "Compute", "Cloud & External"]
+
+    for cat in category_order:
+        if cat not in categories:
+            continue
+
+        subcats = categories[cat]
+        cat_data: dict = {"name": cat}
+
+        # Check if category has subcategories (other than _direct)
+        has_subcategories = any(k != "_direct" for k in subcats.keys())
+
+        if has_subcategories:
+            cat_data["subCategories"] = []
+            # Define subcategory order for Network
+            subcat_order = ["Routers", "Switches", "Load Balancers", "_direct"]
+            for subcat in subcat_order:
+                if subcat not in subcats:
+                    continue
+                if subcat == "_direct":
+                    # Direct models without subcategory
+                    if subcats[subcat]:
+                        cat_data["subCategories"].append({
+                            "name": "Other",
+                            "models": subcats[subcat]
+                        })
+                else:
+                    cat_data["subCategories"].append({
+                        "name": subcat,
+                        "models": subcats[subcat]
+                    })
+        else:
+            # No subcategories, models directly on category
+            cat_data["models"] = subcats.get("_direct", [])
+
+        result.append(cat_data)
+
+    return result

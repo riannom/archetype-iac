@@ -51,9 +51,15 @@ interface ImageLibraryEntry {
   version?: string | null;
 }
 
-interface DeviceCategory {
+interface DeviceSubCategory {
   name: string;
   models: DeviceModel[];
+}
+
+interface DeviceCategory {
+  name: string;
+  models?: DeviceModel[];
+  subCategories?: DeviceSubCategory[];
 }
 
 interface CustomDevice {
@@ -213,6 +219,7 @@ const StudioPage: React.FC = () => {
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
   const [deviceCatalog, setDeviceCatalog] = useState<DeviceCatalogEntry[]>([]);
+  const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
   const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
   const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
   const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
@@ -258,7 +265,13 @@ const StudioPage: React.FC = () => {
     () => buildDeviceModels(deviceCatalog, imageLibrary, customDevices),
     [deviceCatalog, imageLibrary, customDevices]
   );
-  const deviceCategories = useMemo<DeviceCategory[]>(() => [{ name: 'Devices', models: deviceModels }], [deviceModels]);
+  const deviceCategories = useMemo<DeviceCategory[]>(() => {
+    // Use vendor categories from API if available, otherwise fall back to flat structure
+    if (vendorCategories.length > 0) {
+      return vendorCategories;
+    }
+    return [{ name: 'Devices', models: deviceModels }];
+  }, [vendorCategories, deviceModels]);
   
   const updateCustomDevices = (next: CustomDevice[]) => {
     setCustomDevices(next);
@@ -293,6 +306,9 @@ const StudioPage: React.FC = () => {
     setImageCatalog(imageData.images || {});
     const libraryData = await studioRequest<{ images?: ImageLibraryEntry[] }>('/images/library');
     setImageLibrary(libraryData.images || []);
+    // Load vendor categories from unified registry
+    const vendorData = await studioRequest<DeviceCategory[]>('/vendors');
+    setVendorCategories(vendorData || []);
   }, [studioRequest]);
 
   const loadGraph = useCallback(async (labId: string) => {

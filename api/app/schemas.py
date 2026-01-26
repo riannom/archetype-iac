@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 class LabCreate(BaseModel):
     name: str
+    provider: str = "containerlab"
 
 
 class LabOut(BaseModel):
@@ -14,6 +15,7 @@ class LabOut(BaseModel):
     name: str
     owner_id: str | None
     workspace_path: str
+    provider: str = "containerlab"
     state: str = "stopped"
     agent_id: str | None = None
     state_updated_at: datetime | None = None

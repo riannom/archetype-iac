@@ -1,0 +1,347 @@
+"""Lab lifecycle and job management endpoints."""
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app import agent_client, db, models, schemas
+from app.auth import get_current_user
+from app.db import SessionLocal
+from app.netlab import run_netlab_command
+from app.storage import lab_workspace, topology_path
+from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
+from app.topology import analyze_topology, graph_to_containerlab_yaml, yaml_to_graph
+from app.utils.lab import get_lab_or_404, get_lab_provider
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["jobs"])
+
+
+@router.post("/labs/{lab_id}/up")
+async def lab_up(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.JobOut:
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get topology YAML (stored in netlab format)
+    topo_path = topology_path(lab.id)
+    topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+
+    # Analyze topology for multi-host deployment and convert to containerlab format
+    is_multihost = False
+    clab_yaml = ""
+    graph = None
+    analysis = None
+    if topology_yaml:
+        try:
+            graph = yaml_to_graph(topology_yaml)
+            analysis = analyze_topology(graph)
+            is_multihost = not analysis.single_host
+            # Convert to containerlab format for deployment
+            clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+            logger.info(
+                f"Lab {lab_id} topology analysis: "
+                f"single_host={analysis.single_host}, "
+                f"hosts={list(analysis.placements.keys())}, "
+                f"cross_host_links={len(analysis.cross_host_links)}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+
+    # Get the provider for this lab
+    lab_provider = get_lab_provider(lab)
+
+    if is_multihost and analysis:
+        # Multi-host deployment: validate all required agents exist
+        missing_hosts = []
+        for host_name in analysis.placements:
+            agent = await agent_client.get_agent_by_name(
+                database, host_name, required_provider=lab_provider
+            )
+            if not agent:
+                missing_hosts.append(host_name)
+
+        if missing_hosts:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
+            )
+    else:
+        # Single-host deployment: check for any healthy agent
+        agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+        if not agent:
+            raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+
+    # Create job record
+    job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")
+    database.add(job)
+    database.commit()
+    database.refresh(job)
+
+    # Start background task - choose deployment method based on topology
+    # Use containerlab-formatted YAML for deployment
+    if is_multihost:
+        asyncio.create_task(run_multihost_deploy(
+            job.id, lab.id, clab_yaml, provider=lab_provider
+        ))
+    else:
+        asyncio.create_task(run_agent_job(
+            job.id, lab.id, "up", topology_yaml=clab_yaml, provider=lab_provider
+        ))
+
+    return schemas.JobOut.model_validate(job)
+
+
+@router.post("/labs/{lab_id}/down")
+async def lab_down(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.JobOut:
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get topology YAML to check for multi-host
+    topo_path = topology_path(lab.id)
+    topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+
+    # Analyze topology for multi-host deployment
+    is_multihost = False
+    if topology_yaml:
+        try:
+            graph = yaml_to_graph(topology_yaml)
+            analysis = analyze_topology(graph)
+            is_multihost = not analysis.single_host
+        except Exception as e:
+            logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+
+    # Get the provider for this lab
+    lab_provider = get_lab_provider(lab)
+
+    if not is_multihost:
+        # Single-host: check for healthy agent with required capability
+        agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+        if not agent:
+            raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+
+    # Create job record
+    job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
+    database.add(job)
+    database.commit()
+    database.refresh(job)
+
+    # Start background task - choose destroy method based on topology
+    if is_multihost:
+        asyncio.create_task(run_multihost_destroy(
+            job.id, lab.id, topology_yaml, provider=lab_provider
+        ))
+    else:
+        asyncio.create_task(run_agent_job(
+            job.id, lab.id, "down", provider=lab_provider
+        ))
+
+    return schemas.JobOut.model_validate(job)
+
+
+@router.post("/labs/{lab_id}/restart")
+async def lab_restart(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.JobOut:
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get the provider for this lab
+    lab_provider = get_lab_provider(lab)
+
+    # Check for healthy agent with required capability, respecting affinity
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if not agent:
+        raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+
+    # Validate and convert topology BEFORE creating jobs
+    topo_path = topology_path(lab.id)
+    if not topo_path.exists():
+        raise HTTPException(status_code=400, detail="No topology file found for this lab")
+
+    try:
+        topology_yaml = topo_path.read_text(encoding="utf-8")
+        graph = yaml_to_graph(topology_yaml)
+        clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+    except Exception as e:
+        logger.error(f"Failed to convert topology for restart of lab {lab.id}: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to convert topology: {str(e)}")
+
+    if not clab_yaml or not clab_yaml.strip():
+        raise HTTPException(status_code=400, detail="Topology conversion resulted in empty YAML")
+
+    # Create separate jobs for down and up phases
+    down_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
+    database.add(down_job)
+    database.commit()
+    database.refresh(down_job)
+
+    up_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")
+    database.add(up_job)
+    database.commit()
+    database.refresh(up_job)
+
+    # For restart, we do down then up sequentially with separate jobs
+    async def restart_sequence():
+        await run_agent_job(down_job.id, lab.id, "down", provider=lab_provider)
+        # Check if down succeeded before starting up
+        session = SessionLocal()
+        try:
+            dj = session.get(models.Job, down_job.id)
+            uj = session.get(models.Job, up_job.id)
+            if dj and dj.status == "failed":
+                # Mark up job as cancelled since down failed
+                if uj:
+                    uj.status = "failed"
+                    uj.log = "Cancelled: down phase failed"
+                    session.commit()
+                return
+            # Proceed with up phase
+            await run_agent_job(up_job.id, lab.id, "up", topology_yaml=clab_yaml, provider=lab_provider)
+        finally:
+            session.close()
+
+    asyncio.create_task(restart_sequence())
+
+    return schemas.JobOut.model_validate(down_job)
+
+
+@router.post("/labs/{lab_id}/nodes/{node}/{action}")
+async def node_action(
+    lab_id: str,
+    node: str,
+    action: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.JobOut:
+    if action not in ("start", "stop"):
+        raise HTTPException(status_code=400, detail="Unsupported node action")
+
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get the provider for this lab
+    lab_provider = get_lab_provider(lab)
+
+    # Check for healthy agent with required capability, respecting affinity
+    # Node actions must go to the same agent running the lab
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if not agent:
+        raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+
+    # Create job record
+    job = models.Job(lab_id=lab.id, user_id=current_user.id, action=f"node:{action}:{node}", status="queued")
+    database.add(job)
+    database.commit()
+    database.refresh(job)
+
+    # Start background task
+    asyncio.create_task(run_agent_job(job.id, lab.id, f"node:{action}:{node}", provider=lab_provider))
+
+    return schemas.JobOut.model_validate(job)
+
+
+@router.get("/labs/{lab_id}/status")
+async def lab_status(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get the provider for this lab
+    lab_provider = get_lab_provider(lab)
+
+    # Try to get status from the agent managing this lab (respecting affinity)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if agent:
+        try:
+            result = await agent_client.get_lab_status_from_agent(agent, lab.id)
+            return {
+                "nodes": result.get("nodes", []),
+                "error": result.get("error"),
+                "agent_id": agent.id,
+                "agent_name": agent.name,
+            }
+        except Exception as e:
+            return {"nodes": [], "error": str(e)}
+
+    # Fallback to old netlab command if no agent
+    code, stdout, stderr = run_netlab_command(["netlab", "status"], lab_workspace(lab.id))
+    if code != 0:
+        return {"raw": "", "error": stderr or "netlab status failed"}
+    return {"raw": stdout}
+
+
+@router.get("/labs/{lab_id}/jobs")
+def list_jobs(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict[str, list[schemas.JobOut]]:
+    get_lab_or_404(lab_id, database, current_user)
+    jobs = (
+        database.query(models.Job)
+        .filter(models.Job.lab_id == lab_id)
+        .order_by(models.Job.created_at.desc())
+        .all()
+    )
+    return {"jobs": [schemas.JobOut.model_validate(job) for job in jobs]}
+
+
+@router.get("/labs/{lab_id}/jobs/{job_id}")
+def get_job(
+    lab_id: str,
+    job_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.JobOut:
+    get_lab_or_404(lab_id, database, current_user)
+    job = database.get(models.Job, job_id)
+    if not job or job.lab_id != lab_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return schemas.JobOut.model_validate(job)
+
+
+@router.get("/labs/{lab_id}/jobs/{job_id}/log")
+def get_job_log(
+    lab_id: str,
+    job_id: str,
+    tail: int | None = None,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict[str, str]:
+    get_lab_or_404(lab_id, database, current_user)
+    job = database.get(models.Job, job_id)
+    if not job or job.lab_id != lab_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.log_path:
+        raise HTTPException(status_code=404, detail="Log not found")
+    log_path = Path(job.log_path)
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail="Log not found")
+    content = log_path.read_text(encoding="utf-8")
+    if tail:
+        lines = content.splitlines()
+        content = "\n".join(lines[-tail:])
+    return {"log": content}
+
+
+@router.get("/labs/{lab_id}/audit")
+def audit_log(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict[str, list[schemas.JobOut]]:
+    get_lab_or_404(lab_id, database, current_user)
+    return list_jobs(lab_id, database, current_user)

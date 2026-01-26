@@ -78,6 +78,23 @@ class Provider(ABC):
         """Provider name (e.g., 'containerlab', 'libvirt')."""
         ...
 
+    @property
+    def display_name(self) -> str:
+        """Human-readable display name for the provider.
+
+        Defaults to capitalized version of name.
+        """
+        return self.name.capitalize()
+
+    @property
+    def capabilities(self) -> list[str]:
+        """List of capabilities supported by this provider.
+
+        Default capabilities that all providers support.
+        Subclasses can override to add/remove capabilities.
+        """
+        return ["deploy", "destroy", "status", "node_actions", "console"]
+
     @abstractmethod
     async def deploy(
         self,

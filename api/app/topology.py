@@ -16,6 +16,7 @@ from app.schemas import (
     TopologyGraph,
 )
 from app.image_store import find_image_reference
+from agent.vendors import get_kind_for_device, get_default_image
 
 LINK_ATTRS = {
     "bandwidth",
@@ -306,47 +307,8 @@ def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> T
     )
 
 
-# Mapping from internal device names to containerlab kinds
-DEVICE_TO_CLAB_KIND = {
-    "eos": "ceos",
-    "arista_eos": "ceos",
-    "ceos": "ceos",
-    "arista_ceos": "ceos",
-    "srlinux": "nokia_srlinux",
-    "srl": "nokia_srlinux",
-    "nokia_srlinux": "nokia_srlinux",
-    "linux": "linux",
-    "alpine": "linux",
-    "frr": "linux",
-    "cumulus": "cvx",
-    "cvx": "cvx",
-    "sonic": "sonic-vs",
-    "crpd": "juniper_crpd",
-    "vjunos": "juniper_vjunosswitch",
-    "vqfx": "juniper_vqfx",
-    "vsrx": "juniper_vsrx3",
-    "iosxr": "cisco_iosxr",
-    "xrd": "cisco_xrd",
-    "nxos": "cisco_n9kv",
-    "iosv": "linux",  # fallback for qemu-based
-    "csr": "linux",  # fallback for qemu-based
-}
-
-# Default images for containerlab kinds (used when node doesn't specify an image)
-CLAB_DEFAULT_IMAGES = {
-    "ceos": "ceos:latest",  # User must import their own cEOS image
-    "nokia_srlinux": "ghcr.io/nokia/srlinux:latest",
-    "linux": "alpine:latest",
-    "cvx": "networkop/cx:5.4.0",
-    "sonic-vs": "docker-sonic-vs:latest",
-    "juniper_crpd": "crpd:latest",
-    "juniper_vjunosswitch": "vrnetlab/vr-vjunosswitch:latest",
-    "juniper_vqfx": "vrnetlab/vr-vqfx:latest",
-    "juniper_vsrx3": "vrnetlab/vr-vsrx3:latest",
-    "cisco_iosxr": "ios-xr:latest",
-    "cisco_xrd": "ios-xrd:latest",
-    "cisco_n9kv": "vrnetlab/vr-n9kv:latest",
-}
+# Device alias resolution and default images are now centralized in agent/vendors.py
+# Use get_kind_for_device() and get_default_image() functions imported above
 
 
 def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
@@ -375,14 +337,13 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
 
         node_data: dict[str, Any] = {}
 
-        # Map device to containerlab kind
+        # Map device to containerlab kind using centralized vendor registry
         kind = "linux"  # default
         if node.device:
-            device_lower = node.device.lower()
-            kind = DEVICE_TO_CLAB_KIND.get(device_lower, device_lower)
+            kind = get_kind_for_device(node.device)
         node_data["kind"] = kind
 
-        # Use image if specified, otherwise look up from image library
+        # Use image if specified, otherwise look up from image library or default
         if node.image:
             node_data["image"] = node.image
         else:
@@ -390,8 +351,10 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
             library_image = find_image_reference(node.device or kind, node.version)
             if library_image:
                 node_data["image"] = library_image
-            elif kind in CLAB_DEFAULT_IMAGES:
-                node_data["image"] = CLAB_DEFAULT_IMAGES[kind]
+            else:
+                default_image = get_default_image(kind)
+                if default_image:
+                    node_data["image"] = default_image
 
         # Network mode
         if node.network_mode:
