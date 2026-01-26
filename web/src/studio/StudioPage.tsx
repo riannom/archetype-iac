@@ -1021,13 +1021,6 @@ const StudioPage: React.FC = () => {
           loadLabs();
           loadSystemMetrics();
         }}
-        onNavigateToImages={() => {
-          // Set a placeholder lab to enter the studio, then switch to images view
-          if (labs.length > 0) {
-            setActiveLab(labs[0]);
-            setView('images');
-          }
-        }}
       />
     );
   }
