@@ -2,6 +2,8 @@
 import React, { useState } from 'react';
 import { Node, Link, Annotation, DeviceModel } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
+import InterfaceSelect from './InterfaceSelect';
+import { PortManager } from '../hooks/usePortManager';
 
 interface PropertiesPanelProps {
   selectedItem: Node | Link | Annotation | null;
@@ -15,10 +17,11 @@ interface PropertiesPanelProps {
   runtimeStates: Record<string, RuntimeStatus>;
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
   deviceModels: DeviceModel[];
+  portManager: PortManager;
 }
 
 const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
-  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, onOpenConsole, runtimeStates, onUpdateStatus, deviceModels
+  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'hardware' | 'connectivity' | 'config'>('general');
 
@@ -72,6 +75,8 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     const link = selectedItem;
     const sourceNode = nodes.find(n => n.id === link.source);
     const targetNode = nodes.find(n => n.id === link.target);
+    const sourceAvailable = portManager.getAvailableInterfaces(link.source);
+    const targetAvailable = portManager.getAvailableInterfaces(link.target);
     return (
       <div className="w-80 bg-white dark:bg-stone-900 border-l border-stone-200 dark:border-stone-700 overflow-y-auto">
         <div className="p-4 border-b border-stone-200 dark:border-stone-700 flex justify-between items-center bg-stone-100/50 dark:bg-stone-800/50">
@@ -89,12 +94,22 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
           </div>
           <div className="space-y-4 pt-2">
             <div className="space-y-2">
-              <label className="text-[11px] font-bold text-stone-500 uppercase">Source Interface</label>
-              <input type="text" value={link.sourceInterface || ''} placeholder="e.g. eth0" onChange={(e) => onUpdateLink(link.id, { sourceInterface: e.target.value })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
+              <label className="text-[11px] font-bold text-stone-500 uppercase">{sourceNode?.name} Interface</label>
+              <InterfaceSelect
+                value={link.sourceInterface || ''}
+                availableInterfaces={sourceAvailable}
+                onChange={(value) => onUpdateLink(link.id, { sourceInterface: value })}
+                placeholder="Select interface"
+              />
             </div>
             <div className="space-y-2">
-              <label className="text-[11px] font-bold text-stone-500 uppercase">Target Interface</label>
-              <input type="text" value={link.targetInterface || ''} placeholder="e.g. eth0" onChange={(e) => onUpdateLink(link.id, { targetInterface: e.target.value })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
+              <label className="text-[11px] font-bold text-stone-500 uppercase">{targetNode?.name} Interface</label>
+              <InterfaceSelect
+                value={link.targetInterface || ''}
+                availableInterfaces={targetAvailable}
+                onChange={(value) => onUpdateLink(link.id, { targetInterface: value })}
+                placeholder="Select interface"
+              />
             </div>
           </div>
         </div>
@@ -186,12 +201,19 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               const otherId = link.source === node.id ? link.target : link.source;
               const otherNode = nodes.find(n => n.id === otherId);
               const isSource = link.source === node.id;
+              const currentInterface = isSource ? link.sourceInterface : link.targetInterface;
+              const availableInterfaces = portManager.getAvailableInterfaces(node.id);
               return (
                 <div key={link.id} className="p-3 bg-stone-100/50 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-800 rounded-xl hover:border-stone-300 dark:hover:border-stone-700 transition-all">
                   <div className="flex items-center justify-between mb-2"><span className="text-[10px] font-black text-stone-600 dark:text-stone-400 uppercase tracking-tighter">Connection to {otherNode?.name}</span><i className="fa-solid fa-link text-[10px] text-sage-500/50"></i></div>
                   <div className="space-y-2">
                     <label className="text-[9px] font-bold text-stone-400 dark:text-stone-600 uppercase">Local Interface</label>
-                    <input type="text" value={(isSource ? link.sourceInterface : link.targetInterface) || ''} placeholder="e.g. eth0" onChange={(e) => onUpdateLink(link.id, isSource ? { sourceInterface: e.target.value } : { targetInterface: e.target.value })} className="w-full bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-[11px] text-sage-700 dark:text-sage-300 focus:outline-none focus:border-sage-500" />
+                    <InterfaceSelect
+                      value={currentInterface || ''}
+                      availableInterfaces={availableInterfaces}
+                      onChange={(value) => onUpdateLink(link.id, isSource ? { sourceInterface: value } : { targetInterface: value })}
+                      placeholder="Select interface"
+                    />
                   </div>
                 </div>
               );
