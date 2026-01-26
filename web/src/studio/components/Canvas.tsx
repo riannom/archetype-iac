@@ -277,7 +277,7 @@ const Canvas: React.FC<CanvasProps> = ({
               onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
               onMouseUp={(e) => handleNodeMouseUp(e, node.id)}
               onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
-              className={`absolute w-12 h-12 flex items-center justify-center cursor-pointer transition-all shadow-sm
+              className={`absolute w-12 h-12 flex items-center justify-center cursor-pointer shadow-sm transition-[box-shadow,background-color,border-color,transform] duration-150
                 ${selectedId === node.id ? 'ring-2 ring-sage-500 bg-sage-500/10 dark:bg-sage-900/40 shadow-lg shadow-sage-500/20' : 'bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600'}
                 ${status === 'running' ? 'border-green-500/50 shadow-md shadow-green-500/10' : ''}
                 ${linkingNode === node.id ? 'ring-2 ring-sage-400 scale-110' : ''}
