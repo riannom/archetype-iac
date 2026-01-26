@@ -15,6 +15,7 @@ import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
 import { useTheme } from '../theme/index';
+import { useUser } from '../contexts/UserContext';
 import './studio.css';
 import 'xterm/css/xterm.css';
 
@@ -195,6 +196,8 @@ const resolveNodeStatus = (action: string, status: string): RuntimeStatus | unde
 
 const StudioPage: React.FC = () => {
   const { effectiveMode } = useTheme();
+  const { user, refreshUser } = useUser();
+  const isAdmin = user?.is_admin ?? false;
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
   const [view, setView] = useState<'designer' | 'images' | 'runtime'>('designer');
@@ -237,8 +240,24 @@ const StudioPage: React.FC = () => {
     containers: { running: number; total: number };
     cpu_percent: number;
     memory_percent: number;
+    storage?: {
+      used_gb: number;
+      total_gb: number;
+      percent: number;
+    };
     labs_running: number;
     labs_total: number;
+    per_host?: {
+      id: string;
+      name: string;
+      cpu_percent: number;
+      memory_percent: number;
+      storage_percent: number;
+      storage_used_gb: number;
+      storage_total_gb: number;
+      containers_running: number;
+    }[];
+    is_multi_host?: boolean;
   } | null>(null);
 
   // Port manager for interface auto-assignment
@@ -372,8 +391,20 @@ const StudioPage: React.FC = () => {
         containers: { running: number; total: number };
         cpu_percent: number;
         memory_percent: number;
+        storage?: { used_gb: number; total_gb: number; percent: number };
         labs_running: number;
         labs_total: number;
+        per_host?: {
+          id: string;
+          name: string;
+          cpu_percent: number;
+          memory_percent: number;
+          storage_percent: number;
+          storage_used_gb: number;
+          storage_total_gb: number;
+          containers_running: number;
+        }[];
+        is_multi_host?: boolean;
       }>('/dashboard/metrics');
       setSystemMetrics(data);
     } catch {
@@ -843,6 +874,7 @@ const StudioPage: React.FC = () => {
       localStorage.setItem('token', data.access_token);
       setAuthRequired(false);
       setAuthPassword('');
+      await refreshUser();
       await loadLabs();
       await loadDevices();
     } catch (error) {
@@ -1029,7 +1061,7 @@ const StudioPage: React.FC = () => {
           Images
         </button>
       </div>
-      <SystemStatusStrip metrics={systemMetrics} />
+      {isAdmin && <SystemStatusStrip metrics={systemMetrics} />}
       <div className="flex flex-1 overflow-hidden relative">
         {renderView()}
         <ConsoleManager
