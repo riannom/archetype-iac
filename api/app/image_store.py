@@ -1,10 +1,38 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import json
 import re
+from typing import Optional
 
 from app.config import settings
+
+
+# Vendor mapping for detected devices
+DEVICE_VENDOR_MAP = {
+    "eos": "Arista",
+    "ceos": "Arista",
+    "arista_ceos": "Arista",
+    "arista_eos": "Arista",
+    "iosv": "Cisco",
+    "iosxr": "Cisco",
+    "csr": "Cisco",
+    "nxos": "Cisco",
+    "iosvl2": "Cisco",
+    "xrd": "Cisco",
+    "vsrx": "Juniper",
+    "crpd": "Juniper",
+    "vjunos": "Juniper",
+    "vqfx": "Juniper",
+    "srlinux": "Nokia",
+    "cumulus": "NVIDIA",
+    "sonic": "SONiC",
+    "vyos": "VyOS",
+    "frr": "Open Source",
+    "linux": "Open Source",
+    "alpine": "Open Source",
+}
 
 
 def image_store_root() -> Path:
@@ -79,6 +107,93 @@ def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
 def _extract_version(filename: str) -> str | None:
     match = re.search(r"(\d+(?:\.\d+){1,3}[A-Za-z0-9]*)", filename)
     return match.group(1) if match else None
+
+
+def get_vendor_for_device(device_id: str) -> Optional[str]:
+    """Get the vendor name for a device ID."""
+    if not device_id:
+        return None
+    device_lower = device_id.lower()
+    return DEVICE_VENDOR_MAP.get(device_lower)
+
+
+def create_image_entry(
+    image_id: str,
+    kind: str,
+    reference: str,
+    filename: str,
+    device_id: Optional[str] = None,
+    version: Optional[str] = None,
+    size_bytes: Optional[int] = None,
+    notes: str = "",
+    compatible_devices: Optional[list[str]] = None,
+) -> dict:
+    """Create a new image library entry with all metadata fields.
+
+    Args:
+        image_id: Unique identifier (e.g., "docker:ceos:4.28.0F")
+        kind: Image type ("docker" or "qcow2")
+        reference: Docker image reference or file path
+        filename: Original filename
+        device_id: Assigned device type (e.g., "eos")
+        version: Version string (e.g., "4.28.0F")
+        size_bytes: File size in bytes
+        notes: User notes about the image
+        compatible_devices: List of device IDs this image works with
+
+    Returns:
+        Dictionary with all image metadata fields
+    """
+    vendor = get_vendor_for_device(device_id) if device_id else None
+
+    return {
+        "id": image_id,
+        "kind": kind,
+        "reference": reference,
+        "filename": filename,
+        "device_id": device_id,
+        "version": version,
+        # New fields
+        "vendor": vendor,
+        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "size_bytes": size_bytes,
+        "is_default": False,
+        "notes": notes,
+        "compatible_devices": compatible_devices or ([device_id] if device_id else []),
+    }
+
+
+def update_image_entry(
+    manifest: dict,
+    image_id: str,
+    updates: dict,
+) -> Optional[dict]:
+    """Update an existing image entry with new values.
+
+    Args:
+        manifest: The manifest dictionary
+        image_id: ID of the image to update
+        updates: Dictionary of fields to update
+
+    Returns:
+        Updated image entry or None if not found
+    """
+    for item in manifest.get("images", []):
+        if item.get("id") == image_id:
+            # Update vendor if device_id is being changed
+            if "device_id" in updates:
+                updates["vendor"] = get_vendor_for_device(updates["device_id"])
+
+            # Handle is_default - if setting as default, unset other defaults for same device
+            if updates.get("is_default") and updates.get("device_id"):
+                device_id = updates.get("device_id") or item.get("device_id")
+                for other in manifest.get("images", []):
+                    if other.get("device_id") == device_id and other.get("id") != image_id:
+                        other["is_default"] = False
+
+            item.update(updates)
+            return item
+    return None
 
 
 def find_image_reference(device_id: str, version: str | None = None) -> str | None:

@@ -42,6 +42,31 @@ export interface DeviceModel {
   images?: DeviceImage[];
   isActive: boolean;
   vendor: string;
+  // Extended metadata fields
+  portNaming?: string;
+  portStartIndex?: number;
+  maxPorts?: number;
+  requiresImage?: boolean;
+  supportedImageKinds?: string[];
+  documentationUrl?: string;
+  licenseRequired?: boolean;
+  tags?: string[];
+}
+
+export interface ImageLibraryEntry {
+  id: string;
+  kind: string;
+  reference: string;
+  filename?: string;
+  device_id?: string | null;
+  version?: string | null;
+  // Extended metadata fields (optional for backward compatibility)
+  vendor?: string | null;
+  uploaded_at?: string | null;
+  size_bytes?: number | null;
+  is_default?: boolean;
+  notes?: string;
+  compatible_devices?: string[];
 }
 
 export interface Node {

@@ -46,6 +46,14 @@ class VendorConfig:
         icon: FontAwesome icon class
         versions: Available version options
         is_active: Whether device is available in UI
+        port_naming: Interface naming pattern (eth, Ethernet, GigabitEthernet)
+        port_start_index: Starting port number (0 or 1)
+        max_ports: Maximum number of interfaces
+        requires_image: Whether user must provide/import an image
+        supported_image_kinds: List of supported image types (docker, qcow2)
+        documentation_url: Link to vendor documentation
+        license_required: Whether device requires commercial license
+        tags: Searchable tags for filtering (e.g., ["bgp", "mpls"])
     """
 
     # Core fields (used by agent for console access)
@@ -66,6 +74,22 @@ class VendorConfig:
     icon: str = "fa-box"
     versions: list[str] = field(default_factory=lambda: ["latest"])
     is_active: bool = True
+
+    # Interface/port configuration
+    port_naming: str = "eth"
+    port_start_index: int = 0
+    max_ports: int = 16
+
+    # Image requirements
+    requires_image: bool = True
+    supported_image_kinds: list[str] = field(default_factory=lambda: ["docker"])
+
+    # Documentation and licensing
+    documentation_url: Optional[str] = None
+    license_required: bool = False
+
+    # Searchable tags
+    tags: list[str] = field(default_factory=list)
 
 
 # =============================================================================
@@ -95,6 +119,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["1.4-rolling", "1.3.3"],
         is_active=True,
         notes="VyOS uses vbash for configuration mode.",
+        port_naming="eth",
+        port_start_index=0,
+        max_ports=16,
+        requires_image=False,
+        documentation_url="https://docs.vyos.io/",
+        tags=["routing", "firewall", "vpn", "bgp", "ospf"],
     ),
     "cisco_iosxr": VendorConfig(
         kind="cisco_iosxr",
@@ -110,6 +140,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["7.5.2", "7.3.2"],
         is_active=True,
         notes="IOS-XR starts in bash. Run 'xr' for XR CLI.",
+        port_naming="GigabitEthernet",
+        port_start_index=0,
+        max_ports=16,
+        requires_image=True,
+        documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/",
+        license_required=True,
+        tags=["routing", "bgp", "mpls", "segment-routing", "netconf"],
     ),
     "cisco_xrd": VendorConfig(
         kind="cisco_xrd",
@@ -125,6 +162,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["7.8.1", "7.7.1"],
         is_active=True,
         notes="XRd container variant of IOS-XR.",
+        port_naming="GigabitEthernet",
+        port_start_index=0,
+        max_ports=16,
+        requires_image=True,
+        documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/cisco8000/xrd/",
+        license_required=True,
+        tags=["routing", "bgp", "mpls", "segment-routing", "container"],
     ),
     "cisco_iosv": VendorConfig(
         kind="linux",  # Uses linux kind as fallback (QEMU-based)
@@ -140,6 +184,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["15.9(3)M4", "15.8"],
         is_active=True,
         notes="IOSv requires vrnetlab or QEMU setup. User must import image.",
+        port_naming="GigabitEthernet",
+        port_start_index=0,
+        max_ports=8,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://www.cisco.com/c/en/us/td/docs/ios/",
+        license_required=True,
+        tags=["routing", "bgp", "ospf", "eigrp", "legacy"],
     ),
     "cisco_csr1000v": VendorConfig(
         kind="linux",  # Uses linux kind as fallback (QEMU-based)
@@ -155,6 +207,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["17.3.2", "17.2.1"],
         is_active=True,
         notes="CSR1000v requires vrnetlab or QEMU setup. User must import image.",
+        port_naming="GigabitEthernet",
+        port_start_index=1,
+        max_ports=8,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://www.cisco.com/c/en/us/td/docs/routers/csr1000/",
+        license_required=True,
+        tags=["routing", "bgp", "sd-wan", "ipsec", "cloud"],
     ),
     "juniper_crpd": VendorConfig(
         kind="juniper_crpd",
@@ -170,6 +230,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["23.2R1", "22.4R1"],
         is_active=True,
         notes="cRPD uses standard Junos CLI.",
+        port_naming="eth",
+        port_start_index=0,
+        max_ports=16,
+        requires_image=True,
+        documentation_url="https://www.juniper.net/documentation/product/us/en/crpd/",
+        license_required=True,
+        tags=["routing", "bgp", "mpls", "container", "kubernetes"],
     ),
     "juniper_vsrx3": VendorConfig(
         kind="juniper_vsrx3",
@@ -185,6 +252,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["23.2R1", "22.4R1"],
         is_active=True,
         notes="vSRX3 with standard Junos CLI.",
+        port_naming="ge-0/0/",
+        port_start_index=0,
+        max_ports=16,
+        requires_image=True,
+        supported_image_kinds=["qcow2", "docker"],
+        documentation_url="https://www.juniper.net/documentation/product/us/en/vsrx/",
+        license_required=True,
+        tags=["routing", "firewall", "security", "ipsec", "nat"],
     ),
 
     # =========================================================================
@@ -204,6 +279,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["4.28.0F", "4.27.1F", "4.26.4M"],
         is_active=True,
         notes="cEOS requires 'Cli' command for EOS prompt. User must import image.",
+        port_naming="Ethernet",
+        port_start_index=1,
+        max_ports=64,
+        requires_image=True,
+        documentation_url="https://www.arista.com/en/support/product-documentation",
+        license_required=True,
+        tags=["switching", "bgp", "evpn", "vxlan", "datacenter"],
     ),
     "nokia_srlinux": VendorConfig(
         kind="nokia_srlinux",
@@ -219,6 +301,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["23.10.1", "23.7.1", "latest"],
         is_active=True,
         notes="SR Linux uses sr_cli for its native CLI.",
+        port_naming="e1-",
+        port_start_index=1,
+        max_ports=64,
+        requires_image=False,
+        documentation_url="https://documentation.nokia.com/srlinux/",
+        tags=["switching", "bgp", "evpn", "datacenter", "gnmi"],
     ),
     "cvx": VendorConfig(
         kind="cvx",
@@ -234,6 +322,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["5.4.0", "4.4.0"],
         is_active=True,
         notes="Cumulus VX uses standard Linux bash with NCLU/NVUE.",
+        port_naming="swp",
+        port_start_index=1,
+        max_ports=64,
+        requires_image=False,
+        documentation_url="https://docs.nvidia.com/networking-ethernet-software/cumulus-linux/",
+        tags=["switching", "linux", "bgp", "evpn", "datacenter"],
     ),
     "sonic-vs": VendorConfig(
         kind="sonic-vs",
@@ -249,6 +343,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["latest", "202305"],
         is_active=True,
         notes="SONiC uses FRR's vtysh for routing configuration.",
+        port_naming="Ethernet",
+        port_start_index=0,
+        max_ports=64,
+        requires_image=True,
+        documentation_url="https://github.com/sonic-net/SONiC/wiki",
+        tags=["switching", "linux", "bgp", "datacenter", "open-source"],
     ),
     "juniper_vjunosswitch": VendorConfig(
         kind="juniper_vjunosswitch",
@@ -264,6 +364,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["23.2R1", "22.4R1"],
         is_active=True,
         notes="vJunos Switch with standard Junos CLI.",
+        port_naming="ge-0/0/",
+        port_start_index=0,
+        max_ports=48,
+        requires_image=True,
+        supported_image_kinds=["qcow2", "docker"],
+        documentation_url="https://www.juniper.net/documentation/product/us/en/vjunos-switch/",
+        license_required=True,
+        tags=["switching", "evpn", "vxlan", "datacenter"],
     ),
     "juniper_vqfx": VendorConfig(
         kind="juniper_vqfx",
@@ -279,6 +387,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["20.2R1", "19.4R1"],
         is_active=True,
         notes="vQFX with standard Junos CLI.",
+        port_naming="xe-0/0/",
+        port_start_index=0,
+        max_ports=48,
+        requires_image=True,
+        supported_image_kinds=["qcow2", "docker"],
+        documentation_url="https://www.juniper.net/documentation/product/us/en/virtual-qfx/",
+        license_required=True,
+        tags=["switching", "evpn", "datacenter"],
     ),
     "cisco_n9kv": VendorConfig(
         kind="cisco_n9kv",
@@ -294,6 +410,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["9.3.9", "9.3.8"],
         is_active=False,  # Requires specific setup
         notes="Nexus 9000v requires vrnetlab image.",
+        port_naming="Ethernet1/",
+        port_start_index=1,
+        max_ports=64,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
+        license_required=True,
+        tags=["switching", "vxlan", "evpn", "datacenter", "aci"],
     ),
 
     # =========================================================================
@@ -313,6 +437,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["16.1.0", "17.0.0"],
         is_active=True,
         notes="F5 BIG-IP requires licensed image. User must import.",
+        port_naming="1.",
+        port_start_index=1,
+        max_ports=16,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://clouddocs.f5.com/",
+        license_required=True,
+        tags=["load-balancer", "waf", "ssl", "adc"],
     ),
     "haproxy": VendorConfig(
         kind="linux",
@@ -328,6 +460,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["2.6", "2.8", "latest"],
         is_active=True,
         notes="HAProxy load balancer container.",
+        port_naming="eth",
+        port_start_index=0,
+        max_ports=8,
+        requires_image=False,
+        documentation_url="https://www.haproxy.org/#docs",
+        tags=["load-balancer", "proxy", "open-source"],
     ),
     "citrix_adc": VendorConfig(
         kind="linux",
@@ -343,6 +481,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["13.1"],
         is_active=False,
         notes="Citrix ADC requires licensed image.",
+        port_naming="0/",
+        port_start_index=1,
+        max_ports=8,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://docs.citrix.com/en-us/citrix-adc",
+        license_required=True,
+        tags=["load-balancer", "adc", "ssl"],
     ),
 
     # =========================================================================
@@ -362,6 +508,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["9.16.1", "9.15.1"],
         is_active=True,
         notes="ASAv requires vrnetlab or QEMU setup. User must import image.",
+        port_naming="GigabitEthernet0/",
+        port_start_index=0,
+        max_ports=10,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://www.cisco.com/c/en/us/td/docs/security/asa/",
+        license_required=True,
+        tags=["firewall", "vpn", "ipsec", "nat", "security"],
     ),
     "fortinet_fortigate": VendorConfig(
         kind="linux",
@@ -377,6 +531,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["7.2.0", "7.0.5"],
         is_active=False,
         notes="FortiGate requires licensed image.",
+        port_naming="port",
+        port_start_index=1,
+        max_ports=10,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://docs.fortinet.com/product/fortigate/",
+        license_required=True,
+        tags=["firewall", "utm", "vpn", "security", "sd-wan"],
     ),
     "paloalto_vmseries": VendorConfig(
         kind="linux",
@@ -392,6 +554,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["10.1.0", "10.0.0"],
         is_active=False,
         notes="VM-Series requires licensed image.",
+        port_naming="ethernet1/",
+        port_start_index=1,
+        max_ports=10,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://docs.paloaltonetworks.com/vm-series",
+        license_required=True,
+        tags=["firewall", "ngfw", "security", "threat-prevention"],
     ),
 
     # =========================================================================
@@ -411,6 +581,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["Alpine", "Ubuntu 22.04", "Debian 12"],
         is_active=True,
         notes="Generic Linux container. Uses /bin/sh for broad compatibility.",
+        port_naming="eth",
+        port_start_index=0,
+        max_ports=8,
+        requires_image=False,
+        documentation_url="https://docs.docker.com/",
+        tags=["host", "linux", "container", "testing"],
     ),
     "frr": VendorConfig(
         kind="linux",
@@ -426,6 +602,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["latest", "8.4.1", "8.3"],
         is_active=True,
         notes="FRR uses vtysh for routing configuration.",
+        port_naming="eth",
+        port_start_index=0,
+        max_ports=16,
+        requires_image=False,
+        documentation_url="https://docs.frrouting.org/",
+        tags=["routing", "bgp", "ospf", "open-source", "container"],
     ),
     "windows": VendorConfig(
         kind="linux",  # Placeholder - needs special handling
@@ -441,6 +623,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["2022", "2019"],
         is_active=False,
         notes="Windows requires special QEMU/KVM setup.",
+        port_naming="Ethernet",
+        port_start_index=0,
+        max_ports=4,
+        requires_image=True,
+        supported_image_kinds=["qcow2"],
+        documentation_url="https://docs.microsoft.com/en-us/windows-server/",
+        license_required=True,
+        tags=["host", "windows", "server"],
     ),
 
     # =========================================================================
@@ -460,6 +650,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["Default"],
         is_active=True,
         notes="External bridge for internet connectivity.",
+        port_naming="",
+        port_start_index=0,
+        max_ports=1,
+        requires_image=False,
+        tags=["external", "bridge", "connectivity"],
     ),
     "mgmt_bridge": VendorConfig(
         kind="bridge",  # Special type for management
@@ -475,6 +670,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=["br0"],
         is_active=True,
         notes="Management bridge for OOB access.",
+        port_naming="",
+        port_start_index=0,
+        max_ports=1,
+        requires_image=False,
+        tags=["external", "bridge", "management", "oob"],
     ),
 }
 
@@ -587,6 +787,15 @@ def get_vendors_for_ui() -> list[dict]:
             "icon": config.icon,
             "versions": config.versions,
             "isActive": config.is_active,
+            # New metadata fields
+            "portNaming": config.port_naming,
+            "portStartIndex": config.port_start_index,
+            "maxPorts": config.max_ports,
+            "requiresImage": config.requires_image,
+            "supportedImageKinds": config.supported_image_kinds,
+            "documentationUrl": config.documentation_url,
+            "licenseRequired": config.license_required,
+            "tags": config.tags,
         })
 
     # Convert to output format
