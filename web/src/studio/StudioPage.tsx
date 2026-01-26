@@ -9,6 +9,7 @@ import RuntimeControl, { RuntimeStatus } from './components/RuntimeControl';
 import StatusBar from './components/StatusBar';
 import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
+import SystemStatusStrip from './components/SystemStatusStrip';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, Link, Node } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
@@ -384,12 +385,12 @@ const StudioPage: React.FC = () => {
     }
   }, [labs, activeLab, loadLabStatuses]);
 
-  // Poll for system metrics and lab statuses when on dashboard
+  // Poll for system metrics (both dashboard and lab views)
   useEffect(() => {
-    if (activeLab) return;
     const timer = setInterval(() => {
       loadSystemMetrics();
-      if (labs.length > 0) {
+      // Only poll lab statuses when on dashboard
+      if (!activeLab && labs.length > 0) {
         loadLabStatuses(labs.map((lab) => lab.id));
       }
     }, 10000);
@@ -849,6 +850,7 @@ const StudioPage: React.FC = () => {
           Images
         </button>
       </div>
+      <SystemStatusStrip metrics={systemMetrics} />
       <div className="flex flex-1 overflow-hidden relative">
         {renderView()}
         <ConsoleManager

@@ -151,15 +151,43 @@ def get_resource_usage() -> dict:
         memory = psutil.virtual_memory()
         memory_percent = memory.percent
 
-        # Docker container counts
+        # Docker container counts and details
+        # Only count Aura-related containers (containerlab nodes + aura-iac system)
         containers_running = 0
         containers_total = 0
+        container_details = []
         try:
             import docker
             client = docker.from_env()
             all_containers = client.containers.list(all=True)
-            containers_total = len(all_containers)
-            containers_running = len([c for c in all_containers if c.status == "running"])
+
+            # Collect detailed container info with lab associations
+            # Only include containerlab nodes and aura-iac system containers
+            for c in all_containers:
+                labels = c.labels
+                # Containerlab stores lab prefix in 'containerlab' label
+                lab_prefix = labels.get("containerlab", "")
+                is_clab_node = bool(labels.get("clab-node-name"))
+                is_aura_system = c.name.startswith("aura-iac-")
+
+                # Only include relevant containers
+                if not is_clab_node and not is_aura_system:
+                    continue
+
+                # Count only Aura-related containers
+                containers_total += 1
+                if c.status == "running":
+                    containers_running += 1
+
+                container_details.append({
+                    "name": c.name,
+                    "status": c.status,
+                    "lab_prefix": lab_prefix,  # Truncated lab ID from containerlab
+                    "node_name": labels.get("clab-node-name"),
+                    "node_kind": labels.get("clab-node-kind"),
+                    "image": c.image.tags[0] if c.image.tags else c.image.short_id,
+                    "is_system": is_aura_system,
+                })
         except Exception:
             pass
 
@@ -168,6 +196,7 @@ def get_resource_usage() -> dict:
             "memory_percent": memory_percent,
             "containers_running": containers_running,
             "containers_total": containers_total,
+            "container_details": container_details,
         }
     except Exception as e:
         print(f"Failed to gather resource usage: {e}")
