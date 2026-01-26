@@ -23,12 +23,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   const [activeTab, setActiveTab] = useState<'general' | 'hardware' | 'connectivity' | 'config'>('general');
 
   if (!selectedItem) {
-    return (
-      <div className="w-80 bg-white dark:bg-stone-900 border-l border-stone-200 dark:border-stone-700 p-6 flex flex-col items-center justify-center text-stone-500 text-sm italic">
-        <i className="fa-solid fa-i-cursor text-3xl mb-4 opacity-10"></i>
-        Select an element to edit properties
-      </div>
-    );
+    return null;
   }
 
   const isLink = 'source' in selectedItem && 'target' in selectedItem;
