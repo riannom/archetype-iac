@@ -139,6 +139,41 @@ def get_capabilities() -> AgentCapabilities:
     )
 
 
+def get_resource_usage() -> dict:
+    """Gather system resource metrics for heartbeat."""
+    import psutil
+
+    try:
+        # CPU usage (average across all cores)
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+
+        # Memory usage
+        memory = psutil.virtual_memory()
+        memory_percent = memory.percent
+
+        # Docker container counts
+        containers_running = 0
+        containers_total = 0
+        try:
+            import docker
+            client = docker.from_env()
+            all_containers = client.containers.list(all=True)
+            containers_total = len(all_containers)
+            containers_running = len([c for c in all_containers if c.status == "running"])
+        except Exception:
+            pass
+
+        return {
+            "cpu_percent": cpu_percent,
+            "memory_percent": memory_percent,
+            "containers_running": containers_running,
+            "containers_total": containers_total,
+        }
+    except Exception as e:
+        print(f"Failed to gather resource usage: {e}")
+        return {}
+
+
 def get_agent_info() -> AgentInfo:
     """Build agent info for registration."""
     address = f"{settings.agent_host}:{settings.agent_port}"
@@ -204,7 +239,7 @@ async def send_heartbeat() -> HeartbeatResponse | None:
         agent_id=AGENT_ID,
         status=AgentStatus.ONLINE,
         active_jobs=0,  # TODO: track active jobs
-        resource_usage={},  # TODO: gather resource metrics
+        resource_usage=get_resource_usage(),
     )
 
     try:
