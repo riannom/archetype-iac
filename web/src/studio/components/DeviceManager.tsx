@@ -85,8 +85,8 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
       }
       const timeout = window.setTimeout(() => {
         request.abort();
-        reject(new Error('Upload timed out while processing the image.'));
-      }, 5 * 60 * 1000);
+        reject(new Error('Upload timed out while processing the image. Large images may take several minutes.'));
+      }, 10 * 60 * 1000);
       request.upload.onprogress = (event) => {
         if (event.lengthComputable) {
           onProgress(Math.round((event.loaded / event.total) * 100));
@@ -123,7 +123,7 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
         setUploadProgress(value);
         if (value !== null && value >= 100 && !processingNoticeShown) {
           processingNoticeShown = true;
-          setUploadStatus('Upload complete. Processing image...');
+          setUploadStatus('Upload complete. Importing image (this may take a few minutes for large files)...');
         }
       })) as {
         output?: string;

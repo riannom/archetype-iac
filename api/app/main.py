@@ -1003,40 +1003,56 @@ async def lab_restart(
     if not agent:
         raise HTTPException(status_code=503, detail="No healthy agent available with containerlab support")
 
-    # Create job record - restart is down then up
-    job = models.Job(lab_id=lab.id, user_id=current_user.id, action="restart", status="queued")
-    database.add(job)
-    database.commit()
-    database.refresh(job)
-
-    # Get topology YAML for the up phase and convert to containerlab format
+    # Validate and convert topology BEFORE creating jobs
     topo_path = topology_path(lab.id)
-    clab_yaml = ""
-    if topo_path.exists():
-        try:
-            topology_yaml = topo_path.read_text(encoding="utf-8")
-            graph = yaml_to_graph(topology_yaml)
-            clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
-        except Exception as e:
-            logger.warning(f"Failed to convert topology for restart of lab {lab.id}: {e}")
+    if not topo_path.exists():
+        raise HTTPException(status_code=400, detail="No topology file found for this lab")
 
-    # For restart, we do down then up sequentially
+    try:
+        topology_yaml = topo_path.read_text(encoding="utf-8")
+        graph = yaml_to_graph(topology_yaml)
+        clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+    except Exception as e:
+        logger.error(f"Failed to convert topology for restart of lab {lab.id}: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to convert topology: {str(e)}")
+
+    if not clab_yaml or not clab_yaml.strip():
+        raise HTTPException(status_code=400, detail="Topology conversion resulted in empty YAML")
+
+    # Create separate jobs for down and up phases
+    down_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
+    database.add(down_job)
+    database.commit()
+    database.refresh(down_job)
+
+    up_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")
+    database.add(up_job)
+    database.commit()
+    database.refresh(up_job)
+
+    # For restart, we do down then up sequentially with separate jobs
     async def restart_sequence():
-        await run_agent_job(job.id, lab.id, "down", required_provider="containerlab")
-        # Only do up if down succeeded
+        await run_agent_job(down_job.id, lab.id, "down", required_provider="containerlab")
+        # Check if down succeeded before starting up
         session = SessionLocal()
         try:
-            j = session.get(models.Job, job.id)
-            if j and j.status != "failed":
-                j.status = "running"
-                session.commit()
-                await run_agent_job(job.id, lab.id, "up", topology_yaml=clab_yaml, required_provider="containerlab")
+            dj = session.get(models.Job, down_job.id)
+            uj = session.get(models.Job, up_job.id)
+            if dj and dj.status == "failed":
+                # Mark up job as cancelled since down failed
+                if uj:
+                    uj.status = "failed"
+                    uj.log = "Cancelled: down phase failed"
+                    session.commit()
+                return
+            # Proceed with up phase
+            await run_agent_job(up_job.id, lab.id, "up", topology_yaml=clab_yaml, required_provider="containerlab")
         finally:
             session.close()
 
     asyncio.create_task(restart_sequence())
 
-    return schemas.JobOut.model_validate(job)
+    return schemas.JobOut.model_validate(down_job)
 
 
 @app.post("/labs/{lab_id}/nodes/{node}/{action}")
@@ -1353,11 +1369,33 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
         pass
 
 
+def _is_docker_image_tar(tar_path: str) -> bool:
+    """Check if tar is a Docker image (has manifest.json) vs raw filesystem.
+
+    Docker images have manifest.json or repositories at the root level,
+    typically in the first few entries. We only check the first 20 entries
+    to avoid reading the entire tar for large filesystem archives.
+    """
+    import tarfile
+    try:
+        with tarfile.open(tar_path, "r:*") as tf:
+            # Only check first 20 entries - Docker metadata is always at the start
+            for i, member in enumerate(tf):
+                if i >= 20:
+                    break
+                name = member.name.lstrip("./")
+                if name in ("manifest.json", "repositories"):
+                    return True
+            return False
+    except Exception:
+        return False
+
+
 @app.post("/images/load")
 def load_image(
     file: UploadFile = File(...),
     current_user: models.User = Depends(get_current_user),
-) -> dict[str, str]:
+):
     filename = file.filename or "image.tar"
     suffixes = Path(filename).suffixes
     suffix = "".join(suffixes) if suffixes else ".tar"
@@ -1378,21 +1416,53 @@ def load_image(
                 load_path = decompressed_path
             except lzma.LZMAError as exc:
                 raise HTTPException(status_code=400, detail=f"Failed to decompress archive: {exc}") from exc
-        result = subprocess.run(
-            ["docker", "load", "-i", load_path],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        output = (result.stdout or "") + (result.stderr or "")
-        if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=output.strip() or "docker load failed")
+
+        # Detect tar format and use appropriate command
+        is_docker_image = _is_docker_image_tar(load_path)
         loaded_images = []
-        for line in output.splitlines():
-            if "Loaded image:" in line:
-                loaded_images.append(line.split("Loaded image:", 1)[-1].strip())
-            elif "Loaded image ID:" in line:
-                loaded_images.append(line.split("Loaded image ID:", 1)[-1].strip())
+
+        if is_docker_image:
+            # Standard Docker image from `docker save`
+            result = subprocess.run(
+                ["docker", "load", "-i", load_path],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            if result.returncode != 0:
+                raise HTTPException(status_code=500, detail=output.strip() or "docker load failed")
+            for line in output.splitlines():
+                if "Loaded image:" in line:
+                    loaded_images.append(line.split("Loaded image:", 1)[-1].strip())
+                elif "Loaded image ID:" in line:
+                    loaded_images.append(line.split("Loaded image ID:", 1)[-1].strip())
+        else:
+            # Raw filesystem tar (e.g., cEOS) - use docker import
+            # Derive image name from filename
+            base_name = Path(filename).stem
+            # Remove common extensions that might remain
+            for ext in [".tar", ".gz", ".xz"]:
+                if base_name.lower().endswith(ext):
+                    base_name = base_name[:-len(ext)]
+            # Create a clean image name
+            image_name = base_name.lower().replace(" ", "-").replace("_", "-")
+            image_tag = f"{image_name}:imported"
+
+            result = subprocess.run(
+                ["docker", "import", load_path, image_tag],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            if result.returncode != 0:
+                raise HTTPException(status_code=500, detail=output.strip() or "docker import failed")
+            # docker import outputs the image ID
+            image_id = output.strip().split(":")[-1][:12] if output.strip() else ""
+            loaded_images.append(image_tag)
+            output = f"Imported filesystem as {image_tag} (ID: {image_id})"
+
         if not loaded_images:
             raise HTTPException(status_code=500, detail=output.strip() or "No images detected in archive")
         manifest = load_manifest()
@@ -1405,6 +1475,7 @@ def load_image(
                     "reference": image_ref,
                     "device_id": device_id,
                     "version": version,
+                    "filename": filename,
                 }
             )
         save_manifest(manifest)

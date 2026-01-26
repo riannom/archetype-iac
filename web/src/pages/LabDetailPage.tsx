@@ -58,6 +58,21 @@ interface NodeData {
   status?: string;
 }
 
+interface Notification {
+  id: string;
+  message: string;
+  type: 'error' | 'warning' | 'success' | 'info';
+  timestamp: Date;
+}
+
+interface TaskLogEntry {
+  id: string;
+  timestamp: Date;
+  level: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  jobId?: string;
+}
+
 interface LinkData {
   name?: string;
   type?: string;
@@ -249,6 +264,7 @@ export function LabDetailPage() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [runtimeLog, setRuntimeLog] = useState<string>("");
   const [jobs, setJobs] = useState<any[]>([]);
+  const [deployedNodeStatus, setDeployedNodeStatus] = useState<Map<string, string>>(new Map());
   const [consoleOutput, setConsoleOutput] = useState<string>("");
   const [terminalHostEl, setTerminalHostEl] = useState<HTMLDivElement | null>(null);
   const [deviceLog, setDeviceLog] = useState<string>("");
@@ -279,6 +295,11 @@ export function LabDetailPage() {
     label: string;
     position?: { x: number; y: number };
   } | null>(null);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [taskLog, setTaskLog] = useState<TaskLogEntry[]>([]);
+  const [isTaskLogVisible, setIsTaskLogVisible] = useState(true);
+  const prevJobsRef = useRef<Map<string, string>>(new Map());
+  const nodesRef = useRef<Node<NodeData>[]>([]);
 
   const reactFlowWrapper = useRef<HTMLDivElement | null>(null);
   const reactFlowInstance = useRef<ReactFlowInstance | null>(null);
@@ -345,18 +366,26 @@ export function LabDetailPage() {
     return undefined;
   }
 
-  function buildStatusMap(currentJobs: any[], currentNodes: Node<NodeData>[]) {
+  function buildStatusMap(currentJobs: any[], currentNodes: Node<NodeData>[], realStatus: Map<string, string>) {
     const map = new Map<string, string>();
     let globalStatus: string | undefined;
 
+    // First, apply real container status from the status endpoint (most accurate)
+    for (const [name, status] of realStatus) {
+      map.set(name, status);
+    }
+
+    // Then process node-specific job actions
     for (const job of currentJobs) {
       if (typeof job.action !== "string") continue;
       if (job.action.startsWith("node:")) {
         const [, nodeAction, nodeName] = job.action.split(":", 3);
-        if (map.has(nodeName)) continue;
-        const status = resolveNodeStatus(nodeAction, job.status);
-        if (status) {
-          map.set(nodeName, status);
+        // Show status for in-progress or failed jobs
+        if (job.status === "running" || job.status === "queued" || job.status === "failed") {
+          const status = resolveNodeStatus(nodeAction, job.status);
+          if (status) {
+            map.set(nodeName, status);
+          }
         }
         continue;
       }
@@ -365,16 +394,41 @@ export function LabDetailPage() {
       }
     }
 
+    // Apply global status only to nodes that are actually deployed (have containers)
+    // Don't apply to newly dragged nodes that haven't been deployed yet
     if (globalStatus) {
       for (const node of currentNodes) {
         const name = node.data.netlabName || node.id;
-        if (!map.has(name)) {
+        // Only apply global status if the node is in the deployed list
+        if (!map.has(name) && realStatus.has(name)) {
           map.set(name, globalStatus);
         }
       }
     }
 
     return map;
+  }
+
+  function addNotification(message: string, type: Notification['type'] = 'error') {
+    const id = `notif-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setNotifications((prev) => [...prev, { id, message, type, timestamp: new Date() }]);
+    // Auto-dismiss after 8 seconds
+    setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    }, 8000);
+  }
+
+  function dismissNotification(id: string) {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }
+
+  function addTaskLogEntry(level: TaskLogEntry['level'], message: string, jobId?: string) {
+    const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setTaskLog((prev) => [...prev.slice(-99), { id, timestamp: new Date(), level, message, jobId }]);
+  }
+
+  function clearTaskLog() {
+    setTaskLog([]);
   }
 
   function renderDeviceIcon(deviceId: string) {
@@ -440,10 +494,16 @@ export function LabDetailPage() {
 
   async function loadGraph() {
     if (!labId) return;
-    const graph = await apiRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
-    const flow = flowFromGraph(graph);
-    setNodes(flow.nodes);
-    setEdges(flow.edges);
+    try {
+      const graph = await apiRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
+      const flow = flowFromGraph(graph);
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load graph";
+      addNotification(message, 'error');
+      addTaskLogEntry('error', `Failed to load topology: ${message}`);
+    }
   }
 
   async function exportYaml() {
@@ -487,17 +547,44 @@ export function LabDetailPage() {
     if (!labId) return;
     try {
       setRuntimeStatus(null);
+      addTaskLogEntry('info', `Starting ${action} action...`);
       await apiRequest(`/labs/${labId}/${action}`, { method: "POST" });
-      loadJobs();
+      await loadJobs();
+      addTaskLogEntry('success', `${action.charAt(0).toUpperCase() + action.slice(1)} action queued`);
     } catch (error) {
-      setRuntimeStatus(error instanceof Error ? error.message : "Action failed");
+      const message = error instanceof Error ? error.message : "Action failed";
+      setRuntimeStatus(message);
+      addNotification(`${action} failed: ${message}`, 'error');
+      addTaskLogEntry('error', `${action} failed: ${message}`);
     }
   }
 
   async function fetchStatus() {
     if (!labId) return;
-    const data = await apiRequest<{ raw: string }>(`/labs/${labId}/status`);
-    setRuntimeLog(data.raw);
+    try {
+      const data = await apiRequest<{ nodes?: { name: string; status: string }[]; raw?: string }>(`/labs/${labId}/status`);
+      // Update deployed node status from actual container state
+      if (data.nodes && Array.isArray(data.nodes)) {
+        const statusMap = new Map<string, string>();
+        data.nodes.forEach((node) => {
+          statusMap.set(node.name, node.status);
+        });
+        setDeployedNodeStatus(statusMap);
+      } else {
+        // No nodes returned - clear stale status
+        setDeployedNodeStatus(new Map());
+      }
+      // Show raw output if available
+      if (data.raw) {
+        setRuntimeLog(data.raw);
+      } else if (data.nodes) {
+        setRuntimeLog(data.nodes.map((n) => `${n.name}: ${n.status}`).join("\n"));
+      }
+    } catch (error) {
+      // Clear stale status on error to prevent showing outdated "running" state
+      setDeployedNodeStatus(new Map());
+      console.error("Failed to fetch status:", error);
+    }
   }
 
   async function loadLatestLog() {
@@ -612,7 +699,33 @@ export function LabDetailPage() {
     }
     const safeNode = safeNodes.nodes.find((item) => item.id === nodeId) || node;
     const netlabName = safeNode?.data.netlabName || nodeName;
+
+    // Check if node is deployed by fetching current status (avoids stale closure)
+    let isDeployed = false;
     try {
+      const statusData = await apiRequest<{ nodes?: { name: string }[] }>(`/labs/${labId}/status`);
+      if (statusData.nodes) {
+        isDeployed = statusData.nodes.some((n) => n.name === netlabName);
+      }
+    } catch {
+      // If status fetch fails, assume not deployed
+    }
+
+    // If trying to start a node that isn't deployed, deploy the whole lab instead
+    if (action === "start" && !isDeployed) {
+      addTaskLogEntry('warning', `Node "${netlabName}" not deployed. Deploying lab...`);
+      setDeviceLog(`Node "${netlabName}" not deployed yet. Deploying lab...\n`);
+      setConsoleOutput((prev) => `${prev}\n[Node not deployed - starting lab deploy]\n`);
+      // Save the canvas first to ensure topology is up to date
+      await saveGraph();
+      // Then deploy the lab
+      await runAction("up");
+      setContextMenu(null);
+      return;
+    }
+
+    try {
+      addTaskLogEntry('info', `Queuing ${action} for node "${netlabName}"...`);
       await apiRequest(`/labs/${labId}/nodes/${encodeURIComponent(netlabName)}/${action}`, {
         method: "POST",
       });
@@ -620,10 +733,14 @@ export function LabDetailPage() {
       setSelectedEdgeId(null);
       setDeviceLog(`Queued ${action} for ${nodeName}...\n`);
       setConsoleOutput((prev) => `${prev}\n[queued ${action} for ${nodeName}]\n`);
-      loadJobs();
+      await loadJobs();
+      addTaskLogEntry('success', `Node ${action} queued for "${netlabName}"`);
       setContextMenu(null);
     } catch (error) {
-      setDeviceLog(error instanceof Error ? error.message : "Action failed");
+      const message = error instanceof Error ? error.message : "Action failed";
+      setDeviceLog(message);
+      addNotification(`Node ${action} failed: ${message}`, 'error');
+      addTaskLogEntry('error', `Node ${action} failed for "${netlabName}": ${message}`);
     }
   }
 
@@ -831,6 +948,11 @@ export function LabDetailPage() {
     );
   }
 
+  // Keep nodesRef in sync with nodes state to avoid stale closures
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
   useEffect(() => {
     loadLab();
   }, [labId]);
@@ -843,24 +965,83 @@ export function LabDetailPage() {
     return () => window.clearInterval(timer);
   }, [labId]);
 
+  // Track job status changes and log them
+  useEffect(() => {
+    const prevStatuses = prevJobsRef.current;
+    const newStatuses = new Map<string, string>();
+
+    for (const job of jobs) {
+      const jobKey = job.id;
+      const prevStatus = prevStatuses.get(jobKey);
+      newStatuses.set(jobKey, job.status);
+
+      // Only log if status changed
+      if (prevStatus && prevStatus !== job.status) {
+        const actionLabel = job.action.startsWith('node:')
+          ? `Node ${job.action.split(':')[1]} (${job.action.split(':')[2]})`
+          : job.action.toUpperCase();
+
+        if (job.status === 'running') {
+          addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
+        } else if (job.status === 'completed') {
+          addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
+        } else if (job.status === 'failed') {
+          addTaskLogEntry('error', `Job failed: ${actionLabel}`, job.id);
+          addNotification(`Job failed: ${actionLabel}`, 'error');
+        }
+      } else if (!prevStatus) {
+        // New job added - log based on its initial status
+        const actionLabel = job.action.startsWith('node:')
+          ? `Node ${job.action.split(':')[1]} (${job.action.split(':')[2]})`
+          : job.action.toUpperCase();
+
+        if (job.status === 'queued') {
+          addTaskLogEntry('info', `Job queued: ${actionLabel}`, job.id);
+        } else if (job.status === 'running') {
+          addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
+        } else if (job.status === 'completed') {
+          addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
+        } else if (job.status === 'failed') {
+          addTaskLogEntry('error', `Job failed: ${actionLabel}`, job.id);
+          addNotification(`Job failed: ${actionLabel}`, 'error');
+        }
+      }
+    }
+
+    prevJobsRef.current = newStatuses;
+  }, [jobs]);
+
+  // Periodically fetch real container status to sync with actual state
+  useEffect(() => {
+    if (!labId) return;
+    // Fetch status immediately when lab loads
+    fetchStatus();
+    // Then poll periodically
+    const timer = window.setInterval(() => {
+      fetchStatus();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [labId]);
+
   useEffect(() => {
     if (nodes.length === 0) return;
-    const statusMap = buildStatusMap(jobs, nodes);
-    if (statusMap.size === 0) return;
+    const statusMap = buildStatusMap(jobs, nodes, deployedNodeStatus);
     setNodes((prev) => {
       let changed = false;
       const next = prev.map((node) => {
         const name = node.data.netlabName || node.id;
         const status = statusMap.get(name);
-        if (!status || node.data.status === status) {
+        // Clear status for nodes that aren't deployed and have no pending jobs
+        const newStatus = status || undefined;
+        if (node.data.status === newStatus) {
           return node;
         }
         changed = true;
-        return { ...node, data: { ...node.data, status } };
+        return { ...node, data: { ...node.data, status: newStatus } };
       });
       return changed ? next : prev;
     });
-  }, [jobs]);
+  }, [jobs, deployedNodeStatus]);
 
   useEffect(() => {
     if (!selectedNode) return;
@@ -868,6 +1049,31 @@ export function LabDetailPage() {
     if (!job) return;
     loadNodeActionLog();
   }, [jobs, selectedNodeId]);
+
+  // Auto-save canvas when nodes or edges change (debounced)
+  const isInitialLoad = useRef(true);
+  const saveTimeoutRef = useRef<number | null>(null);
+  useEffect(() => {
+    // Skip initial load and empty canvas
+    if (isInitialLoad.current || nodes.length === 0) {
+      if (nodes.length > 0) {
+        isInitialLoad.current = false;
+      }
+      return;
+    }
+    // Debounce auto-save
+    if (saveTimeoutRef.current) {
+      window.clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = window.setTimeout(() => {
+      saveGraph();
+    }, 1000);
+    return () => {
+      if (saveTimeoutRef.current) {
+        window.clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [nodes.length, edges.length]);
 
   useEffect(() => {
     const popup = consolePopoutRef.current;
@@ -973,15 +1179,6 @@ export function LabDetailPage() {
               title="Export YAML"
             >
               ⬇️
-            </button>
-            <button
-              className="icon-button"
-              type="button"
-              onClick={saveGraph}
-              aria-label="Save canvas"
-              title="Save canvas"
-            >
-              💾
             </button>
             <button
               className="icon-button"
@@ -1222,9 +1419,18 @@ export function LabDetailPage() {
             <button
               className="icon-button"
               type="button"
+              onClick={saveGraph}
+              aria-label="Save canvas"
+              title="Save canvas"
+            >
+              💾
+            </button>
+            <button
+              className="icon-button"
+              type="button"
               onClick={() => runAction("up")}
-              aria-label="Start all nodes"
-              title="Start all nodes"
+              aria-label="Deploy lab"
+              title="Deploy lab"
             >
               ▶️
             </button>
@@ -1416,6 +1622,70 @@ export function LabDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Notification toasts */}
+      {notifications.length > 0 && (
+        <div className="notification-container">
+          {notifications.map((notif) => (
+            <div key={notif.id} className={`notification notification-${notif.type}`}>
+              <span className="notification-icon">
+                {notif.type === 'error' ? '!' : notif.type === 'warning' ? '!' : notif.type === 'success' ? '?' : 'i'}
+              </span>
+              <span className="notification-message">{notif.message}</span>
+              <button
+                className="notification-dismiss"
+                onClick={() => dismissNotification(notif.id)}
+                aria-label="Dismiss"
+              >
+                x
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Task Log Panel */}
+      <div className={`task-log-panel ${isTaskLogVisible ? '' : 'collapsed'}`}>
+        <div className="task-log-header" onClick={() => setIsTaskLogVisible(!isTaskLogVisible)}>
+          <span className="task-log-title">
+            Task Log
+            {taskLog.filter(e => e.level === 'error').length > 0 && (
+              <span className="task-log-error-badge">
+                {taskLog.filter(e => e.level === 'error').length}
+              </span>
+            )}
+          </span>
+          <div className="task-log-actions">
+            {isTaskLogVisible && (
+              <button
+                className="task-log-clear"
+                onClick={(e) => { e.stopPropagation(); clearTaskLog(); }}
+                aria-label="Clear log"
+              >
+                Clear
+              </button>
+            )}
+            <span className="task-log-toggle">{isTaskLogVisible ? 'v' : '^'}</span>
+          </div>
+        </div>
+        {isTaskLogVisible && (
+          <div className="task-log-content">
+            {taskLog.length === 0 ? (
+              <div className="task-log-empty">No task activity yet</div>
+            ) : (
+              taskLog.map((entry) => (
+                <div key={entry.id} className={`task-log-entry task-log-entry-${entry.level}`}>
+                  <span className="task-log-time">
+                    {entry.timestamp.toLocaleTimeString()}
+                  </span>
+                  <span className="task-log-level">{entry.level.toUpperCase()}</span>
+                  <span className="task-log-message">{entry.message}</span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState, createContext, useContext } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef, createContext, useContext } from 'react';
 import Sidebar from './components/Sidebar';
 import Canvas from './components/Canvas';
 import TopBar from './components/TopBar';
@@ -7,6 +7,7 @@ import ConsoleManager from './components/ConsoleManager';
 import DeviceManager from './components/DeviceManager';
 import RuntimeControl, { RuntimeStatus } from './components/RuntimeControl';
 import StatusBar from './components/StatusBar';
+import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, Link, Node } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
@@ -145,18 +146,24 @@ const buildGraphLinks = (graph: TopologyGraph): Link[] => {
     .filter(Boolean) as Link[];
 };
 
-const buildStatusMap = (jobs: any[], nodes: Node[]) => {
+const buildStatusMap = (jobs: any[], nodes: Node[], deployedNodeNames: Set<string>) => {
   const map = new Map<string, RuntimeStatus>();
   let globalStatus: RuntimeStatus | undefined;
+
+  // Build a name-to-id lookup for nodes
+  const nameToId = new Map<string, string>();
+  nodes.forEach((node) => nameToId.set(node.name, node.id));
 
   for (const job of jobs) {
     if (typeof job.action !== 'string') continue;
     if (job.action.startsWith('node:')) {
       const [, nodeAction, nodeName] = job.action.split(':', 3);
-      if (map.has(nodeName)) continue;
+      // Find the node ID for this node name
+      const nodeId = nameToId.get(nodeName);
+      if (!nodeId || map.has(nodeId)) continue;
       const status = resolveNodeStatus(nodeAction, job.status);
       if (status) {
-        map.set(nodeName, status);
+        map.set(nodeId, status);
       }
       continue;
     }
@@ -165,9 +172,10 @@ const buildStatusMap = (jobs: any[], nodes: Node[]) => {
     }
   }
 
+  // Only apply global status to nodes that are actually deployed
   if (globalStatus) {
     for (const node of nodes) {
-      if (!map.has(node.id)) {
+      if (!map.has(node.id) && deployedNodeNames.has(node.name)) {
         map.set(node.id, globalStatus);
       }
     }
@@ -222,6 +230,10 @@ const StudioPage: React.FC = () => {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
+  const [taskLog, setTaskLog] = useState<TaskLogEntry[]>([]);
+  const [isTaskLogVisible, setIsTaskLogVisible] = useState(true);
+  const [jobs, setJobs] = useState<any[]>([]);
+  const prevJobsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -234,6 +246,13 @@ const StudioPage: React.FC = () => {
   }, [theme]);
 
   const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+
+  const addTaskLogEntry = useCallback((level: TaskLogEntry['level'], message: string, jobId?: string) => {
+    const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setTaskLog((prev) => [...prev.slice(-99), { id, timestamp: new Date(), level, message, jobId }]);
+  }, []);
+
+  const clearTaskLog = useCallback(() => setTaskLog([]), []);
 
   const deviceModels = useMemo(
     () => buildDeviceModels(deviceCatalog, imageLibrary, customDevices),
@@ -283,11 +302,38 @@ const StudioPage: React.FC = () => {
   }, [deviceModels, studioRequest]);
 
   const loadJobs = useCallback(async (labId: string, currentNodes: Node[]) => {
+    // Fetch actual container status from agent
+    let deployedNodeNames = new Set<string>();
+    let deployedStatus = new Map<string, RuntimeStatus>();
+    try {
+      const statusData = await studioRequest<{ nodes?: { name: string; status: string }[] }>(`/labs/${labId}/status`);
+      if (statusData.nodes) {
+        statusData.nodes.forEach((node) => {
+          deployedNodeNames.add(node.name);
+          // Map container status to RuntimeStatus
+          const status = node.status === 'running' ? 'running' : node.status === 'exited' ? 'stopped' : 'stopped';
+          deployedStatus.set(node.name, status as RuntimeStatus);
+        });
+      }
+    } catch {
+      // Status endpoint may fail if lab not deployed - that's ok
+    }
+
     const data = await studioRequest<{ jobs: any[] }>(`/labs/${labId}/jobs`);
-    const statusMap = buildStatusMap(data.jobs || [], currentNodes);
+    setJobs(data.jobs || []);
+    const statusMap = buildStatusMap(data.jobs || [], currentNodes, deployedNodeNames);
+
     const next: Record<string, RuntimeStatus> = {};
     currentNodes.forEach((node) => {
-      next[node.id] = statusMap.get(node.id) || 'stopped';
+      // Priority: 1) In-progress job status, 2) Real container status, 3) undefined (no status shown)
+      const jobStatus = statusMap.get(node.id);
+      const realStatus = deployedStatus.get(node.name);
+      if (jobStatus) {
+        next[node.id] = jobStatus;
+      } else if (realStatus) {
+        next[node.id] = realStatus;
+      }
+      // Don't set any status for nodes that aren't deployed and have no active jobs
     });
     setRuntimeStates(next);
   }, [studioRequest]);
@@ -306,6 +352,58 @@ const StudioPage: React.FC = () => {
     if (!activeLab || nodes.length === 0) return;
     loadJobs(activeLab.id, nodes);
   }, [activeLab, nodes, loadJobs]);
+
+  // Poll for job updates
+  useEffect(() => {
+    if (!activeLab || nodes.length === 0) return;
+    const timer = setInterval(() => {
+      loadJobs(activeLab.id, nodes);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [activeLab, nodes, loadJobs]);
+
+  // Track job status changes and log them
+  useEffect(() => {
+    const prevStatuses = prevJobsRef.current;
+    const newStatuses = new Map<string, string>();
+
+    for (const job of jobs) {
+      const jobKey = job.id;
+      const prevStatus = prevStatuses.get(jobKey);
+      newStatuses.set(jobKey, job.status);
+
+      if (prevStatus && prevStatus !== job.status) {
+        const actionLabel = job.action.startsWith('node:')
+          ? `Node ${job.action.split(':')[1]} (${job.action.split(':')[2]})`
+          : job.action.toUpperCase();
+
+        if (job.status === 'running') {
+          addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
+        } else if (job.status === 'completed') {
+          addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
+        } else if (job.status === 'failed') {
+          addTaskLogEntry('error', `Job failed: ${actionLabel}`, job.id);
+        }
+      } else if (!prevStatus) {
+        // New job - log based on its initial status
+        const actionLabel = job.action.startsWith('node:')
+          ? `Node ${job.action.split(':')[1]} (${job.action.split(':')[2]})`
+          : job.action.toUpperCase();
+
+        if (job.status === 'queued') {
+          addTaskLogEntry('info', `Job queued: ${actionLabel}`, job.id);
+        } else if (job.status === 'running') {
+          addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
+        } else if (job.status === 'completed') {
+          addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
+        } else if (job.status === 'failed') {
+          addTaskLogEntry('error', `Job failed: ${actionLabel}`, job.id);
+        }
+      }
+    }
+
+    prevJobsRef.current = newStatuses;
+  }, [jobs, addTaskLogEntry]);
 
   const handleCreateLab = async () => {
     const name = `Project_${labs.length + 1}`;
@@ -345,7 +443,7 @@ const StudioPage: React.FC = () => {
       memory: 1024,
     };
     setNodes((prev) => [...prev, newNode]);
-    setRuntimeStates((prev) => ({ ...prev, [id]: 'stopped' }));
+    // Don't set any status for new nodes - they should show no status icon until deployed
     setSelectedId(id);
   };
 
@@ -369,13 +467,21 @@ const StudioPage: React.FC = () => {
 
   const handleUpdateStatus = async (nodeId: string, status: RuntimeStatus) => {
     if (!activeLab) return;
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const nodeName = node.name;
     const action = status === 'booting' ? 'start' : status === 'stopped' ? 'stop' : 'restart';
+    addTaskLogEntry('info', `Queuing ${action} for node "${nodeName}"...`);
     try {
-      await studioRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/${action}`, { method: 'POST' });
+      await studioRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeName)}/${action}`, { method: 'POST' });
       setRuntimeStates((prev) => ({ ...prev, [nodeId]: status }));
+      addTaskLogEntry('success', `Node ${action} queued for "${nodeName}"`);
       loadJobs(activeLab.id, nodes);
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Action failed';
+      console.error('Node action failed:', error);
       setRuntimeStates((prev) => ({ ...prev, [nodeId]: 'error' }));
+      addTaskLogEntry('error', `Node ${action} failed for "${nodeName}": ${message}`);
     }
   };
 
@@ -448,6 +554,7 @@ const StudioPage: React.FC = () => {
 
   const handleDeploy = async () => {
     if (!activeLab) return;
+    addTaskLogEntry('info', 'Saving topology...');
     const graph: TopologyGraph = {
       nodes: nodes.map((node) => ({
         id: node.id,
@@ -462,11 +569,22 @@ const StudioPage: React.FC = () => {
         ],
       })),
     };
-    await studioRequest(`/labs/${activeLab.id}/import-graph`, {
-      method: 'POST',
-      body: JSON.stringify(graph),
-    });
-    loadGraph(activeLab.id);
+    try {
+      await studioRequest(`/labs/${activeLab.id}/import-graph`, {
+        method: 'POST',
+        body: JSON.stringify(graph),
+      });
+      addTaskLogEntry('info', 'Deploying lab...');
+      await studioRequest(`/labs/${activeLab.id}/up`, {
+        method: 'POST',
+      });
+      addTaskLogEntry('success', 'Lab deployment queued');
+      loadGraph(activeLab.id);
+      loadJobs(activeLab.id, nodes);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Deploy failed';
+      addTaskLogEntry('error', `Deploy failed: ${message}`);
+    }
   };
 
   const handleLogin = async (event: React.FormEvent) => {
@@ -687,6 +805,12 @@ const StudioPage: React.FC = () => {
           />
         </div>
         <StatusBar />
+        <TaskLogPanel
+          entries={taskLog}
+          isVisible={isTaskLogVisible}
+          onToggle={() => setIsTaskLogVisible(!isTaskLogVisible)}
+          onClear={clearTaskLog}
+        />
         {showYamlModal && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md">
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl w-[700px] max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
