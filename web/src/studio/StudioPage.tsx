@@ -656,19 +656,27 @@ const StudioPage: React.FC = () => {
               onUpdateStatus={handleUpdateStatus}
               onDelete={handleDelete}
             />
-            <PropertiesPanel
-              selectedItem={selectedItem}
-              onUpdateNode={handleUpdateNode}
-              onUpdateLink={handleUpdateLink}
-              onUpdateAnnotation={handleUpdateAnnotation}
-              onDelete={handleDelete}
-              nodes={nodes}
-              links={links}
-              onOpenConsole={handleOpenConsole}
-              runtimeStates={runtimeStates}
-              deviceModels={deviceModels}
-              onUpdateStatus={handleUpdateStatus}
-            />
+            <div
+              className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${
+                selectedItem ? 'w-80' : 'w-0'
+              }`}
+            >
+              <div className="w-80 h-full">
+                <PropertiesPanel
+                  selectedItem={selectedItem}
+                  onUpdateNode={handleUpdateNode}
+                  onUpdateLink={handleUpdateLink}
+                  onUpdateAnnotation={handleUpdateAnnotation}
+                  onDelete={handleDelete}
+                  nodes={nodes}
+                  links={links}
+                  onOpenConsole={handleOpenConsole}
+                  runtimeStates={runtimeStates}
+                  deviceModels={deviceModels}
+                  onUpdateStatus={handleUpdateStatus}
+                />
+              </div>
+            </div>
           </>
         );
     }
