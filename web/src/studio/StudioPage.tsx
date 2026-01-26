@@ -690,14 +690,14 @@ const StudioPage: React.FC = () => {
   if (authRequired) {
     return (
       <div className={`min-h-screen flex items-center justify-center ${backgroundGradient}`}>
-        <div className="w-[420px] bg-stone-950/90 border border-stone-800 rounded-2xl shadow-2xl p-8">
+        <div className="w-[420px] bg-white/90 dark:bg-stone-950/90 border border-stone-200 dark:border-stone-800 rounded-2xl shadow-2xl p-8">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 bg-sage-600 rounded-xl flex items-center justify-center shadow-lg shadow-sage-900/20 border border-sage-400/30">
               <i className="fa-solid fa-bolt-lightning text-white"></i>
             </div>
             <div>
-              <h1 className="text-lg font-black text-white tracking-tight">Aura Studio</h1>
-              <p className="text-[10px] text-sage-500 font-bold uppercase tracking-widest">Sign in</p>
+              <h1 className="text-lg font-black text-stone-900 dark:text-white tracking-tight">Aura Studio</h1>
+              <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Sign in</p>
             </div>
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
@@ -707,7 +707,7 @@ const StudioPage: React.FC = () => {
                 value={authEmail}
                 onChange={(event) => setAuthEmail(event.target.value)}
                 type="email"
-                className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-100 focus:outline-none focus:border-sage-500"
+                className="w-full bg-stone-100 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500"
               />
             </div>
             <div className="space-y-1">
@@ -716,10 +716,10 @@ const StudioPage: React.FC = () => {
                 value={authPassword}
                 onChange={(event) => setAuthPassword(event.target.value)}
                 type="password"
-                className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-100 focus:outline-none focus:border-sage-500"
+                className="w-full bg-stone-100 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500"
               />
             </div>
-            {authError && <div className="text-xs text-red-400">{authError}</div>}
+            {authError && <div className="text-xs text-red-500 dark:text-red-400">{authError}</div>}
             <button
               type="submit"
               disabled={authLoading}

@@ -17,22 +17,22 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelete, onRefresh }) => {
   return (
-    <div className="min-h-screen bg-stone-900 flex flex-col overflow-hidden">
-      <header className="h-20 border-b border-stone-800 bg-stone-900/30 flex items-center justify-between px-10">
+    <div className="min-h-screen bg-stone-50 dark:bg-stone-900 flex flex-col overflow-hidden">
+      <header className="h-20 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-sage-600 rounded-xl flex items-center justify-center shadow-lg shadow-sage-900/20 border border-sage-400/30">
             <i className="fa-solid fa-bolt-lightning text-white"></i>
           </div>
           <div>
-            <h1 className="text-xl font-black text-white tracking-tight">AURA</h1>
-            <p className="text-[10px] text-sage-500 font-bold uppercase tracking-widest">Visual Studio</p>
+            <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">AURA</h1>
+            <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Visual Studio</p>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
           <button
             onClick={onRefresh}
-            className="flex items-center gap-2 px-3 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 rounded-lg transition-all"
+            className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
           >
             <i className="fa-solid fa-rotate text-xs"></i>
             <span className="text-[10px] font-bold uppercase">Refresh</span>
@@ -44,7 +44,7 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
         <div className="max-w-6xl mx-auto">
           <div className="flex justify-between items-center mb-8">
             <div>
-              <h2 className="text-2xl font-bold text-white">Your Workspace</h2>
+              <h2 className="text-2xl font-bold text-stone-900 dark:text-white">Your Workspace</h2>
               <p className="text-stone-500 text-sm mt-1">Manage, design and deploy your virtual network environments.</p>
             </div>
             <button
@@ -60,7 +60,7 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
             {labs.length > 0 ? labs.map((lab) => (
               <div
                 key={lab.id}
-                className="group relative bg-stone-900 border border-stone-800 rounded-2xl p-6 hover:border-sage-500/50 hover:shadow-2xl hover:shadow-sage-900/10 transition-all cursor-default overflow-hidden"
+                className="group relative bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 hover:border-sage-500/50 hover:shadow-2xl hover:shadow-sage-900/10 transition-all cursor-default overflow-hidden"
               >
                 <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
                    <button
@@ -71,11 +71,11 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
                    </button>
                 </div>
 
-                <div className="w-12 h-12 bg-stone-800 rounded-xl flex items-center justify-center mb-4 text-stone-400 group-hover:bg-sage-600 group-hover:text-white transition-all border border-stone-700">
+                <div className="w-12 h-12 bg-stone-100 dark:bg-stone-800 rounded-xl flex items-center justify-center mb-4 text-stone-500 dark:text-stone-400 group-hover:bg-sage-600 group-hover:text-white transition-all border border-stone-200 dark:border-stone-700">
                   <i className="fa-solid fa-diagram-project"></i>
                 </div>
 
-                <h3 className="text-lg font-bold text-white mb-1 group-hover:text-sage-400 transition-colors">{lab.name}</h3>
+                <h3 className="text-lg font-bold text-stone-900 dark:text-white mb-1 group-hover:text-sage-600 dark:group-hover:text-sage-400 transition-colors">{lab.name}</h3>
                 <div className="flex items-center gap-4 text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-6">
                    <span className="flex items-center gap-1.5"><i className="fa-solid fa-server"></i> Lab</span>
                    <span className="flex items-center gap-1.5"><i className="fa-solid fa-calendar"></i> {lab.created_at ? new Date(lab.created_at).toLocaleDateString() : 'New'}</span>
@@ -84,19 +84,19 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
                 <div className="flex gap-2">
                   <button
                     onClick={() => onSelect(lab)}
-                    className="flex-1 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold rounded-lg border border-stone-700 transition-all"
+                    className="flex-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border border-stone-200 dark:border-stone-700 transition-all"
                   >
                     Open Designer
                   </button>
-                  <button className="w-10 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold rounded-lg border border-stone-700 transition-all flex items-center justify-center">
+                  <button className="w-10 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border border-stone-200 dark:border-stone-700 transition-all flex items-center justify-center">
                     <i className="fa-solid fa-download"></i>
                   </button>
                 </div>
               </div>
             )) : (
-              <div className="col-span-full py-20 bg-stone-900/30 border-2 border-dashed border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-600">
+              <div className="col-span-full py-20 bg-stone-100/50 dark:bg-stone-900/30 border-2 border-dashed border-stone-300 dark:border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-500 dark:text-stone-600">
                  <i className="fa-solid fa-folder-open text-5xl mb-4 opacity-10"></i>
-                 <h3 className="text-lg font-bold text-stone-400">Empty Workspace</h3>
+                 <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">Empty Workspace</h3>
                  <p className="text-sm max-w-xs text-center mt-1">Start your first journey by clicking 'Create New Lab' above.</p>
               </div>
             )}
@@ -104,12 +104,12 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelet
         </div>
       </main>
 
-      <footer className="h-10 border-t border-stone-900 bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-600 font-medium">
+      <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
         <span>© 2024 Aura Visual Studio | Professional Edition</span>
         <div className="flex gap-4">
-          <a href="#" className="hover:text-stone-400">Documentation</a>
-          <a href="#" className="hover:text-stone-400">API Status</a>
-          <a href="#" className="hover:text-stone-400">Support</a>
+          <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">Documentation</a>
+          <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">API Status</a>
+          <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">Support</a>
         </div>
       </footer>
     </div>
