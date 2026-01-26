@@ -240,10 +240,57 @@ const Canvas: React.FC<CanvasProps> = ({
             const isSelected = selectedId === link.id;
             const isHovered = hoveredLinkId === link.id;
             const linkColor = isSelected ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F') : (isHovered ? (effectiveMode === 'dark' ? '#84CC16' : '#65A30D') : (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
+
+            // Calculate port label positions (~40px along line from each node)
+            const dx = target.x - source.x;
+            const dy = target.y - source.y;
+            const len = Math.sqrt(dx * dx + dy * dy);
+            const unitX = len > 0 ? dx / len : 0;
+            const unitY = len > 0 ? dy / len : 0;
+            const labelOffset = 40;
+            const sourceLabelX = source.x + unitX * labelOffset;
+            const sourceLabelY = source.y + unitY * labelOffset;
+            const targetLabelX = target.x - unitX * labelOffset;
+            const targetLabelY = target.y - unitY * labelOffset;
+
+            // Label text color
+            const labelColor = effectiveMode === 'dark' ? '#A8A29E' : '#78716C';
+
             return (
               <g key={link.id} className="pointer-events-auto cursor-pointer">
                 <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="transparent" strokeWidth="12" onMouseDown={(e) => handleLinkMouseDown(e, link.id)} onMouseEnter={() => setHoveredLinkId(link.id)} onMouseLeave={() => setHoveredLinkId(null)} />
                 <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={linkColor} strokeWidth={isSelected || isHovered ? "3" : "2"} className={draggingNode ? '' : 'transition-[stroke,stroke-width] duration-150'} />
+                {/* Port labels */}
+                {link.sourceInterface && (
+                  <text
+                    x={sourceLabelX}
+                    y={sourceLabelY}
+                    fill={linkColor}
+                    fontSize="9"
+                    fontWeight="600"
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    className="pointer-events-none select-none"
+                    style={{ fontFamily: 'ui-monospace, monospace' }}
+                  >
+                    {link.sourceInterface}
+                  </text>
+                )}
+                {link.targetInterface && (
+                  <text
+                    x={targetLabelX}
+                    y={targetLabelY}
+                    fill={linkColor}
+                    fontSize="9"
+                    fontWeight="600"
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    className="pointer-events-none select-none"
+                    style={{ fontFamily: 'ui-monospace, monospace' }}
+                  >
+                    {link.targetInterface}
+                  </text>
+                )}
               </g>
             );
           })}

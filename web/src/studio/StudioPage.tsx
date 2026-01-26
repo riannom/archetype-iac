@@ -13,6 +13,7 @@ import SystemStatusStrip from './components/SystemStatusStrip';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
+import { usePortManager } from './hooks/usePortManager';
 import { useTheme } from '../theme/index';
 import './studio.css';
 import 'xterm/css/xterm.css';
@@ -239,6 +240,9 @@ const StudioPage: React.FC = () => {
     labs_running: number;
     labs_total: number;
   } | null>(null);
+
+  // Port manager for interface auto-assignment
+  const portManager = usePortManager(nodes, links);
 
   const addTaskLogEntry = useCallback((level: TaskLogEntry['level'], message: string, jobId?: string) => {
     const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -705,11 +709,18 @@ const StudioPage: React.FC = () => {
       (link) => (link.source === sourceId && link.target === targetId) || (link.source === targetId && link.target === sourceId)
     );
     if (exists) return;
+
+    // Auto-assign next available interfaces
+    const sourceInterface = portManager.getNextInterface(sourceId);
+    const targetInterface = portManager.getNextInterface(targetId);
+
     const newLink: Link = {
       id: Math.random().toString(36).slice(2, 9),
       source: sourceId,
       target: targetId,
       type: 'p2p',
+      sourceInterface,
+      targetInterface,
     };
     setLinks((prev) => [...prev, newLink]);
     setSelectedId(newLink.id);
@@ -905,6 +916,7 @@ const StudioPage: React.FC = () => {
                   runtimeStates={runtimeStates}
                   deviceModels={deviceModels}
                   onUpdateStatus={handleUpdateStatus}
+                  portManager={portManager}
                 />
               </div>
             </div>
