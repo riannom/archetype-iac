@@ -8,7 +8,15 @@ from sqlalchemy.orm import Session
 
 from app import db, models, schemas
 from app.auth import get_current_user
-from app.storage import ensure_topology_file, lab_workspace, topology_path
+from app.storage import (
+    delete_layout,
+    ensure_topology_file,
+    lab_workspace,
+    layout_path,
+    read_layout,
+    topology_path,
+    write_layout,
+)
 from app.topology import graph_to_yaml, yaml_to_graph
 from app.utils.lab import get_lab_or_404
 
@@ -157,14 +165,66 @@ def import_graph(
     return schemas.LabOut.model_validate(lab)
 
 
+class TopologyGraphWithLayout(schemas.TopologyGraph):
+    """Topology graph with optional layout data."""
+
+    layout: schemas.LabLayout | None = None
+
+
 @router.get("/labs/{lab_id}/export-graph")
 def export_graph(
     lab_id: str,
+    include_layout: bool = False,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> schemas.TopologyGraph:
+) -> schemas.TopologyGraph | TopologyGraphWithLayout:
     lab = get_lab_or_404(lab_id, database, current_user)
     topo_path = topology_path(lab.id)
     if not topo_path.exists():
         raise HTTPException(status_code=404, detail="Topology not found")
-    return yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+    graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+    if include_layout:
+        layout = read_layout(lab.id)
+        return TopologyGraphWithLayout(**graph.model_dump(), layout=layout)
+    return graph
+
+
+@router.get("/labs/{lab_id}/layout")
+def get_layout(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LabLayout:
+    """Get layout data for a lab, or 404 if no layout exists."""
+    lab = get_lab_or_404(lab_id, database, current_user)
+    layout = read_layout(lab.id)
+    if layout is None:
+        raise HTTPException(status_code=404, detail="Layout not found")
+    return layout
+
+
+@router.put("/labs/{lab_id}/layout")
+def save_layout(
+    lab_id: str,
+    payload: schemas.LabLayout,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LabLayout:
+    """Save or update layout data for a lab."""
+    lab = get_lab_or_404(lab_id, database, current_user)
+    write_layout(lab.id, payload)
+    return payload
+
+
+@router.delete("/labs/{lab_id}/layout")
+def remove_layout(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Delete layout data, reverting to auto-layout on next load."""
+    lab = get_lab_or_404(lab_id, database, current_user)
+    deleted = delete_layout(lab.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Layout not found")
+    return {"status": "deleted"}

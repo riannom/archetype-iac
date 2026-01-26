@@ -10,7 +10,7 @@ import StatusBar from './components/StatusBar';
 import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
-import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, Link, Node } from './types';
+import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { useTheme } from '../theme/index';
@@ -229,6 +229,8 @@ const StudioPage: React.FC = () => {
   const [jobs, setJobs] = useState<any[]>([]);
   const prevJobsRef = useRef<Map<string, string>>(new Map());
   const [labStatuses, setLabStatuses] = useState<Record<string, { running: number; total: number }>>({});
+  const layoutDirtyRef = useRef(false);
+  const saveLayoutTimeoutRef = useRef<number | null>(null);
   const [systemMetrics, setSystemMetrics] = useState<{
     agents: { online: number; total: number };
     containers: { running: number; total: number };
@@ -277,6 +279,70 @@ const StudioPage: React.FC = () => {
     },
     []
   );
+
+  // Build current layout from state
+  const buildLayoutFromState = useCallback(
+    (currentNodes: Node[], currentAnnotations: Annotation[]): LabLayout => {
+      const nodeLayouts: Record<string, { x: number; y: number; label?: string; color?: string }> = {};
+      currentNodes.forEach((node) => {
+        nodeLayouts[node.id] = {
+          x: node.x,
+          y: node.y,
+          label: node.label,
+        };
+      });
+      return {
+        version: 1,
+        nodes: nodeLayouts,
+        annotations: currentAnnotations.map((ann) => ({
+          id: ann.id,
+          type: ann.type,
+          x: ann.x,
+          y: ann.y,
+          width: ann.width,
+          height: ann.height,
+          text: ann.text,
+          color: ann.color,
+          fontSize: ann.fontSize,
+          targetX: ann.targetX,
+          targetY: ann.targetY,
+        })),
+      };
+    },
+    []
+  );
+
+  // Save layout to backend (debounced)
+  const saveLayout = useCallback(
+    async (labId: string, currentNodes: Node[], currentAnnotations: Annotation[]) => {
+      if (currentNodes.length === 0) return;
+      const layout = buildLayoutFromState(currentNodes, currentAnnotations);
+      try {
+        await studioRequest(`/labs/${labId}/layout`, {
+          method: 'PUT',
+          body: JSON.stringify(layout),
+        });
+        layoutDirtyRef.current = false;
+      } catch (error) {
+        console.error('Failed to save layout:', error);
+      }
+    },
+    [buildLayoutFromState, studioRequest]
+  );
+
+  // Trigger debounced layout save
+  const triggerLayoutSave = useCallback(() => {
+    if (!activeLab) return;
+    layoutDirtyRef.current = true;
+    if (saveLayoutTimeoutRef.current) {
+      window.clearTimeout(saveLayoutTimeoutRef.current);
+    }
+    saveLayoutTimeoutRef.current = window.setTimeout(() => {
+      if (activeLab && layoutDirtyRef.current) {
+        saveLayout(activeLab.id, nodes, annotations);
+      }
+    }, 500);
+  }, [activeLab, nodes, annotations, saveLayout]);
 
   const loadLabs = useCallback(async () => {
     const data = await studioRequest<{ labs: LabSummary[] }>('/labs');
@@ -329,11 +395,59 @@ const StudioPage: React.FC = () => {
     setLabStatuses(statuses);
   }, [studioRequest]);
 
+  const loadLayout = useCallback(async (labId: string): Promise<LabLayout | null> => {
+    try {
+      return await studioRequest<LabLayout>(`/labs/${labId}/layout`);
+    } catch {
+      // Layout not found is expected for new labs
+      return null;
+    }
+  }, [studioRequest]);
+
   const loadGraph = useCallback(async (labId: string) => {
     const graph = await studioRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
-    setNodes(buildGraphNodes(graph, deviceModels));
+    const layout = await loadLayout(labId);
+
+    // Build nodes with layout positions if available
+    let newNodes = buildGraphNodes(graph, deviceModels);
+    if (layout?.nodes) {
+      newNodes = newNodes.map((node) => {
+        const nodeLayout = layout.nodes[node.id];
+        if (nodeLayout) {
+          return {
+            ...node,
+            x: nodeLayout.x,
+            y: nodeLayout.y,
+            label: nodeLayout.label ?? node.label,
+          };
+        }
+        return node;
+      });
+    }
+    setNodes(newNodes);
     setLinks(buildGraphLinks(graph));
-  }, [deviceModels, studioRequest]);
+
+    // Restore annotations from layout
+    if (layout?.annotations && layout.annotations.length > 0) {
+      setAnnotations(
+        layout.annotations.map((ann) => ({
+          id: ann.id,
+          type: ann.type as AnnotationType,
+          x: ann.x,
+          y: ann.y,
+          width: ann.width,
+          height: ann.height,
+          text: ann.text,
+          color: ann.color,
+          fontSize: ann.fontSize,
+          targetX: ann.targetX,
+          targetY: ann.targetY,
+        }))
+      );
+    }
+
+    layoutDirtyRef.current = false;
+  }, [deviceModels, studioRequest, loadLayout]);
 
   const loadJobs = useCallback(async (labId: string, currentNodes: Node[]) => {
     // Fetch actual container status from agent
@@ -416,6 +530,15 @@ const StudioPage: React.FC = () => {
     return () => clearInterval(timer);
   }, [activeLab, nodes, loadJobs]);
 
+  // Cleanup: save layout and clear timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveLayoutTimeoutRef.current) {
+        window.clearTimeout(saveLayoutTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Track job status changes and log them
   useEffect(() => {
     const prevStatuses = prevJobsRef.current;
@@ -466,6 +589,15 @@ const StudioPage: React.FC = () => {
   };
 
   const handleSelectLab = (lab: LabSummary) => {
+    // Save pending layout changes before switching
+    if (activeLab && layoutDirtyRef.current && nodes.length > 0) {
+      saveLayout(activeLab.id, nodes, annotations);
+    }
+    // Clear any pending save timeout
+    if (saveLayoutTimeoutRef.current) {
+      window.clearTimeout(saveLayoutTimeoutRef.current);
+      saveLayoutTimeoutRef.current = null;
+    }
     setActiveLab(lab);
     setAnnotations([]);
     setConsoleWindows([]);
@@ -517,6 +649,7 @@ const StudioPage: React.FC = () => {
     };
     setAnnotations((prev) => [...prev, newAnn]);
     setSelectedId(id);
+    triggerLayoutSave();
   };
 
   const handleUpdateStatus = async (nodeId: string, status: RuntimeStatus) => {
@@ -559,11 +692,13 @@ const StudioPage: React.FC = () => {
 
   const handleNodeMove = useCallback((id: string, x: number, y: number) => {
     setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, x, y } : node)));
-  }, []);
+    triggerLayoutSave();
+  }, [triggerLayoutSave]);
 
   const handleAnnotationMove = useCallback((id: string, x: number, y: number) => {
     setAnnotations((prev) => prev.map((ann) => (ann.id === id ? { ...ann, x, y } : ann)));
-  }, []);
+    triggerLayoutSave();
+  }, [triggerLayoutSave]);
 
   const handleConnect = (sourceId: string, targetId: string) => {
     const exists = links.find(
@@ -590,13 +725,19 @@ const StudioPage: React.FC = () => {
 
   const handleUpdateAnnotation = (id: string, updates: Partial<Annotation>) => {
     setAnnotations((prev) => prev.map((ann) => (ann.id === id ? { ...ann, ...updates } : ann)));
+    triggerLayoutSave();
   };
 
   const handleDelete = (id: string) => {
+    const isAnnotation = annotations.some((ann) => ann.id === id);
     setNodes((prev) => prev.filter((node) => node.id !== id));
     setLinks((prev) => prev.filter((link) => link.id !== id && link.source !== id && link.target !== id));
     setAnnotations((prev) => prev.filter((ann) => ann.id !== id));
     setSelectedId(null);
+    // Only trigger layout save if an annotation was deleted (node positions remain the same)
+    if (isAnnotation) {
+      triggerLayoutSave();
+    }
   };
 
   const handleExport = async () => {
@@ -604,6 +745,32 @@ const StudioPage: React.FC = () => {
     const data = await studioRequest<{ content: string }>(`/labs/${activeLab.id}/export-yaml`);
     setYamlContent(data.content || '');
     setShowYamlModal(true);
+  };
+
+  const handleExportFull = async () => {
+    if (!activeLab) return;
+    // Save layout first to ensure we have the latest
+    await saveLayout(activeLab.id, nodes, annotations);
+    // Get both YAML and layout
+    const [yamlData, layoutData] = await Promise.all([
+      studioRequest<{ content: string }>(`/labs/${activeLab.id}/export-yaml`),
+      studioRequest<LabLayout>(`/labs/${activeLab.id}/layout`).catch(() => null),
+    ]);
+    // Create a combined export object
+    const exportData = {
+      topology: yamlData.content,
+      layout: layoutData,
+    };
+    // Download as JSON file
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${activeLab.name.replace(/\s+/g, '_')}_full_export.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleDeploy = async () => {
@@ -823,7 +990,7 @@ const StudioPage: React.FC = () => {
 
   return (
     <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${backgroundGradient}`}>
-      <TopBar labName={activeLab.name} onExport={handleExport} onDeploy={handleDeploy} onExit={() => setActiveLab(null)} />
+      <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onDeploy={handleDeploy} onExit={() => setActiveLab(null)} />
       <div className="h-10 bg-white/60 dark:bg-stone-900/60 backdrop-blur-md border-b border-stone-200 dark:border-stone-800 flex px-6 items-center gap-1 shrink-0">
         <button
           onClick={() => setView('designer')}
