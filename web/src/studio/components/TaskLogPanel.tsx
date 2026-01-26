@@ -19,27 +19,27 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggl
   const errorCount = entries.filter((e) => e.level === 'error').length;
 
   const levelColors = {
-    info: 'text-blue-400',
-    success: 'text-green-400',
-    warning: 'text-yellow-400',
-    error: 'text-red-400',
+    info: 'text-cyan-700 dark:text-cyan-400',
+    success: 'text-green-700 dark:text-green-400',
+    warning: 'text-amber-700 dark:text-yellow-400',
+    error: 'text-red-700 dark:text-red-400',
   };
 
   const levelBorders = {
-    info: 'border-l-blue-500',
+    info: 'border-l-cyan-500',
     success: 'border-l-green-500',
-    warning: 'border-l-yellow-500',
-    error: 'border-l-red-500 bg-red-900/20',
+    warning: 'border-l-amber-500 dark:border-l-yellow-500',
+    error: 'border-l-red-500 bg-red-100/50 dark:bg-red-900/20',
   };
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 bg-slate-950/95 border-t border-slate-800 backdrop-blur-md">
+    <div className="fixed bottom-0 left-0 right-0 z-50 bg-white/95 dark:bg-stone-950/95 border-t border-stone-200 dark:border-stone-800 backdrop-blur-md">
       <div
         onClick={onToggle}
-        className="flex justify-between items-center px-4 py-2 cursor-pointer hover:bg-slate-900/50 select-none"
+        className="flex justify-between items-center px-4 py-2 cursor-pointer hover:bg-stone-100/50 dark:hover:bg-stone-900/50 select-none"
       >
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+          <span className="text-[10px] font-black uppercase tracking-widest text-stone-600 dark:text-stone-400">
             Task Log
           </span>
           {errorCount > 0 && (
@@ -55,31 +55,31 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggl
                 e.stopPropagation();
                 onClear();
               }}
-              className="text-[10px] font-bold text-slate-500 hover:text-slate-300 uppercase tracking-widest"
+              className="text-[10px] font-bold text-stone-500 hover:text-stone-700 dark:hover:text-stone-300 uppercase tracking-widest"
             >
               Clear
             </button>
           )}
-          <span className="text-slate-500 text-xs">{isVisible ? 'v' : '^'}</span>
+          <span className="text-stone-400 dark:text-stone-500 text-xs">{isVisible ? 'v' : '^'}</span>
         </div>
       </div>
       {isVisible && (
         <div className="max-h-[200px] overflow-y-auto font-mono text-[11px]">
           {entries.length === 0 ? (
-            <div className="px-4 py-6 text-center text-slate-600">No task activity yet</div>
+            <div className="px-4 py-6 text-center text-stone-400 dark:text-stone-600">No task activity yet</div>
           ) : (
             entries.map((entry) => (
               <div
                 key={entry.id}
                 className={`flex gap-3 px-4 py-1.5 border-l-2 ${levelBorders[entry.level]}`}
               >
-                <span className="text-slate-600 min-w-[70px]">
+                <span className="text-stone-400 dark:text-stone-600 min-w-[70px]">
                   {entry.timestamp.toLocaleTimeString()}
                 </span>
                 <span className={`min-w-[50px] font-bold uppercase ${levelColors[entry.level]}`}>
                   {entry.level}
                 </span>
-                <span className="text-slate-300">{entry.message}</span>
+                <span className="text-stone-700 dark:text-stone-300">{entry.message}</span>
               </div>
             ))
           )}

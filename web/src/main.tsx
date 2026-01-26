@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider, Navigate } from "react-router-dom";
+import { ThemeProvider } from "./theme/index";
 import StudioConsolePage from "./pages/StudioConsolePage";
 import StudioPage from "./studio/StudioPage";
 
@@ -16,6 +17,8 @@ const router = createBrowserRouter([
 const root = createRoot(document.getElementById("root")!);
 root.render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <ThemeProvider>
+      <RouterProvider router={router} />
+    </ThemeProvider>
   </React.StrictMode>
 );

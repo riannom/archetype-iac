@@ -1,8 +1,8 @@
 
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo, memo } from 'react';
 import { Node, Link, DeviceType, Annotation, DeviceModel } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
-import { useTheme } from '../StudioPage';
+import { useTheme } from '../../theme/index';
 
 interface CanvasProps {
   nodes: Node[];
@@ -27,10 +27,10 @@ interface ContextMenu {
   type: 'node' | 'link';
 }
 
-const Canvas: React.FC<CanvasProps> = ({ 
+const Canvas: React.FC<CanvasProps> = ({
   nodes, links, annotations, runtimeStates, deviceModels, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete
 }) => {
-  const { theme } = useTheme();
+  const { effectiveMode } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const [draggingNode, setDraggingNode] = useState<string | null>(null);
   const [draggingAnnotation, setDraggingAnnotation] = useState<string | null>(null);
@@ -42,6 +42,13 @@ const Canvas: React.FC<CanvasProps> = ({
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+
+  // Memoized node map for O(1) lookups instead of O(n) .find() calls
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, Node>();
+    nodes.forEach(node => map.set(node.id, node));
+    return map;
+  }, [nodes]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -62,7 +69,7 @@ const Canvas: React.FC<CanvasProps> = ({
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const x = (e.clientX - rect.left - offset.x) / zoom;
@@ -79,9 +86,9 @@ const Canvas: React.FC<CanvasProps> = ({
     } else if (draggingAnnotation) {
       onAnnotationMove(draggingAnnotation, x, y);
     }
-  };
+  }, [offset, zoom, isPanning, draggingNode, draggingAnnotation, onNodeMove, onAnnotationMove]);
 
-  const handleWheel = (e: React.WheelEvent) => {
+  const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const factor = Math.pow(1.1, -e.deltaY / 100);
@@ -96,26 +103,26 @@ const Canvas: React.FC<CanvasProps> = ({
     } else {
       setOffset(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY }));
     }
-  };
+  }, [zoom, offset]);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && (e as any).spaceKey)) {
       setIsPanning(true);
       return;
     }
     onSelect(null);
     setContextMenu(null);
-  };
+  }, [onSelect]);
 
-  const handleMouseUp = () => {
+  const handleMouseUp = useCallback(() => {
     setDraggingNode(null);
     setDraggingAnnotation(null);
     setIsPanning(false);
     setLinkingNode(null);
-  };
+  }, []);
 
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
-    if (e.button === 2) return; 
+    if (e.button === 2) return;
     e.stopPropagation();
     setContextMenu(null);
     if (e.shiftKey) {
@@ -199,59 +206,57 @@ const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  const gridColor = theme === 'dark' ? 'text-slate-800' : 'text-slate-200';
-
   return (
-    <div 
+    <div
       ref={containerRef}
-      className={`flex-1 relative overflow-hidden canvas-grid ${gridColor} ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+      className={`flex-1 relative overflow-hidden canvas-grid ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseDown={handleMouseDown}
       onWheel={handleWheel}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div 
+      <div
         className="absolute inset-0 origin-top-left"
         style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
       >
         <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none">
           {annotations.map(ann => {
             const isSelected = selectedId === ann.id;
-            const stroke = isSelected ? (theme === 'dark' ? '#3b82f6' : '#2563eb') : (ann.color || (theme === 'dark' ? '#475569' : '#cbd5e1'));
+            const stroke = isSelected ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F') : (ann.color || (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
             return (
               <g key={ann.id} className="pointer-events-auto cursor-move" onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)}>
-                {ann.type === 'rect' && <rect x={ann.x} y={ann.y} width={ann.width || 100} height={ann.height || 60} fill={theme === 'dark' ? "rgba(51, 65, 85, 0.2)" : "rgba(203, 213, 225, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} rx="4" />}
-                {ann.type === 'circle' && <circle cx={ann.x} cy={ann.y} r={ann.width ? ann.width / 2 : 40} fill={theme === 'dark' ? "rgba(51, 65, 85, 0.2)" : "rgba(203, 213, 225, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} />}
-                {ann.type === 'text' && <text x={ann.x} y={ann.y} fill={ann.color || (theme === 'dark' ? 'white' : '#1e293b')} fontSize={ann.fontSize || 14} className="font-black tracking-tight select-none">{ann.text || 'New Text'}</text>}
+                {ann.type === 'rect' && <rect x={ann.x} y={ann.y} width={ann.width || 100} height={ann.height || 60} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} rx="4" />}
+                {ann.type === 'circle' && <circle cx={ann.x} cy={ann.y} r={ann.width ? ann.width / 2 : 40} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} />}
+                {ann.type === 'text' && <text x={ann.x} y={ann.y} fill={ann.color || (effectiveMode === 'dark' ? 'white' : '#1C1917')} fontSize={ann.fontSize || 14} className="font-black tracking-tight select-none">{ann.text || 'New Text'}</text>}
               </g>
             );
           })}
 
           {links.map(link => {
-            const source = nodes.find(n => n.id === link.source);
-            const target = nodes.find(n => n.id === link.target);
+            const source = nodeMap.get(link.source);
+            const target = nodeMap.get(link.target);
             if (!source || !target) return null;
             const isSelected = selectedId === link.id;
             const isHovered = hoveredLinkId === link.id;
-            const linkColor = isSelected ? (theme === 'dark' ? '#3b82f6' : '#2563eb') : (isHovered ? (theme === 'dark' ? '#60a5fa' : '#3b82f6') : (theme === 'dark' ? '#475569' : '#cbd5e1'));
+            const linkColor = isSelected ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F') : (isHovered ? (effectiveMode === 'dark' ? '#84CC16' : '#65A30D') : (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
             return (
               <g key={link.id} className="pointer-events-auto cursor-pointer">
                 <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="transparent" strokeWidth="12" onMouseDown={(e) => handleLinkMouseDown(e, link.id)} onMouseEnter={() => setHoveredLinkId(link.id)} onMouseLeave={() => setHoveredLinkId(null)} />
-                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={linkColor} strokeWidth={isSelected || isHovered ? "3" : "2"} className="transition-all" />
+                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={linkColor} strokeWidth={isSelected || isHovered ? "3" : "2"} className={draggingNode ? '' : 'transition-[stroke,stroke-width] duration-150'} />
               </g>
             );
           })}
 
           {linkingNode && (
-            <line 
-              x1={nodes.find(n => n.id === linkingNode)?.x} 
-              y1={nodes.find(n => n.id === linkingNode)?.y} 
-              x2={mousePos.x} 
-              y2={mousePos.y} 
-              stroke="#3b82f6" 
-              strokeWidth="2" 
-              strokeDasharray="4" 
+            <line
+              x1={nodeMap.get(linkingNode)?.x}
+              y1={nodeMap.get(linkingNode)?.y}
+              x2={mousePos.x}
+              y2={mousePos.y}
+              stroke="#65A30D"
+              strokeWidth="2"
+              strokeDasharray="4"
             />
           )}
         </svg>
@@ -260,7 +265,7 @@ const Canvas: React.FC<CanvasProps> = ({
           const status = runtimeStates[node.id] || 'stopped';
           const isRouter = node.type === DeviceType.ROUTER;
           const isSwitch = node.type === DeviceType.SWITCH;
-          
+
           let borderRadius = '8px';
           if (isRouter) borderRadius = '50%';
           if (isSwitch) borderRadius = '4px';
@@ -273,13 +278,13 @@ const Canvas: React.FC<CanvasProps> = ({
               onMouseUp={(e) => handleNodeMouseUp(e, node.id)}
               onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
               className={`absolute w-12 h-12 flex items-center justify-center cursor-pointer transition-all shadow-sm
-                ${selectedId === node.id ? 'ring-2 ring-blue-500 bg-blue-500/10 dark:bg-blue-900/40 shadow-lg shadow-blue-500/20' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600'}
+                ${selectedId === node.id ? 'ring-2 ring-sage-500 bg-sage-500/10 dark:bg-sage-900/40 shadow-lg shadow-sage-500/20' : 'bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600'}
                 ${status === 'running' ? 'border-green-500/50 shadow-md shadow-green-500/10' : ''}
-                ${linkingNode === node.id ? 'ring-2 ring-blue-400 scale-110' : ''}
-                hover:border-blue-400 z-10 select-none group`}
+                ${linkingNode === node.id ? 'ring-2 ring-sage-400 scale-110' : ''}
+                hover:border-sage-400 z-10 select-none group`}
             >
-              <i className={`fa-solid ${getNodeIcon(node.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : 'text-slate-700 dark:text-slate-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
-              <div className="absolute top-full mt-1 text-[10px] font-bold text-slate-700 dark:text-slate-300 bg-white/90 dark:bg-slate-900/80 px-1 rounded shadow-sm border border-slate-200 dark:border-slate-700 whitespace-nowrap pointer-events-none">
+              <i className={`fa-solid ${getNodeIcon(node.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
+              <div className="absolute top-full mt-1 text-[10px] font-bold text-stone-700 dark:text-stone-300 bg-white/90 dark:bg-stone-900/80 px-1 rounded shadow-sm border border-stone-200 dark:border-stone-700 whitespace-nowrap pointer-events-none">
                 {node.name}
               </div>
             </div>
@@ -288,24 +293,24 @@ const Canvas: React.FC<CanvasProps> = ({
       </div>
 
       <div className="absolute bottom-6 left-6 flex flex-col gap-2 z-30">
-        <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-lg flex flex-col overflow-hidden shadow-lg">
-          <button onClick={() => setZoom(prev => Math.min(prev * 1.2, 5))} className="p-3 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors border-b border-slate-200 dark:border-slate-700"><i className="fa-solid fa-plus"></i></button>
-          <button onClick={() => setZoom(prev => Math.max(prev / 1.2, 0.1))} className="p-3 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"><i className="fa-solid fa-minus"></i></button>
+        <div className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-md border border-stone-200 dark:border-stone-700 rounded-lg flex flex-col overflow-hidden shadow-lg">
+          <button onClick={() => setZoom(prev => Math.min(prev * 1.2, 5))} className="p-3 text-stone-500 dark:text-stone-400 hover:text-sage-600 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors border-b border-stone-200 dark:border-stone-700"><i className="fa-solid fa-plus"></i></button>
+          <button onClick={() => setZoom(prev => Math.max(prev / 1.2, 0.1))} className="p-3 text-stone-500 dark:text-stone-400 hover:text-sage-600 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"><i className="fa-solid fa-minus"></i></button>
         </div>
-        <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-lg flex flex-col overflow-hidden shadow-lg">
-          <button onClick={centerCanvas} className="p-3 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors border-b border-slate-200 dark:border-slate-700"><i className="fa-solid fa-crosshairs"></i></button>
-          <button onClick={fitToScreen} className="p-3 text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"><i className="fa-solid fa-maximize"></i></button>
+        <div className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-md border border-stone-200 dark:border-stone-700 rounded-lg flex flex-col overflow-hidden shadow-lg">
+          <button onClick={centerCanvas} className="p-3 text-stone-500 dark:text-stone-400 hover:text-sage-600 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors border-b border-stone-200 dark:border-stone-700"><i className="fa-solid fa-crosshairs"></i></button>
+          <button onClick={fitToScreen} className="p-3 text-stone-500 dark:text-stone-400 hover:text-sage-600 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"><i className="fa-solid fa-maximize"></i></button>
         </div>
       </div>
 
       {contextMenu && (
-        <div className="fixed z-[100] w-52 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl py-2 animate-in fade-in zoom-in duration-100" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(e) => e.stopPropagation()}>
-          <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 mb-1 flex items-center justify-between">
-            <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">{contextMenu.type === 'node' ? 'Node Actions' : 'Link Actions'}</span>
+        <div className="fixed z-[100] w-52 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl py-2 animate-in fade-in zoom-in duration-100" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="px-4 py-2 border-b border-stone-100 dark:border-stone-800 mb-1 flex items-center justify-between">
+            <span className="text-[10px] font-black text-stone-400 dark:text-stone-500 uppercase tracking-widest">{contextMenu.type === 'node' ? 'Node Actions' : 'Link Actions'}</span>
           </div>
           {contextMenu.type === 'node' && (
             <>
-              <button onClick={() => handleAction('console')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-slate-700 dark:text-slate-300 hover:bg-blue-600 hover:text-white transition-colors">
+              <button onClick={() => handleAction('console')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-sage-600 hover:text-white transition-colors">
                 <i className="fa-solid fa-terminal w-4"></i> Open Console
               </button>
               <button onClick={() => handleAction('start')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-green-600 dark:text-green-400 hover:bg-green-600 hover:text-white transition-colors">
@@ -314,7 +319,7 @@ const Canvas: React.FC<CanvasProps> = ({
               <button onClick={() => handleAction('stop')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-red-600 dark:text-red-400 hover:bg-red-600 hover:text-white transition-colors">
                 <i className="fa-solid fa-power-off w-4"></i> Power Off
               </button>
-              <div className="h-px bg-slate-100 dark:bg-slate-800 my-1 mx-2"></div>
+              <div className="h-px bg-stone-100 dark:bg-stone-800 my-1 mx-2"></div>
             </>
           )}
           <button onClick={() => handleAction('delete')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-red-600 dark:text-red-500 hover:bg-red-600 hover:text-white transition-colors">
@@ -326,4 +331,4 @@ const Canvas: React.FC<CanvasProps> = ({
   );
 };
 
-export default Canvas;
+export default memo(Canvas);

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState, useRef, createContext, useContext } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import Canvas from './components/Canvas';
 import TopBar from './components/TopBar';
@@ -12,23 +12,9 @@ import Dashboard from './components/Dashboard';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, Link, Node } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
+import { useTheme } from '../theme/index';
 import './studio.css';
 import 'xterm/css/xterm.css';
-
-type Theme = 'light' | 'dark';
-
-interface ThemeContextType {
-  theme: Theme;
-  toggleTheme: () => void;
-}
-
-const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
-
-export const useTheme = () => {
-  const context = useContext(ThemeContext);
-  if (!context) throw new Error('useTheme must be used within a ThemeProvider');
-  return context;
-};
 
 interface LabSummary {
   id: string;
@@ -206,7 +192,7 @@ const resolveNodeStatus = (action: string, status: string): RuntimeStatus | unde
 };
 
 const StudioPage: React.FC = () => {
-  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('aura_theme') as Theme) || 'dark');
+  const { effectiveMode } = useTheme();
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
   const [view, setView] = useState<'designer' | 'images' | 'runtime'>('designer');
@@ -241,18 +227,6 @@ const StudioPage: React.FC = () => {
   const [isTaskLogVisible, setIsTaskLogVisible] = useState(true);
   const [jobs, setJobs] = useState<any[]>([]);
   const prevJobsRef = useRef<Map<string, string>>(new Map());
-
-  useEffect(() => {
-    const root = window.document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
-    localStorage.setItem('aura_theme', theme);
-  }, [theme]);
-
-  const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
 
   const addTaskLogEntry = useCallback((level: TaskLogEntry['level'], message: string, jobId?: string) => {
     const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -471,7 +445,7 @@ const StudioPage: React.FC = () => {
       x: 400,
       y: 300,
       text: type === 'text' ? 'New Label' : type === 'caption' ? 'Note here' : '',
-      color: theme === 'dark' ? '#3b82f6' : '#2563eb',
+      color: effectiveMode === 'dark' ? '#3b82f6' : '#2563eb',
       width: type === 'rect' || type === 'circle' ? 100 : undefined,
       height: type === 'rect' ? 60 : undefined,
       targetX: type === 'arrow' ? 500 : undefined,
@@ -701,154 +675,148 @@ const StudioPage: React.FC = () => {
   };
 
   const backgroundGradient =
-    theme === 'dark'
-      ? 'bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 bg-gradient-animate'
-      : 'bg-gradient-to-br from-slate-50 via-white to-slate-100 bg-gradient-animate';
+    effectiveMode === 'dark'
+      ? 'bg-gradient-to-br from-stone-950 via-stone-900 to-stone-950 bg-gradient-animate'
+      : 'bg-gradient-to-br from-stone-50 via-white to-stone-100 bg-gradient-animate';
 
   if (authRequired) {
     return (
-      <ThemeContext.Provider value={{ theme, toggleTheme }}>
-        <div className={`min-h-screen flex items-center justify-center ${backgroundGradient}`}>
-          <div className="w-[420px] bg-slate-950/90 border border-slate-800 rounded-2xl shadow-2xl p-8">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/20 border border-blue-400/30">
-                <i className="fa-solid fa-bolt-lightning text-white"></i>
-              </div>
-              <div>
-                <h1 className="text-lg font-black text-white tracking-tight">Aura Studio</h1>
-                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest text-blue-500">Sign in</p>
-              </div>
+      <div className={`min-h-screen flex items-center justify-center ${backgroundGradient}`}>
+        <div className="w-[420px] bg-stone-950/90 border border-stone-800 rounded-2xl shadow-2xl p-8">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 bg-sage-600 rounded-xl flex items-center justify-center shadow-lg shadow-sage-900/20 border border-sage-400/30">
+              <i className="fa-solid fa-bolt-lightning text-white"></i>
             </div>
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Email</label>
-                <input
-                  value={authEmail}
-                  onChange={(event) => setAuthEmail(event.target.value)}
-                  type="email"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Password</label>
-                <input
-                  value={authPassword}
-                  onChange={(event) => setAuthPassword(event.target.value)}
-                  type="password"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              {authError && <div className="text-xs text-red-400">{authError}</div>}
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all"
-              >
-                {authLoading ? 'Signing in...' : 'Sign in'}
-              </button>
-            </form>
+            <div>
+              <h1 className="text-lg font-black text-white tracking-tight">Aura Studio</h1>
+              <p className="text-[10px] text-sage-500 font-bold uppercase tracking-widest">Sign in</p>
+            </div>
           </div>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Email</label>
+              <input
+                value={authEmail}
+                onChange={(event) => setAuthEmail(event.target.value)}
+                type="email"
+                className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-100 focus:outline-none focus:border-sage-500"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Password</label>
+              <input
+                value={authPassword}
+                onChange={(event) => setAuthPassword(event.target.value)}
+                type="password"
+                className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-100 focus:outline-none focus:border-sage-500"
+              />
+            </div>
+            {authError && <div className="text-xs text-red-400">{authError}</div>}
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full bg-sage-600 hover:bg-sage-500 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all"
+            >
+              {authLoading ? 'Signing in...' : 'Sign in'}
+            </button>
+          </form>
         </div>
-      </ThemeContext.Provider>
+      </div>
     );
   }
 
   if (!activeLab) {
     return (
-      <ThemeContext.Provider value={{ theme, toggleTheme }}>
-        <Dashboard
-          labs={labs}
-          onSelect={handleSelectLab}
-          onCreate={handleCreateLab}
-          onDelete={handleDeleteLab}
-          onRefresh={loadLabs}
-        />
-      </ThemeContext.Provider>
+      <Dashboard
+        labs={labs}
+        onSelect={handleSelectLab}
+        onCreate={handleCreateLab}
+        onDelete={handleDeleteLab}
+        onRefresh={loadLabs}
+      />
     );
   }
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${backgroundGradient}`}>
-        <TopBar labName={activeLab.name} onExport={handleExport} onDeploy={handleDeploy} onExit={() => setActiveLab(null)} />
-        <div className="h-10 bg-white/60 dark:bg-slate-900/60 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex px-6 items-center gap-1 shrink-0">
-          <button
-            onClick={() => setView('designer')}
-            className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-              view === 'designer' ? 'text-blue-600 dark:text-blue-500 border-blue-600 dark:border-blue-500' : 'text-slate-400 dark:text-slate-500 border-transparent'
-            }`}
-          >
-            Designer
-          </button>
-          <button
-            onClick={() => setView('runtime')}
-            className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-              view === 'runtime' ? 'text-blue-600 dark:text-blue-500 border-blue-600 dark:border-blue-500' : 'text-slate-400 dark:text-slate-500 border-transparent'
-            }`}
-          >
-            Runtime
-          </button>
-          <button
-            onClick={() => setView('images')}
-            className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-              view === 'images' ? 'text-blue-600 dark:text-blue-500 border-blue-600 dark:border-blue-500' : 'text-slate-400 dark:text-slate-500 border-transparent'
-            }`}
-          >
-            Images
-          </button>
-        </div>
-        <div className="flex flex-1 overflow-hidden relative">
-          {renderView()}
-          <ConsoleManager
-            labId={activeLab.id}
-            windows={consoleWindows}
-            nodes={nodes}
-            onCloseWindow={(id) => setConsoleWindows((prev) => prev.filter((win) => win.id !== id))}
-            onCloseTab={(winId, nodeId) =>
-              setConsoleWindows((prev) =>
-                prev
-                  .map((win) => {
-                    if (win.id !== winId) return win;
-                    const nextIds = win.deviceIds.filter((did) => did !== nodeId);
-                    const nextActive = win.activeDeviceId === nodeId ? nextIds[0] || '' : win.activeDeviceId;
-                    return { ...win, deviceIds: nextIds, activeDeviceId: nextActive };
-                  })
-                  .filter((win) => win.deviceIds.length > 0)
-              )
-            }
-            onSetActiveTab={(winId, nodeId) => setConsoleWindows((prev) => prev.map((win) => (win.id === winId ? { ...win, activeDeviceId: nodeId } : win)))}
-            onUpdateWindowPos={(id, x, y) => setConsoleWindows((prev) => prev.map((win) => (win.id === id ? { ...win, x, y } : win)))}
-          />
-        </div>
-        <StatusBar />
-        <TaskLogPanel
-          entries={taskLog}
-          isVisible={isTaskLogVisible}
-          onToggle={() => setIsTaskLogVisible(!isTaskLogVisible)}
-          onClear={clearTaskLog}
+    <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${backgroundGradient}`}>
+      <TopBar labName={activeLab.name} onExport={handleExport} onDeploy={handleDeploy} onExit={() => setActiveLab(null)} />
+      <div className="h-10 bg-white/60 dark:bg-stone-900/60 backdrop-blur-md border-b border-stone-200 dark:border-stone-800 flex px-6 items-center gap-1 shrink-0">
+        <button
+          onClick={() => setView('designer')}
+          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
+            view === 'designer' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+          }`}
+        >
+          Designer
+        </button>
+        <button
+          onClick={() => setView('runtime')}
+          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
+            view === 'runtime' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+          }`}
+        >
+          Runtime
+        </button>
+        <button
+          onClick={() => setView('images')}
+          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
+            view === 'images' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+          }`}
+        >
+          Images
+        </button>
+      </div>
+      <div className="flex flex-1 overflow-hidden relative">
+        {renderView()}
+        <ConsoleManager
+          labId={activeLab.id}
+          windows={consoleWindows}
+          nodes={nodes}
+          onCloseWindow={(id) => setConsoleWindows((prev) => prev.filter((win) => win.id !== id))}
+          onCloseTab={(winId, nodeId) =>
+            setConsoleWindows((prev) =>
+              prev
+                .map((win) => {
+                  if (win.id !== winId) return win;
+                  const nextIds = win.deviceIds.filter((did) => did !== nodeId);
+                  const nextActive = win.activeDeviceId === nodeId ? nextIds[0] || '' : win.activeDeviceId;
+                  return { ...win, deviceIds: nextIds, activeDeviceId: nextActive };
+                })
+                .filter((win) => win.deviceIds.length > 0)
+            )
+          }
+          onSetActiveTab={(winId, nodeId) => setConsoleWindows((prev) => prev.map((win) => (win.id === winId ? { ...win, activeDeviceId: nodeId } : win)))}
+          onUpdateWindowPos={(id, x, y) => setConsoleWindows((prev) => prev.map((win) => (win.id === id ? { ...win, x, y } : win)))}
         />
-        {showYamlModal && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl w-[700px] max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
-              <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
-                <h3 className="text-slate-900 dark:text-slate-100 font-bold text-sm uppercase">YAML Preview</h3>
-                <button onClick={() => setShowYamlModal(false)} className="text-slate-500 hover:text-slate-900 dark:hover:text-white">
-                  <i className="fa-solid fa-times"></i>
-                </button>
-              </div>
-              <div className="flex-1 p-6 overflow-y-auto bg-slate-50 dark:bg-slate-950/50 font-mono text-[11px] text-blue-700 dark:text-blue-300 whitespace-pre">
-                {yamlContent}
-              </div>
-              <div className="p-5 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-3">
-                <button onClick={() => setShowYamlModal(false)} className="px-6 py-2 bg-blue-600 text-white font-black rounded-lg">
-                  DONE
-                </button>
-              </div>
+      </div>
+      <StatusBar />
+      <TaskLogPanel
+        entries={taskLog}
+        isVisible={isTaskLogVisible}
+        onToggle={() => setIsTaskLogVisible(!isTaskLogVisible)}
+        onClear={clearTaskLog}
+      />
+      {showYamlModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md">
+          <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-2xl w-[700px] max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
+            <div className="p-5 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
+              <h3 className="text-stone-900 dark:text-stone-100 font-bold text-sm uppercase">YAML Preview</h3>
+              <button onClick={() => setShowYamlModal(false)} className="text-stone-500 hover:text-stone-900 dark:hover:text-white">
+                <i className="fa-solid fa-times"></i>
+              </button>
+            </div>
+            <div className="flex-1 p-6 overflow-y-auto bg-stone-50 dark:bg-stone-950/50 font-mono text-[11px] text-sage-700 dark:text-sage-300 whitespace-pre">
+              {yamlContent}
+            </div>
+            <div className="p-5 border-t border-stone-100 dark:border-stone-800 flex justify-end gap-3">
+              <button onClick={() => setShowYamlModal(false)} className="px-6 py-2 bg-sage-600 text-white font-black rounded-lg">
+                DONE
+              </button>
             </div>
           </div>
-        )}
-      </div>
-    </ThemeContext.Provider>
+        </div>
+      )}
+    </div>
   );
 };
 

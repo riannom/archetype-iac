@@ -14,22 +14,22 @@ const StudioConsolePage: React.FC = () => {
 
   if (!labId || !nodeId) {
     return (
-      <div className="min-h-screen bg-[#0b0f16] text-slate-300 flex items-center justify-center text-sm">
+      <div className="min-h-screen bg-[#0b0f16] text-stone-300 flex items-center justify-center text-sm">
         Missing console parameters.
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#0b0f16] text-slate-200 flex flex-col">
-      <header className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
-        <div className="text-sm font-bold text-slate-100">
-          Console: <span className="text-blue-400">{nodeId}</span>
+    <div className="min-h-screen bg-[#0b0f16] text-stone-200 flex flex-col">
+      <header className="px-6 py-4 border-b border-stone-800 flex items-center justify-between">
+        <div className="text-sm font-bold text-stone-100">
+          Console: <span className="text-sage-400">{nodeId}</span>
         </div>
-        <div className="text-[10px] text-slate-500 uppercase tracking-widest">Lab {labId}</div>
+        <div className="text-[10px] text-stone-500 uppercase tracking-widest">Lab {labId}</div>
       </header>
       <div className="flex-1 p-4">
-        <div className="h-full border border-slate-800 rounded-xl overflow-hidden">
+        <div className="h-full border border-stone-800 rounded-xl overflow-hidden">
           <TerminalSession labId={labId} nodeId={nodeId} isActive />
         </div>
       </div>

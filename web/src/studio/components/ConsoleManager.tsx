@@ -86,7 +86,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         return (
           <div
             key={win.id}
-            className="fixed z-40 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5"
+            className="fixed z-40 bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5"
             style={{
               left: win.x,
               top: win.y,
@@ -99,7 +99,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
             }}
           >
             <div
-              className="h-9 bg-slate-800 border-b border-slate-700 flex items-center cursor-move select-none shrink-0"
+              className="h-9 bg-stone-800 border-b border-stone-700 flex items-center cursor-move select-none shrink-0"
               onMouseDown={(e) => handleMouseDown(e, win)}
             >
               <div className="flex-1 flex items-center h-full overflow-x-auto no-scrollbar scroll-smooth">
@@ -113,10 +113,10 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                         e.stopPropagation();
                         onSetActiveTab(win.id, nodeId);
                       }}
-                      className={`h-full px-4 flex items-center gap-2 text-[10px] font-bold border-r border-slate-700/50 transition-all cursor-pointer shrink-0 relative
-                        ${isActive ? 'bg-slate-900 text-blue-400' : 'text-slate-500 hover:bg-slate-700/50 hover:text-slate-300'}`}
+                      className={`h-full px-4 flex items-center gap-2 text-[10px] font-bold border-r border-stone-700/50 transition-all cursor-pointer shrink-0 relative
+                        ${isActive ? 'bg-stone-900 text-sage-400' : 'text-stone-500 hover:bg-stone-700/50 hover:text-stone-300'}`}
                     >
-                      {isActive && <div className="absolute top-0 left-0 right-0 h-0.5 bg-blue-500" />}
+                      {isActive && <div className="absolute top-0 left-0 right-0 h-0.5 bg-sage-500" />}
                       <i className={`fa-solid ${isActive ? 'fa-terminal' : 'fa-rectangle-list'} scale-90`}></i>
                       <span className="truncate max-w-[80px]">{node?.name || 'Unknown'}</span>
                       <button
@@ -133,9 +133,9 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                   );
                 })}
               </div>
-              <div className="flex items-center px-2 gap-1.5 shrink-0 bg-slate-800 ml-auto border-l border-slate-700">
+              <div className="flex items-center px-2 gap-1.5 shrink-0 bg-stone-800 ml-auto border-l border-stone-700">
                 <button
-                  className="w-6 h-6 flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-slate-700 rounded transition-all"
+                  className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-stone-300 hover:bg-stone-700 rounded transition-all"
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={() => {
                     if (!activeNode) return;
@@ -147,7 +147,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                 </button>
                 <button
                   onClick={() => onCloseWindow(win.id)}
-                  className="w-6 h-6 flex items-center justify-center text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded transition-all"
+                  className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-red-400 hover:bg-red-400/10 rounded transition-all"
                 >
                   <i className="fa-solid fa-xmark"></i>
                 </button>
@@ -156,7 +156,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
 
             <div className="flex-1 bg-[#0b0f16] relative">
               {win.deviceIds.length === 0 && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-700">
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-stone-700">
                   <i className="fa-solid fa-terminal text-4xl mb-4 opacity-10"></i>
                   <p className="text-xs font-bold uppercase tracking-widest opacity-30">No active session selected</p>
                 </div>
@@ -175,7 +175,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
               className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize flex items-end justify-end p-0.5 group pointer-events-auto"
               onMouseDown={(e) => handleResizeMouseDown(e, win)}
             >
-              <div className="w-2 h-2 border-r-2 border-b-2 border-slate-700 group-hover:border-blue-500 transition-colors"></div>
+              <div className="w-2 h-2 border-r-2 border-b-2 border-stone-700 group-hover:border-sage-500 transition-colors"></div>
             </div>
           </div>
         );
