@@ -102,3 +102,206 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* =====================================================
+   Drag-and-Drop Animations & Visual Effects
+   ===================================================== */
+
+/* Status Indicator Colors */
+.status-assigned {
+  --status-color: #10B981; /* Emerald - has image */
+}
+
+.status-unassigned {
+  --status-color: #F59E0B; /* Amber - needs image */
+}
+
+.status-dragging {
+  --status-color: #3B82F6; /* Blue - drag state */
+}
+
+.status-drop-valid {
+  --status-color: #22C55E; /* Green - valid target */
+}
+
+.status-drop-invalid {
+  --status-color: #EF4444; /* Red - invalid target */
+}
+
+/* Image Type Badge Colors */
+.image-docker {
+  --image-color: #2496ED; /* Docker blue */
+}
+
+.image-qcow2 {
+  --image-color: #FF6D00; /* Orange for disk images */
+}
+
+/* Drop zone pulse animation when drag is active */
+@keyframes dropZonePulse {
+  0%, 100% {
+    border-color: var(--color-neutral-400);
+    background-color: transparent;
+  }
+  50% {
+    border-color: var(--color-accent-500);
+    background-color: rgba(101, 163, 13, 0.05);
+  }
+}
+
+.drop-zone-active {
+  animation: dropZonePulse 1.5s ease-in-out infinite;
+}
+
+/* Drag ghost styling */
+.drag-ghost {
+  transform: scale(1.05) rotate(2deg);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* Invalid drop shake animation */
+@keyframes shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+.shake {
+  animation: shake 0.3s ease-in-out;
+}
+
+/* Smooth card transitions */
+.drag-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.drag-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+.drag-card.dragging {
+  opacity: 0.5;
+  transform: scale(0.95);
+}
+
+/* Drop target highlight */
+.drop-target {
+  transition: all 0.2s ease;
+}
+
+.drop-target.active {
+  border-color: var(--color-accent-500);
+  background-color: rgba(101, 163, 13, 0.1);
+  transform: scale(1.02);
+  box-shadow: 0 0 20px rgba(101, 163, 13, 0.3);
+}
+
+/* Status indicator animations */
+@keyframes statusPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--status-color);
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+.status-indicator {
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+/* Filter chip transitions */
+.filter-chip {
+  transition: all 0.15s ease-out;
+}
+
+.filter-chip:active {
+  transform: scale(0.95);
+}
+
+/* Image card hover effects */
+.image-card {
+  transition: all 0.2s ease;
+}
+
+.image-card:hover {
+  border-color: var(--color-accent-400);
+}
+
+.image-card:hover .drag-handle {
+  opacity: 1;
+}
+
+/* Device card drop zone appearance */
+.device-card-dropzone {
+  transition: all 0.2s ease;
+  border: 2px dashed var(--color-neutral-300);
+}
+
+.device-card-dropzone.active {
+  border-color: var(--color-accent-500);
+  background-color: rgba(101, 163, 13, 0.1);
+}
+
+/* Slide-in animations for panels */
+@keyframes slideInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInFromRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.slide-in-left {
+  animation: slideInFromLeft 0.3s ease-out;
+}
+
+.slide-in-right {
+  animation: slideInFromRight 0.3s ease-out;
+}
+
+/* Focus ring for accessibility */
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-accent-500);
+  outline-offset: 2px;
+}
+
+/* Keyboard navigation indicator */
+[data-keyboard-focused="true"] {
+  outline: 2px solid var(--color-accent-500);
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .status-indicator {
+    border: 2px solid currentColor;
+  }
+
+  .drop-target.active {
+    border-width: 3px;
+  }
+}

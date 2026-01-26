@@ -10,7 +10,7 @@ import StatusBar from './components/StatusBar';
 import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
-import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node } from './types';
+import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, ImageLibraryEntry, LabLayout, Link, Node } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
@@ -29,15 +29,6 @@ interface DeviceCatalogEntry {
   id: string;
   label: string;
   support?: string;
-}
-
-interface ImageLibraryEntry {
-  id: string;
-  kind: string;
-  reference: string;
-  device_id?: string | null;
-  filename?: string;
-  version?: string | null;
 }
 
 interface DeviceSubCategory {
@@ -440,48 +431,58 @@ const StudioPage: React.FC = () => {
   }, [studioRequest]);
 
   const loadGraph = useCallback(async (labId: string) => {
-    const graph = await studioRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
-    const layout = await loadLayout(labId);
+    try {
+      const graph = await studioRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
+      const layout = await loadLayout(labId);
 
-    // Build nodes with layout positions if available
-    let newNodes = buildGraphNodes(graph, deviceModels);
-    if (layout?.nodes) {
-      newNodes = newNodes.map((node) => {
-        const nodeLayout = layout.nodes[node.id];
-        if (nodeLayout) {
-          return {
-            ...node,
-            x: nodeLayout.x,
-            y: nodeLayout.y,
-            label: nodeLayout.label ?? node.label,
-          };
-        }
-        return node;
-      });
+      // Build nodes with layout positions if available
+      let newNodes = buildGraphNodes(graph, deviceModels);
+      if (layout?.nodes) {
+        newNodes = newNodes.map((node) => {
+          const nodeLayout = layout.nodes[node.id];
+          if (nodeLayout) {
+            return {
+              ...node,
+              x: nodeLayout.x,
+              y: nodeLayout.y,
+              label: nodeLayout.label ?? node.label,
+            };
+          }
+          return node;
+        });
+      }
+      setNodes(newNodes);
+      setLinks(buildGraphLinks(graph));
+
+      // Restore annotations from layout
+      if (layout?.annotations && layout.annotations.length > 0) {
+        setAnnotations(
+          layout.annotations.map((ann) => ({
+            id: ann.id,
+            type: ann.type as AnnotationType,
+            x: ann.x,
+            y: ann.y,
+            width: ann.width,
+            height: ann.height,
+            text: ann.text,
+            color: ann.color,
+            fontSize: ann.fontSize,
+            targetX: ann.targetX,
+            targetY: ann.targetY,
+          }))
+        );
+      } else {
+        setAnnotations([]);
+      }
+
+      layoutDirtyRef.current = false;
+    } catch {
+      // New lab with no topology - clear state
+      setNodes([]);
+      setLinks([]);
+      setAnnotations([]);
+      layoutDirtyRef.current = false;
     }
-    setNodes(newNodes);
-    setLinks(buildGraphLinks(graph));
-
-    // Restore annotations from layout
-    if (layout?.annotations && layout.annotations.length > 0) {
-      setAnnotations(
-        layout.annotations.map((ann) => ({
-          id: ann.id,
-          type: ann.type as AnnotationType,
-          x: ann.x,
-          y: ann.y,
-          width: ann.width,
-          height: ann.height,
-          text: ann.text,
-          color: ann.color,
-          fontSize: ann.fontSize,
-          targetX: ann.targetX,
-          targetY: ann.targetY,
-        }))
-      );
-    }
-
-    layoutDirtyRef.current = false;
   }, [deviceModels, studioRequest, loadLayout]);
 
   const loadJobs = useCallback(async (labId: string, currentNodes: Node[]) => {
@@ -914,7 +915,7 @@ const StudioPage: React.FC = () => {
       default:
         return (
           <>
-            <Sidebar categories={deviceCategories} onAddDevice={handleAddDevice} onAddAnnotation={handleAddAnnotation} />
+            <Sidebar categories={deviceCategories} onAddDevice={handleAddDevice} onAddAnnotation={handleAddAnnotation} imageLibrary={imageLibrary} />
             <Canvas
               nodes={nodes}
               links={links}

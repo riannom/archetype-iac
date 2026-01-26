@@ -4,21 +4,12 @@ import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { apiRequest } from '../api';
 import DeviceManager from '../studio/components/DeviceManager';
-import { DeviceModel, DeviceType } from '../studio/types';
+import { DeviceModel, DeviceType, ImageLibraryEntry } from '../studio/types';
 
 interface DeviceCatalogEntry {
   id: string;
   label: string;
   support?: string;
-}
-
-interface ImageLibraryEntry {
-  id: string;
-  kind: string;
-  reference: string;
-  device_id?: string | null;
-  filename?: string;
-  version?: string | null;
 }
 
 interface CustomDevice {
