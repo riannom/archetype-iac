@@ -9,6 +9,8 @@ from typing import Callable
 import docker
 from docker.errors import NotFound, APIError
 
+from agent.config import settings
+
 
 class DockerConsole:
     """Manage an interactive console session to a Docker container.
@@ -155,7 +157,7 @@ async def console_session(
     on_output: Callable[[bytes], None],
     get_input: Callable[[], bytes | None],
     shell: str = "/bin/sh",
-    check_interval: float = 0.05,
+    check_interval: float | None = None,
 ) -> None:
     """Run an async console session.
 
@@ -166,6 +168,9 @@ async def console_session(
         shell: Shell to use
         check_interval: Interval to check for I/O
     """
+    if check_interval is None:
+        check_interval = settings.console_read_timeout
+
     console = DockerConsole(container_name)
 
     if not console.start(shell):

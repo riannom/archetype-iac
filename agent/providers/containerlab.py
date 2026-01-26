@@ -11,6 +11,7 @@ import docker
 import yaml
 from docker.errors import NotFound, APIError
 
+from agent.config import settings
 from agent.providers.base import (
     DeployResult,
     DestroyResult,
@@ -422,7 +423,7 @@ class ContainerlabProvider(Provider):
 
         try:
             container = self.docker.containers.get(container_name)
-            container.stop(timeout=10)
+            container.stop(timeout=settings.container_stop_timeout)
 
             # Refresh container state
             container.reload()
