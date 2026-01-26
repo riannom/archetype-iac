@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+import lzma
 import os
 import shutil
 import subprocess
@@ -1345,14 +1346,28 @@ def load_image(
     file: UploadFile = File(...),
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, str]:
-    suffix = Path(file.filename or "image.tar").suffix or ".tar"
+    filename = file.filename or "image.tar"
+    suffixes = Path(filename).suffixes
+    suffix = "".join(suffixes) if suffixes else ".tar"
     temp_path = ""
+    load_path = ""
+    decompressed_path = ""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
             shutil.copyfileobj(file.file, tmp_file)
             temp_path = tmp_file.name
+        load_path = temp_path
+        if filename.lower().endswith((".tar.xz", ".txz", ".xz")):
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_tar:
+                    with lzma.open(temp_path, "rb") as source:
+                        shutil.copyfileobj(source, tmp_tar)
+                    decompressed_path = tmp_tar.name
+                load_path = decompressed_path
+            except lzma.LZMAError as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to decompress archive: {exc}") from exc
         result = subprocess.run(
-            ["docker", "load", "-i", temp_path],
+            ["docker", "load", "-i", load_path],
             capture_output=True,
             text=True,
             check=False,
@@ -1364,6 +1379,10 @@ def load_image(
         for line in output.splitlines():
             if "Loaded image:" in line:
                 loaded_images.append(line.split("Loaded image:", 1)[-1].strip())
+            elif "Loaded image ID:" in line:
+                loaded_images.append(line.split("Loaded image ID:", 1)[-1].strip())
+        if not loaded_images:
+            raise HTTPException(status_code=500, detail=output.strip() or "No images detected in archive")
         manifest = load_manifest()
         for image_ref in loaded_images:
             device_id, version = detect_device_from_filename(image_ref)
@@ -1380,6 +1399,8 @@ def load_image(
         return {"output": output.strip() or "Image loaded", "images": loaded_images}
     finally:
         file.file.close()
+        if decompressed_path and os.path.exists(decompressed_path):
+            os.unlink(decompressed_path)
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
 

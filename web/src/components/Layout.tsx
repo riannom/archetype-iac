@@ -45,13 +45,6 @@ export function Layout() {
               <rect x="4" y="4" width="16" height="16" rx="3" />
               <path d="M8 8h8M8 12h8M8 16h6" strokeWidth="1.4" />
             </svg>
-            Labs
-          </NavLink>
-          <NavLink to="/studio">
-            <svg viewBox="0 0 24 24" className="nav-icon" aria-hidden="true">
-              <rect x="3" y="5" width="18" height="14" rx="2" />
-              <path d="M7 9h10M7 13h6" strokeWidth="1.4" />
-            </svg>
             Studio
           </NavLink>
           {!token && (

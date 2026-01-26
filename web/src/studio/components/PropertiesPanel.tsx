@@ -31,8 +31,9 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     );
   }
 
-  const isLink = 'source' in selectedItem;
-  const isAnnotation = 'type' in selectedItem && !('model' in selectedItem);
+  const isLink = 'source' in selectedItem && 'target' in selectedItem;
+  const isNode = 'model' in selectedItem;
+  const isAnnotation = !isLink && !isNode;
 
   if (isAnnotation) {
     const ann = selectedItem as Annotation;
@@ -73,7 +74,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   }
 
   if (isLink) {
-    const link = selectedItem as Link;
+    const link = selectedItem;
     const sourceNode = nodes.find(n => n.id === link.source);
     const targetNode = nodes.find(n => n.id === link.target);
     return (

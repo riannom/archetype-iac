@@ -9,7 +9,7 @@ import RuntimeControl, { RuntimeStatus } from './components/RuntimeControl';
 import StatusBar from './components/StatusBar';
 import Dashboard from './components/Dashboard';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, Link, Node } from './types';
-import { apiRequest } from '../api';
+import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import './studio.css';
 import 'xterm/css/xterm.css';
@@ -55,6 +55,11 @@ interface DeviceCategory {
   models: DeviceModel[];
 }
 
+interface CustomDevice {
+  id: string;
+  label: string;
+}
+
 const DEFAULT_ICON = 'fa-microchip';
 
 const guessDeviceType = (id: string, label: string): DeviceType => {
@@ -66,10 +71,12 @@ const guessDeviceType = (id: string, label: string): DeviceType => {
   return DeviceType.CONTAINER;
 };
 
-const buildDeviceModels = (devices: DeviceCatalogEntry[], images: ImageLibraryEntry[]): DeviceModel[] => {
+const buildDeviceModels = (devices: DeviceCatalogEntry[], images: ImageLibraryEntry[], customDevices: CustomDevice[]): DeviceModel[] => {
   const versionsByDevice = new Map<string, Set<string>>();
+  const imageDeviceIds = new Set<string>();
   images.forEach((image) => {
     if (!image.device_id) return;
+    imageDeviceIds.add(image.device_id);
     const versions = versionsByDevice.get(image.device_id) || new Set<string>();
     if (image.version) {
       versions.add(image.version);
@@ -77,16 +84,25 @@ const buildDeviceModels = (devices: DeviceCatalogEntry[], images: ImageLibraryEn
     versionsByDevice.set(image.device_id, versions);
   });
 
-  return devices.map((device) => {
-    const versions = Array.from(versionsByDevice.get(device.id) || []);
+  const catalogMap = new Map(devices.map((device) => [device.id, device]));
+  const customMap = new Map(customDevices.map((device) => [device.id, device]));
+  const deviceIds = new Set<string>(devices.map((device) => device.id));
+  imageDeviceIds.forEach((deviceId) => deviceIds.add(deviceId));
+  customDevices.forEach((device) => deviceIds.add(device.id));
+
+  return Array.from(deviceIds).map((deviceId) => {
+    const device = catalogMap.get(deviceId);
+    const custom = customMap.get(deviceId);
+    const label = device?.label || custom?.label || deviceId;
+    const versions = Array.from(versionsByDevice.get(deviceId) || []);
     return {
-      id: device.id,
-      type: guessDeviceType(device.id, device.label),
-      name: device.label,
+      id: deviceId,
+      type: guessDeviceType(deviceId, label),
+      name: label,
       icon: DEFAULT_ICON,
       versions: versions.length > 0 ? versions : ['default'],
       isActive: true,
-      vendor: device.support || 'unknown',
+      vendor: device?.support || custom?.label ? 'custom' : 'custom',
     };
   });
 };
@@ -191,6 +207,21 @@ const StudioPage: React.FC = () => {
   const [deviceCatalog, setDeviceCatalog] = useState<DeviceCatalogEntry[]>([]);
   const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
   const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
+  const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
+    const stored = localStorage.getItem('aura_custom_devices');
+    if (!stored) return [];
+    try {
+      const parsed = JSON.parse(stored) as CustomDevice[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const [authRequired, setAuthRequired] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -204,38 +235,62 @@ const StudioPage: React.FC = () => {
 
   const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
 
-  const deviceModels = useMemo(() => buildDeviceModels(deviceCatalog, imageLibrary), [deviceCatalog, imageLibrary]);
+  const deviceModels = useMemo(
+    () => buildDeviceModels(deviceCatalog, imageLibrary, customDevices),
+    [deviceCatalog, imageLibrary, customDevices]
+  );
   const deviceCategories = useMemo<DeviceCategory[]>(() => [{ name: 'Devices', models: deviceModels }], [deviceModels]);
+  
+  const updateCustomDevices = (next: CustomDevice[]) => {
+    setCustomDevices(next);
+    localStorage.setItem('aura_custom_devices', JSON.stringify(next));
+  };
+
+  const isUnauthorized = (error: unknown) => error instanceof Error && error.message.toLowerCase().includes('unauthorized');
+
+  const studioRequest = useCallback(
+    async <T,>(path: string, options: RequestInit = {}) => {
+      try {
+        return await apiRequest<T>(path, options);
+      } catch (error) {
+        if (isUnauthorized(error)) {
+          setAuthRequired(true);
+        }
+        throw error;
+      }
+    },
+    []
+  );
 
   const loadLabs = useCallback(async () => {
-    const data = await apiRequest<{ labs: LabSummary[] }>('/labs');
+    const data = await studioRequest<{ labs: LabSummary[] }>('/labs');
     setLabs(data.labs || []);
-  }, []);
+  }, [studioRequest]);
 
   const loadDevices = useCallback(async () => {
-    const data = await apiRequest<{ devices?: DeviceCatalogEntry[] }>('/devices');
+    const data = await studioRequest<{ devices?: DeviceCatalogEntry[] }>('/devices');
     setDeviceCatalog(data.devices || []);
-    const imageData = await apiRequest<{ images?: Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }> }>('/images');
+    const imageData = await studioRequest<{ images?: Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }> }>('/images');
     setImageCatalog(imageData.images || {});
-    const libraryData = await apiRequest<{ images?: ImageLibraryEntry[] }>('/images/library');
+    const libraryData = await studioRequest<{ images?: ImageLibraryEntry[] }>('/images/library');
     setImageLibrary(libraryData.images || []);
-  }, []);
+  }, [studioRequest]);
 
   const loadGraph = useCallback(async (labId: string) => {
-    const graph = await apiRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
+    const graph = await studioRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
     setNodes(buildGraphNodes(graph, deviceModels));
     setLinks(buildGraphLinks(graph));
-  }, [deviceModels]);
+  }, [deviceModels, studioRequest]);
 
   const loadJobs = useCallback(async (labId: string, currentNodes: Node[]) => {
-    const data = await apiRequest<{ jobs: any[] }>(`/labs/${labId}/jobs`);
+    const data = await studioRequest<{ jobs: any[] }>(`/labs/${labId}/jobs`);
     const statusMap = buildStatusMap(data.jobs || [], currentNodes);
     const next: Record<string, RuntimeStatus> = {};
     currentNodes.forEach((node) => {
       next[node.id] = statusMap.get(node.id) || 'stopped';
     });
     setRuntimeStates(next);
-  }, []);
+  }, [studioRequest]);
 
   useEffect(() => {
     loadLabs();
@@ -254,7 +309,7 @@ const StudioPage: React.FC = () => {
 
   const handleCreateLab = async () => {
     const name = `Project_${labs.length + 1}`;
-    await apiRequest('/labs', { method: 'POST', body: JSON.stringify({ name }) });
+    await studioRequest('/labs', { method: 'POST', body: JSON.stringify({ name }) });
     loadLabs();
   };
 
@@ -267,7 +322,7 @@ const StudioPage: React.FC = () => {
   };
 
   const handleDeleteLab = async (labId: string) => {
-    await apiRequest(`/labs/${labId}`, { method: 'DELETE' });
+    await studioRequest(`/labs/${labId}`, { method: 'DELETE' });
     if (activeLab?.id === labId) {
       setActiveLab(null);
       setNodes([]);
@@ -316,7 +371,7 @@ const StudioPage: React.FC = () => {
     if (!activeLab) return;
     const action = status === 'booting' ? 'start' : status === 'stopped' ? 'stop' : 'restart';
     try {
-      await apiRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/${action}`, { method: 'POST' });
+      await studioRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/${action}`, { method: 'POST' });
       setRuntimeStates((prev) => ({ ...prev, [nodeId]: status }));
       loadJobs(activeLab.id, nodes);
     } catch {
@@ -386,7 +441,7 @@ const StudioPage: React.FC = () => {
 
   const handleExport = async () => {
     if (!activeLab) return;
-    const data = await apiRequest<{ content: string }>(`/labs/${activeLab.id}/export-yaml`);
+    const data = await studioRequest<{ content: string }>(`/labs/${activeLab.id}/export-yaml`);
     setYamlContent(data.content || '');
     setShowYamlModal(true);
   };
@@ -407,11 +462,44 @@ const StudioPage: React.FC = () => {
         ],
       })),
     };
-    await apiRequest(`/labs/${activeLab.id}/import-graph`, {
+    await studioRequest(`/labs/${activeLab.id}/import-graph`, {
       method: 'POST',
       body: JSON.stringify(graph),
     });
     loadGraph(activeLab.id);
+  };
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setAuthError(null);
+    setAuthLoading(true);
+    try {
+      const body = new URLSearchParams();
+      body.set('username', authEmail);
+      body.set('password', authPassword);
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Login failed');
+      }
+      const data = (await response.json()) as { access_token?: string };
+      if (!data.access_token) {
+        throw new Error('Login failed');
+      }
+      localStorage.setItem('token', data.access_token);
+      setAuthRequired(false);
+      setAuthPassword('');
+      await loadLabs();
+      await loadDevices();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Login failed');
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
   const selectedItem = nodes.find((node) => node.id === selectedId) || links.find((link) => link.id === selectedId) || annotations.find((ann) => ann.id === selectedId) || null;
@@ -424,6 +512,9 @@ const StudioPage: React.FC = () => {
             deviceModels={deviceModels}
             imageCatalog={imageCatalog}
             imageLibrary={imageLibrary}
+            customDevices={customDevices}
+            onAddCustomDevice={(device) => updateCustomDevices([...customDevices, device])}
+            onRemoveCustomDevice={(deviceId) => updateCustomDevices(customDevices.filter((item) => item.id !== deviceId))}
             onUploadImage={loadDevices}
             onUploadQcow2={loadDevices}
             onRefresh={loadDevices}
@@ -479,6 +570,54 @@ const StudioPage: React.FC = () => {
     theme === 'dark'
       ? 'bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 bg-gradient-animate'
       : 'bg-gradient-to-br from-slate-50 via-white to-slate-100 bg-gradient-animate';
+
+  if (authRequired) {
+    return (
+      <ThemeContext.Provider value={{ theme, toggleTheme }}>
+        <div className={`min-h-screen flex items-center justify-center ${backgroundGradient}`}>
+          <div className="w-[420px] bg-slate-950/90 border border-slate-800 rounded-2xl shadow-2xl p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/20 border border-blue-400/30">
+                <i className="fa-solid fa-bolt-lightning text-white"></i>
+              </div>
+              <div>
+                <h1 className="text-lg font-black text-white tracking-tight">Aura Studio</h1>
+                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest text-blue-500">Sign in</p>
+              </div>
+            </div>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Email</label>
+                <input
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                  type="email"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Password</label>
+                <input
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                  type="password"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              {authError && <div className="text-xs text-red-400">{authError}</div>}
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all"
+              >
+                {authLoading ? 'Signing in...' : 'Sign in'}
+              </button>
+            </form>
+          </div>
+        </div>
+      </ThemeContext.Provider>
+    );
+  }
 
   if (!activeLab) {
     return (

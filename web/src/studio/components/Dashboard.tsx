@@ -1,17 +1,21 @@
 
 import React from 'react';
-import { Topology } from '../types';
 
-interface DashboardProps {
-  topologies: Topology[];
-  onSelect: (topology: Topology) => void;
-  onCreate: () => void;
-  onDelete: (name: string) => void;
-  onLogout: () => void;
-  username: string;
+interface LabSummary {
+  id: string;
+  name: string;
+  created_at?: string;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ topologies, onSelect, onCreate, onDelete, onLogout, username }) => {
+interface DashboardProps {
+  labs: LabSummary[];
+  onSelect: (lab: LabSummary) => void;
+  onCreate: () => void;
+  onDelete: (labId: string) => void;
+  onRefresh: () => void;
+}
+
+const Dashboard: React.FC<DashboardProps> = ({ labs, onSelect, onCreate, onDelete, onRefresh }) => {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col overflow-hidden">
       <header className="h-20 border-b border-slate-800 bg-slate-900/30 flex items-center justify-between px-10">
@@ -25,23 +29,13 @@ const Dashboard: React.FC<DashboardProps> = ({ topologies, onSelect, onCreate, o
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-3 pr-6 border-r border-slate-800">
-            <div className="text-right">
-              <div className="text-xs font-bold text-white">{username}</div>
-              <div className="text-[10px] text-green-500 font-bold uppercase">Administrator</div>
-            </div>
-            <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden">
-               <img src={`https://api.dicebear.com/7.x/identicon/svg?seed=${username}`} alt="Avatar" />
-            </div>
-          </div>
-          <button 
-            onClick={onLogout}
-            className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-red-900/20 text-slate-500 hover:text-red-500 border border-slate-700 rounded-lg transition-all"
-            title="Log out"
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onRefresh}
+            className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-all"
           >
-            <i className="fa-solid fa-right-from-bracket"></i>
-            <span className="text-[10px] font-bold uppercase">Sign Out</span>
+            <i className="fa-solid fa-rotate text-xs"></i>
+            <span className="text-[10px] font-bold uppercase">Refresh</span>
           </button>
         </div>
       </header>
@@ -63,14 +57,14 @@ const Dashboard: React.FC<DashboardProps> = ({ topologies, onSelect, onCreate, o
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {topologies.length > 0 ? topologies.map((topo) => (
+            {labs.length > 0 ? labs.map((lab) => (
               <div 
-                key={topo.name}
+                key={lab.id}
                 className="group relative bg-slate-900 border border-slate-800 rounded-2xl p-6 hover:border-blue-500/50 hover:shadow-2xl hover:shadow-blue-900/10 transition-all cursor-default overflow-hidden"
               >
                 <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
                    <button 
-                    onClick={(e) => { e.stopPropagation(); onDelete(topo.name); }}
+                    onClick={(e) => { e.stopPropagation(); onDelete(lab.id); }}
                     className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
                    >
                      <i className="fa-solid fa-trash-can text-xs"></i>
@@ -81,15 +75,15 @@ const Dashboard: React.FC<DashboardProps> = ({ topologies, onSelect, onCreate, o
                   <i className="fa-solid fa-diagram-project"></i>
                 </div>
                 
-                <h3 className="text-lg font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">{topo.name}</h3>
+                <h3 className="text-lg font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">{lab.name}</h3>
                 <div className="flex items-center gap-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-6">
-                   <span className="flex items-center gap-1.5"><i className="fa-solid fa-server"></i> {topo.nodes.length} Nodes</span>
-                   <span className="flex items-center gap-1.5"><i className="fa-solid fa-link"></i> {topo.links.length} Links</span>
+                   <span className="flex items-center gap-1.5"><i className="fa-solid fa-server"></i> Lab</span>
+                   <span className="flex items-center gap-1.5"><i className="fa-solid fa-calendar"></i> {lab.created_at ? new Date(lab.created_at).toLocaleDateString() : 'New'}</span>
                 </div>
 
                 <div className="flex gap-2">
                   <button 
-                    onClick={() => onSelect(topo)}
+                    onClick={() => onSelect(lab)}
                     className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-lg border border-slate-700 transition-all"
                   >
                     Open Designer

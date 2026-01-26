@@ -22,6 +22,9 @@ interface DeviceManagerProps {
   deviceModels: DeviceModel[];
   imageCatalog: Record<string, ImageCatalogEntry>;
   imageLibrary: ImageLibraryEntry[];
+  customDevices: { id: string; label: string }[];
+  onAddCustomDevice: (device: { id: string; label: string }) => void;
+  onRemoveCustomDevice: (deviceId: string) => void;
   onUploadImage: () => void;
   onUploadQcow2: () => void;
   onRefresh: () => void;
@@ -31,6 +34,9 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
   deviceModels,
   imageCatalog,
   imageLibrary,
+  customDevices,
+  onAddCustomDevice,
+  onRemoveCustomDevice,
   onUploadImage,
   onUploadQcow2,
   onRefresh,
@@ -39,6 +45,9 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [qcow2Progress, setQcow2Progress] = useState<number | null>(null);
+  const [customAssignments, setCustomAssignments] = useState<Record<string, string>>({});
+  const [customDeviceId, setCustomDeviceId] = useState('');
+  const [customDeviceLabel, setCustomDeviceLabel] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const qcow2InputRef = useRef<HTMLInputElement | null>(null);
 
@@ -74,13 +83,21 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
       if (token) {
         request.setRequestHeader('Authorization', `Bearer ${token}`);
       }
+      const timeout = window.setTimeout(() => {
+        request.abort();
+        reject(new Error('Upload timed out while processing the image.'));
+      }, 5 * 60 * 1000);
       request.upload.onprogress = (event) => {
         if (event.lengthComputable) {
           onProgress(Math.round((event.loaded / event.total) * 100));
         }
       };
-      request.onerror = () => reject(new Error('Upload failed'));
+      request.onerror = () => {
+        window.clearTimeout(timeout);
+        reject(new Error('Upload failed'));
+      };
       request.onload = () => {
+        window.clearTimeout(timeout);
         if (request.status >= 200 && request.status < 300) {
           try {
             resolve(JSON.parse(request.responseText));
@@ -98,11 +115,25 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
   async function uploadImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    let processingNoticeShown = false;
     try {
       setUploadStatus(`Uploading ${file.name}...`);
       setUploadProgress(0);
-      await uploadWithProgress(`${API_BASE_URL}/images/load`, file, setUploadProgress);
-      setUploadStatus('Image loaded.');
+      const data = (await uploadWithProgress(`${API_BASE_URL}/images/load`, file, (value) => {
+        setUploadProgress(value);
+        if (value !== null && value >= 100 && !processingNoticeShown) {
+          processingNoticeShown = true;
+          setUploadStatus('Upload complete. Processing image...');
+        }
+      })) as {
+        output?: string;
+        images?: string[];
+      };
+      if (data.images && data.images.length === 0) {
+        setUploadStatus('Upload finished, but no images were detected.');
+      } else {
+        setUploadStatus(data.output || 'Image loaded.');
+      }
       onUploadImage();
       onRefresh();
     } catch (error) {
@@ -162,7 +193,7 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
             <button onClick={openQcow2Picker} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg border border-slate-700 text-xs font-bold transition-all">
               <i className="fa-solid fa-hard-drive mr-2"></i> Upload QCOW2
             </button>
-            <input ref={fileInputRef} className="hidden" type="file" accept=".tar,.tgz,.tar.gz" onChange={uploadImage} />
+            <input ref={fileInputRef} className="hidden" type="file" accept=".tar,.tgz,.tar.gz,.tar.xz,.txz" onChange={uploadImage} />
             <input ref={qcow2InputRef} className="hidden" type="file" accept=".qcow2,.qcow" onChange={uploadQcow2} />
           </div>
         </header>
@@ -187,6 +218,45 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
 
         <div className="grid grid-cols-12 gap-8 flex-1 overflow-hidden">
           <div className="col-span-4 flex flex-col gap-4 overflow-y-auto pr-2 custom-scrollbar">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Custom device</div>
+              <div className="space-y-2">
+                <input
+                  className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-xs text-slate-200"
+                  placeholder="device-id (e.g. my-os)"
+                  value={customDeviceId}
+                  onChange={(event) => setCustomDeviceId(event.target.value)}
+                />
+                <input
+                  className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-xs text-slate-200"
+                  placeholder="label (optional)"
+                  value={customDeviceLabel}
+                  onChange={(event) => setCustomDeviceLabel(event.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!customDeviceId.trim()) return;
+                    onAddCustomDevice({ id: customDeviceId.trim(), label: customDeviceLabel.trim() || customDeviceId.trim() });
+                    setCustomDeviceId('');
+                    setCustomDeviceLabel('');
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg py-2"
+                >
+                  Add device
+                </button>
+              </div>
+              {customDevices.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {customDevices.map((device) => (
+                    <div key={device.id} className="flex items-center justify-between text-[11px] text-slate-400">
+                      <span className="font-mono">{device.id}</span>
+                      <button onClick={() => onRemoveCustomDevice(device.id)} className="text-red-400 hover:text-red-300">Remove</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             {deviceModels.map((model) => {
               const assignedCount = libraryByDevice.get(model.id)?.length || 0;
               return (
@@ -306,9 +376,23 @@ const DeviceManager: React.FC<DeviceManagerProps> = ({
                               <div className="text-sm font-bold text-white">{img.filename || img.reference}</div>
                               <div className="text-[11px] text-slate-500 font-mono">{img.kind}</div>
                             </div>
-                            <button onClick={() => assignImage(img.id, selectedDevice.id)} className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white rounded">
-                              Assign
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <input
+                                className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 w-36"
+                                placeholder="device-id"
+                                value={customAssignments[img.id] || ''} 
+                                onChange={(event) =>
+                                  setCustomAssignments((prev) => ({ ...prev, [img.id]: event.target.value }))
+                                }
+                              />
+                              <button
+                                onClick={() => assignImage(img.id, customAssignments[img.id] || selectedDevice?.id || null)}
+                                className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white rounded disabled:opacity-60"
+                                disabled={!customAssignments[img.id] && !selectedDevice}
+                              >
+                                Assign
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
