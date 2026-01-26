@@ -8,3 +8,9 @@ __pycache__/
 venv/
 .pytest_cache/
 CLAUDE.md
+
+# Build artifacts
+web/dist/
+web/node_modules/
+web/tsconfig.tsbuildinfo
+docs/
