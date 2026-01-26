@@ -151,6 +151,13 @@ def get_resource_usage() -> dict:
         memory = psutil.virtual_memory()
         memory_percent = memory.percent
 
+        # Disk usage for workspace partition
+        disk_path = settings.workspace_path if settings.workspace_path else "/"
+        disk = psutil.disk_usage(disk_path)
+        disk_percent = disk.percent
+        disk_used_gb = round(disk.used / (1024 ** 3), 2)
+        disk_total_gb = round(disk.total / (1024 ** 3), 2)
+
         # Docker container counts and details
         # Only count Aura-related containers (containerlab nodes + aura-iac system)
         containers_running = 0
@@ -194,6 +201,9 @@ def get_resource_usage() -> dict:
         return {
             "cpu_percent": cpu_percent,
             "memory_percent": memory_percent,
+            "disk_percent": disk_percent,
+            "disk_used_gb": disk_used_gb,
+            "disk_total_gb": disk_total_gb,
             "containers_running": containers_running,
             "containers_total": containers_total,
             "container_details": container_details,

@@ -143,6 +143,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     """Get aggregated system metrics for the dashboard.
 
     Returns agent counts, container counts, CPU/memory usage, and lab stats.
+    Labs running count is based on actual container presence, not database state.
     """
     import json
 
@@ -151,12 +152,34 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     online_agents = sum(1 for h in hosts if h.status == "online")
     total_agents = len(hosts)
 
+    # Get all labs for mapping
+    all_labs = database.query(models.Lab).all()
+    labs_by_id = {lab.id: lab for lab in all_labs}
+    labs_by_prefix = {lab.id[:20]: lab.id for lab in all_labs}  # containerlab truncates
+
+    def find_lab_id(prefix: str) -> str | None:
+        """Find lab ID by prefix match."""
+        if not prefix:
+            return None
+        if prefix in labs_by_id:
+            return prefix
+        if prefix in labs_by_prefix:
+            return labs_by_prefix[prefix]
+        for lab_id in labs_by_id:
+            if lab_id.startswith(prefix):
+                return lab_id
+        return None
+
     # Aggregate resource usage from all online agents
     total_cpu = 0.0
     total_memory = 0.0
+    total_disk_used = 0.0
+    total_disk_total = 0.0
     total_containers_running = 0
     total_containers = 0
     online_count = 0
+    labs_with_containers: set[str] = set()  # Track labs with running containers
+    per_host: list[dict] = []  # Per-host breakdown for multi-host environments
 
     for host in hosts:
         if host.status != "online":
@@ -164,10 +187,38 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
         online_count += 1
         try:
             usage = json.loads(host.resource_usage) if host.resource_usage else {}
-            total_cpu += usage.get("cpu_percent", 0)
-            total_memory += usage.get("memory_percent", 0)
-            total_containers_running += usage.get("containers_running", 0)
+            host_cpu = usage.get("cpu_percent", 0)
+            host_memory = usage.get("memory_percent", 0)
+            host_disk_percent = usage.get("disk_percent", 0)
+            host_disk_used = usage.get("disk_used_gb", 0)
+            host_disk_total = usage.get("disk_total_gb", 0)
+            host_containers = usage.get("containers_running", 0)
+
+            total_cpu += host_cpu
+            total_memory += host_memory
+            total_disk_used += host_disk_used
+            total_disk_total += host_disk_total
+            total_containers_running += host_containers
             total_containers += usage.get("containers_total", 0)
+
+            # Track per-host data
+            per_host.append({
+                "id": host.id,
+                "name": host.name,
+                "cpu_percent": round(host_cpu, 1),
+                "memory_percent": round(host_memory, 1),
+                "storage_percent": round(host_disk_percent, 1),
+                "storage_used_gb": host_disk_used,
+                "storage_total_gb": host_disk_total,
+                "containers_running": host_containers,
+            })
+
+            # Track which labs have running containers
+            for container in usage.get("container_details", []):
+                if container.get("status") == "running" and not container.get("is_system"):
+                    lab_id = find_lab_id(container.get("lab_prefix", ""))
+                    if lab_id:
+                        labs_with_containers.add(lab_id)
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -175,17 +226,29 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     avg_cpu = total_cpu / online_count if online_count > 0 else 0
     avg_memory = total_memory / online_count if online_count > 0 else 0
 
-    # Get lab counts
-    all_labs = database.query(models.Lab).all()
-    running_labs = sum(1 for lab in all_labs if lab.state in ("running", "starting"))
+    # Storage: aggregate totals, calculate overall percent
+    storage_percent = (total_disk_used / total_disk_total * 100) if total_disk_total > 0 else 0
+
+    # Use container-based count as source of truth for running labs
+    running_labs = len(labs_with_containers)
+
+    # Determine if multi-host environment
+    is_multi_host = total_agents > 1
 
     return {
         "agents": {"online": online_agents, "total": total_agents},
         "containers": {"running": total_containers_running, "total": total_containers},
         "cpu_percent": round(avg_cpu, 1),
         "memory_percent": round(avg_memory, 1),
+        "storage": {
+            "used_gb": round(total_disk_used, 2),
+            "total_gb": round(total_disk_total, 2),
+            "percent": round(storage_percent, 1),
+        },
         "labs_running": running_labs,
         "labs_total": len(all_labs),
+        "per_host": per_host,
+        "is_multi_host": is_multi_host,
     }
 
 

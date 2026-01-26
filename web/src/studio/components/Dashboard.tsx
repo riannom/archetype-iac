@@ -1,6 +1,8 @@
 
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../../theme/index';
+import { useUser } from '../../contexts/UserContext';
 import SystemStatusStrip from './SystemStatusStrip';
 
 interface LabSummary {
@@ -19,8 +21,24 @@ interface SystemMetrics {
   containers: { running: number; total: number };
   cpu_percent: number;
   memory_percent: number;
+  storage?: {
+    used_gb: number;
+    total_gb: number;
+    percent: number;
+  };
   labs_running: number;
   labs_total: number;
+  per_host?: {
+    id: string;
+    name: string;
+    cpu_percent: number;
+    memory_percent: number;
+    storage_percent: number;
+    storage_used_gb: number;
+    storage_total_gb: number;
+    containers_running: number;
+  }[];
+  is_multi_host?: boolean;
 }
 
 interface DashboardProps {
@@ -36,7 +54,10 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics, onSelect, onCreate, onDelete, onRefresh, onNavigateToImages }) => {
   const { effectiveMode, toggleMode } = useTheme();
+  const { user } = useUser();
+  const navigate = useNavigate();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
+  const isAdmin = user?.is_admin ?? false;
 
   return (
     <>
@@ -53,6 +74,17 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
         </div>
 
         <div className="flex items-center gap-3">
+          {isAdmin && (
+            <button
+              onClick={() => navigate('/hosts')}
+              className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+              title="Manage Hosts"
+            >
+              <i className="fa-solid fa-server text-xs"></i>
+              <span className="text-[10px] font-bold uppercase">Hosts</span>
+            </button>
+          )}
+
           {onNavigateToImages && (
             <button
               onClick={onNavigateToImages}
@@ -90,7 +122,7 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
         </div>
       </header>
 
-      <SystemStatusStrip metrics={systemMetrics || null} />
+      {isAdmin && <SystemStatusStrip metrics={systemMetrics || null} />}
 
       <main className="flex-1 overflow-y-auto p-10 custom-scrollbar">
         <div className="max-w-6xl mx-auto">

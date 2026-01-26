@@ -231,8 +231,27 @@ def list_agents(
 def list_agents_detailed(
     database: Session = Depends(db.get_db),
 ) -> list[dict]:
-    """List all agents with full details including resource usage."""
+    """List all agents with full details including resource usage, role, and labs.
+
+    Role is determined by:
+    - "agent": Has containerlab or libvirt provider capabilities
+    - "controller": Has no provider capabilities (controller-only host)
+    - "agent+controller": Has provider capabilities AND is the same host as controller
+    """
     hosts = database.query(models.Host).order_by(models.Host.name).all()
+
+    # Get labs to associate with hosts
+    all_labs = database.query(models.Lab).all()
+    labs_by_agent: dict[str, list[dict]] = {}
+    for lab in all_labs:
+        if lab.agent_id:
+            if lab.agent_id not in labs_by_agent:
+                labs_by_agent[lab.agent_id] = []
+            labs_by_agent[lab.agent_id].append({
+                "id": lab.id,
+                "name": lab.name,
+                "state": lab.state,
+            })
 
     result = []
     for host in hosts:
@@ -246,19 +265,46 @@ def list_agents_detailed(
         except (json.JSONDecodeError, TypeError):
             resource_usage = {}
 
+        # Determine role based on capabilities
+        providers = capabilities.get("providers", [])
+        has_provider = len(providers) > 0
+
+        # Check if this host is co-located with controller
+        # (controller runs on localhost, so check if address matches common patterns)
+        address = host.address.lower()
+        is_local = (
+            address.startswith("localhost") or
+            address.startswith("127.0.0.1") or
+            address.startswith("host.docker.internal")
+        )
+
+        if has_provider:
+            role = "agent+controller" if is_local else "agent"
+        else:
+            role = "controller"
+
+        # Get labs for this host
+        host_labs = labs_by_agent.get(host.id, [])
+
         result.append({
             "id": host.id,
             "name": host.name,
             "address": host.address,
             "status": host.status,
             "version": host.version,
+            "role": role,
             "capabilities": capabilities,
             "resource_usage": {
                 "cpu_percent": resource_usage.get("cpu_percent", 0),
                 "memory_percent": resource_usage.get("memory_percent", 0),
+                "storage_percent": resource_usage.get("disk_percent", 0),
+                "storage_used_gb": resource_usage.get("disk_used_gb", 0),
+                "storage_total_gb": resource_usage.get("disk_total_gb", 0),
                 "containers_running": resource_usage.get("containers_running", 0),
                 "containers_total": resource_usage.get("containers_total", 0),
             },
+            "labs": host_labs,
+            "lab_count": len(host_labs),
             "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
         })
 
