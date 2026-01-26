@@ -15,6 +15,7 @@ from app.schemas import (
     TopologyAnalysis,
     TopologyGraph,
 )
+from app.image_store import find_image_reference
 
 LINK_ATTRS = {
     "bandwidth",
@@ -381,11 +382,16 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
             kind = DEVICE_TO_CLAB_KIND.get(device_lower, device_lower)
         node_data["kind"] = kind
 
-        # Use image if specified, otherwise use default for the kind
+        # Use image if specified, otherwise look up from image library
         if node.image:
             node_data["image"] = node.image
-        elif kind in CLAB_DEFAULT_IMAGES:
-            node_data["image"] = CLAB_DEFAULT_IMAGES[kind]
+        else:
+            # Try to find uploaded image for this device type and version
+            library_image = find_image_reference(node.device or kind, node.version)
+            if library_image:
+                node_data["image"] = library_image
+            elif kind in CLAB_DEFAULT_IMAGES:
+                node_data["image"] = CLAB_DEFAULT_IMAGES[kind]
 
         # Network mode
         if node.network_mode:
