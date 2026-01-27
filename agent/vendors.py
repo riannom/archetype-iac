@@ -95,6 +95,14 @@ class VendorConfig:
     # Searchable tags
     tags: list[str] = field(default_factory=list)
 
+    # Boot readiness detection
+    # - "none": No probe, always considered ready when container is running
+    # - "log_pattern": Check container logs for boot completion pattern
+    # - "cli_probe": Execute CLI command and check for expected output
+    readiness_probe: str = "none"
+    readiness_pattern: Optional[str] = None  # Regex pattern for log/cli detection
+    readiness_timeout: int = 120  # Max seconds to wait for ready state
+
 
 # =============================================================================
 # VENDOR CONFIGURATIONS - Single Source of Truth
@@ -294,6 +302,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.arista.com/en/support/product-documentation",
         license_required=True,
         tags=["switching", "bgp", "evpn", "vxlan", "datacenter"],
+        # Boot readiness: cEOS takes 30-60+ seconds to boot
+        readiness_probe="log_pattern",
+        readiness_pattern=r"%SYS-5-CONFIG_I|%ZTP-6-CANCEL|Startup complete|System ready",
+        readiness_timeout=300,  # cEOS can take up to 5 minutes
     ),
     "nokia_srlinux": VendorConfig(
         kind="nokia_srlinux",
@@ -317,6 +329,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         requires_image=False,
         documentation_url="https://documentation.nokia.com/srlinux/",
         tags=["switching", "bgp", "evpn", "datacenter", "gnmi"],
+        # Boot readiness: SR Linux typically boots faster than cEOS
+        readiness_probe="log_pattern",
+        readiness_pattern=r"System is ready|SR Linux.*started|mgmt0.*up",
+        readiness_timeout=120,
     ),
     "cvx": VendorConfig(
         kind="cvx",

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { API_BASE_URL } from '../../api';
@@ -7,13 +7,25 @@ interface TerminalSessionProps {
   labId: string;
   nodeId: string;
   isActive?: boolean;
+  isReady?: boolean;  // From NodeState.is_ready
 }
 
-const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActive }) => {
+const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActive, isReady = true }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const [showBootWarning, setShowBootWarning] = useState(!isReady);
+  const [dismissed, setDismissed] = useState(false);
+
+  // Update boot warning when isReady prop changes
+  useEffect(() => {
+    if (isReady) {
+      setShowBootWarning(false);
+    } else if (!dismissed) {
+      setShowBootWarning(true);
+    }
+  }, [isReady, dismissed]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -103,7 +115,30 @@ const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActi
     }
   }, [isActive]);
 
-  return <div ref={containerRef} className="w-full h-full" />;
+  return (
+    <div className="relative w-full h-full">
+      <div ref={containerRef} className="w-full h-full" />
+      {showBootWarning && !dismissed && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
+          <div className="bg-slate-800 border border-slate-600 rounded-lg p-6 max-w-md text-center">
+            <div className="flex items-center justify-center mb-4">
+              <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent"></div>
+            </div>
+            <h3 className="text-lg font-semibold text-white mb-2">Device Booting</h3>
+            <p className="text-slate-300 text-sm mb-4">
+              The network device is still starting up. Console may be unresponsive until boot completes.
+            </p>
+            <button
+              onClick={() => setDismissed(true)}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
+            >
+              Connect Anyway
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default TerminalSession;

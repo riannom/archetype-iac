@@ -126,6 +126,7 @@ class NodeState(Base):
     This model enables per-node control where each node tracks:
     - desired_state: What the user wants (stopped/running)
     - actual_state: What the node actually is (undeployed/pending/running/stopped/error)
+    - is_ready: Whether the node's application has completed boot (for console access)
 
     Nodes default to 'stopped' when added and only boot when user triggers start.
     """
@@ -142,5 +143,9 @@ class NodeState(Base):
     actual_state: Mapped[str] = mapped_column(String(50), default="undeployed")
     # Error message if actual_state is "error"
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Boot readiness: True when application has completed boot and is ready for console
+    is_ready: Mapped[bool] = mapped_column(default=False)
+    # Timestamp when container started booting (for tracking boot duration)
+    boot_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

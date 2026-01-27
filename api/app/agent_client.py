@@ -424,6 +424,38 @@ def get_agent_console_url(agent: models.Host, lab_id: str, node_name: str) -> st
     return f"{ws_base}/console/{lab_id}/{node_name}"
 
 
+async def check_node_readiness(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+) -> dict:
+    """Check if a node has completed its boot sequence.
+
+    Args:
+        agent: The agent managing the node
+        lab_id: Lab identifier
+        node_name: Name of the node to check
+
+    Returns:
+        Dict with 'is_ready', 'message', and optionally 'progress_percent' keys
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/ready"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            response.raise_for_status()
+            result = response.json()
+            return result
+    except Exception as e:
+        logger.error(f"Failed to check readiness for {node_name} on agent {agent.id}: {e}")
+        return {
+            "is_ready": False,
+            "message": f"Readiness check failed: {str(e)}",
+            "progress_percent": None,
+        }
+
+
 async def get_all_agents(database: Session) -> list[models.Host]:
     """Get all registered agents."""
     return database.query(models.Host).all()

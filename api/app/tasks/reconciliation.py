@@ -157,19 +157,44 @@ async def _reconcile_single_lab(session, lab_id: str):
         for ns in node_states:
             container_status = container_status_map.get(ns.node_name)
             old_state = ns.actual_state
+            old_is_ready = ns.is_ready
 
             if container_status:
                 if container_status == "running":
                     ns.actual_state = "running"
                     ns.error_message = None
                     running_count += 1
+
+                    # Check boot readiness for nodes that are running but not yet ready
+                    if not ns.is_ready:
+                        # Set boot_started_at if not already set
+                        if not ns.boot_started_at:
+                            ns.boot_started_at = datetime.now(timezone.utc)
+
+                        # Poll agent for readiness status
+                        try:
+                            readiness = await agent_client.check_node_readiness(
+                                agent, lab_id, ns.node_name
+                            )
+                            if readiness.get("is_ready", False):
+                                ns.is_ready = True
+                                logger.info(
+                                    f"Node {ns.node_name} in lab {lab_id} is now ready"
+                                )
+                        except Exception as e:
+                            logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
+
                 elif container_status in ("stopped", "exited"):
                     ns.actual_state = "stopped"
                     ns.error_message = None
+                    ns.is_ready = False
+                    ns.boot_started_at = None
                     stopped_count += 1
                 elif container_status in ("error", "dead"):
                     ns.actual_state = "error"
                     ns.error_message = f"Container status: {container_status}"
+                    ns.is_ready = False
+                    ns.boot_started_at = None
                     error_count += 1
                 else:
                     # Unknown container status
@@ -179,12 +204,18 @@ async def _reconcile_single_lab(session, lab_id: str):
                 if ns.actual_state not in ("undeployed", "stopped"):
                     ns.actual_state = "undeployed"
                     ns.error_message = None
+                ns.is_ready = False
+                ns.boot_started_at = None
                 undeployed_count += 1
 
             if ns.actual_state != old_state:
                 logger.info(
                     f"Reconciled node {ns.node_name} in lab {lab_id}: "
                     f"{old_state} -> {ns.actual_state}"
+                )
+            if ns.is_ready != old_is_ready and ns.is_ready:
+                logger.info(
+                    f"Node {ns.node_name} in lab {lab_id} boot complete"
                 )
 
         # Update lab state based on aggregated node states
