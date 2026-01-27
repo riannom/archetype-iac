@@ -1,13 +1,14 @@
 """Lab CRUD and topology management endpoints."""
 from __future__ import annotations
 
+import logging
 import shutil
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app import db, models, schemas
+from app import agent_client, db, models, schemas
 from app.auth import get_current_user
 from app.storage import (
     delete_layout,
@@ -18,8 +19,11 @@ from app.storage import (
     topology_path,
     write_layout,
 )
-from app.topology import graph_to_yaml, yaml_to_graph
-from app.utils.lab import get_lab_or_404
+from app.tasks.jobs import run_agent_job, run_multihost_destroy
+from app.topology import analyze_topology, graph_to_yaml, yaml_to_graph
+from app.utils.lab import get_lab_or_404, get_lab_provider
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["labs"])
 
@@ -159,7 +163,7 @@ def update_lab(
 
 
 @router.delete("/labs/{lab_id}")
-def delete_lab(
+async def delete_lab(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -168,11 +172,63 @@ def delete_lab(
     if lab.owner_id != current_user.id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # If lab has running infrastructure, destroy it first
+    if lab.state in ("running", "starting", "stopping"):
+        logger.info(f"Lab {lab_id} has state '{lab.state}', destroying infrastructure before deletion")
+
+        # Get topology to check for multi-host
+        topo_path = topology_path(lab.id)
+        topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+
+        # Analyze topology for multi-host deployment
+        is_multihost = False
+        if topology_yaml:
+            try:
+                graph = yaml_to_graph(topology_yaml)
+                analysis = analyze_topology(graph)
+                is_multihost = not analysis.single_host
+            except Exception as e:
+                logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+
+        # Get the provider for this lab
+        lab_provider = get_lab_provider(lab)
+
+        # Create a job record for the destroy operation
+        destroy_job = models.Job(
+            lab_id=lab.id,
+            user_id=current_user.id,
+            action="down",
+            status="queued",
+        )
+        database.add(destroy_job)
+        database.commit()
+        database.refresh(destroy_job)
+
+        # Run destroy and wait for completion
+        try:
+            if is_multihost:
+                await run_multihost_destroy(
+                    destroy_job.id, lab.id, topology_yaml, provider=lab_provider
+                )
+            else:
+                # Check for healthy agent
+                agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+                if agent:
+                    await run_agent_job(
+                        destroy_job.id, lab.id, "down", provider=lab_provider
+                    )
+                else:
+                    logger.warning(f"No healthy agent available to destroy lab {lab_id}, proceeding with deletion")
+        except Exception as e:
+            logger.error(f"Failed to destroy lab {lab_id} infrastructure: {e}")
+            # Continue with deletion even if destroy fails - containers may need manual cleanup
+
     # Delete related records first to avoid foreign key violations
     database.query(models.Job).filter(models.Job.lab_id == lab_id).delete()
     database.query(models.Permission).filter(models.Permission.lab_id == lab_id).delete()
     database.query(models.LabFile).filter(models.LabFile.lab_id == lab_id).delete()
     database.query(models.NodePlacement).filter(models.NodePlacement.lab_id == lab_id).delete()
+    database.query(models.NodeState).filter(models.NodeState.lab_id == lab_id).delete()
 
     # Delete workspace files
     workspace = lab_workspace(lab.id)
