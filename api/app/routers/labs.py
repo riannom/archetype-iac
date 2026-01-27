@@ -51,16 +51,18 @@ def _upsert_node_states(
 
     # Update or create node states
     for node in graph.nodes:
+        # Use container_name (YAML key) for containerlab operations, fall back to name
+        clab_name = node.container_name or node.name
         if node.id in existing_by_node_id:
             # Update existing - only update node_name in case it changed
             existing = existing_by_node_id[node.id]
-            existing.node_name = node.name
+            existing.node_name = clab_name
         else:
             # Create new with defaults
             new_state = models.NodeState(
                 lab_id=lab_id,
                 node_id=node.id,
-                node_name=node.name,
+                node_name=clab_name,
                 desired_state="stopped",
                 actual_state="undeployed",
             )
@@ -428,7 +430,17 @@ def get_node_state(
         .first()
     )
     if not state:
-        raise HTTPException(status_code=404, detail="Node state not found")
+        # Lazy initialization: create NodeState if it doesn't exist yet
+        state = models.NodeState(
+            lab_id=lab_id,
+            node_id=node_id,
+            node_name=node_id,  # Placeholder - will be updated when topology syncs
+            desired_state="stopped",
+            actual_state="undeployed",
+        )
+        database.add(state)
+        database.commit()
+        database.refresh(state)
     return schemas.NodeStateOut.model_validate(state)
 
 
@@ -455,7 +467,20 @@ def set_node_desired_state(
         .first()
     )
     if not state:
-        raise HTTPException(status_code=404, detail="Node state not found")
+        # Lazy initialization: create NodeState if it doesn't exist yet
+        # This handles race conditions where UI sends request before topology is saved
+        # The node_name will be corrected when _ensure_node_states_exist runs after topology save
+        state = models.NodeState(
+            lab_id=lab_id,
+            node_id=node_id,
+            node_name=node_id,  # Placeholder - will be updated when topology syncs
+            desired_state=payload.state,
+            actual_state="undeployed",
+        )
+        database.add(state)
+        database.commit()
+        database.refresh(state)
+        return schemas.NodeStateOut.model_validate(state)
 
     state.desired_state = payload.state
     database.commit()
@@ -630,7 +655,19 @@ async def sync_node(
         .first()
     )
     if not state:
-        raise HTTPException(status_code=404, detail="Node state not found")
+        # Lazy initialization: create NodeState if it doesn't exist yet
+        state = models.NodeState(
+            lab_id=lab_id,
+            node_id=node_id,
+            node_name=node_id,  # Placeholder - will be updated below
+            desired_state="running",  # Assume user wants to start it
+            actual_state="undeployed",
+        )
+        database.add(state)
+        database.commit()
+        # Re-run ensure to get correct node_name from topology
+        _ensure_node_states_exist(database, lab.id)
+        database.refresh(state)
 
     # Check if node is out of sync
     out_of_sync = _get_out_of_sync_nodes(database, lab_id, [node_id])

@@ -31,12 +31,24 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
 
         # For multi-host labs, find which agent has the specific node
         agent = None
+        node_name = node  # May be GUI ID or actual name
         topo_path = topology_path(lab.id)
         if topo_path.exists():
             try:
                 topology_yaml = topo_path.read_text(encoding="utf-8")
                 graph = yaml_to_graph(topology_yaml)
                 analysis = analyze_topology(graph)
+
+                # Resolve GUI ID to containerlab node name
+                # The 'node' parameter may be a GUI ID (e.g., "8e0qdki") or
+                # the actual node name (e.g., "EOS_1_96ce")
+                # We need the container_name (YAML key) for containerlab, not the display name
+                for n in graph.nodes:
+                    if n.id == node:
+                        # Use container_name (YAML key) if available, otherwise fall back to name
+                        node_name = n.container_name or n.name
+                        logger.debug(f"Console: resolved GUI ID {node} to container name {node_name}")
+                        break
 
                 # Get the provider for this lab
                 lab_provider = lab.provider if lab.provider else "containerlab"
@@ -45,7 +57,7 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
                 if not analysis.single_host:
                     for host_id, placements in analysis.placements.items():
                         for p in placements:
-                            if p.node_name == node:
+                            if p.node_name == node_name:
                                 # Found the host for this node, get the agent
                                 agent = await agent_client.get_agent_by_name(
                                     database, host_id, required_provider=lab_provider
@@ -69,8 +81,8 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
             await websocket.close(code=1011)
             return
 
-        # Get agent WebSocket URL
-        agent_ws_url = agent_client.get_agent_console_url(agent, lab_id, node)
+        # Get agent WebSocket URL (use resolved node_name, not raw GUI ID)
+        agent_ws_url = agent_client.get_agent_console_url(agent, lab_id, node_name)
 
     finally:
         database.close()

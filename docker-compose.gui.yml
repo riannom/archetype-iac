@@ -114,7 +114,8 @@ services:
       - ARCHETYPE_AGENT_ENABLE_VXLAN=true
       - ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
     volumes:
-      - agent_workspaces:/var/lib/archetype-agent
+      # Use bind mount so containerlab's paths match between agent and cEOS containers
+      - /var/lib/archetype-agent:/var/lib/archetype-agent
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]

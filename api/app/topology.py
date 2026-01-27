@@ -56,18 +56,20 @@ LINK_ATTRS = {
 
 _NODE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,15}$")
 
-# Base startup-config for cEOS nodes
+# Base startup-config template for cEOS nodes
 # - Disables ZeroTouch provisioning (allows saving config)
-# - Configures AAA authorization (allows copy commands)
+# - Disables AAA root (allows copy commands without auth)
+# - Sets hostname based on node name
 # - Enables standard routing protocols model
-CEOS_BASE_STARTUP_CONFIG = """\
+_CEOS_STARTUP_CONFIG_TEMPLATE = """\
 ! Archetype base configuration for cEOS
 ! Enables config persistence via 'copy run start' or 'write memory'
 !
-no aaa root
+zerotouch cancel
 !
-aaa authorization exec default local
-aaa authorization commands all default local
+hostname {hostname}
+!
+no aaa root
 !
 no service interface inactive port-id allocation disabled
 !
@@ -92,6 +94,15 @@ no ip routing
 !
 end
 """
+
+
+def _generate_ceos_startup_config(node_name: str) -> str:
+    """Generate startup-config for a cEOS node with the given hostname."""
+    # Convert node name to valid EOS hostname (alphanumeric, hyphens, max 63 chars)
+    hostname = re.sub(r"[^A-Za-z0-9-]", "-", node_name)[:63].strip("-")
+    if not hostname:
+        hostname = "ceos"
+    return _CEOS_STARTUP_CONFIG_TEMPLATE.format(hostname=hostname)
 
 
 def _safe_node_name(name: str, used: set[str]) -> str:
@@ -132,6 +143,9 @@ def graph_to_yaml(graph: TopologyGraph) -> str:
         # Store GUI ID to preserve identity through YAML round-trips
         if node.id != node.name:
             node_data["_gui_id"] = node.id
+        # Store original display name if it differs from safe name
+        if node.name != safe_name:
+            node_data["_display_name"] = node.name
         if node.device:
             node_data["device"] = node.device
         if node.image:
@@ -251,21 +265,26 @@ def yaml_to_graph(content: str) -> TopologyGraph:
     links_data = data.get("links", [])
 
     # Fields that are parsed as explicit GraphNode attributes (not stored in vars)
-    node_explicit_fields = {"device", "image", "version", "role", "mgmt", "network-mode", "host", "_gui_id"}
+    node_explicit_fields = {"device", "image", "version", "role", "mgmt", "network-mode", "host", "_gui_id", "_display_name"}
 
     nodes: list[GraphNode] = []
     if isinstance(nodes_data, list):
         for name in nodes_data:
-            nodes.append(GraphNode(id=str(name), name=str(name)))
+            nodes.append(GraphNode(id=str(name), name=str(name), container_name=str(name)))
     elif isinstance(nodes_data, dict):
         for name, attrs in nodes_data.items():
             attrs = attrs or {}
             # Use _gui_id if present, otherwise fall back to name
             node_id = attrs.get("_gui_id", name)
+            # Use _display_name if present, otherwise use the YAML key
+            display_name = attrs.get("_display_name", name)
+            # YAML key is the containerlab container name
+            yaml_key = str(name)
             nodes.append(
                 GraphNode(
                     id=str(node_id),
-                    name=str(name),
+                    name=str(display_name),
+                    container_name=yaml_key,
                     device=attrs.get("device"),
                     image=attrs.get("image"),
                     version=attrs.get("version"),
@@ -425,7 +444,11 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         # Add startup-config for cEOS nodes to enable config persistence
         # This disables ZTP and configures AAA to allow 'copy run start'
         if kind == "ceos":
-            node_data["startup-config"] = CEOS_BASE_STARTUP_CONFIG
+            # Use original node name for hostname (e.g., "EOS-1" not "EOS_1_96ce")
+            node_data["startup-config"] = _generate_ceos_startup_config(node.name)
+            # Set environment variable to disable ZeroTouch provisioning
+            # This is required because startup-config is loaded AFTER ZTP runs
+            node_data["env"] = {"CEOS_NOZEROTOUCH": "true"}
 
         # Add any other vars that containerlab might use
         if node.vars:

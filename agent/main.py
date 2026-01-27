@@ -67,6 +67,11 @@ _heartbeat_task: asyncio.Task | None = None
 # Overlay network manager (lazy initialized)
 _overlay_manager = None
 
+# Deploy locks to prevent concurrent deploys for the same lab
+# Maps lab_id -> (lock, result_future)
+_deploy_locks: dict[str, asyncio.Lock] = {}
+_deploy_results: dict[str, asyncio.Future] = {}
+
 
 def get_overlay_manager():
     """Lazy-initialize overlay manager."""
@@ -381,32 +386,95 @@ def info():
 
 @app.post("/jobs/deploy")
 async def deploy_lab(request: DeployRequest) -> JobResult:
-    """Deploy a lab topology."""
-    print(f"Deploy request: lab={request.lab_id}, job={request.job_id}, provider={request.provider.value}")
+    """Deploy a lab topology.
 
-    provider = get_provider_for_request(request.provider.value)
-    workspace = get_workspace(request.lab_id)
-    result = await provider.deploy(
-        lab_id=request.lab_id,
-        topology_yaml=request.topology_yaml,
-        workspace=workspace,
-    )
+    Uses per-lab locking to prevent concurrent deploys for the same lab.
+    If a deploy is already in progress, subsequent requests wait for it to complete.
+    """
+    lab_id = request.lab_id
+    print(f"Deploy request: lab={lab_id}, job={request.job_id}, provider={request.provider.value}")
 
-    if result.success:
-        return JobResult(
-            job_id=request.job_id,
-            status=JobStatus.COMPLETED,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        )
-    else:
-        return JobResult(
-            job_id=request.job_id,
-            status=JobStatus.FAILED,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            error_message=result.error,
-        )
+    # Get or create lock for this lab
+    if lab_id not in _deploy_locks:
+        _deploy_locks[lab_id] = asyncio.Lock()
+
+    lock = _deploy_locks[lab_id]
+
+    # Check if deploy is already in progress
+    if lock.locked():
+        print(f"Deploy already in progress for lab {lab_id}, waiting...")
+        # Wait for the lock and return the cached result
+        async with lock:
+            # Deploy finished while we were waiting, check for cached result
+            if lab_id in _deploy_results:
+                cached = _deploy_results.get(lab_id)
+                if cached:
+                    print(f"Returning cached deploy result for lab {lab_id}")
+                    # Return the same result but with this job's ID
+                    return JobResult(
+                        job_id=request.job_id,
+                        status=cached.status,
+                        stdout=cached.stdout,
+                        stderr=cached.stderr,
+                        error_message=cached.error_message,
+                    )
+        # No cached result, continue with deploy
+
+    async with lock:
+        try:
+            provider = get_provider_for_request(request.provider.value)
+            workspace = get_workspace(lab_id)
+            print(f"Deploy starting: workspace={workspace}")
+
+            result = await provider.deploy(
+                lab_id=lab_id,
+                topology_yaml=request.topology_yaml,
+                workspace=workspace,
+            )
+
+            print(f"Deploy finished: success={result.success}")
+
+            if result.success:
+                job_result = JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.COMPLETED,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                )
+            else:
+                job_result = JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.FAILED,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    error_message=result.error,
+                )
+
+            # Cache result briefly for concurrent requests
+            _deploy_results[lab_id] = job_result
+            # Clean up cache after a short delay
+            asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
+
+            return job_result
+
+        except Exception as e:
+            print(f"Deploy error: {e}")
+            import traceback
+            traceback.print_exc()
+            job_result = JobResult(
+                job_id=request.job_id,
+                status=JobStatus.FAILED,
+                error_message=str(e),
+            )
+            _deploy_results[lab_id] = job_result
+            asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
+            return job_result
+
+
+async def _cleanup_deploy_cache(lab_id: str, delay: float = 5.0):
+    """Clean up cached deploy result after a delay."""
+    await asyncio.sleep(delay)
+    _deploy_results.pop(lab_id, None)
 
 
 @app.post("/jobs/destroy")
@@ -951,5 +1019,6 @@ if __name__ == "__main__":
         "agent.main:app",
         host=settings.agent_host,
         port=settings.agent_port,
-        reload=True,
+        reload=False,  # Disable reload to prevent connection drops during long operations
+        timeout_keep_alive=300,  # Keep connections alive for deploy operations
     )

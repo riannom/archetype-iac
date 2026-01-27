@@ -83,7 +83,7 @@ class GraphLink(BaseModel):
 
 class GraphNode(BaseModel):
     id: str
-    name: str
+    name: str  # Display name for UI
     device: str | None = None
     image: str | None = None
     version: str | None = None
@@ -92,6 +92,7 @@ class GraphNode(BaseModel):
     vars: dict | None = None
     host: str | None = None  # Agent ID for multi-host placement
     network_mode: str | None = None  # Container network mode (e.g., "bridge", "host", "none")
+    container_name: str | None = None  # Name used by containerlab (YAML key), may differ from display name
 
 
 class TopologyGraph(BaseModel):

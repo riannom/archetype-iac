@@ -14,7 +14,6 @@ from app.topology import (
     graph_to_yaml,
     split_topology_by_host,
     yaml_to_graph,
-    CEOS_BASE_STARTUP_CONFIG,
 )
 
 
@@ -542,11 +541,14 @@ def test_containerlab_yaml_ceos_has_startup_config():
 
     yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
 
-    # Verify startup-config is present
+    # Verify startup-config is present with required elements
     assert "startup-config:" in yaml_str
-    # Verify AAA authorization is configured (key for config persistence)
-    assert "aaa authorization exec default local" in yaml_str
-    assert "aaa authorization commands all default local" in yaml_str
+    # Verify zerotouch is disabled (key for config persistence)
+    assert "zerotouch cancel" in yaml_str
+    # Verify hostname is set based on node name
+    assert "hostname R1" in yaml_str
+    # Verify AAA root is disabled
+    assert "no aaa root" in yaml_str
 
 
 def test_containerlab_yaml_ceos_uses_block_scalar():
@@ -609,11 +611,17 @@ def test_containerlab_yaml_mixed_nodes():
 
 def test_containerlab_yaml_ceos_config_has_required_lines():
     """Test that cEOS startup-config contains all required configuration."""
-    # Verify the base config constant has required lines
-    assert "no aaa root" in CEOS_BASE_STARTUP_CONFIG
-    assert "aaa authorization exec default local" in CEOS_BASE_STARTUP_CONFIG
-    assert "aaa authorization commands all default local" in CEOS_BASE_STARTUP_CONFIG
-    assert "end" in CEOS_BASE_STARTUP_CONFIG
+    # Generate a config and verify it has required lines
+    graph = TopologyGraph(
+        nodes=[GraphNode(id="r1", name="TestRouter", device="ceos")],
+        links=[],
+    )
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+
+    assert "zerotouch cancel" in yaml_str
+    assert "hostname TestRouter" in yaml_str
+    assert "no aaa root" in yaml_str
+    assert "end" in yaml_str
 
 
 def test_containerlab_yaml_structure():
@@ -659,7 +667,8 @@ def test_containerlab_yaml_ceos_alias_resolution():
 
     # Should still get startup-config since 'eos' resolves to 'ceos'
     assert "startup-config: |" in yaml_str
-    assert "aaa authorization" in yaml_str
+    assert "zerotouch cancel" in yaml_str
+    assert "hostname R1" in yaml_str
 
 
 # To run these tests:

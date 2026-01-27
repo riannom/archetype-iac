@@ -305,7 +305,8 @@ async def deploy_to_agent(
     logger.info(f"Deploying lab {lab_id} via agent {agent.id} using provider {provider}")
 
     try:
-        result = await with_retry(_do_deploy, url, job_id, lab_id, topology_yaml, provider)
+        # Reduce retries for deploy since it's a long operation and agent has its own deduplication
+        result = await with_retry(_do_deploy, url, job_id, lab_id, topology_yaml, provider, max_retries=1)
         logger.info(f"Deploy completed for lab {lab_id}: {result.get('status')}")
         return result
     except AgentError as e:
