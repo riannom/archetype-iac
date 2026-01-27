@@ -519,6 +519,66 @@ async def lab_status(request: LabStatusRequest) -> LabStatusResponse:
     )
 
 
+# --- Container Control Endpoints ---
+
+@app.post("/containers/{container_name}/start")
+async def start_container(container_name: str) -> dict:
+    """Start a stopped container.
+
+    Used by the sync system to start individual nodes without redeploying.
+    """
+    print(f"Starting container: {container_name}")
+
+    try:
+        import docker
+        client = docker.from_env()
+        container = client.containers.get(container_name)
+
+        if container.status == "running":
+            return {"success": True, "message": "Container already running"}
+
+        container.start()
+        return {"success": True, "message": "Container started"}
+
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{container_name}' not found")
+    except docker.errors.APIError as e:
+        print(f"Docker API error starting {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        print(f"Error starting container {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/containers/{container_name}/stop")
+async def stop_container(container_name: str) -> dict:
+    """Stop a running container.
+
+    Used by the sync system to stop individual nodes without destroying the lab.
+    """
+    print(f"Stopping container: {container_name}")
+
+    try:
+        import docker
+        client = docker.from_env()
+        container = client.containers.get(container_name)
+
+        if container.status != "running":
+            return {"success": True, "message": "Container already stopped"}
+
+        container.stop(timeout=10)
+        return {"success": True, "message": "Container stopped"}
+
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{container_name}' not found")
+    except docker.errors.APIError as e:
+        print(f"Docker API error stopping {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        print(f"Error stopping container {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # --- Reconciliation Endpoints ---
 
 @app.get("/discover-labs")

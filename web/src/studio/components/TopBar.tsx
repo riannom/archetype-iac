@@ -5,11 +5,10 @@ interface TopBarProps {
   labName: string;
   onExport: () => void;
   onExportFull?: () => void;
-  onDeploy: () => void;
   onExit: () => void;
 }
 
-const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onDeploy, onExit }) => {
+const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit }) => {
   const { effectiveMode, toggleMode } = useTheme();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
@@ -121,13 +120,6 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onDepl
               </div>
             )}
           </div>
-          <button
-            onClick={onDeploy}
-            className="flex items-center gap-2 px-4 py-1.5 bg-sage-600 hover:bg-sage-500 text-white text-xs font-bold rounded-lg transition-all shadow-lg shadow-sage-900/20 active:scale-95 border border-sage-400/20"
-          >
-            <i className="fa-solid fa-rocket"></i>
-            DEPLOY
-          </button>
 
           <div className="h-8 w-px bg-stone-200 dark:bg-stone-800 mx-1"></div>
 

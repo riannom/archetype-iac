@@ -706,6 +706,48 @@ def agent_supports_vxlan(agent: models.Host) -> bool:
     return "vxlan" in features
 
 
+async def container_action(
+    agent: models.Host,
+    container_name: str,
+    action: str,  # "start" or "stop"
+) -> dict:
+    """Execute start/stop action on a specific container.
+
+    Args:
+        agent: The agent where the container is running
+        container_name: Full container name (e.g., "clab-labid-nodename")
+        action: "start" or "stop"
+
+    Returns:
+        Dict with 'success' key and optional 'error' message
+    """
+    url = f"{get_agent_url(agent)}/containers/{container_name}/{action}"
+    logger.info(f"Container {action} for {container_name} via agent {agent.id}")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, timeout=60.0)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("success"):
+                logger.info(f"Container {action} completed for {container_name}")
+            else:
+                logger.warning(f"Container {action} failed for {container_name}: {result.get('error')}")
+            return result
+    except httpx.HTTPStatusError as e:
+        error_msg = f"HTTP {e.response.status_code}"
+        try:
+            error_data = e.response.json()
+            error_msg = error_data.get("detail", error_msg)
+        except Exception:
+            pass
+        logger.error(f"Container {action} failed for {container_name}: {error_msg}")
+        return {"success": False, "error": error_msg}
+    except Exception as e:
+        logger.error(f"Container {action} failed for {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def setup_cross_host_link(
     database: Session,
     lab_id: str,

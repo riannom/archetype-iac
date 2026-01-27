@@ -543,3 +543,303 @@ async def run_multihost_destroy(
             pass
     finally:
         session.close()
+
+
+async def run_node_sync(
+    job_id: str,
+    lab_id: str,
+    node_ids: list[str],
+    provider: str = "containerlab",
+):
+    """Sync nodes to match their desired state.
+
+    This function handles the reconciliation logic:
+    1. If any node needs to start and is undeployed, deploys the full topology
+    2. After deploy, stops all nodes where desired_state=stopped
+    3. For already-deployed nodes, uses docker start/stop as needed
+
+    Args:
+        job_id: The job ID
+        lab_id: The lab ID
+        node_ids: List of node IDs to sync
+        provider: Provider for the job (default: containerlab)
+    """
+    from app.storage import topology_path
+
+    session = SessionLocal()
+    try:
+        job = session.get(models.Job, job_id)
+        if not job:
+            logger.error(f"Job {job_id} not found in database")
+            return
+
+        lab = session.get(models.Lab, lab_id)
+        if not lab:
+            logger.error(f"Lab {lab_id} not found in database")
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = f"ERROR: Lab {lab_id} not found"
+            session.commit()
+            return
+
+        # Get node states
+        node_states = (
+            session.query(models.NodeState)
+            .filter(
+                models.NodeState.lab_id == lab_id,
+                models.NodeState.node_id.in_(node_ids),
+            )
+            .all()
+        )
+
+        if not node_states:
+            job.status = "completed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = "No nodes to sync"
+            session.commit()
+            return
+
+        # Find a healthy agent
+        agent = await agent_client.get_agent_for_lab(
+            session,
+            lab,
+            required_provider=provider,
+        )
+        if not agent:
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = f"ERROR: No healthy agent available with {provider} support"
+            # Mark nodes as error
+            for ns in node_states:
+                ns.actual_state = "error"
+                ns.error_message = "No agent available"
+            session.commit()
+            logger.warning(f"Job {job_id} failed: no healthy agent available")
+            return
+
+        # Update job with agent assignment
+        job.status = "running"
+        job.agent_id = agent.id
+        job.started_at = datetime.utcnow()
+        session.commit()
+
+        log_parts = []
+        log_parts.append(f"=== Node Sync Job ===")
+        log_parts.append(f"Lab: {lab_id}")
+        log_parts.append(f"Agent: {agent.id} ({agent.name})")
+        log_parts.append(f"Nodes: {', '.join(node_ids)}")
+        log_parts.append("")
+
+        # Categorize nodes by what action they need
+        nodes_need_deploy = []  # undeployed -> running
+        nodes_need_start = []   # stopped -> running
+        nodes_need_stop = []    # running -> stopped
+
+        for ns in node_states:
+            if ns.desired_state == "running":
+                if ns.actual_state in ("undeployed", "pending"):
+                    nodes_need_deploy.append(ns)
+                elif ns.actual_state == "stopped":
+                    nodes_need_start.append(ns)
+                # If already running, nothing to do
+            elif ns.desired_state == "stopped":
+                if ns.actual_state == "running":
+                    nodes_need_stop.append(ns)
+                # If already stopped/undeployed, nothing to do
+
+        logger.info(
+            f"Sync job {job_id}: deploy={len(nodes_need_deploy)}, "
+            f"start={len(nodes_need_start)}, stop={len(nodes_need_stop)}"
+        )
+
+        # Phase 1: If any nodes need deploy, we need to deploy the full topology
+        # Containerlab doesn't support per-node deploy, so we deploy all and then stop unwanted
+        if nodes_need_deploy:
+            log_parts.append("=== Phase 1: Deploy Topology ===")
+
+            # Read topology YAML
+            topo_path = topology_path(lab.id)
+            if not topo_path.exists():
+                error_msg = "No topology file found"
+                job.status = "failed"
+                job.completed_at = datetime.utcnow()
+                job.log_path = f"ERROR: {error_msg}"
+                for ns in nodes_need_deploy:
+                    ns.actual_state = "error"
+                    ns.error_message = error_msg
+                session.commit()
+                return
+
+            topology_yaml = topo_path.read_text(encoding="utf-8")
+
+            # Convert to containerlab format
+            graph = yaml_to_graph(topology_yaml)
+            clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+
+            log_parts.append(f"Deploying topology with {len(graph.nodes)} nodes...")
+
+            try:
+                result = await agent_client.deploy_to_agent(
+                    agent, job_id, lab_id, clab_yaml, provider=provider
+                )
+
+                if result.get("status") == "completed":
+                    log_parts.append("Deploy completed successfully")
+
+                    # Get all node states for this lab to update them
+                    all_states = (
+                        session.query(models.NodeState)
+                        .filter(models.NodeState.lab_id == lab_id)
+                        .all()
+                    )
+
+                    # After deploy, all nodes are running by default in containerlab
+                    # We need to stop nodes where desired_state=stopped
+                    nodes_to_stop_after_deploy = [
+                        ns for ns in all_states
+                        if ns.desired_state == "stopped"
+                    ]
+
+                    # First, mark all nodes as running (since clab starts them all)
+                    for ns in all_states:
+                        ns.actual_state = "running"
+                        ns.error_message = None
+
+                    session.commit()
+
+                    if nodes_to_stop_after_deploy:
+                        log_parts.append("")
+                        log_parts.append(f"Stopping {len(nodes_to_stop_after_deploy)} nodes with desired_state=stopped...")
+
+                        for ns in nodes_to_stop_after_deploy:
+                            container_name = _get_container_name(lab_id, ns.node_name)
+                            stop_result = await agent_client.container_action(
+                                agent, container_name, "stop"
+                            )
+                            if stop_result.get("success"):
+                                ns.actual_state = "stopped"
+                                log_parts.append(f"  {ns.node_name}: stopped")
+                            else:
+                                ns.actual_state = "error"
+                                ns.error_message = stop_result.get("error", "Stop failed")
+                                log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+
+                        session.commit()
+
+                else:
+                    error_msg = result.get("error_message", "Deploy failed")
+                    log_parts.append(f"Deploy FAILED: {error_msg}")
+                    for ns in nodes_need_deploy:
+                        ns.actual_state = "error"
+                        ns.error_message = error_msg
+                    session.commit()
+
+                if result.get("stdout"):
+                    log_parts.append(f"\nDeploy STDOUT:\n{result['stdout']}")
+                if result.get("stderr"):
+                    log_parts.append(f"\nDeploy STDERR:\n{result['stderr']}")
+
+            except Exception as e:
+                error_msg = str(e)
+                log_parts.append(f"Deploy FAILED: {error_msg}")
+                for ns in nodes_need_deploy:
+                    ns.actual_state = "error"
+                    ns.error_message = error_msg
+                session.commit()
+                logger.exception(f"Deploy failed in sync job {job_id}: {e}")
+
+        # Phase 2: Start nodes that are stopped but should be running
+        if nodes_need_start:
+            log_parts.append("")
+            log_parts.append("=== Phase 2: Start Nodes ===")
+
+            for ns in nodes_need_start:
+                container_name = _get_container_name(lab_id, ns.node_name)
+                log_parts.append(f"Starting {ns.node_name} ({container_name})...")
+
+                try:
+                    result = await agent_client.container_action(
+                        agent, container_name, "start"
+                    )
+                    if result.get("success"):
+                        ns.actual_state = "running"
+                        ns.error_message = None
+                        log_parts.append(f"  {ns.node_name}: started")
+                    else:
+                        ns.actual_state = "error"
+                        ns.error_message = result.get("error", "Start failed")
+                        log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+                except Exception as e:
+                    ns.actual_state = "error"
+                    ns.error_message = str(e)
+                    log_parts.append(f"  {ns.node_name}: FAILED - {e}")
+
+            session.commit()
+
+        # Phase 3: Stop nodes that are running but should be stopped
+        if nodes_need_stop:
+            log_parts.append("")
+            log_parts.append("=== Phase 3: Stop Nodes ===")
+
+            for ns in nodes_need_stop:
+                container_name = _get_container_name(lab_id, ns.node_name)
+                log_parts.append(f"Stopping {ns.node_name} ({container_name})...")
+
+                try:
+                    result = await agent_client.container_action(
+                        agent, container_name, "stop"
+                    )
+                    if result.get("success"):
+                        ns.actual_state = "stopped"
+                        ns.error_message = None
+                        log_parts.append(f"  {ns.node_name}: stopped")
+                    else:
+                        ns.actual_state = "error"
+                        ns.error_message = result.get("error", "Stop failed")
+                        log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+                except Exception as e:
+                    ns.actual_state = "error"
+                    ns.error_message = str(e)
+                    log_parts.append(f"  {ns.node_name}: FAILED - {e}")
+
+            session.commit()
+
+        # Check if any nodes are in error state
+        error_count = sum(1 for ns in node_states if ns.actual_state == "error")
+
+        if error_count > 0:
+            job.status = "failed"
+            log_parts.append(f"\nCompleted with {error_count} error(s)")
+        else:
+            job.status = "completed"
+            log_parts.append("\nAll nodes synced successfully")
+
+        job.completed_at = datetime.utcnow()
+        job.log_path = "\n".join(log_parts)
+        session.commit()
+
+        logger.info(f"Job {job_id} completed with status: {job.status}")
+
+    except Exception as e:
+        logger.exception(f"Job {job_id} failed with unexpected error: {e}")
+        try:
+            job = session.get(models.Job, job_id)
+            if job:
+                job.status = "failed"
+                job.completed_at = datetime.utcnow()
+                job.log_path = f"ERROR: Unexpected error: {e}"
+                session.commit()
+        except Exception:
+            pass
+    finally:
+        session.close()
+
+
+def _get_container_name(lab_id: str, node_name: str) -> str:
+    """Get the containerlab container name for a node.
+
+    Containerlab names containers as: clab-{lab_id}-{node_name}
+    Lab ID is sanitized and truncated to ~20 chars.
+    """
+    safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
+    return f"clab-{safe_lab_id}-{node_name}"

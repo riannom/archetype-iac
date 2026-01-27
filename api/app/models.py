@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -109,3 +109,29 @@ class NodePlacement(Base):
     runtime_id: Mapped[str | None] = mapped_column(String(255), nullable=True)  # container/domain ID
     status: Mapped[str] = mapped_column(String(50), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NodeState(Base):
+    """Per-node desired/actual state for lab lifecycle management.
+
+    This model enables per-node control where each node tracks:
+    - desired_state: What the user wants (stopped/running)
+    - actual_state: What the node actually is (undeployed/pending/running/stopped/error)
+
+    Nodes default to 'stopped' when added and only boot when user triggers start.
+    """
+    __tablename__ = "node_states"
+    __table_args__ = (UniqueConstraint("lab_id", "node_id", name="uq_node_state_lab_node"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"))
+    node_id: Mapped[str] = mapped_column(String(100))  # Frontend node ID
+    node_name: Mapped[str] = mapped_column(String(100))  # Name in topology
+    # desired_state: What the user wants - "stopped" or "running"
+    desired_state: Mapped[str] = mapped_column(String(50), default="stopped")
+    # actual_state: Current reality - "undeployed", "pending", "running", "stopped", "error"
+    actual_state: Mapped[str] = mapped_column(String(50), default="undeployed")
+    # Error message if actual_state is "error"
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -1,17 +1,20 @@
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import { DeviceModel, Node } from '../types';
 
 export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'error';
 
 interface RuntimeControlProps {
+  labId: string;
   nodes: Node[];
   runtimeStates: Record<string, RuntimeStatus>;
   deviceModels: DeviceModel[];
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
+  onRefreshStates: () => void;
+  studioRequest: <T>(path: string, options?: RequestInit) => Promise<T>;
 }
 
-const RuntimeControl: React.FC<RuntimeControlProps> = ({ nodes, runtimeStates, deviceModels, onUpdateStatus }) => {
+const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest }) => {
   const getStatusColor = (status: RuntimeStatus) => {
     switch (status) {
       case 'running': return 'text-green-500 bg-green-500/10 border-green-500/20';
@@ -21,9 +24,30 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ nodes, runtimeStates, d
     }
   };
 
-  const handleBulkAction = (action: RuntimeStatus) => {
-    nodes.forEach(node => onUpdateStatus(node.id, action));
-  };
+  const handleBulkAction = useCallback(async (action: 'running' | 'stopped') => {
+    if (!labId || nodes.length === 0) return;
+
+    try {
+      // Set all nodes' desired state
+      await studioRequest(`/labs/${labId}/nodes/desired-state`, {
+        method: 'PUT',
+        body: JSON.stringify({ state: action === 'running' ? 'running' : 'stopped' }),
+      });
+
+      // Optimistically update UI
+      nodes.forEach(node => {
+        onUpdateStatus(node.id, action === 'running' ? 'booting' : 'stopped');
+      });
+
+      // Trigger sync for all nodes
+      await studioRequest(`/labs/${labId}/sync`, { method: 'POST' });
+
+      // Refresh states after a short delay
+      setTimeout(() => onRefreshStates(), 1000);
+    } catch (error) {
+      console.error('Bulk action failed:', error);
+    }
+  }, [labId, nodes, studioRequest, onUpdateStatus, onRefreshStates]);
 
   return (
     <div className="flex-1 bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden animate-in fade-in duration-300">
@@ -35,7 +59,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ nodes, runtimeStates, d
           </div>
           <div className="flex gap-3">
             <button
-              onClick={() => handleBulkAction('booting')}
+              onClick={() => handleBulkAction('running')}
               className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
             >
               <i className="fa-solid fa-play mr-2"></i> Start All
