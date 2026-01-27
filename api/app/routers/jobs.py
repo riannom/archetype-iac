@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,11 +16,30 @@ from app.netlab import run_netlab_command
 from app.storage import lab_workspace, topology_path
 from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
 from app.topology import analyze_topology, graph_to_containerlab_yaml, yaml_to_graph
+from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.utils.lab import get_lab_or_404, get_lab_provider
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["jobs"])
+
+
+def _enrich_job_output(job: models.Job) -> schemas.JobOut:
+    """Convert a Job model to JobOut schema with computed fields."""
+    job_out = schemas.JobOut.model_validate(job)
+
+    # Compute timeout_at
+    job_out.timeout_at = get_job_timeout_at(job.action, job.started_at)
+
+    # Compute is_stuck
+    job_out.is_stuck = is_job_stuck(
+        job.action,
+        job.status,
+        job.started_at,
+        job.created_at,
+    )
+
+    return job_out
 
 
 @router.post("/labs/{lab_id}/up")
@@ -296,7 +316,7 @@ def list_jobs(
         .order_by(models.Job.created_at.desc())
         .all()
     )
-    return {"jobs": [schemas.JobOut.model_validate(job) for job in jobs]}
+    return {"jobs": [_enrich_job_output(job) for job in jobs]}
 
 
 @router.get("/labs/{lab_id}/jobs/{job_id}")
@@ -310,7 +330,7 @@ def get_job(
     job = database.get(models.Job, job_id)
     if not job or job.lab_id != lab_id:
         raise HTTPException(status_code=404, detail="Job not found")
-    return schemas.JobOut.model_validate(job)
+    return _enrich_job_output(job)
 
 
 @router.get("/labs/{lab_id}/jobs/{job_id}/log")
@@ -345,3 +365,67 @@ def audit_log(
 ) -> dict[str, list[schemas.JobOut]]:
     get_lab_or_404(lab_id, database, current_user)
     return list_jobs(lab_id, database, current_user)
+
+
+@router.post("/labs/{lab_id}/jobs/{job_id}/cancel")
+async def cancel_job(
+    lab_id: str,
+    job_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.JobOut:
+    """Cancel a running or queued job.
+
+    Marks the job as 'cancelled' and sets the lab state to 'unknown'
+    so reconciliation can determine actual state.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+    job = database.get(models.Job, job_id)
+
+    if not job or job.lab_id != lab_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Can only cancel queued or running jobs
+    if job.status not in ("queued", "running"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel job with status '{job.status}'. Only 'queued' or 'running' jobs can be cancelled."
+        )
+
+    logger.info(f"Cancelling job {job_id} for lab {lab_id} (was {job.status})")
+
+    # Mark job as cancelled
+    job.status = "cancelled"
+    job.completed_at = datetime.now(timezone.utc)
+
+    # Append cancellation note to log
+    if job.log_path:
+        try:
+            with open(job.log_path, "a") as f:
+                f.write(f"\n\n--- Job cancelled by user at {job.completed_at.isoformat()} ---\n")
+        except Exception:
+            pass
+    else:
+        job.log_path = f"Job cancelled by user at {job.completed_at.isoformat()}"
+
+    # Set lab state to unknown so reconciliation will determine actual state
+    lab.state = "unknown"
+    lab.state_error = "Job cancelled by user - awaiting state reconciliation"
+    lab.state_updated_at = datetime.now(timezone.utc)
+
+    database.commit()
+    database.refresh(job)
+
+    # Best-effort attempt to signal agent to stop work (if applicable)
+    # Note: This is a fire-and-forget since the agent may not support cancellation
+    if job.agent_id:
+        try:
+            agent = database.get(models.Host, job.agent_id)
+            if agent and agent.status == "online":
+                # Future: Could add agent cancel endpoint here
+                # await agent_client.cancel_job_on_agent(agent, job_id)
+                pass
+        except Exception as e:
+            logger.debug(f"Could not signal agent to cancel job: {e}")
+
+    return _enrich_job_output(job)

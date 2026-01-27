@@ -59,6 +59,22 @@ class Settings(BaseSettings):
     # How long a lab can be "starting" before auto-reconcile (seconds)
     stale_starting_threshold: int = 900  # 15 minutes
 
+    # Job health monitoring settings
+    # How often the job health monitor checks for stuck jobs (seconds)
+    job_health_check_interval: int = 30
+    # Maximum number of automatic retry attempts for failed jobs
+    job_max_retries: int = 2
+    # Job timeout for deploy operations (seconds) - buffer above agent_deploy_timeout
+    job_timeout_deploy: int = 1200  # 20 minutes
+    # Job timeout for destroy operations (seconds) - buffer above agent_destroy_timeout
+    job_timeout_destroy: int = 600  # 10 minutes
+    # Job timeout for sync operations (seconds)
+    job_timeout_sync: int = 600  # 10 minutes
+    # Job timeout for node start/stop operations (seconds)
+    job_timeout_node: int = 300  # 5 minutes
+    # Grace period after timeout before allowing reconciliation (seconds)
+    job_stuck_grace_period: int = 60  # 1 minute
+
     # Feature flags
     feature_multihost_labs: bool = True
     feature_vxlan_overlay: bool = True
