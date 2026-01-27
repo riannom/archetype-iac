@@ -639,7 +639,11 @@ async def run_node_sync(
             if ns.desired_state == "running":
                 if ns.actual_state in ("undeployed", "pending"):
                     nodes_need_deploy.append(ns)
-                elif ns.actual_state == "stopped":
+                elif ns.actual_state in ("stopped", "error"):
+                    # Both stopped and error states can be started via docker start
+                    # Error state may be from intentional stop (exit code 137/143) or crash
+                    # Either way, try starting first - if container doesn't exist, it will fail
+                    # and we can fall back to deploy
                     nodes_need_start.append(ns)
                 # If already running, nothing to do
             elif ns.desired_state == "stopped":
@@ -755,6 +759,7 @@ async def run_node_sync(
                 logger.exception(f"Deploy failed in sync job {job_id}: {e}")
 
         # Phase 2: Start nodes that are stopped but should be running
+        nodes_need_redeploy = []  # Nodes that failed to start and need full redeploy
         if nodes_need_start:
             log_parts.append("")
             log_parts.append("=== Phase 2: Start Nodes ===")
@@ -772,15 +777,75 @@ async def run_node_sync(
                         ns.error_message = None
                         log_parts.append(f"  {ns.node_name}: started")
                     else:
-                        ns.actual_state = "error"
-                        ns.error_message = result.get("error", "Start failed")
-                        log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+                        error_msg = result.get("error", "Start failed")
+                        # If container not found, we need to redeploy
+                        if "not found" in error_msg.lower() or "no such container" in error_msg.lower():
+                            log_parts.append(f"  {ns.node_name}: container not found, will redeploy")
+                            nodes_need_redeploy.append(ns)
+                        else:
+                            ns.actual_state = "error"
+                            ns.error_message = error_msg
+                            log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
                 except Exception as e:
-                    ns.actual_state = "error"
-                    ns.error_message = str(e)
-                    log_parts.append(f"  {ns.node_name}: FAILED - {e}")
+                    error_str = str(e)
+                    if "not found" in error_str.lower() or "no such container" in error_str.lower():
+                        log_parts.append(f"  {ns.node_name}: container not found, will redeploy")
+                        nodes_need_redeploy.append(ns)
+                    else:
+                        ns.actual_state = "error"
+                        ns.error_message = error_str
+                        log_parts.append(f"  {ns.node_name}: FAILED - {e}")
 
             session.commit()
+
+        # Phase 2b: If any nodes need redeploy (container didn't exist), deploy the topology
+        if nodes_need_redeploy:
+            log_parts.append("")
+            log_parts.append("=== Phase 2b: Redeploy (containers missing) ===")
+
+            # Read topology YAML
+            topo_path = topology_path(lab.id)
+            if not topo_path.exists():
+                error_msg = "No topology file found"
+                for ns in nodes_need_redeploy:
+                    ns.actual_state = "error"
+                    ns.error_message = error_msg
+                session.commit()
+                log_parts.append(f"Redeploy FAILED: {error_msg}")
+            else:
+                topology_yaml = topo_path.read_text(encoding="utf-8")
+                graph = yaml_to_graph(topology_yaml)
+                clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+
+                log_parts.append(f"Redeploying topology with {len(graph.nodes)} nodes...")
+
+                try:
+                    result = await agent_client.deploy_to_agent(
+                        agent, job_id, lab_id, clab_yaml, provider=provider
+                    )
+
+                    if result.get("status") == "completed":
+                        log_parts.append("Redeploy completed successfully")
+                        # Mark redeployed nodes as running
+                        for ns in nodes_need_redeploy:
+                            ns.actual_state = "running"
+                            ns.error_message = None
+                    else:
+                        error_msg = result.get("error_message", "Redeploy failed")
+                        log_parts.append(f"Redeploy FAILED: {error_msg}")
+                        for ns in nodes_need_redeploy:
+                            ns.actual_state = "error"
+                            ns.error_message = error_msg
+
+                except Exception as e:
+                    error_msg = str(e)
+                    log_parts.append(f"Redeploy FAILED: {error_msg}")
+                    for ns in nodes_need_redeploy:
+                        ns.actual_state = "error"
+                        ns.error_message = error_msg
+                    logger.exception(f"Redeploy failed in sync job {job_id}: {e}")
+
+                session.commit()
 
         # Phase 3: Stop nodes that are running but should be stopped
         if nodes_need_stop:

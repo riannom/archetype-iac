@@ -84,21 +84,33 @@ def _find_node_state(
     )
 
 
-def _event_type_to_actual_state(event_type: str, status: str) -> str:
+def _event_type_to_actual_state(
+    event_type: str, status: str, current_state: str | None = None
+) -> str:
     """Map event type to NodeState.actual_state value.
 
     Args:
         event_type: Event type from agent (started, stopped, died, etc.)
-        status: Status string with additional details
+        status: Status string with additional details (e.g., "exited (code 137)")
+        current_state: Current actual_state, used to prevent invalid transitions
 
     Returns:
-        Appropriate actual_state value
+        Appropriate actual_state value, or empty string to skip update
     """
     if event_type == "started":
         return "running"
     elif event_type in ("stopped", "stop"):
         return "stopped"
     elif event_type in ("died", "kill", "oom"):
+        # Exit code 137 = SIGKILL (128 + 9), typically from docker stop
+        # Exit code 143 = SIGTERM (128 + 15), also from docker stop
+        # These are intentional stops, not errors
+        if "code 137" in status or "code 143" in status:
+            return "stopped"
+        # Don't downgrade from "stopped" to "error" - this can happen when
+        # events arrive out of order (die after stop)
+        if current_state == "stopped":
+            return ""  # Skip update
         return "error"
     elif event_type == "creating":
         return "pending"
@@ -149,17 +161,20 @@ async def receive_node_event(
             message="NodeState not found (ignored)",
         )
 
-    # Map event type to actual_state
-    new_state = _event_type_to_actual_state(payload.event_type, payload.status)
-    if not new_state:
-        logger.debug(f"Unknown event type: {payload.event_type}")
-        return schemas.NodeEventResponse(
-            success=True,
-            message="Unknown event type (ignored)",
-        )
-
     # Update the NodeState
     old_state = node_state.actual_state
+
+    # Map event type to actual_state, considering current state
+    new_state = _event_type_to_actual_state(
+        payload.event_type, payload.status, current_state=old_state
+    )
+    if not new_state:
+        logger.debug(f"Event type {payload.event_type} ignored (no state change)")
+        return schemas.NodeEventResponse(
+            success=True,
+            message="Event ignored (no state change)",
+        )
+
     node_state.actual_state = new_state
 
     # Set or clear error message
@@ -211,12 +226,14 @@ async def receive_batch_events(
             if not node_state:
                 continue
 
-            # Map and update state
-            new_state = _event_type_to_actual_state(payload.event_type, payload.status)
+            # Map and update state, considering current state
+            old_state = node_state.actual_state
+            new_state = _event_type_to_actual_state(
+                payload.event_type, payload.status, current_state=old_state
+            )
             if not new_state:
                 continue
 
-            old_state = node_state.actual_state
             node_state.actual_state = new_state
 
             if new_state == "error":
