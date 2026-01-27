@@ -369,7 +369,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
         <div className="flex flex-col gap-2 p-3 bg-sage-500/5 border border-sage-500/10 rounded-lg">
           <div className="flex items-center gap-2 text-[10px] font-bold text-sage-600 dark:text-sage-400 uppercase tracking-tight">
             <i className="fa-solid fa-lightbulb"></i>
-            <span>IaC Canvas</span>
+            <span>Network Canvas</span>
           </div>
           <p className="text-[9px] text-stone-500 dark:text-stone-400 leading-relaxed">
             Drag devices onto the grid to build your topology.

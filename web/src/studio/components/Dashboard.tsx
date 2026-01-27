@@ -97,7 +97,7 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
           <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
           <div>
             <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
-            <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Visual Studio</p>
+            <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Network Studio</p>
           </div>
         </div>
 
@@ -252,7 +252,7 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
       </main>
 
       <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
-        <span>© 2024 Archetype Visual Studio | Professional Edition</span>
+        <span>© 2024 Archetype Network Studio | Professional Edition</span>
         <div className="flex gap-4">
           <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">Documentation</a>
           <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">API Status</a>

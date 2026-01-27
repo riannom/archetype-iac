@@ -25,7 +25,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
         <div className="flex flex-col items-center mb-10">
           <ArchetypeIcon size={56} className="text-sage-600 dark:text-sage-400 mb-4" />
           <h1 className="text-4xl font-black text-stone-900 dark:text-white tracking-tighter uppercase">ARCHETYPE</h1>
-          <p className="text-sage-600 dark:text-sage-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">Visual Studio</p>
+          <p className="text-sage-600 dark:text-sage-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">Network Studio</p>
         </div>
 
         <div className="bg-white/60 dark:bg-stone-900/50 backdrop-blur-xl border border-stone-200 dark:border-stone-800 p-8 rounded-3xl shadow-2xl">

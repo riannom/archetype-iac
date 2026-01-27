@@ -83,7 +83,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
                 ARCHETYPE
               </span>
               <span className="text-[9px] text-sage-600 dark:text-sage-500 font-bold tracking-[0.2em] uppercase">
-                Visual Studio
+                Network Studio
               </span>
             </div>
           </div>
