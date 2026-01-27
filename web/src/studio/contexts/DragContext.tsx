@@ -27,6 +27,7 @@ interface DragContextValue {
   setDragOverDevice: (deviceId: string | null, isValid: boolean) => void;
   assignImageToDevice: (imageId: string, deviceId: string, isDefault?: boolean) => Promise<void>;
   unassignImage: (imageId: string) => Promise<void>;
+  deleteImage: (imageId: string) => Promise<void>;
 }
 
 const DragContext = createContext<DragContextValue | null>(null);
@@ -96,6 +97,13 @@ export const DragProvider: React.FC<DragProviderProps> = ({ children, onImageAss
     onImageAssigned?.();
   }, [onImageAssigned]);
 
+  const deleteImage = useCallback(async (imageId: string) => {
+    await apiRequest(`/images/library/${encodeURIComponent(imageId)}`, {
+      method: 'DELETE',
+    });
+    onImageAssigned?.();
+  }, [onImageAssigned]);
+
   return (
     <DragContext.Provider
       value={{
@@ -105,6 +113,7 @@ export const DragProvider: React.FC<DragProviderProps> = ({ children, onImageAss
         setDragOverDevice,
         assignImageToDevice,
         unassignImage,
+        deleteImage,
       }}
     >
       {children}

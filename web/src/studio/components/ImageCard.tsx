@@ -6,6 +6,7 @@ interface ImageCardProps {
   image: ImageLibraryEntry;
   onUnassign?: () => void;
   onSetDefault?: () => void;
+  onDelete?: () => void;
   compact?: boolean;
 }
 
@@ -13,6 +14,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
   image,
   onUnassign,
   onSetDefault,
+  onDelete,
   compact = false,
 }) => {
   const { dragState } = useDragContext();
@@ -159,10 +161,24 @@ const ImageCard: React.FC<ImageCardProps> = ({
                   e.stopPropagation();
                   onUnassign();
                 }}
-                className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-stone-400 hover:text-red-500"
-                title="Unassign"
+                className="p-1.5 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded text-stone-400 hover:text-amber-600"
+                title="Unassign from device"
               >
-                <i className="fa-solid fa-xmark text-xs" />
+                <i className="fa-solid fa-link-slash text-xs" />
+              </button>
+            )}
+            {onDelete && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm('Delete this image from the library? This cannot be undone.')) {
+                    onDelete();
+                  }
+                }}
+                className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-stone-400 hover:text-red-500"
+                title="Delete image"
+              >
+                <i className="fa-solid fa-trash text-xs" />
               </button>
             )}
           </div>

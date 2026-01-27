@@ -36,7 +36,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   onUploadQcow2,
   onRefresh,
 }) => {
-  const { dragState, unassignImage, assignImageToDevice } = useDragContext();
+  const { dragState, unassignImage, assignImageToDevice, deleteImage } = useDragContext();
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [qcow2Progress, setQcow2Progress] = useState<number | null>(null);
@@ -274,6 +274,16 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       onRefresh();
     } catch (error) {
       console.error('Failed to set default image:', error);
+    }
+  };
+
+  const handleDeleteImage = async (imageId: string) => {
+    try {
+      await deleteImage(imageId);
+      onRefresh();
+    } catch (error) {
+      console.error('Failed to delete image:', error);
+      alert(error instanceof Error ? error.message : 'Failed to delete image');
     }
   };
 
@@ -572,6 +582,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                         key={img.id}
                         image={img}
                         onUnassign={() => handleUnassignImage(img.id)}
+                        onDelete={() => handleDeleteImage(img.id)}
                       />
                     ))}
                   </div>
@@ -597,6 +608,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                           image={img}
                           onUnassign={() => handleUnassignImage(img.id)}
                           onSetDefault={() => handleSetDefaultImage(img.id, deviceId)}
+                          onDelete={() => handleDeleteImage(img.id)}
                         />
                       ))}
                     </div>
