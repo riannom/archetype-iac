@@ -42,7 +42,7 @@ export const DEVICE_CATEGORIES: DeviceCategory[] = [
       {
         name: 'Switches',
         models: [
-          { id: 'eos', type: DeviceType.SWITCH, vendor: 'Arista', name: 'Arista EOS', icon: 'fa-arrows-left-right-to-line', versions: ['4.28.0F', '4.27.1F'], isActive: true },
+          { id: 'eos', type: DeviceType.SWITCH, vendor: 'Arista', name: 'Arista EOS', icon: 'fa-arrows-left-right-to-line', versions: ['4.35.1F', '4.28.0F', '4.27.1F'], isActive: true },
           { id: 'cumulus', type: DeviceType.SWITCH, vendor: 'Nvidia', name: 'Nvidia Cumulus', icon: 'fa-arrows-left-right-to-line', versions: ['4.4.0', '5.0.1'], isActive: true },
           { id: 'nxos', type: DeviceType.SWITCH, vendor: 'Cisco', name: 'Cisco NX-OSv', icon: 'fa-arrows-left-right-to-line', versions: ['9.3.9'], isActive: false },
         ]

@@ -324,8 +324,17 @@ def list_node_states(
     """Get all node states for a lab.
 
     Returns the desired and actual state for each node in the topology.
+    Auto-creates missing NodeState records for labs with existing topologies.
     """
-    get_lab_or_404(lab_id, database, current_user)
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Check if topology exists and sync NodeState records
+    topo_path = topology_path(lab.id)
+    if topo_path.exists():
+        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+        _upsert_node_states(database, lab.id, graph)
+        database.commit()
+
     states = (
         database.query(models.NodeState)
         .filter(models.NodeState.lab_id == lab_id)

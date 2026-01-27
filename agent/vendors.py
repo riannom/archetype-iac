@@ -274,7 +274,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     "ceos": VendorConfig(
         kind="ceos",
         vendor="Arista",
-        console_shell="Cli",  # Case-sensitive! Must be "Cli" not "cli"
+        console_shell="/usr/bin/Cli",  # Full path required for docker exec
         default_image="ceos:latest",
         aliases=["eos", "arista_eos", "arista_ceos"],
         device_type=DeviceType.SWITCH,
@@ -282,7 +282,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         subcategory="Switches",
         label="Arista EOS",
         icon="fa-arrows-left-right-to-line",
-        versions=["4.28.0F", "4.27.1F", "4.26.4M"],
+        versions=["4.35.1F", "4.28.0F", "4.27.1F"],
         is_active=True,
         notes="cEOS requires 'Cli' command for EOS prompt. User must import image.",
         port_naming="Ethernet",

@@ -19,6 +19,8 @@ services:
     depends_on:
       - postgres
       - redis
+    extra_hosts:
+      - "local-agent:host-gateway"
     environment:
       # Database
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://netlab:netlab@postgres:5432/netlab_gui}
@@ -104,15 +106,15 @@ services:
     depends_on:
       - api
     environment:
-      - AURA_AGENT_AGENT_NAME=${AURA_AGENT_NAME:-local-agent}
-      - AURA_AGENT_AGENT_PORT=${AURA_AGENT_PORT:-8001}
-      - AURA_AGENT_CONTROLLER_URL=http://localhost:8000
-      - AURA_AGENT_LOCAL_IP=${AURA_AGENT_LOCAL_IP:-}
-      - AURA_AGENT_ENABLE_CONTAINERLAB=true
-      - AURA_AGENT_ENABLE_VXLAN=true
-      - AURA_AGENT_WORKSPACE_PATH=/var/lib/aura-agent
+      - ARCHETYPE_AGENT_AGENT_NAME=${ARCHETYPE_AGENT_NAME:-local-agent}
+      - ARCHETYPE_AGENT_AGENT_PORT=${ARCHETYPE_AGENT_PORT:-8001}
+      - ARCHETYPE_AGENT_CONTROLLER_URL=http://localhost:8000
+      - ARCHETYPE_AGENT_LOCAL_IP=${ARCHETYPE_AGENT_LOCAL_IP:-}
+      - ARCHETYPE_AGENT_ENABLE_CONTAINERLAB=true
+      - ARCHETYPE_AGENT_ENABLE_VXLAN=true
+      - ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
     volumes:
-      - agent_workspaces:/var/lib/aura-agent
+      - agent_workspaces:/var/lib/archetype-agent
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
