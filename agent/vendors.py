@@ -79,6 +79,7 @@ class VendorConfig:
     port_naming: str = "eth"
     port_start_index: int = 0
     max_ports: int = 16
+    provision_interfaces: bool = False  # Generate dummy interfaces up to max_ports
 
     # Resource requirements
     memory: int = 1024  # Memory in MB
@@ -296,6 +297,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="Ethernet",
         port_start_index=1,
         max_ports=64,
+        provision_interfaces=True,  # cEOS needs dummy interfaces to see ports
         memory=2048,  # 2GB recommended
         cpu=2,
         requires_image=True,

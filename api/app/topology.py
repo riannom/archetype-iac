@@ -16,7 +16,7 @@ from app.schemas import (
     TopologyGraph,
 )
 from app.image_store import find_image_reference
-from agent.vendors import get_kind_for_device, get_default_image
+from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config
 
 
 class _BlockScalarDumper(yaml.SafeDumper):
@@ -418,6 +418,7 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
     nodes: dict[str, Any] = {}
     name_map: dict[str, str] = {}
     used_names: set[str] = set()
+    node_kinds: dict[str, str] = {}  # Track kind per node for interface provisioning
 
     for node in graph.nodes:
         # Use container_name if provided (immutable after first creation),
@@ -439,6 +440,7 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         if node.device:
             kind = get_kind_for_device(node.device)
         node_data["kind"] = kind
+        node_kinds[safe_name] = kind  # Track for interface provisioning
 
         # Use image if specified, otherwise look up from image library or default
         if node.image:
@@ -478,6 +480,13 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
     # Build links in containerlab format
     links = []
     interface_counters: dict[str, int] = {name: 1 for name in used_names}
+    # Track used interface indices per node for dummy link generation
+    used_interfaces: dict[str, set[int]] = {name: set() for name in used_names}
+
+    def _extract_interface_index(iface_name: str) -> int | None:
+        """Extract numeric index from interface name like 'eth1' -> 1."""
+        match = re.search(r'(\d+)$', iface_name)
+        return int(match.group(1)) if match else None
 
     for link in graph.links:
         if len(link.endpoints) != 2:
@@ -505,9 +514,32 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
             iface_b = f"eth{interface_counters.get(node_b, 1)}"
             interface_counters[node_b] = interface_counters.get(node_b, 1) + 1
 
+        # Track used interface indices
+        idx_a = _extract_interface_index(iface_a)
+        idx_b = _extract_interface_index(iface_b)
+        if idx_a is not None and node_a in used_interfaces:
+            used_interfaces[node_a].add(idx_a)
+        if idx_b is not None and node_b in used_interfaces:
+            used_interfaces[node_b].add(idx_b)
+
         links.append({
             "endpoints": [f"{node_a}:{iface_a}", f"{node_b}:{iface_b}"]
         })
+
+    # Generate dummy interfaces for devices that need them
+    for node_name, kind in node_kinds.items():
+        config = get_vendor_config(kind)
+        if config and getattr(config, 'provision_interfaces', False) and config.max_ports > 0:
+            start_idx = config.port_start_index
+            for idx in range(start_idx, start_idx + config.max_ports):
+                if idx not in used_interfaces.get(node_name, set()):
+                    links.append({
+                        "type": "dummy",
+                        "endpoint": {
+                            "node": node_name,
+                            "interface": f"eth{idx}"
+                        }
+                    })
 
     # Generate a unique subnet based on lab_id to avoid conflicts
     # Use hash of lab_id to generate 2nd and 3rd octets (avoiding common ranges)
