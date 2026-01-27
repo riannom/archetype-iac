@@ -309,13 +309,29 @@ const Canvas: React.FC<CanvasProps> = ({
         </svg>
 
         {nodes.map(node => {
-          const status = runtimeStates[node.id] || 'stopped';
+          const status = runtimeStates[node.id];
           const isRouter = node.type === DeviceType.ROUTER;
           const isSwitch = node.type === DeviceType.SWITCH;
 
           let borderRadius = '8px';
           if (isRouter) borderRadius = '50%';
           if (isSwitch) borderRadius = '4px';
+
+          // Status indicator: green=running, gray=stopped, yellow=booting, red=error, no dot=undeployed
+          const getStatusDot = () => {
+            if (!status) return null; // No status = undeployed, no indicator
+            let dotColor = 'bg-stone-400'; // stopped
+            let animate = false;
+            if (status === 'running') dotColor = 'bg-green-500';
+            else if (status === 'booting') { dotColor = 'bg-yellow-500'; animate = true; }
+            else if (status === 'error') dotColor = 'bg-red-500';
+            return (
+              <div
+                className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${dotColor} border-2 border-white dark:border-stone-800 shadow-sm ${animate ? 'animate-pulse' : ''}`}
+                title={status}
+              />
+            );
+          };
 
           return (
             <div
@@ -331,6 +347,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 hover:border-sage-400 z-10 select-none group`}
             >
               <i className={`fa-solid ${getNodeIcon(node.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
+              {getStatusDot()}
               <div className="absolute top-full mt-1 text-[10px] font-bold text-stone-700 dark:text-stone-300 bg-white/90 dark:bg-stone-900/80 px-1 rounded shadow-sm border border-stone-200 dark:border-stone-700 whitespace-nowrap pointer-events-none">
                 {node.name}
               </div>

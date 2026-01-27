@@ -25,6 +25,18 @@ interface LabSummary {
   created_at?: string;
 }
 
+interface NodeStateEntry {
+  id: string;
+  lab_id: string;
+  node_id: string;
+  node_name: string;
+  desired_state: 'stopped' | 'running';
+  actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'error';
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface DeviceCatalogEntry {
   id: string;
   label: string;
@@ -196,6 +208,7 @@ const StudioPage: React.FC = () => {
   const [links, setLinks] = useState<Link[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeStatus>>({});
+  const [nodeStates, setNodeStates] = useState<Record<string, NodeStateEntry>>({});
   const [consoleWindows, setConsoleWindows] = useState<ConsoleWindow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showYamlModal, setShowYamlModal] = useState(false);
@@ -226,6 +239,8 @@ const StudioPage: React.FC = () => {
   const [labStatuses, setLabStatuses] = useState<Record<string, { running: number; total: number }>>({});
   const layoutDirtyRef = useRef(false);
   const saveLayoutTimeoutRef = useRef<number | null>(null);
+  const topologyDirtyRef = useRef(false);
+  const saveTopologyTimeoutRef = useRef<number | null>(null);
   const [systemMetrics, setSystemMetrics] = useState<{
     agents: { online: number; total: number };
     containers: { running: number; total: number };
@@ -358,6 +373,52 @@ const StudioPage: React.FC = () => {
     }, 500);
   }, [activeLab, nodes, annotations, saveLayout]);
 
+  // Save topology to backend (auto-save on changes)
+  const saveTopology = useCallback(
+    async (labId: string, currentNodes: Node[], currentLinks: Link[]) => {
+      if (currentNodes.length === 0) return;
+      const graph: TopologyGraph = {
+        nodes: currentNodes.map((node) => ({
+          id: node.id,
+          name: node.name,
+          device: node.model,
+          version: node.version,
+        })),
+        links: currentLinks.map((link) => ({
+          endpoints: [
+            { node: link.source, ifname: link.sourceInterface },
+            { node: link.target, ifname: link.targetInterface },
+          ],
+        })),
+      };
+      try {
+        await studioRequest(`/labs/${labId}/import-graph`, {
+          method: 'POST',
+          body: JSON.stringify(graph),
+        });
+        topologyDirtyRef.current = false;
+        addTaskLogEntry('info', 'Topology auto-saved');
+      } catch (error) {
+        console.error('Failed to save topology:', error);
+      }
+    },
+    [studioRequest, addTaskLogEntry]
+  );
+
+  // Trigger debounced topology save
+  const triggerTopologySave = useCallback(() => {
+    if (!activeLab) return;
+    topologyDirtyRef.current = true;
+    if (saveTopologyTimeoutRef.current) {
+      window.clearTimeout(saveTopologyTimeoutRef.current);
+    }
+    saveTopologyTimeoutRef.current = window.setTimeout(() => {
+      if (activeLab && topologyDirtyRef.current) {
+        saveTopology(activeLab.id, nodes, links);
+      }
+    }, 2000); // 2 second debounce for topology saves
+  }, [activeLab, nodes, links, saveTopology]);
+
   const loadLabs = useCallback(async () => {
     const data = await studioRequest<{ labs: LabSummary[] }>('/labs');
     setLabs(data.labs || []);
@@ -485,41 +546,39 @@ const StudioPage: React.FC = () => {
     }
   }, [deviceModels, studioRequest, loadLayout]);
 
-  const loadJobs = useCallback(async (labId: string, currentNodes: Node[]) => {
-    // Fetch actual container status from agent
-    let deployedNodeNames = new Set<string>();
-    let deployedStatus = new Map<string, RuntimeStatus>();
+  // Load node states from the backend (per-node desired/actual state)
+  const loadNodeStates = useCallback(async (labId: string, currentNodes: Node[]) => {
     try {
-      const statusData = await studioRequest<{ nodes?: { name: string; status: string }[] }>(`/labs/${labId}/status`);
-      if (statusData.nodes) {
-        statusData.nodes.forEach((node) => {
-          deployedNodeNames.add(node.name);
-          // Map container status to RuntimeStatus
-          const status = node.status === 'running' ? 'running' : node.status === 'exited' ? 'stopped' : 'stopped';
-          deployedStatus.set(node.name, status as RuntimeStatus);
-        });
-      }
-    } catch {
-      // Status endpoint may fail if lab not deployed - that's ok
-    }
+      const data = await studioRequest<{ nodes: NodeStateEntry[] }>(`/labs/${labId}/nodes/states`);
+      const statesByNodeId: Record<string, NodeStateEntry> = {};
+      const runtimeByNodeId: Record<string, RuntimeStatus> = {};
 
+      (data.nodes || []).forEach((state) => {
+        statesByNodeId[state.node_id] = state;
+        // Convert actual_state to RuntimeStatus for display
+        if (state.actual_state === 'running') {
+          runtimeByNodeId[state.node_id] = 'running';
+        } else if (state.actual_state === 'pending') {
+          runtimeByNodeId[state.node_id] = 'booting';
+        } else if (state.actual_state === 'error') {
+          runtimeByNodeId[state.node_id] = 'error';
+        } else if (state.actual_state === 'stopped') {
+          runtimeByNodeId[state.node_id] = 'stopped';
+        }
+        // For 'undeployed', we don't set a runtime status (shows as no status indicator)
+      });
+
+      setNodeStates(statesByNodeId);
+      setRuntimeStates(runtimeByNodeId);
+    } catch {
+      // Node states endpoint may fail for new labs - use job-based fallback
+    }
+  }, [studioRequest]);
+
+  const loadJobs = useCallback(async (labId: string, currentNodes: Node[]) => {
+    // Also load jobs for job log display
     const data = await studioRequest<{ jobs: any[] }>(`/labs/${labId}/jobs`);
     setJobs(data.jobs || []);
-    const statusMap = buildStatusMap(data.jobs || [], currentNodes, deployedNodeNames);
-
-    const next: Record<string, RuntimeStatus> = {};
-    currentNodes.forEach((node) => {
-      // Priority: 1) In-progress job status, 2) Real container status, 3) undefined (no status shown)
-      const jobStatus = statusMap.get(node.id);
-      const realStatus = deployedStatus.get(node.name);
-      if (jobStatus) {
-        next[node.id] = jobStatus;
-      } else if (realStatus) {
-        next[node.id] = realStatus;
-      }
-      // Don't set any status for nodes that aren't deployed and have no active jobs
-    });
-    setRuntimeStates(next);
   }, [studioRequest]);
 
   useEffect(() => {
@@ -554,23 +613,28 @@ const StudioPage: React.FC = () => {
 
   useEffect(() => {
     if (!activeLab || nodes.length === 0) return;
+    loadNodeStates(activeLab.id, nodes);
     loadJobs(activeLab.id, nodes);
-  }, [activeLab, nodes, loadJobs]);
+  }, [activeLab, nodes, loadNodeStates, loadJobs]);
 
-  // Poll for job updates
+  // Poll for node state and job updates
   useEffect(() => {
     if (!activeLab || nodes.length === 0) return;
     const timer = setInterval(() => {
+      loadNodeStates(activeLab.id, nodes);
       loadJobs(activeLab.id, nodes);
     }, 4000);
     return () => clearInterval(timer);
-  }, [activeLab, nodes, loadJobs]);
+  }, [activeLab, nodes, loadNodeStates, loadJobs]);
 
-  // Cleanup: save layout and clear timeout on unmount
+  // Cleanup: save layout/topology and clear timeouts on unmount
   useEffect(() => {
     return () => {
       if (saveLayoutTimeoutRef.current) {
         window.clearTimeout(saveLayoutTimeoutRef.current);
+      }
+      if (saveTopologyTimeoutRef.current) {
+        window.clearTimeout(saveTopologyTimeoutRef.current);
       }
     };
   }, []);
@@ -667,6 +731,8 @@ const StudioPage: React.FC = () => {
     setNodes((prev) => [...prev, newNode]);
     // Don't set any status for new nodes - they should show no status icon until deployed
     setSelectedId(id);
+    // Auto-save topology after a delay
+    setTimeout(() => triggerTopologySave(), 100);
   };
 
   const handleAddAnnotation = (type: AnnotationType) => {
@@ -693,12 +759,37 @@ const StudioPage: React.FC = () => {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const nodeName = node.name;
-    const action = status === 'booting' ? 'start' : status === 'stopped' ? 'stop' : 'restart';
-    addTaskLogEntry('info', `Queuing ${action} for node "${nodeName}"...`);
+
+    // Map RuntimeStatus to desired state
+    const desiredState = status === 'stopped' ? 'stopped' : 'running';
+    const action = desiredState === 'running' ? 'start' : 'stop';
+
+    addTaskLogEntry('info', `Setting "${nodeName}" to ${desiredState}...`);
+
     try {
-      await studioRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeName)}/${action}`, { method: 'POST' });
-      setRuntimeStates((prev) => ({ ...prev, [nodeId]: status }));
-      addTaskLogEntry('success', `Node ${action} queued for "${nodeName}"`);
+      // Step 1: Set desired state
+      await studioRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/desired-state`, {
+        method: 'PUT',
+        body: JSON.stringify({ state: desiredState }),
+      });
+
+      // Optimistically update UI to show pending/booting state
+      setRuntimeStates((prev) => ({ ...prev, [nodeId]: status === 'stopped' ? 'stopped' : 'booting' }));
+
+      // Step 2: Trigger sync to apply the change
+      const syncResult = await studioRequest<{ job_id: string; message: string; nodes_to_sync: string[] }>(
+        `/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/sync`,
+        { method: 'POST' }
+      );
+
+      if (syncResult.job_id) {
+        addTaskLogEntry('success', `Sync job queued for "${nodeName}"`);
+      } else {
+        addTaskLogEntry('info', syncResult.message || `"${nodeName}" already in sync`);
+      }
+
+      // Reload states to get updated actual state
+      setTimeout(() => loadNodeStates(activeLab.id, nodes), 1000);
       loadJobs(activeLab.id, nodes);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Action failed';
@@ -756,14 +847,24 @@ const StudioPage: React.FC = () => {
     };
     setLinks((prev) => [...prev, newLink]);
     setSelectedId(newLink.id);
+    // Auto-save topology
+    triggerTopologySave();
   };
 
   const handleUpdateNode = (id: string, updates: Partial<Node>) => {
     setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, ...updates } : node)));
+    // Auto-save topology if name, model, or version changed
+    if (updates.name || updates.model || updates.version) {
+      triggerTopologySave();
+    }
   };
 
   const handleUpdateLink = (id: string, updates: Partial<Link>) => {
     setLinks((prev) => prev.map((link) => (link.id === id ? { ...link, ...updates } : link)));
+    // Auto-save topology if interface assignments changed
+    if (updates.sourceInterface || updates.targetInterface) {
+      triggerTopologySave();
+    }
   };
 
   const handleUpdateAnnotation = (id: string, updates: Partial<Annotation>) => {
@@ -773,13 +874,19 @@ const StudioPage: React.FC = () => {
 
   const handleDelete = (id: string) => {
     const isAnnotation = annotations.some((ann) => ann.id === id);
+    const isNode = nodes.some((node) => node.id === id);
+    const isLink = links.some((link) => link.id === id);
     setNodes((prev) => prev.filter((node) => node.id !== id));
     setLinks((prev) => prev.filter((link) => link.id !== id && link.source !== id && link.target !== id));
     setAnnotations((prev) => prev.filter((ann) => ann.id !== id));
     setSelectedId(null);
-    // Only trigger layout save if an annotation was deleted (node positions remain the same)
+    // Trigger layout save if an annotation was deleted
     if (isAnnotation) {
       triggerLayoutSave();
+    }
+    // Trigger topology save if a node or link was deleted
+    if (isNode || isLink) {
+      triggerTopologySave();
     }
   };
 
@@ -906,10 +1013,13 @@ const StudioPage: React.FC = () => {
       case 'runtime':
         return (
           <RuntimeControl
+            labId={activeLab?.id || ''}
             nodes={nodes}
             runtimeStates={runtimeStates}
             deviceModels={deviceModels}
             onUpdateStatus={handleUpdateStatus}
+            onRefreshStates={() => loadNodeStates(activeLab?.id || '', nodes)}
+            studioRequest={studioRequest}
           />
         );
       default:
@@ -1028,7 +1138,7 @@ const StudioPage: React.FC = () => {
 
   return (
     <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${backgroundGradient}`}>
-      <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onDeploy={handleDeploy} onExit={() => setActiveLab(null)} />
+      <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onExit={() => setActiveLab(null)} />
       <div className="h-10 bg-white/60 dark:bg-stone-900/60 backdrop-blur-md border-b border-stone-200 dark:border-stone-800 flex px-6 items-center gap-1 shrink-0">
         <button
           onClick={() => setView('designer')}

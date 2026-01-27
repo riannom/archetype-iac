@@ -213,3 +213,41 @@ class LabLayout(BaseModel):
     annotations: list[AnnotationLayout] = []
     links: dict[str, LinkLayout] | None = None  # link_id -> styling
     custom: dict | None = None  # Extensible user metadata
+
+
+# Node state management schemas
+class NodeStateOut(BaseModel):
+    """Output schema for a single node's state."""
+
+    id: str
+    lab_id: str
+    node_id: str
+    node_name: str
+    desired_state: str  # "stopped" or "running"
+    actual_state: str  # "undeployed", "pending", "running", "stopped", "error"
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class NodeStateUpdate(BaseModel):
+    """Input schema for updating a node's desired state."""
+
+    state: str = Field(..., pattern="^(stopped|running)$")
+
+
+class NodeStatesResponse(BaseModel):
+    """Response schema for listing all node states in a lab."""
+
+    nodes: list[NodeStateOut]
+
+
+class SyncResponse(BaseModel):
+    """Response schema for sync operations."""
+
+    job_id: str
+    message: str
+    nodes_to_sync: list[str] = []  # List of node IDs that will be synced
