@@ -38,12 +38,6 @@ interface NodeStateEntry {
   updated_at: string;
 }
 
-interface DeviceCatalogEntry {
-  id: string;
-  label: string;
-  support?: string;
-}
-
 interface DeviceSubCategory {
   name: string;
   models: DeviceModel[];
@@ -71,7 +65,31 @@ const guessDeviceType = (id: string, label: string): DeviceType => {
   return DeviceType.CONTAINER;
 };
 
-const buildDeviceModels = (devices: DeviceCatalogEntry[], images: ImageLibraryEntry[], customDevices: CustomDevice[]): DeviceModel[] => {
+/**
+ * Flatten vendor categories into a flat list of DeviceModels
+ */
+const flattenVendorCategories = (categories: DeviceCategory[]): DeviceModel[] => {
+  return categories.flatMap(cat => {
+    if (cat.subCategories) {
+      return cat.subCategories.flatMap(sub => sub.models);
+    }
+    return cat.models || [];
+  });
+};
+
+/**
+ * Build device models by merging vendor registry with image library data
+ */
+const buildDeviceModels = (
+  vendorCategories: DeviceCategory[],
+  images: ImageLibraryEntry[],
+  customDevices: CustomDevice[]
+): DeviceModel[] => {
+  // Get all devices from vendor registry
+  const vendorDevices = flattenVendorCategories(vendorCategories);
+  const vendorDeviceMap = new Map(vendorDevices.map(d => [d.id, d]));
+
+  // Collect versions from image library
   const versionsByDevice = new Map<string, Set<string>>();
   const imageDeviceIds = new Set<string>();
   images.forEach((image) => {
@@ -84,27 +102,51 @@ const buildDeviceModels = (devices: DeviceCatalogEntry[], images: ImageLibraryEn
     versionsByDevice.set(image.device_id, versions);
   });
 
-  const catalogMap = new Map(devices.map((device) => [device.id, device]));
-  const customMap = new Map(customDevices.map((device) => [device.id, device]));
-  const deviceIds = new Set<string>(devices.map((device) => device.id));
-  imageDeviceIds.forEach((deviceId) => deviceIds.add(deviceId));
-  customDevices.forEach((device) => deviceIds.add(device.id));
-
-  return Array.from(deviceIds).map((deviceId) => {
-    const device = catalogMap.get(deviceId);
-    const custom = customMap.get(deviceId);
-    const label = device?.label || custom?.label || deviceId;
-    const versions = Array.from(versionsByDevice.get(deviceId) || []);
+  // Start with vendor devices (preserves rich metadata like icons, types, vendors)
+  const result: DeviceModel[] = vendorDevices.map(device => {
+    const imageVersions = Array.from(versionsByDevice.get(device.id) || []);
     return {
-      id: deviceId,
-      type: guessDeviceType(deviceId, label),
-      name: label,
-      icon: DEFAULT_ICON,
-      versions: versions.length > 0 ? versions : ['default'],
-      isActive: true,
-      vendor: device?.support || custom?.label ? 'custom' : 'custom',
+      ...device,
+      // Merge versions from both vendor registry and image library
+      versions: imageVersions.length > 0
+        ? [...new Set([...device.versions, ...imageVersions])]
+        : device.versions,
     };
   });
+
+  // Add custom devices that aren't in vendor registry
+  customDevices.forEach(custom => {
+    if (!vendorDeviceMap.has(custom.id)) {
+      const imageVersions = Array.from(versionsByDevice.get(custom.id) || []);
+      result.push({
+        id: custom.id,
+        type: 'container' as DeviceModel['type'],
+        name: custom.label,
+        icon: 'fa-microchip',
+        versions: imageVersions.length > 0 ? imageVersions : ['default'],
+        isActive: true,
+        vendor: 'custom',
+      });
+    }
+  });
+
+  // Add devices that have images but aren't in vendor registry or custom
+  imageDeviceIds.forEach(deviceId => {
+    if (!vendorDeviceMap.has(deviceId) && !customDevices.find(c => c.id === deviceId)) {
+      const imageVersions = Array.from(versionsByDevice.get(deviceId) || []);
+      result.push({
+        id: deviceId,
+        type: 'container' as DeviceModel['type'],
+        name: deviceId,
+        icon: 'fa-microchip',
+        versions: imageVersions.length > 0 ? imageVersions : ['default'],
+        isActive: true,
+        vendor: 'unknown',
+      });
+    }
+  });
+
+  return result;
 };
 
 const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] => {
@@ -214,7 +256,6 @@ const StudioPage: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
-  const [deviceCatalog, setDeviceCatalog] = useState<DeviceCatalogEntry[]>([]);
   const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
   const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
   const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
@@ -278,8 +319,8 @@ const StudioPage: React.FC = () => {
   const clearTaskLog = useCallback(() => setTaskLog([]), []);
 
   const deviceModels = useMemo(
-    () => buildDeviceModels(deviceCatalog, imageLibrary, customDevices),
-    [deviceCatalog, imageLibrary, customDevices]
+    () => buildDeviceModels(vendorCategories, imageLibrary, customDevices),
+    [vendorCategories, imageLibrary, customDevices]
   );
   const deviceCategories = useMemo<DeviceCategory[]>(() => {
     // Use vendor categories from API if available, otherwise fall back to flat structure
@@ -426,13 +467,11 @@ const StudioPage: React.FC = () => {
   }, [studioRequest]);
 
   const loadDevices = useCallback(async () => {
-    const data = await studioRequest<{ devices?: DeviceCatalogEntry[] }>('/devices');
-    setDeviceCatalog(data.devices || []);
     const imageData = await studioRequest<{ images?: Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }> }>('/images');
     setImageCatalog(imageData.images || {});
     const libraryData = await studioRequest<{ images?: ImageLibraryEntry[] }>('/images/library');
     setImageLibrary(libraryData.images || []);
-    // Load vendor categories from unified registry
+    // Load vendor categories from unified registry (provides device catalog + rich metadata)
     const vendorData = await studioRequest<DeviceCategory[]>('/vendors');
     setVendorCategories(vendorData || []);
   }, [studioRequest]);
