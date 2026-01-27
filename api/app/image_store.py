@@ -88,6 +88,11 @@ def custom_devices_path() -> Path:
     return ensure_image_store() / "custom_devices.json"
 
 
+def hidden_devices_path() -> Path:
+    """Path to the hidden devices JSON file."""
+    return ensure_image_store() / "hidden_devices.json"
+
+
 def load_custom_devices() -> list[dict]:
     """Load custom device types from storage."""
     path = custom_devices_path()
@@ -95,6 +100,52 @@ def load_custom_devices() -> list[dict]:
         return []
     data = json.loads(path.read_text(encoding="utf-8"))
     return data.get("devices", [])
+
+
+def load_hidden_devices() -> list[str]:
+    """Load list of hidden device IDs."""
+    path = hidden_devices_path()
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data.get("hidden", [])
+
+
+def save_hidden_devices(hidden: list[str]) -> None:
+    """Save list of hidden device IDs."""
+    path = hidden_devices_path()
+    path.write_text(json.dumps({"hidden": hidden}, indent=2), encoding="utf-8")
+
+
+def hide_device(device_id: str) -> bool:
+    """Hide a device by adding it to the hidden list.
+
+    Returns True if device was added, False if already hidden.
+    """
+    hidden = load_hidden_devices()
+    if device_id in hidden:
+        return False
+    hidden.append(device_id)
+    save_hidden_devices(hidden)
+    return True
+
+
+def unhide_device(device_id: str) -> bool:
+    """Unhide a device by removing it from the hidden list.
+
+    Returns True if device was removed, False if not in list.
+    """
+    hidden = load_hidden_devices()
+    if device_id not in hidden:
+        return False
+    hidden.remove(device_id)
+    save_hidden_devices(hidden)
+    return True
+
+
+def is_device_hidden(device_id: str) -> bool:
+    """Check if a device is hidden."""
+    return device_id in load_hidden_devices()
 
 
 def save_custom_devices(devices: list[dict]) -> None:

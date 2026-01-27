@@ -134,14 +134,36 @@ def list_vendors() -> list[dict]:
     including their categories, icons, versions, and availability status.
     Data is sourced from the centralized vendor registry in agent/vendors.py,
     merged with any custom device types defined per installation.
+    Hidden devices are filtered out.
     """
     from agent.vendors import get_vendors_for_ui
-    from app.image_store import load_custom_devices
+    from app.image_store import load_custom_devices, load_hidden_devices
 
     # Get base vendor configs
     result = get_vendors_for_ui()
 
-    # Load custom devices and merge them
+    # Load hidden device IDs
+    hidden_ids = set(load_hidden_devices())
+
+    # Filter out hidden devices from vendor registry
+    def filter_models(models: list[dict]) -> list[dict]:
+        return [m for m in models if m.get("id") not in hidden_ids]
+
+    for cat_data in result:
+        if "subCategories" in cat_data:
+            for subcat in cat_data["subCategories"]:
+                subcat["models"] = filter_models(subcat.get("models", []))
+            # Remove empty subcategories
+            cat_data["subCategories"] = [
+                s for s in cat_data["subCategories"] if s.get("models")
+            ]
+        elif "models" in cat_data:
+            cat_data["models"] = filter_models(cat_data.get("models", []))
+
+    # Remove empty categories
+    result = [c for c in result if c.get("models") or c.get("subCategories")]
+
+    # Load custom devices and merge them (custom devices aren't hidden)
     custom_devices = load_custom_devices()
     if custom_devices:
         # Group custom devices by category
@@ -158,7 +180,7 @@ def list_vendors() -> list[dict]:
             if cat_name in custom_by_category:
                 # Add to existing category
                 if "subCategories" in cat_data:
-                    # Find "Other" subcategory or create one
+                    # Find "Custom" subcategory or create one
                     other_subcat = None
                     for subcat in cat_data["subCategories"]:
                         if subcat.get("name") == "Custom":
@@ -244,47 +266,105 @@ def add_custom_device(
 
 
 @app.delete("/vendors/{device_id}")
-def delete_custom_device(
+def delete_device(
     device_id: str,
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
-    """Delete a custom device type.
+    """Delete or hide a device type.
 
-    Only custom devices with no images assigned can be deleted.
-    Built-in vendor devices cannot be deleted.
+    - Custom devices: Permanently deleted (only if no images assigned)
+    - Built-in devices: Hidden from the UI (can be restored later)
+
+    Both require no images to be assigned to the device.
+    Accepts device IDs or aliases (e.g., 'eos' or 'ceos' both work for Arista EOS).
     """
     from app.image_store import (
         find_custom_device,
         delete_custom_device as store_delete_device,
         get_device_image_count,
+        hide_device,
+        is_device_hidden,
     )
-    from agent.vendors import VENDOR_CONFIGS
+    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
 
-    # Check if it's a built-in vendor device
-    if device_id in VENDOR_CONFIGS:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot delete built-in vendor devices"
-        )
+    # Resolve alias to canonical device ID (for vendor registry lookup)
+    canonical_id = get_kind_for_device(device_id)
 
-    # Check if custom device exists
-    device = find_custom_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Custom device not found")
-
-    # Check if any images are assigned to this device
+    # Check if any images are assigned to this device (check both original and canonical)
     image_count = get_device_image_count(device_id)
+    if canonical_id != device_id:
+        image_count += get_device_image_count(canonical_id)
     if image_count > 0:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot delete device with {image_count} assigned image(s). Unassign images first."
         )
 
+    # Check if it's a built-in vendor device (use canonical ID)
+    if canonical_id in VENDOR_CONFIGS:
+        # Check if already hidden (we hide by the device_id used in UI, which is the alias)
+        if is_device_hidden(device_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Device '{device_id}' is already hidden"
+            )
+        # Hide instead of delete - use the device_id as passed (the alias shown in UI)
+        hide_device(device_id)
+        return {"message": f"Built-in device '{device_id}' hidden successfully"}
+
+    # Check if custom device exists
+    device = find_custom_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
     deleted = store_delete_device(device_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    return {"message": f"Device '{device_id}' deleted successfully"}
+    return {"message": f"Custom device '{device_id}' deleted successfully"}
+
+
+@app.post("/vendors/{device_id}/restore")
+def restore_hidden_device(
+    device_id: str,
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Restore a hidden built-in device type.
+
+    Only built-in devices that have been hidden can be restored.
+    Accepts device IDs or aliases.
+    """
+    from app.image_store import unhide_device, is_device_hidden
+    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
+
+    # Resolve alias to canonical device ID
+    canonical_id = get_kind_for_device(device_id)
+
+    # Check if it's a built-in vendor device
+    if canonical_id not in VENDOR_CONFIGS:
+        raise HTTPException(
+            status_code=400,
+            detail="Only built-in devices can be restored"
+        )
+
+    # Check if it's actually hidden
+    if not is_device_hidden(device_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Device '{device_id}' is not hidden"
+        )
+
+    unhide_device(device_id)
+    return {"message": f"Device '{device_id}' restored successfully"}
+
+
+@app.get("/vendors/hidden")
+def list_hidden_devices(
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """List all hidden built-in devices."""
+    from app.image_store import load_hidden_devices
+    return {"hidden": load_hidden_devices()}
 
 
 @app.put("/vendors/{device_id}")
