@@ -18,6 +18,26 @@ from app.schemas import (
 from app.image_store import find_image_reference
 from agent.vendors import get_kind_for_device, get_default_image
 
+
+class _BlockScalarDumper(yaml.SafeDumper):
+    """Custom YAML dumper that uses block scalar style for multi-line strings.
+
+    This ensures startup-config and other multi-line strings are formatted
+    with the '|' block scalar indicator for better readability and compatibility.
+    """
+    pass
+
+
+def _str_representer(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+    """Represent multi-line strings with block scalar style."""
+    if "\n" in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+_BlockScalarDumper.add_representer(str, _str_representer)
+
+
 LINK_ATTRS = {
     "bandwidth",
     "bridge",
@@ -35,6 +55,43 @@ LINK_ATTRS = {
 }
 
 _NODE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,15}$")
+
+# Base startup-config for cEOS nodes
+# - Disables ZeroTouch provisioning (allows saving config)
+# - Configures AAA authorization (allows copy commands)
+# - Enables standard routing protocols model
+CEOS_BASE_STARTUP_CONFIG = """\
+! Archetype base configuration for cEOS
+! Enables config persistence via 'copy run start' or 'write memory'
+!
+no aaa root
+!
+aaa authorization exec default local
+aaa authorization commands all default local
+!
+no service interface inactive port-id allocation disabled
+!
+transceiver qsfp default-mode 4x10G
+!
+service routing protocols model multi-agent
+!
+agent PowerManager shutdown
+agent LedPolicy shutdown
+agent Thermostat shutdown
+agent PowerFuse shutdown
+agent StandbyCpld shutdown
+agent LicenseManager shutdown
+!
+spanning-tree mode mstp
+!
+system l1
+   unsupported speed action error
+   unsupported error-correction action error
+!
+no ip routing
+!
+end
+"""
 
 
 def _safe_node_name(name: str, used: set[str]) -> str:
@@ -72,6 +129,9 @@ def graph_to_yaml(graph: TopologyGraph) -> str:
         name_map[node.id] = safe_name
         used_names.add(safe_name)
         node_data: dict[str, Any] = {}
+        # Store GUI ID to preserve identity through YAML round-trips
+        if node.id != node.name:
+            node_data["_gui_id"] = node.id
         if node.device:
             node_data["device"] = node.device
         if node.image:
@@ -191,7 +251,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
     links_data = data.get("links", [])
 
     # Fields that are parsed as explicit GraphNode attributes (not stored in vars)
-    node_explicit_fields = {"device", "image", "version", "role", "mgmt", "network-mode", "host"}
+    node_explicit_fields = {"device", "image", "version", "role", "mgmt", "network-mode", "host", "_gui_id"}
 
     nodes: list[GraphNode] = []
     if isinstance(nodes_data, list):
@@ -200,9 +260,11 @@ def yaml_to_graph(content: str) -> TopologyGraph:
     elif isinstance(nodes_data, dict):
         for name, attrs in nodes_data.items():
             attrs = attrs or {}
+            # Use _gui_id if present, otherwise fall back to name
+            node_id = attrs.get("_gui_id", name)
             nodes.append(
                 GraphNode(
-                    id=str(name),
+                    id=str(node_id),
                     name=str(name),
                     device=attrs.get("device"),
                     image=attrs.get("image"),
@@ -360,6 +422,11 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         if node.network_mode:
             node_data["network-mode"] = node.network_mode
 
+        # Add startup-config for cEOS nodes to enable config persistence
+        # This disables ZTP and configures AAA to allow 'copy run start'
+        if kind == "ceos":
+            node_data["startup-config"] = CEOS_BASE_STARTUP_CONFIG
+
         # Add any other vars that containerlab might use
         if node.vars:
             for k, v in node.vars.items():
@@ -430,7 +497,8 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
     if links:
         topology["topology"]["links"] = links
 
-    return yaml.safe_dump(topology, sort_keys=False)
+    # Use custom dumper for proper block scalar style on multi-line strings
+    return yaml.dump(topology, Dumper=_BlockScalarDumper, sort_keys=False)
 
 
 def split_topology_by_host(

@@ -10,9 +10,11 @@ from app.schemas import (
 )
 from app.topology import (
     analyze_topology,
+    graph_to_containerlab_yaml,
     graph_to_yaml,
     split_topology_by_host,
     yaml_to_graph,
+    CEOS_BASE_STARTUP_CONFIG,
 )
 
 
@@ -525,6 +527,139 @@ def test_mixed_internal_and_external_links():
         if ep.type != "node"
     )
     assert external_count == 2
+
+
+# --- Containerlab YAML Generation Tests ---
+
+def test_containerlab_yaml_ceos_has_startup_config():
+    """Test that cEOS nodes get startup-config in containerlab YAML."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="ceos"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+
+    # Verify startup-config is present
+    assert "startup-config:" in yaml_str
+    # Verify AAA authorization is configured (key for config persistence)
+    assert "aaa authorization exec default local" in yaml_str
+    assert "aaa authorization commands all default local" in yaml_str
+
+
+def test_containerlab_yaml_ceos_uses_block_scalar():
+    """Test that startup-config uses YAML block scalar style."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="ceos"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+
+    # Block scalar style uses '|' indicator
+    assert "startup-config: |" in yaml_str
+
+
+def test_containerlab_yaml_linux_no_startup_config():
+    """Test that non-cEOS nodes don't get startup-config."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="h1", name="H1", device="linux"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+
+    # Linux nodes shouldn't have startup-config
+    assert "startup-config:" not in yaml_str
+
+
+def test_containerlab_yaml_mixed_nodes():
+    """Test topology with both cEOS and non-cEOS nodes."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="ceos"),
+            GraphNode(id="r2", name="R2", device="eos"),  # alias for ceos
+            GraphNode(id="h1", name="H1", device="linux"),
+            GraphNode(id="s1", name="S1", device="srlinux"),
+        ],
+        links=[
+            GraphLink(endpoints=[
+                GraphEndpoint(node="R1"),
+                GraphEndpoint(node="R2"),
+            ]),
+            GraphLink(endpoints=[
+                GraphEndpoint(node="R1"),
+                GraphEndpoint(node="H1"),
+            ]),
+        ],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+
+    # Count occurrences of startup-config (should be 2 for R1 and R2)
+    startup_config_count = yaml_str.count("startup-config: |")
+    assert startup_config_count == 2, f"Expected 2 startup-configs, got {startup_config_count}"
+
+
+def test_containerlab_yaml_ceos_config_has_required_lines():
+    """Test that cEOS startup-config contains all required configuration."""
+    # Verify the base config constant has required lines
+    assert "no aaa root" in CEOS_BASE_STARTUP_CONFIG
+    assert "aaa authorization exec default local" in CEOS_BASE_STARTUP_CONFIG
+    assert "aaa authorization commands all default local" in CEOS_BASE_STARTUP_CONFIG
+    assert "end" in CEOS_BASE_STARTUP_CONFIG
+
+
+def test_containerlab_yaml_structure():
+    """Test that containerlab YAML has correct structure."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="ceos"),
+            GraphNode(id="h1", name="H1", device="linux"),
+        ],
+        links=[
+            GraphLink(endpoints=[
+                GraphEndpoint(node="R1"),
+                GraphEndpoint(node="H1"),
+            ]),
+        ],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "my-lab-123")
+
+    # Verify basic structure
+    assert "name:" in yaml_str
+    assert "topology:" in yaml_str
+    assert "nodes:" in yaml_str
+    assert "links:" in yaml_str
+    assert "endpoints:" in yaml_str
+
+    # Verify kind is set (containerlab uses kind, not device)
+    assert "kind: ceos" in yaml_str
+    assert "kind: linux" in yaml_str
+
+
+def test_containerlab_yaml_ceos_alias_resolution():
+    """Test that cEOS aliases (eos, arista_eos, etc.) get startup-config."""
+    # Test with 'eos' alias
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="eos"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+
+    # Should still get startup-config since 'eos' resolves to 'ceos'
+    assert "startup-config: |" in yaml_str
+    assert "aaa authorization" in yaml_str
 
 
 # To run these tests:

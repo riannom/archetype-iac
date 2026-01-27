@@ -332,7 +332,7 @@ def remove_layout(
 
 
 @router.get("/labs/{lab_id}/nodes/states")
-def list_node_states(
+async def list_node_states(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -341,7 +341,11 @@ def list_node_states(
 
     Returns the desired and actual state for each node in the topology.
     Auto-creates missing NodeState records for labs with existing topologies.
+    Auto-refreshes stale pending states if no active jobs are running.
     """
+    from app import agent_client
+    from app.utils.lab import get_lab_provider
+
     lab = get_lab_or_404(lab_id, database, current_user)
 
     # Check if topology exists and sync NodeState records
@@ -357,6 +361,49 @@ def list_node_states(
         .order_by(models.NodeState.node_name)
         .all()
     )
+
+    # Auto-fix stale pending states: if any node is "pending" but no active job exists,
+    # refresh from actual container status
+    has_pending = any(s.actual_state == "pending" for s in states)
+    if has_pending:
+        active_job = (
+            database.query(models.Job)
+            .filter(
+                models.Job.lab_id == lab_id,
+                models.Job.status.in_(["pending", "running"]),
+            )
+            .first()
+        )
+        if not active_job:
+            # No active job but states are pending - refresh from container status
+            try:
+                lab_provider = get_lab_provider(lab)
+                agent = await agent_client.get_agent_for_lab(
+                    database, lab, required_provider=lab_provider
+                )
+                if agent:
+                    result = await agent_client.get_lab_status_from_agent(agent, lab.id)
+                    nodes = result.get("nodes", [])
+                    container_status_map = {
+                        n.get("name", ""): n.get("status", "unknown") for n in nodes
+                    }
+                    for ns in states:
+                        if ns.actual_state == "pending":
+                            container_status = container_status_map.get(ns.node_name)
+                            if container_status == "running":
+                                ns.actual_state = "running"
+                                ns.error_message = None
+                            elif container_status in ("stopped", "exited"):
+                                ns.actual_state = "stopped"
+                                ns.error_message = None
+                            elif not container_status:
+                                # Container doesn't exist - mark as undeployed
+                                ns.actual_state = "undeployed"
+                                ns.error_message = None
+                    database.commit()
+            except Exception:
+                pass  # Best effort - don't fail the request if refresh fails
+
     return schemas.NodeStatesResponse(
         nodes=[schemas.NodeStateOut.model_validate(s) for s in states]
     )
