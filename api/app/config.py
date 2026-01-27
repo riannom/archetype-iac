@@ -33,8 +33,10 @@ class Settings(BaseSettings):
     cors_allowed_origins: str = "http://localhost:8090,http://127.0.0.1:8090"
 
     # Agent communication timeouts (seconds)
-    agent_deploy_timeout: float = 300.0
-    agent_destroy_timeout: float = 120.0
+    # Deploy timeout increased to 900s (15 min) for VMs and slow cEOS boots
+    agent_deploy_timeout: float = 900.0
+    # Destroy timeout increased to 300s (5 min) for graceful shutdown
+    agent_destroy_timeout: float = 300.0
     agent_node_action_timeout: float = 60.0
     agent_status_timeout: float = 30.0
     agent_health_check_timeout: float = 5.0
@@ -48,6 +50,14 @@ class Settings(BaseSettings):
     agent_health_check_interval: int = 30
     agent_stale_timeout: int = 90
     agent_cache_ttl: int = 30
+
+    # State reconciliation settings
+    # How often the reconciliation task runs (seconds)
+    reconciliation_interval: int = 30
+    # How long a node can be "pending" before auto-reconcile (seconds)
+    stale_pending_threshold: int = 600  # 10 minutes
+    # How long a lab can be "starting" before auto-reconcile (seconds)
+    stale_starting_threshold: int = 900  # 15 minutes
 
     # Feature flags
     feature_multihost_labs: bool = True

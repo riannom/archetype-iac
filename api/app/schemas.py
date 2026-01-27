@@ -256,3 +256,77 @@ class SyncResponse(BaseModel):
     job_id: str
     message: str
     nodes_to_sync: list[str] = []  # List of node IDs that will be synced
+
+
+# =============================================================================
+# Event Schemas (Phase 2: Real-time state updates)
+# =============================================================================
+
+
+class NodeEventPayload(BaseModel):
+    """Payload for node state change events from agents.
+
+    Agents forward container/VM state changes to the controller
+    for real-time state synchronization.
+    """
+
+    # Agent sending the event
+    agent_id: str
+
+    # Lab and node identification
+    lab_id: str  # Containerlab lab prefix
+    node_name: str  # Node name (clab-node-name label)
+    container_id: str | None = None  # Container/VM ID
+
+    # Event details
+    event_type: str  # started, stopped, died, etc.
+    timestamp: datetime
+    status: str  # Current status string
+
+    # Additional attributes
+    attributes: dict | None = None  # Provider-specific details
+
+
+class NodeEventResponse(BaseModel):
+    """Response to node event submission."""
+
+    success: bool
+    message: str | None = None
+
+
+# =============================================================================
+# Callback Schemas (Phase 3: Async job completion)
+# =============================================================================
+
+
+class JobCallbackPayload(BaseModel):
+    """Payload for job completion callbacks from agents.
+
+    When using async job execution, agents POST results to this
+    callback endpoint when operations complete.
+    """
+
+    # Job identification
+    job_id: str
+    agent_id: str
+
+    # Job result
+    status: str  # completed, failed
+    stdout: str | None = None
+    stderr: str | None = None
+    error_message: str | None = None
+
+    # Node state updates (optional)
+    # Maps node_name -> actual_state for batch updates
+    node_states: dict[str, str] | None = None
+
+    # Timestamps
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class JobCallbackResponse(BaseModel):
+    """Response to job callback submission."""
+
+    success: bool
+    message: str | None = None

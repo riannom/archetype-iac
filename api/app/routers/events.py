@@ -1,0 +1,244 @@
+"""Event receiving endpoints for real-time state updates.
+
+This module provides endpoints for agents to push state change events
+to the controller, enabling real-time state synchronization without polling.
+
+Events are processed immediately and NodeState records are updated
+to reflect the actual container/VM state.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app import db, models, schemas
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/events", tags=["events"])
+
+
+def _find_lab_by_prefix(database: Session, lab_prefix: str) -> models.Lab | None:
+    """Find a lab by its containerlab prefix.
+
+    Containerlab truncates lab IDs to ~20 chars, so we need to find
+    labs that start with the given prefix.
+
+    Args:
+        database: Database session
+        lab_prefix: Containerlab lab prefix from container labels
+
+    Returns:
+        Lab if found, None otherwise
+    """
+    if not lab_prefix:
+        return None
+
+    # Try exact match first
+    lab = database.query(models.Lab).filter(models.Lab.id == lab_prefix).first()
+    if lab:
+        return lab
+
+    # Try prefix match (containerlab truncates to ~20 chars)
+    labs = database.query(models.Lab).filter(
+        models.Lab.id.startswith(lab_prefix)
+    ).all()
+
+    if len(labs) == 1:
+        return labs[0]
+    elif len(labs) > 1:
+        # Multiple matches - try to find the best one
+        # Prefer exact length match
+        for lab in labs:
+            if len(lab.id) == len(lab_prefix):
+                return lab
+        # Just return the first one
+        return labs[0]
+
+    return None
+
+
+def _find_node_state(
+    database: Session, lab_id: str, node_name: str
+) -> models.NodeState | None:
+    """Find a NodeState record by lab ID and node name.
+
+    Args:
+        database: Database session
+        lab_id: Lab ID
+        node_name: Node name from container labels
+
+    Returns:
+        NodeState if found, None otherwise
+    """
+    return (
+        database.query(models.NodeState)
+        .filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_name == node_name,
+        )
+        .first()
+    )
+
+
+def _event_type_to_actual_state(event_type: str, status: str) -> str:
+    """Map event type to NodeState.actual_state value.
+
+    Args:
+        event_type: Event type from agent (started, stopped, died, etc.)
+        status: Status string with additional details
+
+    Returns:
+        Appropriate actual_state value
+    """
+    if event_type == "started":
+        return "running"
+    elif event_type in ("stopped", "stop"):
+        return "stopped"
+    elif event_type in ("died", "kill", "oom"):
+        return "error"
+    elif event_type == "creating":
+        return "pending"
+    elif event_type == "destroying":
+        return "stopped"
+    else:
+        # Unknown event type - don't change state
+        return ""
+
+
+@router.post("/node", response_model=schemas.NodeEventResponse)
+async def receive_node_event(
+    payload: schemas.NodeEventPayload,
+    database: Session = Depends(db.get_db),
+) -> schemas.NodeEventResponse:
+    """Receive a node state change event from an agent.
+
+    This endpoint processes real-time state updates from agents,
+    updating NodeState records to match actual container/VM state.
+
+    Events are processed immediately - no authentication required
+    as this is internal agent-to-controller communication.
+    """
+    logger.debug(
+        f"Received node event: {payload.event_type} for "
+        f"{payload.node_name} in lab {payload.lab_id}"
+    )
+
+    # Find the lab by prefix
+    lab = _find_lab_by_prefix(database, payload.lab_id)
+    if not lab:
+        # Lab not found - might be a stale container
+        logger.debug(f"Lab not found for prefix: {payload.lab_id}")
+        return schemas.NodeEventResponse(
+            success=True,
+            message="Lab not found (ignored)",
+        )
+
+    # Find the NodeState record
+    node_state = _find_node_state(database, lab.id, payload.node_name)
+    if not node_state:
+        # NodeState not found - this can happen if topology was changed
+        logger.debug(
+            f"NodeState not found for {payload.node_name} in lab {lab.id}"
+        )
+        return schemas.NodeEventResponse(
+            success=True,
+            message="NodeState not found (ignored)",
+        )
+
+    # Map event type to actual_state
+    new_state = _event_type_to_actual_state(payload.event_type, payload.status)
+    if not new_state:
+        logger.debug(f"Unknown event type: {payload.event_type}")
+        return schemas.NodeEventResponse(
+            success=True,
+            message="Unknown event type (ignored)",
+        )
+
+    # Update the NodeState
+    old_state = node_state.actual_state
+    node_state.actual_state = new_state
+
+    # Set or clear error message
+    if new_state == "error":
+        node_state.error_message = f"Container {payload.event_type}: {payload.status}"
+    else:
+        node_state.error_message = None
+
+    # Log significant state changes
+    if old_state != new_state:
+        logger.info(
+            f"Node {payload.node_name} in lab {lab.id}: "
+            f"{old_state} -> {new_state} (event: {payload.event_type})"
+        )
+
+    database.commit()
+
+    return schemas.NodeEventResponse(
+        success=True,
+        message=f"Updated {payload.node_name}: {old_state} -> {new_state}",
+    )
+
+
+@router.post("/batch", response_model=schemas.NodeEventResponse)
+async def receive_batch_events(
+    events: list[schemas.NodeEventPayload],
+    database: Session = Depends(db.get_db),
+) -> schemas.NodeEventResponse:
+    """Receive multiple node events in a single request.
+
+    For efficiency, agents can batch multiple events together.
+    Events are processed in order.
+    """
+    if not events:
+        return schemas.NodeEventResponse(success=True, message="No events to process")
+
+    processed = 0
+    errors = 0
+
+    for payload in events:
+        try:
+            # Find the lab
+            lab = _find_lab_by_prefix(database, payload.lab_id)
+            if not lab:
+                continue
+
+            # Find the NodeState
+            node_state = _find_node_state(database, lab.id, payload.node_name)
+            if not node_state:
+                continue
+
+            # Map and update state
+            new_state = _event_type_to_actual_state(payload.event_type, payload.status)
+            if not new_state:
+                continue
+
+            old_state = node_state.actual_state
+            node_state.actual_state = new_state
+
+            if new_state == "error":
+                node_state.error_message = f"Container {payload.event_type}: {payload.status}"
+            else:
+                node_state.error_message = None
+
+            if old_state != new_state:
+                logger.info(
+                    f"Node {payload.node_name} in lab {lab.id}: "
+                    f"{old_state} -> {new_state}"
+                )
+
+            processed += 1
+
+        except Exception as e:
+            logger.error(f"Error processing event: {e}")
+            errors += 1
+
+    database.commit()
+
+    return schemas.NodeEventResponse(
+        success=True,
+        message=f"Processed {processed} events ({errors} errors)",
+    )

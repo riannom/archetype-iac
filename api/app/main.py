@@ -17,13 +17,15 @@ from app.config import settings
 from app.auth import get_current_user, hash_password
 from app.catalog import list_devices as catalog_devices, list_images as catalog_images
 from app.middleware import CurrentUserMiddleware
-from app.routers import admin, agents, auth, console, images, jobs, labs, permissions
+from app.routers import admin, agents, auth, callbacks, console, events, images, jobs, labs, permissions
 from app.tasks.health import agent_health_monitor
+from app.tasks.reconciliation import state_reconciliation_monitor
 
 logger = logging.getLogger(__name__)
 
-# Background task handle
+# Background task handles
 _agent_monitor_task: asyncio.Task | None = None
+_reconciliation_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
@@ -61,6 +63,9 @@ async def lifespan(app: FastAPI):
     # Start agent health monitor background task
     _agent_monitor_task = asyncio.create_task(agent_health_monitor())
 
+    # Start state reconciliation monitor background task
+    _reconciliation_task = asyncio.create_task(state_reconciliation_monitor())
+
     yield
 
     # Shutdown
@@ -70,6 +75,13 @@ async def lifespan(app: FastAPI):
         _agent_monitor_task.cancel()
         try:
             await _agent_monitor_task
+        except asyncio.CancelledError:
+            pass
+
+    if _reconciliation_task:
+        _reconciliation_task.cancel()
+        try:
+            await _reconciliation_task
         except asyncio.CancelledError:
             pass
 
@@ -97,6 +109,8 @@ app.include_router(permissions.router)
 app.include_router(images.router)
 app.include_router(console.router)
 app.include_router(admin.router)
+app.include_router(callbacks.router)
+app.include_router(events.router)
 
 
 # Simple endpoints that remain in main.py

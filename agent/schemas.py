@@ -35,6 +35,8 @@ class JobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    # Accepted status for async job execution (callback mode)
+    ACCEPTED = "accepted"
 
 
 class Provider(str, Enum):
@@ -98,12 +100,17 @@ class DeployRequest(BaseModel):
     lab_id: str
     topology_yaml: str
     provider: Provider = Provider.CONTAINERLAB
+    # Optional callback URL for async execution
+    # If provided, agent returns 202 Accepted immediately and POSTs result to this URL
+    callback_url: str | None = None
 
 
 class DestroyRequest(BaseModel):
     """Controller -> Agent: Tear down a lab."""
     job_id: str
     lab_id: str
+    # Optional callback URL for async execution
+    callback_url: str | None = None
 
 
 class NodeActionRequest(BaseModel):

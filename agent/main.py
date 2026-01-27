@@ -63,6 +63,7 @@ AGENT_ID = settings.agent_id or str(uuid.uuid4())[:8]
 # Track registration state
 _registered = False
 _heartbeat_task: asyncio.Task | None = None
+_event_listener_task: asyncio.Task | None = None
 
 # Overlay network manager (lazy initialized)
 _overlay_manager = None
@@ -72,6 +73,9 @@ _overlay_manager = None
 _deploy_locks: dict[str, asyncio.Lock] = {}
 _deploy_results: dict[str, asyncio.Future] = {}
 
+# Event listener instance (lazy initialized)
+_event_listener = None
+
 
 def get_overlay_manager():
     """Lazy-initialize overlay manager."""
@@ -80,6 +84,53 @@ def get_overlay_manager():
         from agent.network.overlay import OverlayManager
         _overlay_manager = OverlayManager()
     return _overlay_manager
+
+
+def get_event_listener():
+    """Lazy-initialize Docker event listener."""
+    global _event_listener
+    if _event_listener is None:
+        from agent.events import DockerEventListener
+        _event_listener = DockerEventListener()
+    return _event_listener
+
+
+async def forward_event_to_controller(event):
+    """Forward a node event to the controller.
+
+    This function is called by the event listener when a container
+    state change is detected. It POSTs the event to the controller's
+    /events/node endpoint for real-time state synchronization.
+    """
+    from agent.events.base import NodeEvent
+
+    if not isinstance(event, NodeEvent):
+        return
+
+    payload = {
+        "agent_id": AGENT_ID,
+        "lab_id": event.lab_id,
+        "node_name": event.node_name,
+        "container_id": event.container_id,
+        "event_type": event.event_type.value,
+        "timestamp": event.timestamp.isoformat(),
+        "status": event.status,
+        "attributes": event.attributes,
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.controller_url}/events/node",
+                json=payload,
+                timeout=5.0,
+            )
+            if response.status_code == 200:
+                print(f"Forwarded event: {event.event_type.value} for {event.node_name}")
+            else:
+                print(f"Failed to forward event: HTTP {response.status_code}")
+    except Exception as e:
+        print(f"Error forwarding event to controller: {e}")
 
 
 def get_workspace(lab_id: str) -> Path:
@@ -322,7 +373,7 @@ async def heartbeat_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - register on startup, cleanup on shutdown."""
-    global _heartbeat_task
+    global _heartbeat_task, _event_listener_task
 
     print(f"Agent {AGENT_ID} starting...")
     print(f"Controller URL: {settings.controller_url}")
@@ -334,6 +385,17 @@ async def lifespan(app: FastAPI):
     # Start heartbeat background task
     _heartbeat_task = asyncio.create_task(heartbeat_loop())
 
+    # Start Docker event listener if containerlab is enabled
+    if settings.enable_containerlab:
+        try:
+            listener = get_event_listener()
+            _event_listener_task = asyncio.create_task(
+                listener.start(forward_event_to_controller)
+            )
+            print("Docker event listener started")
+        except Exception as e:
+            print(f"Failed to start Docker event listener: {e}")
+
     yield
 
     # Cleanup
@@ -341,6 +403,18 @@ async def lifespan(app: FastAPI):
         _heartbeat_task.cancel()
         try:
             await _heartbeat_task
+        except asyncio.CancelledError:
+            pass
+
+    if _event_listener_task:
+        try:
+            listener = get_event_listener()
+            await listener.stop()
+        except Exception:
+            pass
+        _event_listener_task.cancel()
+        try:
+            await _event_listener_task
         except asyncio.CancelledError:
             pass
 
@@ -382,6 +456,16 @@ def info():
     return get_agent_info().model_dump()
 
 
+@app.get("/callbacks/dead-letters")
+def get_dead_letters():
+    """Get failed callbacks that couldn't be delivered.
+
+    Returns the dead letter queue contents for monitoring/debugging.
+    """
+    from agent.callbacks import get_dead_letters as fetch_dead_letters
+    return {"dead_letters": fetch_dead_letters()}
+
+
 # --- Job Execution Endpoints (called by controller) ---
 
 @app.post("/jobs/deploy")
@@ -390,9 +474,14 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
 
     Uses per-lab locking to prevent concurrent deploys for the same lab.
     If a deploy is already in progress, subsequent requests wait for it to complete.
+
+    If callback_url is provided, returns 202 Accepted immediately and executes
+    the deploy in the background, POSTing the result to the callback URL when done.
     """
     lab_id = request.lab_id
     print(f"Deploy request: lab={lab_id}, job={request.job_id}, provider={request.provider.value}")
+    if request.callback_url:
+        print(f"  Async mode with callback: {request.callback_url}")
 
     # Get or create lock for this lab
     if lab_id not in _deploy_locks:
@@ -400,6 +489,26 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
 
     lock = _deploy_locks[lab_id]
 
+    # Async callback mode - return immediately and execute in background
+    if request.callback_url:
+        # Start async execution
+        asyncio.create_task(
+            _execute_deploy_with_callback(
+                request.job_id,
+                lab_id,
+                request.topology_yaml,
+                request.provider.value,
+                request.callback_url,
+                lock,
+            )
+        )
+        return JobResult(
+            job_id=request.job_id,
+            status=JobStatus.ACCEPTED,
+            stdout="Deploy accepted for async execution",
+        )
+
+    # Synchronous mode (existing behavior)
     # Check if deploy is already in progress
     if lock.locked():
         print(f"Deploy already in progress for lab {lab_id}, waiting...")
@@ -471,6 +580,71 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
             return job_result
 
 
+async def _execute_deploy_with_callback(
+    job_id: str,
+    lab_id: str,
+    topology_yaml: str,
+    provider_name: str,
+    callback_url: str,
+    lock: asyncio.Lock,
+) -> None:
+    """Execute deploy in background and send result via callback.
+
+    This function handles the async deploy execution pattern:
+    1. Acquire the lab lock (prevents concurrent deploys)
+    2. Execute the deploy operation
+    3. POST the result to the callback URL
+    4. Handle callback delivery failures with retry
+    """
+    from agent.callbacks import CallbackPayload, deliver_callback
+    from datetime import datetime, timezone
+
+    started_at = datetime.now(timezone.utc)
+
+    async with lock:
+        try:
+            provider = get_provider_for_request(provider_name)
+            workspace = get_workspace(lab_id)
+            print(f"Async deploy starting: workspace={workspace}")
+
+            result = await provider.deploy(
+                lab_id=lab_id,
+                topology_yaml=topology_yaml,
+                workspace=workspace,
+            )
+
+            print(f"Async deploy finished: success={result.success}")
+
+            # Build callback payload
+            payload = CallbackPayload(
+                job_id=job_id,
+                agent_id=AGENT_ID,
+                status="completed" if result.success else "failed",
+                stdout=result.stdout or "",
+                stderr=result.stderr or "",
+                error_message=result.error if not result.success else None,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+
+        except Exception as e:
+            print(f"Async deploy error: {e}")
+            import traceback
+            traceback.print_exc()
+
+            payload = CallbackPayload(
+                job_id=job_id,
+                agent_id=AGENT_ID,
+                status="failed",
+                error_message=str(e),
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+
+    # Deliver callback (outside the lock)
+    await deliver_callback(callback_url, payload)
+
+
 async def _cleanup_deploy_cache(lab_id: str, delay: float = 5.0):
     """Clean up cached deploy result after a delay."""
     await asyncio.sleep(delay)
@@ -479,9 +653,31 @@ async def _cleanup_deploy_cache(lab_id: str, delay: float = 5.0):
 
 @app.post("/jobs/destroy")
 async def destroy_lab(request: DestroyRequest) -> JobResult:
-    """Tear down a lab."""
-    print(f"Destroy request: lab={request.lab_id}, job={request.job_id}")
+    """Tear down a lab.
 
+    If callback_url is provided, returns 202 Accepted immediately and executes
+    the destroy in the background, POSTing the result to the callback URL when done.
+    """
+    print(f"Destroy request: lab={request.lab_id}, job={request.job_id}")
+    if request.callback_url:
+        print(f"  Async mode with callback: {request.callback_url}")
+
+    # Async callback mode - return immediately and execute in background
+    if request.callback_url:
+        asyncio.create_task(
+            _execute_destroy_with_callback(
+                request.job_id,
+                request.lab_id,
+                request.callback_url,
+            )
+        )
+        return JobResult(
+            job_id=request.job_id,
+            status=JobStatus.ACCEPTED,
+            stdout="Destroy accepted for async execution",
+        )
+
+    # Synchronous mode (existing behavior)
     # Use default provider for destroy (containerlab)
     # In future, could get provider from request or lab metadata
     provider = get_provider_for_request("containerlab")
@@ -506,6 +702,57 @@ async def destroy_lab(request: DestroyRequest) -> JobResult:
             stderr=result.stderr,
             error_message=result.error,
         )
+
+
+async def _execute_destroy_with_callback(
+    job_id: str,
+    lab_id: str,
+    callback_url: str,
+) -> None:
+    """Execute destroy in background and send result via callback."""
+    from agent.callbacks import CallbackPayload, deliver_callback
+    from datetime import datetime, timezone
+
+    started_at = datetime.now(timezone.utc)
+
+    try:
+        provider = get_provider_for_request("containerlab")
+        workspace = get_workspace(lab_id)
+        print(f"Async destroy starting: workspace={workspace}")
+
+        result = await provider.destroy(
+            lab_id=lab_id,
+            workspace=workspace,
+        )
+
+        print(f"Async destroy finished: success={result.success}")
+
+        payload = CallbackPayload(
+            job_id=job_id,
+            agent_id=AGENT_ID,
+            status="completed" if result.success else "failed",
+            stdout=result.stdout or "",
+            stderr=result.stderr or "",
+            error_message=result.error if not result.success else None,
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
+        )
+
+    except Exception as e:
+        print(f"Async destroy error: {e}")
+        import traceback
+        traceback.print_exc()
+
+        payload = CallbackPayload(
+            job_id=job_id,
+            agent_id=AGENT_ID,
+            status="failed",
+            error_message=str(e),
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
+        )
+
+    await deliver_callback(callback_url, payload)
 
 
 @app.post("/jobs/node-action")
