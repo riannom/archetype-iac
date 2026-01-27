@@ -652,6 +652,12 @@ async def run_node_sync(
             f"start={len(nodes_need_start)}, stop={len(nodes_need_stop)}"
         )
 
+        # Mark all nodes that need action as pending
+        for ns in nodes_need_deploy + nodes_need_start + nodes_need_stop:
+            ns.actual_state = "pending"
+            ns.error_message = None
+        session.commit()
+
         # Phase 1: If any nodes need deploy, we need to deploy the full topology
         # Containerlab doesn't support per-node deploy, so we deploy all and then stop unwanted
         if nodes_need_deploy:

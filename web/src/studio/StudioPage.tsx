@@ -283,6 +283,9 @@ const StudioPage: React.FC = () => {
   const saveLayoutTimeoutRef = useRef<number | null>(null);
   const topologyDirtyRef = useRef(false);
   const saveTopologyTimeoutRef = useRef<number | null>(null);
+  // Refs to track current state for debounced saves (avoids stale closure issues)
+  const nodesRef = useRef<Node[]>([]);
+  const linksRef = useRef<Link[]>([]);
   const [systemMetrics, setSystemMetrics] = useState<{
     agents: { online: number; total: number };
     containers: { running: number; total: number };
@@ -310,6 +313,10 @@ const StudioPage: React.FC = () => {
 
   // Port manager for interface auto-assignment
   const portManager = usePortManager(nodes, links);
+
+  // Keep refs in sync with state for debounced saves (avoids stale closure issues)
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { linksRef.current = links; }, [links]);
 
   const addTaskLogEntry = useCallback((level: TaskLogEntry['level'], message: string, jobId?: string) => {
     const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -448,18 +455,21 @@ const StudioPage: React.FC = () => {
   );
 
   // Trigger debounced topology save
+  // Uses refs to read current state at save time, avoiding stale closure issues
   const triggerTopologySave = useCallback(() => {
     if (!activeLab) return;
     topologyDirtyRef.current = true;
     if (saveTopologyTimeoutRef.current) {
       window.clearTimeout(saveTopologyTimeoutRef.current);
     }
+    const labId = activeLab.id;
     saveTopologyTimeoutRef.current = window.setTimeout(() => {
-      if (activeLab && topologyDirtyRef.current) {
-        saveTopology(activeLab.id, nodes, links);
+      if (topologyDirtyRef.current) {
+        // Read current state from refs to get latest values
+        saveTopology(labId, nodesRef.current, linksRef.current);
       }
     }, 2000); // 2 second debounce for topology saves
-  }, [activeLab, nodes, links, saveTopology]);
+  }, [activeLab, saveTopology]);
 
   const loadLabs = useCallback(async () => {
     const data = await studioRequest<{ labs: LabSummary[] }>('/labs');
@@ -599,7 +609,8 @@ const StudioPage: React.FC = () => {
         if (state.actual_state === 'running') {
           runtimeByNodeId[state.node_id] = 'running';
         } else if (state.actual_state === 'pending') {
-          runtimeByNodeId[state.node_id] = 'booting';
+          // Check desired_state to determine if booting (starting) or stopping
+          runtimeByNodeId[state.node_id] = state.desired_state === 'running' ? 'booting' : 'stopped';
         } else if (state.actual_state === 'error') {
           runtimeByNodeId[state.node_id] = 'error';
         } else if (state.actual_state === 'stopped') {

@@ -431,6 +431,69 @@ def set_all_nodes_desired_state(
     )
 
 
+@router.post("/labs/{lab_id}/nodes/refresh")
+async def refresh_node_states(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.NodeStatesResponse:
+    """Refresh node states from actual container status.
+
+    Queries the agent for real container status and updates the NodeState
+    records to match. Use this when states appear out of sync with reality.
+    """
+    from app import agent_client
+    from app.utils.lab import get_lab_provider
+
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get agent for this lab
+    lab_provider = get_lab_provider(lab)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if not agent:
+        raise HTTPException(status_code=503, detail="No healthy agent available")
+
+    try:
+        result = await agent_client.get_lab_status_from_agent(agent, lab.id)
+        nodes = result.get("nodes", [])
+
+        # Build a map of container status by node name
+        container_status_map = {n.get("name", ""): n.get("status", "unknown") for n in nodes}
+
+        # Update NodeState records based on actual container status
+        node_states = (
+            database.query(models.NodeState)
+            .filter(models.NodeState.lab_id == lab_id)
+            .all()
+        )
+
+        for ns in node_states:
+            container_status = container_status_map.get(ns.node_name)
+            if container_status:
+                if container_status == "running":
+                    ns.actual_state = "running"
+                    ns.error_message = None
+                elif container_status in ("stopped", "exited"):
+                    ns.actual_state = "stopped"
+                    ns.error_message = None
+
+        database.commit()
+
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to refresh from agent: {e}")
+
+    # Return updated states
+    states = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab_id)
+        .order_by(models.NodeState.node_name)
+        .all()
+    )
+    return schemas.NodeStatesResponse(
+        nodes=[schemas.NodeStateOut.model_validate(s) for s in states]
+    )
+
+
 def _get_out_of_sync_nodes(
     database: Session,
     lab_id: str,
@@ -516,10 +579,8 @@ async def sync_node(
     if not agent:
         raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
-    # Mark node as pending
-    state.actual_state = "pending"
-    state.error_message = None
-    database.commit()
+    # Note: Don't set state to pending here - let the task handle state transitions
+    # after it reads the current state to determine what action is needed
 
     # Create sync job
     job = models.Job(
@@ -577,11 +638,8 @@ async def sync_lab(
     if not agent:
         raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
-    # Mark all syncing nodes as pending
-    for state in out_of_sync:
-        state.actual_state = "pending"
-        state.error_message = None
-    database.commit()
+    # Note: Don't set states to pending here - let the task handle state transitions
+    # after it reads the current states to determine what actions are needed
 
     # Create sync job
     job = models.Job(
