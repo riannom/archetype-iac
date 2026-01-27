@@ -72,6 +72,22 @@ def _upsert_node_states(
             database.delete(existing_state)
 
 
+def _ensure_node_states_exist(
+    database: Session,
+    lab_id: str,
+) -> None:
+    """Ensure NodeState records exist for all nodes in the topology.
+
+    Reads topology file and calls _upsert_node_states if topology exists.
+    Safe to call multiple times - idempotent operation.
+    """
+    topo_path = topology_path(lab_id)
+    if topo_path.exists():
+        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+        _upsert_node_states(database, lab_id, graph)
+        database.commit()
+
+
 @router.get("/labs")
 def list_labs(
     skip: int = 0,
@@ -354,7 +370,8 @@ def get_node_state(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.NodeStateOut:
     """Get the state for a specific node."""
-    get_lab_or_404(lab_id, database, current_user)
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
     state = (
         database.query(models.NodeState)
         .filter(
@@ -380,7 +397,8 @@ def set_node_desired_state(
 
     This only updates the desired state - use /sync to actually apply the change.
     """
-    get_lab_or_404(lab_id, database, current_user)
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
     state = (
         database.query(models.NodeState)
         .filter(
@@ -409,7 +427,8 @@ def set_all_nodes_desired_state(
 
     Useful for "Start All" or "Stop All" operations.
     """
-    get_lab_or_404(lab_id, database, current_user)
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
     states = (
         database.query(models.NodeState)
         .filter(models.NodeState.lab_id == lab_id)
@@ -446,6 +465,7 @@ async def refresh_node_states(
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
 
     # Get agent for this lab
     lab_provider = get_lab_provider(lab)
@@ -551,6 +571,7 @@ async def sync_node(
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
 
     # Get the node state
     state = (
@@ -620,6 +641,7 @@ async def sync_lab(
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
 
     # Find all out-of-sync nodes
     out_of_sync = _get_out_of_sync_nodes(database, lab_id)
