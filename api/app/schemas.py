@@ -142,6 +142,9 @@ class JobOut(BaseModel):
     completed_at: datetime | None = None
     retry_count: int = 0
     created_at: datetime
+    # Derived fields for UI - computed in endpoint
+    timeout_at: datetime | None = None  # When job will/did timeout
+    is_stuck: bool = False  # True if past expected runtime
 
     class Config:
         from_attributes = True

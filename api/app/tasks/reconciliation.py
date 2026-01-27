@@ -9,6 +9,7 @@ Key scenarios handled:
 2. Network partitions - Jobs marked failed even when nodes deployed successfully
 3. Stale pending states - Nodes stuck in "pending" with no active job
 4. Stale starting states - Labs stuck in "starting" for too long
+5. Stuck jobs - Labs with jobs that have exceeded their timeout
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from app import agent_client, models
 from app.config import settings
 from app.db import SessionLocal
+from app.utils.job import is_job_within_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +91,7 @@ async def _reconcile_single_lab(session, lab_id: str):
     if not lab:
         return
 
-    # Check if there's an active job for this lab - if so, don't interfere
+    # Check if there's an active job for this lab
     active_job = (
         session.query(models.Job)
         .filter(
@@ -100,8 +102,23 @@ async def _reconcile_single_lab(session, lab_id: str):
     )
 
     if active_job:
-        logger.debug(f"Lab {lab_id} has active job {active_job.id}, skipping reconciliation")
-        return
+        # Check if job is still within its expected timeout window
+        if is_job_within_timeout(
+            active_job.action,
+            active_job.status,
+            active_job.started_at,
+            active_job.created_at,
+        ):
+            logger.debug(f"Lab {lab_id} has active job {active_job.id}, skipping reconciliation")
+            return
+        else:
+            # Job is stuck - log warning but proceed with reconciliation
+            # The job_health_monitor will handle the stuck job separately
+            logger.warning(
+                f"Lab {lab_id} has stuck job {active_job.id} "
+                f"(action={active_job.action}, status={active_job.status}), "
+                f"proceeding with state reconciliation"
+            )
 
     # Get an agent to query for status
     try:

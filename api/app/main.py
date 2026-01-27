@@ -19,6 +19,7 @@ from app.catalog import list_devices as catalog_devices, list_images as catalog_
 from app.middleware import CurrentUserMiddleware
 from app.routers import admin, agents, auth, callbacks, console, events, images, jobs, labs, permissions
 from app.tasks.health import agent_health_monitor
+from app.tasks.job_health import job_health_monitor
 from app.tasks.reconciliation import state_reconciliation_monitor
 
 logger = logging.getLogger(__name__)
@@ -26,12 +27,13 @@ logger = logging.getLogger(__name__)
 # Background task handles
 _agent_monitor_task: asyncio.Task | None = None
 _reconciliation_task: asyncio.Task | None = None
+_job_health_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start background tasks on startup, cleanup on shutdown."""
-    global _agent_monitor_task
+    global _agent_monitor_task, _reconciliation_task, _job_health_task
 
     # Startup
     logger.info("Starting Archetype API controller")
@@ -66,6 +68,9 @@ async def lifespan(app: FastAPI):
     # Start state reconciliation monitor background task
     _reconciliation_task = asyncio.create_task(state_reconciliation_monitor())
 
+    # Start job health monitor background task
+    _job_health_task = asyncio.create_task(job_health_monitor())
+
     yield
 
     # Shutdown
@@ -82,6 +87,13 @@ async def lifespan(app: FastAPI):
         _reconciliation_task.cancel()
         try:
             await _reconciliation_task
+        except asyncio.CancelledError:
+            pass
+
+    if _job_health_task:
+        _job_health_task.cancel()
+        try:
+            await _job_health_task
         except asyncio.CancelledError:
             pass
 

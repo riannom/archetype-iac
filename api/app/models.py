@@ -63,6 +63,15 @@ class Permission(Base):
 
 
 class Job(Base):
+    """Background job tracking for lab operations.
+
+    Status values:
+    - queued: Job created, waiting for agent to pick up
+    - running: Agent is executing the job
+    - completed: Job finished successfully
+    - failed: Job failed (error or timeout after max retries)
+    - cancelled: Job cancelled by user
+    """
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
