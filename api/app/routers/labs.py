@@ -123,6 +123,23 @@ def get_lab(
     return schemas.LabOut.model_validate(lab)
 
 
+@router.put("/labs/{lab_id}")
+def update_lab(
+    lab_id: str,
+    payload: schemas.LabUpdate,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LabOut:
+    lab = get_lab_or_404(lab_id, database, current_user)
+    if lab.owner_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if payload.name is not None:
+        lab.name = payload.name
+    database.commit()
+    database.refresh(lab)
+    return schemas.LabOut.model_validate(lab)
+
+
 @router.delete("/labs/{lab_id}")
 def delete_lab(
     lab_id: str,

@@ -1,18 +1,36 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useTheme, ThemeSelector } from '../../theme/index';
+import { ArchetypeIcon } from '../../components/icons';
 
 interface TopBarProps {
   labName: string;
   onExport: () => void;
   onExportFull?: () => void;
   onExit: () => void;
+  onRename?: (newName: string) => void;
 }
 
-const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit }) => {
+const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit, onRename }) => {
   const { effectiveMode, toggleMode } = useTheme();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(labName);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Sync editName when labName changes
+  useEffect(() => {
+    setEditName(labName);
+  }, [labName]);
+
+  // Focus input when editing starts
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -27,6 +45,25 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showExportDropdown]);
 
+  const handleSaveEdit = () => {
+    const trimmed = editName.trim();
+    if (trimmed && trimmed !== labName && onRename) {
+      onRename(trimmed);
+    } else {
+      setEditName(labName);
+    }
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSaveEdit();
+    } else if (e.key === 'Escape') {
+      setEditName(labName);
+      setIsEditing(false);
+    }
+  };
+
   return (
     <>
       <div className="h-14 bg-white/80 dark:bg-stone-900/80 backdrop-blur-xl border-b border-stone-200 dark:border-stone-800 flex items-center justify-between px-6 z-20 shadow-sm shrink-0">
@@ -39,16 +76,11 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
             <i className="fa-solid fa-chevron-left"></i>
           </button>
 
-          <div className="flex items-center gap-2 group cursor-default">
-            <div className="relative">
-               <div className="absolute inset-0 bg-sage-500 blur-md opacity-20 group-hover:opacity-40 transition-opacity"></div>
-               <div className="relative w-9 h-9 bg-white dark:bg-stone-800 border border-sage-500/50 rounded-xl flex items-center justify-center shadow-sm group-hover:border-sage-400 transition-colors">
-                  <i className="fa-solid fa-bolt-lightning text-sage-600 dark:text-sage-400 text-lg group-hover:rotate-12 transition-transform"></i>
-               </div>
-            </div>
-            <div className="flex flex-col leading-none ml-1">
+          <div className="flex items-center gap-3 group cursor-default">
+            <ArchetypeIcon size={32} className="text-sage-600 dark:text-sage-400 group-hover:text-sage-500 dark:group-hover:text-sage-300 transition-colors" />
+            <div className="flex flex-col leading-none">
               <span className="text-stone-900 dark:text-white font-black text-lg tracking-tighter">
-                AURA
+                ARCHETYPE
               </span>
               <span className="text-[9px] text-sage-600 dark:text-sage-500 font-bold tracking-[0.2em] uppercase">
                 Visual Studio
@@ -61,7 +93,26 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
           <div className="flex items-center gap-2 px-3 py-1 bg-stone-100 dark:bg-stone-800/50 rounded-full border border-stone-200/50 dark:border-stone-700/50">
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
             <span className="text-[11px] text-stone-500 dark:text-stone-400 font-medium uppercase tracking-tight">Lab:</span>
-            <span className="text-xs font-semibold text-stone-700 dark:text-stone-200">{labName}</span>
+            {isEditing ? (
+              <input
+                ref={inputRef}
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onBlur={handleSaveEdit}
+                onKeyDown={handleKeyDown}
+                className="text-xs font-semibold text-stone-700 dark:text-stone-200 bg-transparent border-b border-sage-500 outline-none w-32"
+              />
+            ) : (
+              <button
+                onClick={() => onRename && setIsEditing(true)}
+                className="text-xs font-semibold text-stone-700 dark:text-stone-200 hover:text-sage-600 dark:hover:text-sage-400 transition-colors cursor-pointer flex items-center gap-1 group"
+                title={onRename ? "Click to rename" : undefined}
+              >
+                {labName}
+                {onRename && <i className="fa-solid fa-pencil text-[8px] opacity-0 group-hover:opacity-50 transition-opacity"></i>}
+              </button>
+            )}
           </div>
         </div>
 

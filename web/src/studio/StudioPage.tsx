@@ -16,6 +16,7 @@ import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
 import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
+import { ArchetypeIcon } from '../components/icons';
 import './studio.css';
 import 'xterm/css/xterm.css';
 
@@ -218,7 +219,7 @@ const StudioPage: React.FC = () => {
   const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
   const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
   const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
-    const stored = localStorage.getItem('aura_custom_devices');
+    const stored = localStorage.getItem('archetype_custom_devices');
     if (!stored) return [];
     try {
       const parsed = JSON.parse(stored) as CustomDevice[];
@@ -290,7 +291,7 @@ const StudioPage: React.FC = () => {
   
   const updateCustomDevices = (next: CustomDevice[]) => {
     setCustomDevices(next);
-    localStorage.setItem('aura_custom_devices', JSON.stringify(next));
+    localStorage.setItem('archetype_custom_devices', JSON.stringify(next));
   };
 
   const isUnauthorized = (error: unknown) => error instanceof Error && error.message.toLowerCase().includes('unauthorized');
@@ -715,6 +716,18 @@ const StudioPage: React.FC = () => {
     loadLabs();
   };
 
+  const handleRenameLab = async (labId: string, newName: string) => {
+    await studioRequest(`/labs/${labId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name: newName }),
+    });
+    // Update local state
+    setLabs((prev) => prev.map((lab) => (lab.id === labId ? { ...lab, name: newName } : lab)));
+    if (activeLab?.id === labId) {
+      setActiveLab((prev) => (prev ? { ...prev, name: newName } : prev));
+    }
+  };
+
   const handleAddDevice = (model: DeviceModel) => {
     const id = Math.random().toString(36).slice(2, 9);
     const newNode: Node = {
@@ -1077,12 +1090,10 @@ const StudioPage: React.FC = () => {
     return (
       <div className={`min-h-screen flex items-center justify-center ${backgroundGradient}`}>
         <div className="w-[420px] bg-white/90 dark:bg-stone-950/90 border border-stone-200 dark:border-stone-800 rounded-2xl shadow-2xl p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 bg-sage-600 rounded-xl flex items-center justify-center shadow-lg shadow-sage-900/20 border border-sage-400/30">
-              <i className="fa-solid fa-bolt-lightning text-white"></i>
-            </div>
+          <div className="flex items-center gap-4 mb-6">
+            <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
             <div>
-              <h1 className="text-lg font-black text-stone-900 dark:text-white tracking-tight">Aura Studio</h1>
+              <h1 className="text-lg font-black text-stone-900 dark:text-white tracking-tight">Archetype Studio</h1>
               <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Sign in</p>
             </div>
           </div>
@@ -1128,6 +1139,7 @@ const StudioPage: React.FC = () => {
         onSelect={handleSelectLab}
         onCreate={handleCreateLab}
         onDelete={handleDeleteLab}
+        onRename={handleRenameLab}
         onRefresh={() => {
           loadLabs();
           loadSystemMetrics();
@@ -1138,7 +1150,7 @@ const StudioPage: React.FC = () => {
 
   return (
     <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${backgroundGradient}`}>
-      <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onExit={() => setActiveLab(null)} />
+      <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onExit={() => setActiveLab(null)} onRename={(newName) => handleRenameLab(activeLab.id, newName)} />
       <div className="h-10 bg-white/60 dark:bg-stone-900/60 backdrop-blur-md border-b border-stone-200 dark:border-stone-800 flex px-6 items-center gap-1 shrink-0">
         <button
           onClick={() => setView('designer')}

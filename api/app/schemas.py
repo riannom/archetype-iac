@@ -10,6 +10,10 @@ class LabCreate(BaseModel):
     provider: str = "containerlab"
 
 
+class LabUpdate(BaseModel):
+    name: str | None = None
+
+
 class LabOut(BaseModel):
     id: str
     name: str

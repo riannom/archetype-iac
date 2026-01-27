@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../../theme/index';
 import { useUser } from '../../contexts/UserContext';
 import SystemStatusStrip from './SystemStatusStrip';
+import { ArchetypeIcon } from '../../components/icons';
 
 interface LabSummary {
   id: string;
@@ -49,25 +50,53 @@ interface DashboardProps {
   onCreate: () => void;
   onDelete: (labId: string) => void;
   onRefresh: () => void;
+  onRename?: (labId: string, newName: string) => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics, onSelect, onCreate, onDelete, onRefresh }) => {
+const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics, onSelect, onCreate, onDelete, onRefresh, onRename }) => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user } = useUser();
   const navigate = useNavigate();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
+  const [editingLabId, setEditingLabId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
   const isAdmin = user?.is_admin ?? false;
+
+  const handleStartEdit = (lab: LabSummary, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onRename) {
+      setEditingLabId(lab.id);
+      setEditName(lab.name);
+    }
+  };
+
+  const handleSaveEdit = (labId: string) => {
+    const trimmed = editName.trim();
+    const lab = labs.find(l => l.id === labId);
+    if (trimmed && lab && trimmed !== lab.name && onRename) {
+      onRename(labId, trimmed);
+    }
+    setEditingLabId(null);
+    setEditName('');
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent, labId: string) => {
+    if (e.key === 'Enter') {
+      handleSaveEdit(labId);
+    } else if (e.key === 'Escape') {
+      setEditingLabId(null);
+      setEditName('');
+    }
+  };
 
   return (
     <>
     <div className="min-h-screen bg-stone-50 dark:bg-stone-900 flex flex-col overflow-hidden">
       <header className="h-20 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-sage-600 rounded-xl flex items-center justify-center shadow-lg shadow-sage-900/20 border border-sage-400/30">
-            <i className="fa-solid fa-bolt-lightning text-white"></i>
-          </div>
+        <div className="flex items-center gap-4">
+          <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
           <div>
-            <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">AURA</h1>
+            <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
             <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Visual Studio</p>
           </div>
         </div>
@@ -162,7 +191,26 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
                   <i className="fa-solid fa-diagram-project"></i>
                 </div>
 
-                <h3 className="text-lg font-bold text-stone-900 dark:text-white mb-1 group-hover:text-sage-600 dark:group-hover:text-sage-400 transition-colors">{lab.name}</h3>
+                {editingLabId === lab.id ? (
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onBlur={() => handleSaveEdit(lab.id)}
+                    onKeyDown={(e) => handleKeyDown(e, lab.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    autoFocus
+                    className="text-lg font-bold text-stone-900 dark:text-white mb-1 bg-transparent border-b-2 border-sage-500 outline-none w-full"
+                  />
+                ) : (
+                  <h3
+                    onClick={(e) => handleStartEdit(lab, e)}
+                    className={`text-lg font-bold text-stone-900 dark:text-white mb-1 group-hover:text-sage-600 dark:group-hover:text-sage-400 transition-colors ${onRename ? 'cursor-text hover:bg-stone-100 dark:hover:bg-stone-800 -mx-1 px-1 rounded' : ''}`}
+                    title={onRename ? "Click to rename" : undefined}
+                  >
+                    {lab.name}
+                  </h3>
+                )}
                 <div className="flex items-center gap-4 text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-3">
                    <span className="flex items-center gap-1.5"><i className="fa-solid fa-server"></i> Lab</span>
                    <span className="flex items-center gap-1.5"><i className="fa-solid fa-calendar"></i> {lab.created_at ? new Date(lab.created_at).toLocaleDateString() : 'New'}</span>
@@ -204,7 +252,7 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
       </main>
 
       <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
-        <span>© 2024 Aura Visual Studio | Professional Edition</span>
+        <span>© 2024 Archetype Visual Studio | Professional Edition</span>
         <div className="flex gap-4">
           <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">Documentation</a>
           <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">API Status</a>
