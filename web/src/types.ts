@@ -17,6 +17,7 @@ export interface GraphLink {
 export interface GraphNode {
   id: string;
   name: string;
+  container_name?: string | null; // Immutable container identifier for backend operations
   device?: string | null;
   image?: string | null;
   version?: string | null;

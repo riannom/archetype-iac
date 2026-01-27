@@ -72,6 +72,7 @@ export interface ImageLibraryEntry {
 export interface Node {
   id: string;
   name: string;
+  container_name?: string; // Immutable container identifier (set on first save, never changes)
   type: DeviceType;
   model: string;
   version: string;

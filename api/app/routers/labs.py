@@ -36,7 +36,8 @@ def _upsert_node_states(
     """Create or update NodeState records for all nodes in a topology graph.
 
     New nodes are initialized with desired_state='stopped', actual_state='undeployed'.
-    Existing nodes have their node_name updated but state fields are preserved.
+    IMPORTANT: For existing nodes, node_name is NOT updated to preserve container identity.
+    This allows display names to change in the UI without breaking container operations.
     Nodes removed from topology have their NodeState records deleted.
     """
     # Get current node IDs from graph
@@ -50,19 +51,18 @@ def _upsert_node_states(
     )
     existing_by_node_id = {ns.node_id: ns for ns in existing_states}
 
-    # Create mapping of node_id -> node for lookups
-    nodes_by_id = {node.id: node for node in graph.nodes}
-
     # Update or create node states
     for node in graph.nodes:
         # Use container_name (YAML key) for containerlab operations, fall back to name
         clab_name = node.container_name or node.name
         if node.id in existing_by_node_id:
-            # Update existing - only update node_name in case it changed
-            existing = existing_by_node_id[node.id]
-            existing.node_name = clab_name
+            # CRITICAL: Do NOT update node_name for existing records!
+            # Container identity is immutable - changing it would break console/operations
+            # for containers that were deployed with the original name.
+            # Display name changes (node.name) are purely cosmetic.
+            pass
         else:
-            # Create new with defaults
+            # Create new with defaults - node_name is set only once at creation
             new_state = models.NodeState(
                 lab_id=lab_id,
                 node_id=node.id,

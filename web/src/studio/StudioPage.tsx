@@ -56,6 +56,20 @@ interface CustomDevice {
 
 const DEFAULT_ICON = 'fa-microchip';
 
+/**
+ * Generate a container name from a display name.
+ * Container names must be valid for containerlab (lowercase, alphanumeric + underscore).
+ * This name is immutable after first creation - display names can change freely.
+ */
+const generateContainerName = (displayName: string): string => {
+  return displayName
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')  // Replace invalid chars with underscore
+    .replace(/^[^a-z_]/, 'n')     // Ensure starts with letter or underscore
+    .replace(/_+/g, '_')          // Collapse multiple underscores
+    .substring(0, 20);            // Limit length
+};
+
 const guessDeviceType = (id: string, label: string): DeviceType => {
   const token = `${id} ${label}`.toLowerCase();
   if (token.includes('switch')) return DeviceType.SWITCH;
@@ -159,6 +173,7 @@ const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] =>
     return {
       id: node.id,
       name: node.name || node.id,
+      container_name: node.container_name || undefined, // Preserve container_name from backend
       type: model?.type || DeviceType.CONTAINER,
       model: model?.id || modelId,
       version: node.version || model?.versions?.[0] || 'default',
@@ -430,6 +445,8 @@ const StudioPage: React.FC = () => {
         nodes: currentNodes.map((node) => ({
           id: node.id,
           name: node.name,
+          // Include container_name for backend container identity (immutable after first save)
+          container_name: node.container_name,
           device: node.model,
           version: node.version,
         })),
@@ -780,9 +797,13 @@ const StudioPage: React.FC = () => {
 
   const handleAddDevice = (model: DeviceModel) => {
     const id = Math.random().toString(36).slice(2, 9);
+    const displayName = `${model.id.toUpperCase()}-${nodes.length + 1}`;
     const newNode: Node = {
       id,
-      name: `${model.id.toUpperCase()}-${nodes.length + 1}`,
+      name: displayName,
+      // Generate immutable container_name at creation time
+      // This name is used by containerlab and never changes even if display name changes
+      container_name: generateContainerName(displayName),
       type: model.type,
       model: model.id,
       version: model.versions[0],
@@ -993,6 +1014,7 @@ const StudioPage: React.FC = () => {
       nodes: nodes.map((node) => ({
         id: node.id,
         name: node.name,
+        container_name: node.container_name,
         device: node.model,
         version: node.version,
       })),

@@ -136,14 +136,22 @@ def graph_to_yaml(graph: TopologyGraph) -> str:
     name_map: dict[str, str] = {}
     used_names: set[str] = set()
     for node in graph.nodes:
-        safe_name = _safe_node_name(node.name, used_names)
+        # Use container_name if provided (immutable after first creation),
+        # otherwise generate a safe name from display name
+        if node.container_name:
+            safe_name = node.container_name
+            # Ensure it doesn't collide with already-used names
+            if safe_name in used_names:
+                safe_name = _safe_node_name(node.container_name, used_names)
+        else:
+            safe_name = _safe_node_name(node.name, used_names)
         name_map[node.id] = safe_name
         used_names.add(safe_name)
         node_data: dict[str, Any] = {}
         # Store GUI ID to preserve identity through YAML round-trips
         if node.id != node.name:
             node_data["_gui_id"] = node.id
-        # Store original display name if it differs from safe name
+        # Store original display name if it differs from safe name (YAML key)
         if node.name != safe_name:
             node_data["_display_name"] = node.name
         if node.device:
@@ -412,7 +420,15 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
     used_names: set[str] = set()
 
     for node in graph.nodes:
-        safe_name = _safe_node_name(node.name, used_names)
+        # Use container_name if provided (immutable after first creation),
+        # otherwise generate a safe name from display name
+        if node.container_name:
+            safe_name = node.container_name
+            # Ensure it doesn't collide with already-used names
+            if safe_name in used_names:
+                safe_name = _safe_node_name(node.container_name, used_names)
+        else:
+            safe_name = _safe_node_name(node.name, used_names)
         name_map[node.id] = safe_name
         used_names.add(safe_name)
 
