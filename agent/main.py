@@ -1114,6 +1114,53 @@ async def overlay_status() -> OverlayStatusResponse:
         return OverlayStatusResponse()
 
 
+# --- Node Readiness Endpoint ---
+
+@app.get("/labs/{lab_id}/nodes/{node_name}/ready")
+async def check_node_ready(lab_id: str, node_name: str) -> dict:
+    """Check if a node has completed its boot sequence.
+
+    Returns readiness status based on vendor-specific probes that check
+    container logs or CLI output for boot completion patterns.
+    """
+    from agent.readiness import get_probe_for_vendor, get_readiness_timeout
+
+    # Get container name from provider
+    provider = get_provider("containerlab")
+    if provider is None:
+        return {
+            "is_ready": False,
+            "message": "No provider available",
+            "progress_percent": None,
+        }
+
+    container_name = provider.get_container_name(lab_id, node_name)
+
+    # Get the node kind to determine appropriate probe
+    try:
+        import docker
+        client = docker.from_env()
+        container = client.containers.get(container_name)
+        kind = container.labels.get("clab-node-kind", "")
+    except Exception as e:
+        return {
+            "is_ready": False,
+            "message": f"Container not found: {str(e)}",
+            "progress_percent": 0,
+        }
+
+    # Get and run the appropriate probe
+    probe = get_probe_for_vendor(kind)
+    result = await probe.check(container_name)
+
+    return {
+        "is_ready": result.is_ready,
+        "message": result.message,
+        "progress_percent": result.progress_percent,
+        "timeout": get_readiness_timeout(kind),
+    }
+
+
 # --- Console Endpoint ---
 
 # Import console shell configuration from central vendor registry
@@ -1202,17 +1249,54 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
             await input_queue.put(None)
 
     async def read_container():
-        """Read from container and send to WebSocket."""
+        """Read from container and send to WebSocket using event-driven I/O.
+
+        Uses asyncio event loop's add_reader for immediate notification when
+        data is available, eliminating polling latency.
+        """
+        loop = asyncio.get_event_loop()
+        data_available = asyncio.Event()
+
+        def on_readable():
+            """Callback when socket has data available."""
+            data_available.set()
+
+        fd = console.get_socket_fileno()
+        if fd is None:
+            return
+
         try:
+            # Register for read events on the socket
+            loop.add_reader(fd, on_readable)
+
             while console.is_running:
-                data = console.read_blocking(timeout=settings.console_read_timeout)
+                # Wait for data to become available (event-driven, no polling)
+                try:
+                    await asyncio.wait_for(
+                        data_available.wait(),
+                        timeout=settings.console_read_timeout
+                    )
+                except asyncio.TimeoutError:
+                    # Fallback timeout - check if still running
+                    continue
+
+                data_available.clear()
+
+                # Read all available data without blocking
+                data = console.read_nonblocking()
                 if data is None:
-                    break
+                    break  # Connection closed
                 if data:
                     await websocket.send_bytes(data)
-                await asyncio.sleep(0)
+
         except Exception:
             pass
+        finally:
+            # Always remove the reader when done
+            try:
+                loop.remove_reader(fd)
+            except Exception:
+                pass
 
     async def write_container():
         """Read from input queue and write to container."""

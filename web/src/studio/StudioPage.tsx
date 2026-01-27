@@ -34,6 +34,8 @@ interface NodeStateEntry {
   desired_state: 'stopped' | 'running';
   actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'error';
   error_message?: string | null;
+  is_ready?: boolean;
+  boot_started_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1256,6 +1258,7 @@ const StudioPage: React.FC = () => {
           labId={activeLab.id}
           windows={consoleWindows}
           nodes={nodes}
+          nodeStates={nodeStates}
           onCloseWindow={(id) => setConsoleWindows((prev) => prev.filter((win) => win.id !== id))}
           onCloseTab={(winId, nodeId) =>
             setConsoleWindows((prev) =>

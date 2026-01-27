@@ -38,8 +38,9 @@ class Settings(BaseSettings):
     heartbeat_timeout: float = 5.0
 
     # Console I/O timeouts (seconds)
-    console_read_timeout: float = 0.05
-    console_input_timeout: float = 0.1
+    # Note: With event-driven I/O, these are fallback timeouts only
+    console_read_timeout: float = 0.005  # 5ms fallback (primary is event-driven)
+    console_input_timeout: float = 0.01  # 10ms input check interval
 
     # Container operations
     container_stop_timeout: int = 10

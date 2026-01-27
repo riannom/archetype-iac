@@ -2,10 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { ConsoleWindow, Node } from '../types';
 import TerminalSession from './TerminalSession';
 
+interface NodeStateEntry {
+  id: string;
+  node_id: string;
+  actual_state: string;
+  is_ready?: boolean;
+}
+
 interface ConsoleManagerProps {
   labId: string;
   windows: ConsoleWindow[];
   nodes: Node[];
+  nodeStates?: Record<string, NodeStateEntry>;
   onCloseWindow: (windowId: string) => void;
   onCloseTab: (windowId: string, nodeId: string) => void;
   onSetActiveTab: (windowId: string, nodeId: string) => void;
@@ -17,6 +25,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   labId,
   windows,
   nodes,
+  nodeStates = {},
   onCloseWindow,
   onCloseTab,
   onSetActiveTab,
@@ -161,14 +170,23 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                   <p className="text-xs font-bold uppercase tracking-widest opacity-30">No active session selected</p>
                 </div>
               )}
-              {win.deviceIds.map((nodeId) => (
-                <div
-                  key={nodeId}
-                  className={`absolute inset-0 ${win.activeDeviceId === nodeId ? 'block' : 'hidden'}`}
-                >
-                  <TerminalSession labId={labId} nodeId={nodeId} isActive={win.activeDeviceId === nodeId} />
-                </div>
-              ))}
+              {win.deviceIds.map((nodeId) => {
+                const nodeState = nodeStates[nodeId];
+                const isReady = nodeState?.is_ready !== false; // Default to ready if unknown
+                return (
+                  <div
+                    key={nodeId}
+                    className={`absolute inset-0 ${win.activeDeviceId === nodeId ? 'block' : 'hidden'}`}
+                  >
+                    <TerminalSession
+                      labId={labId}
+                      nodeId={nodeId}
+                      isActive={win.activeDeviceId === nodeId}
+                      isReady={isReady}
+                    />
+                  </div>
+                );
+              })}
             </div>
 
             <div

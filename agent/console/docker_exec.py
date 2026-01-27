@@ -140,6 +140,42 @@ class DockerConsole:
         """Check if the console session is still active."""
         return self._running
 
+    def get_socket_fileno(self) -> int | None:
+        """Get the raw socket file descriptor for event-driven I/O.
+
+        Returns the file descriptor number, or None if socket not available.
+        """
+        if not self._socket or not self._running:
+            return None
+        try:
+            return self._socket._sock.fileno()
+        except Exception:
+            return None
+
+    def read_nonblocking(self, size: int = 4096) -> bytes | None:
+        """Read immediately available data without any blocking.
+
+        Returns:
+            - bytes: Data that was available
+            - b"": No data available (would block)
+            - None: Connection closed or error
+        """
+        if not self._socket or not self._running:
+            return None
+        try:
+            self._socket._sock.setblocking(False)
+            try:
+                data = self._socket._sock.recv(size)
+                if not data:
+                    self._running = False
+                    return None
+                return data
+            except BlockingIOError:
+                return b""  # No data available right now
+        except Exception:
+            self._running = False
+            return None
+
     def close(self):
         """Close the console session."""
         self._running = False

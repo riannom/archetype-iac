@@ -84,6 +84,40 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
         # Get agent WebSocket URL (use resolved node_name, not raw GUI ID)
         agent_ws_url = agent_client.get_agent_console_url(agent, lab_id, node_name)
 
+        # Check if node is ready for console access
+        # Look up NodeState to check is_ready flag
+        node_state = (
+            database.query(models.NodeState)
+            .filter(
+                models.NodeState.lab_id == lab_id,
+                models.NodeState.node_name == node_name,
+            )
+            .first()
+        )
+
+        # Also check by node_id in case the raw GUI ID was passed
+        if not node_state:
+            node_state = (
+                database.query(models.NodeState)
+                .filter(
+                    models.NodeState.lab_id == lab_id,
+                    models.NodeState.node_id == node,
+                )
+                .first()
+            )
+
+        boot_warning = None
+        if node_state and node_state.actual_state == "running" and not node_state.is_ready:
+            # Node is running but not ready - check readiness from agent
+            try:
+                readiness = await agent_client.check_node_readiness(agent, lab_id, node_name)
+                if not readiness.get("is_ready", False):
+                    progress = readiness.get("progress_percent")
+                    progress_str = f" ({progress}%)" if progress is not None else ""
+                    boot_warning = f"\r\n[Boot in progress{progress_str}... Console may be unresponsive]\r\n\r\n"
+            except Exception as e:
+                logger.debug(f"Readiness check failed for {node_name}: {e}")
+
     finally:
         database.close()
 
@@ -91,6 +125,13 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
     import websockets
 
     logger.info(f"Console: connecting to agent at {agent_ws_url}")
+
+    # Send boot warning if node is not yet ready
+    if boot_warning:
+        try:
+            await websocket.send_text(boot_warning)
+        except Exception:
+            pass
 
     try:
         async with websockets.connect(agent_ws_url) as agent_ws:
