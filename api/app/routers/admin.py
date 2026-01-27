@@ -139,7 +139,8 @@ async def refresh_lab_status(
 ) -> dict:
     """Refresh a single lab's status from the agent.
 
-    This updates the lab state in the database based on actual container status.
+    This updates both the lab state and individual NodeState records
+    in the database based on actual container status.
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 
@@ -157,6 +158,44 @@ async def refresh_lab_status(
         result = await agent_client.get_lab_status_from_agent(agent, lab.id)
         nodes = result.get("nodes", [])
 
+        # Build a map of container status by node name
+        # Node names from agent include the lab prefix, extract just the node part
+        container_status_map = {}
+        for node in nodes:
+            # Container names are like "clab-{lab_id_prefix}-{node_name}"
+            # The node name in the response should match our node_name
+            node_name = node.get("name", "")
+            container_status_map[node_name] = node.get("status", "unknown")
+
+        # Update NodeState records based on actual container status
+        node_states = (
+            database.query(models.NodeState)
+            .filter(models.NodeState.lab_id == lab_id)
+            .all()
+        )
+
+        updated_nodes = []
+        for ns in node_states:
+            # Try to find matching container status
+            container_status = container_status_map.get(ns.node_name)
+            if container_status:
+                # Map container status to our actual_state
+                if container_status == "running":
+                    ns.actual_state = "running"
+                    ns.error_message = None
+                elif container_status in ("stopped", "exited"):
+                    ns.actual_state = "stopped"
+                    ns.error_message = None
+                else:
+                    # Unknown status, leave as-is but clear error
+                    ns.error_message = None
+                updated_nodes.append({
+                    "node_id": ns.node_id,
+                    "node_name": ns.node_name,
+                    "actual_state": ns.actual_state,
+                    "container_status": container_status,
+                })
+
         # Determine lab state from node states
         if not nodes:
             new_state = "stopped"
@@ -172,12 +211,14 @@ async def refresh_lab_status(
             lab.state = new_state
             lab.state_updated_at = datetime.utcnow()
             lab.agent_id = agent.id
-            database.commit()
+
+        database.commit()
 
         return {
             "lab_id": lab_id,
             "state": new_state,
             "nodes": nodes,
+            "updated_node_states": updated_nodes,
             "agent_id": agent.id,
         }
 

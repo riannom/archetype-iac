@@ -55,7 +55,7 @@ class VxlanTunnel:
 class OverlayBridge:
     """Represents a Linux bridge for overlay connectivity."""
 
-    name: str  # Bridge name (e.g., aura-br-100000)
+    name: str  # Bridge name (e.g., archetype-br-100000)
     vni: int  # Associated VNI
     lab_id: str
     link_id: str
@@ -256,7 +256,7 @@ class OverlayManager:
             logger.info(f"Bridge already exists for: {key}")
             return self._bridges[key]
 
-        bridge_name = f"aura-br-{tunnel.vni}"
+        bridge_name = f"archetype-br-{tunnel.vni}"
 
         # Delete if exists from previous run
         if await self._bridge_exists(bridge_name):

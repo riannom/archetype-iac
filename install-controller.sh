@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Aura Controller Installer
-# Installs the full Aura controller stack (API, Web UI, Database, Redis)
+# Archetype Controller Installer
+# Installs the full Archetype controller stack (API, Web UI, Database, Redis)
 #
-# Usage: curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install-controller.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install-controller.sh | sudo bash
 
-INSTALL_DIR="/opt/aura-controller"
-REPO_URL="https://github.com/riannom/aura-iac.git"
+INSTALL_DIR="/opt/archetype-controller"
+REPO_URL="https://github.com/riannom/archetype-iac.git"
 BRANCH="main"
 
 # Colors
@@ -50,10 +50,10 @@ done
 
 # Uninstall
 if [ "$UNINSTALL" = true ]; then
-    log_info "Uninstalling Aura Controller..."
+    log_info "Uninstalling Archetype Controller..."
     cd $INSTALL_DIR 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null || true
     rm -rf $INSTALL_DIR
-    log_info "Aura Controller uninstalled successfully"
+    log_info "Archetype Controller uninstalled successfully"
     exit 0
 fi
 
@@ -73,7 +73,7 @@ else
 fi
 
 log_info "Detected OS: $OS"
-log_info "Installing Aura Controller..."
+log_info "Installing Archetype Controller..."
 
 # Install system dependencies
 log_info "Installing system dependencies..."
@@ -120,7 +120,7 @@ else
 fi
 
 # Create install directory
-log_info "Setting up Aura Controller in $INSTALL_DIR..."
+log_info "Setting up Archetype Controller in $INSTALL_DIR..."
 mkdir -p $INSTALL_DIR
 cd $INSTALL_DIR
 
@@ -132,8 +132,8 @@ if [ -d "$INSTALL_DIR/.git" ]; then
 else
     log_info "Cloning repository..."
     cd /opt
-    rm -rf aura-controller
-    git clone --branch $BRANCH $REPO_URL aura-controller
+    rm -rf archetype-controller
+    git clone --branch $BRANCH $REPO_URL archetype-controller
     cd $INSTALL_DIR
 fi
 
@@ -148,7 +148,7 @@ LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || hostname -
 # Create .env file
 log_info "Creating configuration..."
 cat > $INSTALL_DIR/.env << EOF
-# Aura Controller Configuration
+# Archetype Controller Configuration
 # Generated on $(date)
 
 # Web UI
@@ -181,8 +181,8 @@ OIDC_SCOPES=openid profile email
 OIDC_APP_REDIRECT_URL=http://localhost:$WEB_PORT/auth/callback
 
 # Local agent (built into docker-compose)
-AURA_AGENT_NAME=local-agent
-AURA_AGENT_LOCAL_IP=$LOCAL_IP
+ARCHETYPE_AGENT_NAME=local-agent
+ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 EOF
 
 # Make readable by docker group (or use 600 and run with sudo for tighter security)
@@ -211,7 +211,7 @@ fi
 
 echo ""
 echo "=============================================="
-echo -e "${GREEN}Aura Controller Installation Complete!${NC}"
+echo -e "${GREEN}Archetype Controller Installation Complete!${NC}"
 echo "=============================================="
 echo ""
 echo -e "${CYAN}Access URLs:${NC}"
@@ -226,7 +226,7 @@ echo ""
 echo -e "${CYAN}Agent Installation:${NC}"
 echo "  On each agent host, run:"
 echo ""
-echo "  curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/agent/install.sh | \\"
+echo "  curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/agent/install.sh | \\"
 echo "    sudo bash -s -- --name <agent-name> --controller http://$LOCAL_IP:$API_PORT"
 echo ""
 echo -e "${CYAN}Useful Commands:${NC}"

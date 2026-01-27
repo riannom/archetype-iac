@@ -3,8 +3,8 @@ import type { Theme, ThemePreferences, ThemeContextValue } from './types';
 import { builtInThemes, DEFAULT_THEME_ID, getBuiltInTheme } from './presets';
 
 // Storage keys
-const PREFS_KEY = 'aura_theme_prefs';
-const CUSTOM_THEMES_KEY = 'aura_custom_themes';
+const PREFS_KEY = 'archetype_theme_prefs';
+const CUSTOM_THEMES_KEY = 'archetype_custom_themes';
 
 // Default preferences
 const defaultPreferences: ThemePreferences = {

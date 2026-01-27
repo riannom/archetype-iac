@@ -1,6 +1,6 @@
 # Studio UI Integration Plan (Detailed)
 
-Goal: use the Visual Studio UI (from the aura zip) as the primary Studio experience, replacing mock data with real backend data, while preserving the original look/feel and interaction model. Provide a terminal console UI that matches the original design: tabbed consoles within a single window, plus popout capability. Keep the experience intentional, bold, and faithful to the zip UI.
+Goal: use the Visual Studio UI (from the archetype zip) as the primary Studio experience, replacing mock data with real backend data, while preserving the original look/feel and interaction model. Provide a terminal console UI that matches the original design: tabbed consoles within a single window, plus popout capability. Keep the experience intentional, bold, and faithful to the zip UI.
 
 ---
 

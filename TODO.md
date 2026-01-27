@@ -1,4 +1,4 @@
-# Aura-IAC TODO
+# Archetype-IAC TODO
 
 ## Current Status (2026-01-19)
 
@@ -189,31 +189,31 @@ For multi-host labs, the controller automatically routes to the correct agent.
 ### Fresh Install (Controller + Agent)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | sudo bash
 ```
 
 ### Multi-Host Setup
 
 ```bash
 # On controller host
-curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | sudo bash
 
 # On agent hosts
-curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \
   sudo bash -s -- --agent --controller-url http://CONTROLLER_IP:8000 --name host-b
 ```
 
 ### Clean Reinstall (resets database)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \
   sudo bash -s -- --fresh
 ```
 
 ### Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \
   sudo bash -s -- --uninstall
 ```
 
@@ -221,14 +221,14 @@ curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | 
 
 ```bash
 # Controller
-cd /opt/aura-controller
+cd /opt/archetype-controller
 sudo git pull origin main
 sudo docker compose -f docker-compose.gui.yml up -d --build
 
 # Standalone agent
-cd /opt/aura-agent/repo
+cd /opt/archetype-agent/repo
 sudo git pull origin main
-sudo systemctl restart aura-agent
+sudo systemctl restart archetype-agent
 ```
 
 ---
@@ -237,7 +237,7 @@ sudo systemctl restart aura-agent
 
 - **Host A (Controller + Agent):** 10.14.23.36
 - **Host B (Agent only):** 10.14.23.11
-- **Admin:** admin@localhost / (check /opt/aura-controller/.env)
+- **Admin:** admin@localhost / (check /opt/archetype-controller/.env)
 
 ---
 
@@ -277,13 +277,13 @@ curl -s -X POST "http://localhost:8000/labs/${LAB_ID}/down" \
   -H "Authorization: Bearer $TOKEN" | jq
 
 # Controller logs
-docker compose -f /opt/aura-controller/docker-compose.gui.yml logs -f api
+docker compose -f /opt/archetype-controller/docker-compose.gui.yml logs -f api
 
 # Agent logs (systemd)
-journalctl -u aura-agent -f
+journalctl -u archetype-agent -f
 
 # Agent logs (docker)
-docker compose -f /opt/aura-controller/docker-compose.gui.yml logs -f agent
+docker compose -f /opt/archetype-controller/docker-compose.gui.yml logs -f agent
 ```
 
 ---

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Aura Infrastructure-as-Code Installer
+# Archetype Infrastructure-as-Code Installer
 #
 # Usage:
 #   ./install.sh                              # Install controller + local agent
@@ -18,9 +18,9 @@ set -e
 #   --uninstall            Remove installation
 #   --fresh                Clean reinstall (removes database/volumes)
 
-INSTALL_DIR="/opt/aura-controller"
-AGENT_INSTALL_DIR="/opt/aura-agent"
-REPO_URL="https://github.com/riannom/aura-iac.git"
+INSTALL_DIR="/opt/archetype-controller"
+AGENT_INSTALL_DIR="/opt/archetype-agent"
+REPO_URL="https://github.com/riannom/archetype-iac.git"
 BRANCH="main"
 
 # Colors
@@ -81,7 +81,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help|-h)
-            echo "Aura Infrastructure-as-Code Installer"
+            echo "Archetype Infrastructure-as-Code Installer"
             echo ""
             echo "Usage:"
             echo "  $0                                    # Install controller + local agent"
@@ -115,8 +115,8 @@ fi
 # Clean up overlay network interfaces
 cleanup_overlay() {
     log_info "Cleaning up overlay network interfaces..."
-    # Remove any aura bridges and vxlan interfaces
-    for br in $(ip link show 2>/dev/null | grep -oP 'aura-br-\d+' || true); do
+    # Remove any archetype bridges and vxlan interfaces
+    for br in $(ip link show 2>/dev/null | grep -oP 'archetype-br-\d+' || true); do
         ip link set "$br" down 2>/dev/null || true
         ip link delete "$br" 2>/dev/null || true
     done
@@ -131,7 +131,7 @@ cleanup_overlay() {
 
 # Uninstall
 if [ "$UNINSTALL" = true ]; then
-    log_section "Uninstalling Aura"
+    log_section "Uninstalling Archetype"
 
     if [ -d "$INSTALL_DIR" ]; then
         log_info "Stopping controller services..."
@@ -140,11 +140,11 @@ if [ "$UNINSTALL" = true ]; then
         log_info "Controller removed (including database volumes)"
     fi
 
-    if systemctl is-active --quiet aura-agent 2>/dev/null; then
+    if systemctl is-active --quiet archetype-agent 2>/dev/null; then
         log_info "Stopping agent service..."
-        systemctl stop aura-agent
-        systemctl disable aura-agent
-        rm -f /etc/systemd/system/aura-agent.service
+        systemctl stop archetype-agent
+        systemctl disable archetype-agent
+        rm -f /etc/systemd/system/archetype-agent.service
         systemctl daemon-reload
     fi
 
@@ -154,8 +154,8 @@ if [ "$UNINSTALL" = true ]; then
     fi
 
     # Clean up agent workspace
-    if [ -d "/var/lib/aura-agent" ]; then
-        rm -rf /var/lib/aura-agent
+    if [ -d "/var/lib/archetype-agent" ]; then
+        rm -rf /var/lib/archetype-agent
         log_info "Agent workspace removed"
     fi
 
@@ -181,10 +181,10 @@ if [ "$FRESH_INSTALL" = true ]; then
         rm -rf $INSTALL_DIR
     fi
 
-    if systemctl is-active --quiet aura-agent 2>/dev/null; then
+    if systemctl is-active --quiet archetype-agent 2>/dev/null; then
         log_info "Stopping existing agent..."
-        systemctl stop aura-agent
-        systemctl disable aura-agent 2>/dev/null || true
+        systemctl stop archetype-agent
+        systemctl disable archetype-agent 2>/dev/null || true
     fi
 
     if [ -d "$AGENT_INSTALL_DIR" ]; then
@@ -229,12 +229,12 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ] && [ -z "$CO
         echo ""
         echo "When installing via curl pipe, use --controller-url:"
         echo ""
-        echo "  curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \\"
+        echo "  curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \\"
         echo "    sudo bash -s -- --agent --controller-url http://CONTROLLER_IP:8000 --name agent-name"
         echo ""
         echo "Or download first, then run interactively:"
         echo ""
-        echo "  curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh -o install.sh"
+        echo "  curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh -o install.sh"
         echo "  sudo bash install.sh --agent"
         echo ""
         exit 1
@@ -350,7 +350,7 @@ if [ "$INSTALL_CONTROLLER" = true ]; then
         SESSION_SECRET=$(openssl rand -hex 32)
 
         cat > .env << EOF
-# Aura Controller Configuration
+# Archetype Controller Configuration
 # Generated on $(date)
 
 # Admin credentials
@@ -366,8 +366,8 @@ API_PORT=8000
 WEB_PORT=8080
 
 # Local agent configuration
-AURA_AGENT_NAME=local-agent
-AURA_AGENT_LOCAL_IP=$LOCAL_IP
+ARCHETYPE_AGENT_NAME=local-agent
+ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 EOF
         chmod 644 .env
         log_info "Generated .env with admin password: $ADMIN_PASS"
@@ -439,22 +439,22 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
 
     # Config
     cat > $AGENT_INSTALL_DIR/agent.env << EOF
-AURA_AGENT_AGENT_NAME=$AGENT_NAME
-AURA_AGENT_CONTROLLER_URL=$CONTROLLER_URL
-AURA_AGENT_LOCAL_IP=$LOCAL_IP
-AURA_AGENT_AGENT_PORT=$AGENT_PORT
-AURA_AGENT_ENABLE_CONTAINERLAB=true
-AURA_AGENT_ENABLE_VXLAN=true
-AURA_AGENT_WORKSPACE_PATH=/var/lib/aura-agent
+ARCHETYPE_AGENT_AGENT_NAME=$AGENT_NAME
+ARCHETYPE_AGENT_CONTROLLER_URL=$CONTROLLER_URL
+ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
+ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT
+ARCHETYPE_AGENT_ENABLE_CONTAINERLAB=true
+ARCHETYPE_AGENT_ENABLE_VXLAN=true
+ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
 EOF
     chmod 644 $AGENT_INSTALL_DIR/agent.env
 
-    mkdir -p /var/lib/aura-agent
+    mkdir -p /var/lib/archetype-agent
 
     # Systemd service
-    cat > /etc/systemd/system/aura-agent.service << EOF
+    cat > /etc/systemd/system/archetype-agent.service << EOF
 [Unit]
-Description=Aura Network Lab Agent
+Description=Archetype Network Lab Agent
 After=network.target docker.service
 Requires=docker.service
 
@@ -472,13 +472,13 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable aura-agent
-    systemctl start aura-agent
+    systemctl enable archetype-agent
+    systemctl start archetype-agent
 
     # Wait and verify
     log_info "Waiting for agent to start..."
     sleep 3
-    if systemctl is-active --quiet aura-agent; then
+    if systemctl is-active --quiet archetype-agent; then
         log_info "Agent is running!"
 
         # Verify registration with controller
@@ -492,7 +492,7 @@ EOF
             sleep 2
         done
     else
-        log_error "Agent failed to start. Check: journalctl -u aura-agent -f"
+        log_error "Agent failed to start. Check: journalctl -u archetype-agent -f"
     fi
 fi
 
@@ -517,8 +517,8 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
     echo "  Controller: $CONTROLLER_URL"
     echo "  Local IP:   $LOCAL_IP"
     echo ""
-    echo "  Status:     systemctl status aura-agent"
-    echo "  Logs:       journalctl -u aura-agent -f"
+    echo "  Status:     systemctl status archetype-agent"
+    echo "  Logs:       journalctl -u archetype-agent -f"
     echo ""
 fi
 
@@ -529,11 +529,11 @@ if [ "$INSTALL_CONTROLLER" = true ]; then
     echo "  3. Create a lab and import a topology"
     echo ""
     echo -e "${GREEN}Add Remote Agents:${NC}"
-    echo "  curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \\"
+    echo "  curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \\"
     echo "    sudo bash -s -- --agent --controller-url http://$LOCAL_IP:8000 --name agent-name"
     echo ""
     echo -e "${GREEN}Reinstall Fresh (if needed):${NC}"
-    echo "  curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/install.sh | \\"
+    echo "  curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \\"
     echo "    sudo bash -s -- --fresh"
     echo ""
 fi

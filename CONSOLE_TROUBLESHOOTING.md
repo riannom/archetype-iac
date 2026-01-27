@@ -35,11 +35,11 @@
   - `clab-a2fe3d2a-ebd0-4a06-b-r1` on host-b
   - `clab-a2fe3d2a-ebd0-4a06-b-r2` on controller host
 - Routing confirmation:
-  - `sudo journalctl -u aura-agent --since "1 min ago" | grep -i console` shows r1 requests hitting host-b.
-  - `docker logs --since 1m aura-controller-agent-1 | grep -i console` shows r2 requests hitting local agent.
+  - `sudo journalctl -u archetype-agent --since "1 min ago" | grep -i console` shows r1 requests hitting host-b.
+  - `docker logs --since 1m archetype-controller-agent-1 | grep -i console` shows r2 requests hitting local agent.
 - Backend console WebSocket works and returns binary data:
   ```bash
-  docker exec -it aura-controller-api-1 sh -c 'printf "%s\n" \
+  docker exec -it archetype-controller-api-1 sh -c 'printf "%s\n" \
   "import asyncio, websockets" \
   "async def main():" \
   "    uri = \"ws://localhost:8000/labs/a2fe3d2a-ebd0-4a06-b53c-baaec34fbb64/nodes/r1/console\"" \
@@ -61,7 +61,7 @@
 - WebSocket delivers binary frames (Blob/ArrayBuffer). If not handled properly, xterm errors or console disconnects.
 - Even after changes, browser may still be using cached bundle; verify with a fresh build and cache bypass.
 
-## Frontend Fix (Needed in /opt/aura-controller build)
+## Frontend Fix (Needed in /opt/archetype-controller build)
 Target file:
 - `web/src/pages/LabDetailPage.tsx`
 
@@ -104,13 +104,13 @@ socket.onmessage = (event) => {
 ## Build / Deploy
 - Rebuild web:
   ```bash
-  cd /opt/aura-controller
+  cd /opt/archetype-controller
   docker compose -f docker-compose.gui.yml up -d --build web
   ```
 - Verify bundle includes `binaryType` and `Uint8Array`:
   ```bash
-  docker exec -it aura-controller-web-1 /bin/sh -c 'grep -n "binaryType" /usr/share/nginx/html/assets/*.js | head -n 5'
-  docker exec -it aura-controller-web-1 /bin/sh -c 'grep -n "Uint8Array" /usr/share/nginx/html/assets/*.js | head -n 5'
+  docker exec -it archetype-controller-web-1 /bin/sh -c 'grep -n "binaryType" /usr/share/nginx/html/assets/*.js | head -n 5'
+  docker exec -it archetype-controller-web-1 /bin/sh -c 'grep -n "Uint8Array" /usr/share/nginx/html/assets/*.js | head -n 5'
   ```
 - Use hard refresh or private window to avoid cached JS.
 
@@ -135,6 +135,6 @@ socket.onmessage = (event) => {
 - WebSocket stays open when idle; backend does not auto-disconnect during a 5s wait.
 
 ## Controller Fix Applied (2026-01-20)
-- Updated `/opt/aura-controller/web/src/pages/LabDetailPage.tsx` to write `Uint8Array` directly to xterm for ArrayBuffer/Blob frames while still capturing decoded text for `consoleOutput`.
-- Rebuilt and restarted web container: `docker compose -f /opt/aura-controller/docker-compose.gui.yml up -d --build web`.
+- Updated `/opt/archetype-controller/web/src/pages/LabDetailPage.tsx` to write `Uint8Array` directly to xterm for ArrayBuffer/Blob frames while still capturing decoded text for `consoleOutput`.
+- Rebuilt and restarted web container: `docker compose -f /opt/archetype-controller/docker-compose.gui.yml up -d --build web`.
 - New bundle is `http://127.0.0.1:8080/assets/index-u7EUbNhD.js` and includes `Uint8Array` handling in console message path.
