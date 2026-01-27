@@ -80,6 +80,10 @@ class VendorConfig:
     port_start_index: int = 0
     max_ports: int = 16
 
+    # Resource requirements
+    memory: int = 1024  # Memory in MB
+    cpu: int = 1  # CPU cores
+
     # Image requirements
     requires_image: bool = True
     supported_image_kinds: list[str] = field(default_factory=lambda: ["docker"])
@@ -143,6 +147,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="GigabitEthernet",
         port_start_index=0,
         max_ports=16,
+        memory=4096,  # 4GB recommended
+        cpu=2,
         requires_image=True,
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/",
         license_required=True,
@@ -282,6 +288,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="Ethernet",
         port_start_index=1,
         max_ports=64,
+        memory=2048,  # 2GB recommended
+        cpu=2,
         requires_image=True,
         documentation_url="https://www.arista.com/en/support/product-documentation",
         license_required=True,
@@ -304,6 +312,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="e1-",
         port_start_index=1,
         max_ports=64,
+        memory=4096,  # 4GB recommended
+        cpu=2,
         requires_image=False,
         documentation_url="https://documentation.nokia.com/srlinux/",
         tags=["switching", "bgp", "evpn", "datacenter", "gnmi"],
@@ -787,12 +797,17 @@ def get_vendors_for_ui() -> list[dict]:
             "icon": config.icon,
             "versions": config.versions,
             "isActive": config.is_active,
-            # New metadata fields
+            # Port/interface configuration
             "portNaming": config.port_naming,
             "portStartIndex": config.port_start_index,
             "maxPorts": config.max_ports,
+            # Resource requirements
+            "memory": config.memory,
+            "cpu": config.cpu,
+            # Image configuration
             "requiresImage": config.requires_image,
             "supportedImageKinds": config.supported_image_kinds,
+            # Documentation and licensing
             "documentationUrl": config.documentation_url,
             "licenseRequired": config.license_required,
             "tags": config.tags,

@@ -132,10 +132,205 @@ def list_vendors() -> list[dict]:
 
     This endpoint provides a unified view of all supported network devices,
     including their categories, icons, versions, and availability status.
-    Data is sourced from the centralized vendor registry in agent/vendors.py.
+    Data is sourced from the centralized vendor registry in agent/vendors.py,
+    merged with any custom device types defined per installation.
     """
     from agent.vendors import get_vendors_for_ui
-    return get_vendors_for_ui()
+    from app.image_store import load_custom_devices
+
+    # Get base vendor configs
+    result = get_vendors_for_ui()
+
+    # Load custom devices and merge them
+    custom_devices = load_custom_devices()
+    if custom_devices:
+        # Group custom devices by category
+        custom_by_category: dict[str, list[dict]] = {}
+        for device in custom_devices:
+            cat = device.get("category", "Compute")
+            if cat not in custom_by_category:
+                custom_by_category[cat] = []
+            custom_by_category[cat].append(device)
+
+        # Merge into existing categories or create new ones
+        for cat_data in result:
+            cat_name = cat_data.get("name")
+            if cat_name in custom_by_category:
+                # Add to existing category
+                if "subCategories" in cat_data:
+                    # Find "Other" subcategory or create one
+                    other_subcat = None
+                    for subcat in cat_data["subCategories"]:
+                        if subcat.get("name") == "Custom":
+                            other_subcat = subcat
+                            break
+                    if other_subcat:
+                        other_subcat["models"].extend(custom_by_category[cat_name])
+                    else:
+                        cat_data["subCategories"].append({
+                            "name": "Custom",
+                            "models": custom_by_category[cat_name]
+                        })
+                elif "models" in cat_data:
+                    cat_data["models"].extend(custom_by_category[cat_name])
+                del custom_by_category[cat_name]
+
+        # Add remaining categories that don't exist
+        for cat_name, devices in custom_by_category.items():
+            result.append({
+                "name": cat_name,
+                "models": devices
+            })
+
+    return result
+
+
+@app.post("/vendors")
+def add_custom_device(
+    payload: dict,
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Add a custom device type.
+
+    Required fields:
+    - id: Unique device identifier
+    - name: Display name
+
+    Optional fields:
+    - type: Device type (router, switch, firewall, host, container)
+    - category: UI category (Network, Security, Compute, Cloud & External)
+    - vendor: Vendor name (default: "Custom")
+    - icon: FontAwesome icon class (default: "fa-box")
+    - versions: List of versions (default: ["latest"])
+    - memory: Memory requirement in MB (default: 1024)
+    - cpu: CPU cores required (default: 1)
+    - maxPorts: Maximum interfaces (default: 8)
+    - portNaming: Interface naming pattern (default: "eth")
+    - portStartIndex: Starting port number (default: 0)
+    - requiresImage: Whether user must provide image (default: true)
+    - supportedImageKinds: List of image types (default: ["docker"])
+    - licenseRequired: Whether license is required (default: false)
+    - documentationUrl: Link to documentation
+    - tags: Searchable tags
+    """
+    from app.image_store import add_custom_device as store_add_device, find_custom_device
+    from agent.vendors import VENDOR_CONFIGS
+
+    device_id = payload.get("id")
+    if not device_id:
+        raise HTTPException(status_code=400, detail="Device ID is required")
+    if not payload.get("name"):
+        raise HTTPException(status_code=400, detail="Device name is required")
+
+    # Check if device ID conflicts with vendor registry
+    if device_id in VENDOR_CONFIGS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Device ID '{device_id}' conflicts with built-in vendor registry"
+        )
+
+    # Check if already exists as custom device
+    if find_custom_device(device_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Custom device '{device_id}' already exists"
+        )
+
+    try:
+        device = store_add_device(payload)
+        return {"device": device}
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.delete("/vendors/{device_id}")
+def delete_custom_device(
+    device_id: str,
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Delete a custom device type.
+
+    Only custom devices with no images assigned can be deleted.
+    Built-in vendor devices cannot be deleted.
+    """
+    from app.image_store import (
+        find_custom_device,
+        delete_custom_device as store_delete_device,
+        get_device_image_count,
+    )
+    from agent.vendors import VENDOR_CONFIGS
+
+    # Check if it's a built-in vendor device
+    if device_id in VENDOR_CONFIGS:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete built-in vendor devices"
+        )
+
+    # Check if custom device exists
+    device = find_custom_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Custom device not found")
+
+    # Check if any images are assigned to this device
+    image_count = get_device_image_count(device_id)
+    if image_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete device with {image_count} assigned image(s). Unassign images first."
+        )
+
+    deleted = store_delete_device(device_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    return {"message": f"Device '{device_id}' deleted successfully"}
+
+
+@app.put("/vendors/{device_id}")
+def update_custom_device_endpoint(
+    device_id: str,
+    payload: dict,
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Update a custom device type's properties.
+
+    Body can include any of:
+    - name: Display name
+    - category: UI category
+    - vendor: Vendor name
+    - icon: FontAwesome icon class
+    - versions: List of versions
+    - memory: Memory requirement in MB
+    - cpu: CPU cores required
+    - maxPorts: Maximum interfaces
+    - portNaming: Interface naming pattern
+    - requiresImage: Whether user must provide image
+    - supportedImageKinds: List of image types
+    - licenseRequired: Whether license is required
+    - documentationUrl: Link to docs
+    - tags: Searchable tags
+    - isActive: Whether device is available in UI
+    """
+    from app.image_store import find_custom_device, update_custom_device
+    from agent.vendors import VENDOR_CONFIGS
+
+    # Check if it's a built-in vendor device
+    if device_id in VENDOR_CONFIGS:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot modify built-in vendor devices"
+        )
+
+    # Check if custom device exists
+    if not find_custom_device(device_id):
+        raise HTTPException(status_code=404, detail="Custom device not found")
+
+    updated = update_custom_device(device_id, payload)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    return {"device": updated}
 
 
 @app.get("/dashboard/metrics")

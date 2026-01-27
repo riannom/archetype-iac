@@ -15,8 +15,10 @@ from app import models
 from app.auth import get_current_user
 from app.image_store import (
     create_image_entry,
+    delete_image_entry,
     detect_device_from_filename,
     ensure_image_store,
+    find_image_by_id,
     load_manifest,
     qcow2_path,
     save_manifest,
@@ -128,6 +130,16 @@ def load_image(
             file_size = os.path.getsize(temp_path)
 
         manifest = load_manifest()
+
+        # Check for duplicate images before adding
+        for image_ref in loaded_images:
+            potential_id = f"docker:{image_ref}"
+            if find_image_by_id(manifest, potential_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Image '{image_ref}' already exists in the library"
+                )
+
         for image_ref in loaded_images:
             device_id, version = detect_device_from_filename(image_ref)
             entry = create_image_entry(
@@ -159,6 +171,16 @@ def upload_qcow2(
         raise HTTPException(status_code=400, detail="Missing filename")
     if not file.filename.lower().endswith((".qcow2", ".qcow")):
         raise HTTPException(status_code=400, detail="File must be a qcow2 image")
+
+    # Check for duplicate before saving
+    manifest = load_manifest()
+    potential_id = f"qcow2:{Path(file.filename).name}"
+    if find_image_by_id(manifest, potential_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Image '{file.filename}' already exists in the library"
+        )
+
     destination = qcow2_path(Path(file.filename).name)
     try:
         with destination.open("wb") as handle:
@@ -168,7 +190,6 @@ def upload_qcow2(
     # Get file size
     file_size = destination.stat().st_size if destination.exists() else None
 
-    manifest = load_manifest()
     device_id, version = detect_device_from_filename(destination.name)
     entry = create_image_entry(
         image_id=f"qcow2:{destination.name}",
@@ -292,6 +313,44 @@ def unassign_image_from_device(
 
     save_manifest(manifest)
     return {"image": updated}
+
+
+@router.delete("/library/{image_id}")
+def delete_image(
+    image_id: str,
+    current_user: models.User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Delete an image from the library.
+
+    For QCOW2 images, also deletes the file from disk.
+    For Docker images, only removes from manifest (does not remove from Docker).
+    """
+    manifest = load_manifest()
+
+    # Find the image first to get its details
+    image = find_image_by_id(manifest, image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # If it's a QCOW2 image, delete the file from disk
+    if image.get("kind") == "qcow2":
+        file_path = Path(image.get("reference", ""))
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to delete file: {e}"
+                )
+
+    # Remove from manifest
+    deleted = delete_image_entry(manifest, image_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    save_manifest(manifest)
+    return {"message": f"Image '{image_id}' deleted successfully"}
 
 
 @router.get("/devices/{device_id}/images")

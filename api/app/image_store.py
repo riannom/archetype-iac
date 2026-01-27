@@ -79,6 +79,166 @@ def load_rules() -> list[dict[str, str]]:
     return data.get("rules", [])
 
 
+# =============================================================================
+# CUSTOM DEVICE TYPES
+# =============================================================================
+
+def custom_devices_path() -> Path:
+    """Path to the custom device types JSON file."""
+    return ensure_image_store() / "custom_devices.json"
+
+
+def load_custom_devices() -> list[dict]:
+    """Load custom device types from storage."""
+    path = custom_devices_path()
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data.get("devices", [])
+
+
+def save_custom_devices(devices: list[dict]) -> None:
+    """Save custom device types to storage."""
+    path = custom_devices_path()
+    path.write_text(json.dumps({"devices": devices}, indent=2), encoding="utf-8")
+
+
+def find_custom_device(device_id: str) -> Optional[dict]:
+    """Find a custom device type by its ID."""
+    devices = load_custom_devices()
+    for device in devices:
+        if device.get("id") == device_id:
+            return device
+    return None
+
+
+def add_custom_device(device: dict) -> dict:
+    """Add a new custom device type.
+
+    Args:
+        device: Device configuration dict with at least 'id' and 'name' fields
+
+    Supported fields:
+        - id: Unique device identifier (required)
+        - name: Display name (required)
+        - type: Device type (router, switch, firewall, host, container)
+        - vendor: Vendor name
+        - category: UI category (Network, Security, Compute, Cloud & External)
+        - icon: FontAwesome icon class
+        - versions: List of version strings
+
+        Resource properties:
+        - memory: Memory requirement in MB (e.g., 2048)
+        - cpu: CPU cores required (e.g., 2)
+        - maxPorts: Maximum number of network interfaces
+        - portNaming: Interface naming pattern (eth, Ethernet, etc.)
+        - portStartIndex: Starting port number (0 or 1)
+
+        Other properties:
+        - requiresImage: Whether user must provide an image
+        - supportedImageKinds: List of supported image types (docker, qcow2)
+        - licenseRequired: Whether device requires commercial license
+        - documentationUrl: Link to documentation
+        - tags: Searchable tags
+
+    Returns:
+        The added device entry
+    """
+    devices = load_custom_devices()
+
+    # Check for duplicate
+    for existing in devices:
+        if existing.get("id") == device.get("id"):
+            raise ValueError(f"Device '{device.get('id')}' already exists")
+
+    # Add default fields if not present - UI metadata
+    device.setdefault("type", "container")
+    device.setdefault("vendor", "Custom")
+    device.setdefault("icon", "fa-box")
+    device.setdefault("versions", ["latest"])
+    device.setdefault("isActive", True)
+    device.setdefault("category", "Compute")
+    device.setdefault("isCustom", True)  # Mark as custom device
+
+    # Resource properties defaults
+    device.setdefault("memory", 1024)  # 1GB default
+    device.setdefault("cpu", 1)  # 1 CPU core default
+    device.setdefault("maxPorts", 8)  # 8 interfaces default
+    device.setdefault("portNaming", "eth")
+    device.setdefault("portStartIndex", 0)
+
+    # Other property defaults
+    device.setdefault("requiresImage", True)
+    device.setdefault("supportedImageKinds", ["docker"])
+    device.setdefault("licenseRequired", False)
+    device.setdefault("documentationUrl", None)
+    device.setdefault("tags", [])
+
+    devices.append(device)
+    save_custom_devices(devices)
+    return device
+
+
+def update_custom_device(device_id: str, updates: dict) -> Optional[dict]:
+    """Update an existing custom device type.
+
+    Args:
+        device_id: ID of the device to update
+        updates: Dictionary of fields to update
+
+    Returns:
+        Updated device entry or None if not found
+    """
+    devices = load_custom_devices()
+    for device in devices:
+        if device.get("id") == device_id:
+            # Don't allow changing the ID or isCustom flag
+            updates.pop("id", None)
+            updates.pop("isCustom", None)
+            device.update(updates)
+            save_custom_devices(devices)
+            return device
+    return None
+
+
+def delete_custom_device(device_id: str) -> Optional[dict]:
+    """Delete a custom device type by its ID.
+
+    Returns:
+        The deleted device or None if not found
+    """
+    devices = load_custom_devices()
+    for i, device in enumerate(devices):
+        if device.get("id") == device_id:
+            deleted = devices.pop(i)
+            save_custom_devices(devices)
+            return deleted
+    return None
+
+
+def get_device_image_count(device_id: str) -> int:
+    """Count how many images are assigned to a device type.
+
+    Checks both 'device_id' field and 'compatible_devices' list.
+    """
+    manifest = load_manifest()
+    count = 0
+    device_lower = device_id.lower()
+
+    for image in manifest.get("images", []):
+        # Check primary device assignment
+        if (image.get("device_id") or "").lower() == device_lower:
+            count += 1
+            continue
+
+        # Check compatible_devices list
+        compatible = [d.lower() for d in image.get("compatible_devices", [])]
+        if device_lower in compatible:
+            count += 1
+
+    return count
+
+
 def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
     name = filename.lower()
     for rule in load_rules():
@@ -193,6 +353,39 @@ def update_image_entry(
 
             item.update(updates)
             return item
+    return None
+
+
+def find_image_by_id(manifest: dict, image_id: str) -> Optional[dict]:
+    """Find an image entry by its ID."""
+    for item in manifest.get("images", []):
+        if item.get("id") == image_id:
+            return item
+    return None
+
+
+def find_image_by_reference(manifest: dict, reference: str) -> Optional[dict]:
+    """Find an image entry by its Docker reference or file path."""
+    for item in manifest.get("images", []):
+        if item.get("reference") == reference:
+            return item
+    return None
+
+
+def delete_image_entry(manifest: dict, image_id: str) -> Optional[dict]:
+    """Delete an image entry from the manifest by its ID.
+
+    Args:
+        manifest: The manifest dictionary
+        image_id: ID of the image to delete
+
+    Returns:
+        The deleted image entry or None if not found
+    """
+    images = manifest.get("images", [])
+    for i, item in enumerate(images):
+        if item.get("id") == image_id:
+            return images.pop(i)
     return None
 
 

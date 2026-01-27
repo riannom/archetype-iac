@@ -70,7 +70,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
       className={`
         relative rounded-xl border transition-all duration-200 cursor-pointer
         ${isSelected
-          ? 'bg-sage-50 dark:bg-sage-900/20 border-sage-500 shadow-lg shadow-sage-500/10'
+          ? 'bg-sage-50 dark:bg-stone-800 border-sage-500 dark:border-sage-600 shadow-lg shadow-sage-500/10'
           : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700'
         }
         ${isDropTarget
