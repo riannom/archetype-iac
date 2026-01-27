@@ -5,13 +5,16 @@ import { ThemeProvider } from "./theme/index";
 import { UserProvider } from "./contexts/UserContext";
 import StudioConsolePage from "./pages/StudioConsolePage";
 import HostsPage from "./pages/HostsPage";
-import ImagesPage from "./pages/ImagesPage";
+import NodesPage from "./pages/NodesPage";
 import StudioPage from "./studio/StudioPage";
 
 const router = createBrowserRouter([
   { path: "/", element: <StudioPage /> },
   { path: "/hosts", element: <HostsPage /> },
-  { path: "/images", element: <ImagesPage /> },
+  { path: "/nodes", element: <NodesPage /> },
+  { path: "/nodes/devices", element: <NodesPage /> },
+  { path: "/nodes/images", element: <NodesPage /> },
+  { path: "/images", element: <Navigate to="/nodes/images" replace /> },
   { path: "/labs", element: <Navigate to="/" replace /> },
   { path: "/labs/:labId", element: <Navigate to="/" replace /> },
   { path: "/studio", element: <Navigate to="/" replace /> },

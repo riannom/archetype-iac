@@ -770,6 +770,24 @@ def get_all_vendors() -> list[VendorConfig]:
     return list(VENDOR_CONFIGS.values())
 
 
+def _get_vendor_options(config: VendorConfig) -> dict:
+    """Extract vendor-specific options for a device configuration.
+
+    Returns a dictionary of vendor-specific settings that can be customized.
+    """
+    options = {}
+
+    # Arista cEOS: Zero Touch Provisioning cancel
+    if config.kind == "ceos":
+        options["zerotouchCancel"] = True
+
+    # Nokia SR Linux: gNMI interface
+    if config.kind == "nokia_srlinux":
+        options["gnmiEnabled"] = True
+
+    return options
+
+
 def get_vendors_for_ui() -> list[dict]:
     """Return vendors grouped by category/subcategory for frontend.
 
@@ -827,6 +845,16 @@ def get_vendors_for_ui() -> list[dict]:
             "documentationUrl": config.documentation_url,
             "licenseRequired": config.license_required,
             "tags": config.tags,
+            # Boot readiness configuration
+            "readinessProbe": config.readiness_probe,
+            "readinessPattern": config.readiness_pattern,
+            "readinessTimeout": config.readiness_timeout,
+            # Additional metadata
+            "kind": config.kind,
+            "consoleShell": config.console_shell,
+            "notes": config.notes,
+            # Vendor-specific options
+            "vendorOptions": _get_vendor_options(config),
         })
 
     # Convert to output format

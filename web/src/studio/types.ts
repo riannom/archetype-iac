@@ -51,6 +51,23 @@ export interface DeviceModel {
   documentationUrl?: string;
   licenseRequired?: boolean;
   tags?: string[];
+  // Additional config fields
+  memory?: number;
+  cpu?: number;
+  kind?: string;
+  consoleShell?: string;
+  notes?: string;
+  readinessProbe?: string;
+  readinessPattern?: string;
+  readinessTimeout?: number;
+  vendorOptions?: Record<string, unknown>;
+  isCustom?: boolean;
+}
+
+export interface DeviceConfig {
+  base: Record<string, unknown>;
+  overrides: Record<string, unknown>;
+  effective: Record<string, unknown>;
 }
 
 export interface ImageLibraryEntry {

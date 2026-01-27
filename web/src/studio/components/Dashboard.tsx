@@ -114,12 +114,12 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
           )}
 
           <button
-            onClick={() => navigate('/images')}
+            onClick={() => navigate('/nodes')}
             className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
-            title="Manage Images"
+            title="Manage Nodes"
           >
-            <i className="fa-solid fa-hard-drive text-xs"></i>
-            <span className="text-[10px] font-bold uppercase">Images</span>
+            <i className="fa-solid fa-microchip text-xs"></i>
+            <span className="text-[10px] font-bold uppercase">Nodes</span>
           </button>
 
           <button
