@@ -62,11 +62,23 @@ async def reconcile_lab_states():
             .all()
         )
 
+        # Find running nodes that haven't completed boot readiness check
+        unready_running_nodes = (
+            session.query(models.NodeState)
+            .filter(
+                models.NodeState.actual_state == "running",
+                models.NodeState.is_ready == False,
+            )
+            .all()
+        )
+
         # Collect unique lab IDs that need reconciliation
         labs_to_reconcile = set()
         for lab in transitional_labs:
             labs_to_reconcile.add(lab.id)
         for node in stale_pending_nodes:
+            labs_to_reconcile.add(node.lab_id)
+        for node in unready_running_nodes:
             labs_to_reconcile.add(node.lab_id)
 
         if not labs_to_reconcile:

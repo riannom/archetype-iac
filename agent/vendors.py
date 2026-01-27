@@ -304,7 +304,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         tags=["switching", "bgp", "evpn", "vxlan", "datacenter"],
         # Boot readiness: cEOS takes 30-60+ seconds to boot
         readiness_probe="log_pattern",
-        readiness_pattern=r"%SYS-5-CONFIG_I|%ZTP-6-CANCEL|Startup complete|System ready",
+        readiness_pattern=r"%SYS-5-CONFIG_I|%SYS-5-SYSTEM_INITIALIZED|%SYS-5-SYSTEM_RESTARTED|%ZTP-6-CANCEL|Startup complete|System ready",
         readiness_timeout=300,  # cEOS can take up to 5 minutes
     ),
     "nokia_srlinux": VendorConfig(
