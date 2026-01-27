@@ -6,6 +6,7 @@ import { apiRequest } from '../api';
 import DeviceManager from '../studio/components/DeviceManager';
 import { DeviceModel, ImageLibraryEntry } from '../studio/types';
 import { DeviceCategory } from '../studio/constants';
+import { ArchetypeIcon } from '../components/icons';
 
 interface CustomDevice {
   id: string;
@@ -106,7 +107,7 @@ const ImagesPage: React.FC = () => {
   const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
   const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
   const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
-    const stored = localStorage.getItem('aura_custom_devices');
+    const stored = localStorage.getItem('archetype_custom_devices');
     if (!stored) return [];
     try {
       const parsed = JSON.parse(stored) as CustomDevice[];
@@ -140,7 +141,7 @@ const ImagesPage: React.FC = () => {
 
   const updateCustomDevices = (next: CustomDevice[]) => {
     setCustomDevices(next);
-    localStorage.setItem('aura_custom_devices', JSON.stringify(next));
+    localStorage.setItem('archetype_custom_devices', JSON.stringify(next));
   };
 
   const deviceModels = buildDeviceModels(vendorCategories, imageLibrary, customDevices);
@@ -154,12 +155,10 @@ const ImagesPage: React.FC = () => {
     <>
       <div className="min-h-screen bg-stone-50 dark:bg-stone-900 flex flex-col overflow-hidden">
         <header className="h-16 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-sage-600 rounded-xl flex items-center justify-center shadow-lg shadow-sage-900/20 border border-sage-400/30">
-              <i className="fa-solid fa-bolt-lightning text-white"></i>
-            </div>
+          <div className="flex items-center gap-4">
+            <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
             <div>
-              <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">AURA</h1>
+              <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
               <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Image Management</p>
             </div>
           </div>

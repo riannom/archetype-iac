@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { apiRequest } from '../api';
+import { ArchetypeIcon } from '../components/icons';
 
 interface LabInfo {
   id: string;
@@ -152,12 +153,10 @@ const HostsPage: React.FC = () => {
     <>
       <div className="min-h-screen bg-stone-50 dark:bg-stone-900 flex flex-col overflow-hidden">
         <header className="h-20 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-sage-600 rounded-xl flex items-center justify-center shadow-lg shadow-sage-900/20 border border-sage-400/30">
-              <i className="fa-solid fa-bolt-lightning text-white"></i>
-            </div>
+          <div className="flex items-center gap-4">
+            <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
             <div>
-              <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">AURA</h1>
+              <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
               <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Host Management</p>
             </div>
           </div>
@@ -368,7 +367,7 @@ const HostsPage: React.FC = () => {
         </main>
 
         <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
-          <span>Aura Infrastructure Management</span>
+          <span>Archetype Infrastructure Management</span>
           <span>Auto-refresh: 10s</span>
         </footer>
       </div>

@@ -241,20 +241,25 @@ const Canvas: React.FC<CanvasProps> = ({
             const isHovered = hoveredLinkId === link.id;
             const linkColor = isSelected ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F') : (isHovered ? (effectiveMode === 'dark' ? '#84CC16' : '#65A30D') : (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
 
-            // Calculate port label positions (~40px along line from each node)
+            // Calculate port label positions (~40px along line from each node, offset perpendicular)
             const dx = target.x - source.x;
             const dy = target.y - source.y;
             const len = Math.sqrt(dx * dx + dy * dy);
             const unitX = len > 0 ? dx / len : 0;
             const unitY = len > 0 ? dy / len : 0;
+            // Perpendicular offset (rotate 90 degrees)
+            const perpX = -unitY;
+            const perpY = unitX;
             const labelOffset = 40;
-            const sourceLabelX = source.x + unitX * labelOffset;
-            const sourceLabelY = source.y + unitY * labelOffset;
-            const targetLabelX = target.x - unitX * labelOffset;
-            const targetLabelY = target.y - unitY * labelOffset;
+            const perpOffset = 10; // offset perpendicular to the line
+            const sourceLabelX = source.x + unitX * labelOffset + perpX * perpOffset;
+            const sourceLabelY = source.y + unitY * labelOffset + perpY * perpOffset;
+            const targetLabelX = target.x - unitX * labelOffset + perpX * perpOffset;
+            const targetLabelY = target.y - unitY * labelOffset + perpY * perpOffset;
 
-            // Label text color
-            const labelColor = effectiveMode === 'dark' ? '#A8A29E' : '#78716C';
+            // Label styling for better contrast
+            const labelColor = effectiveMode === 'dark' ? '#E7E5E4' : '#44403C';
+            const labelStroke = effectiveMode === 'dark' ? '#1C1917' : '#FFFFFF';
 
             return (
               <g key={link.id} className="pointer-events-auto cursor-pointer">
@@ -265,9 +270,12 @@ const Canvas: React.FC<CanvasProps> = ({
                   <text
                     x={sourceLabelX}
                     y={sourceLabelY}
-                    fill={linkColor}
-                    fontSize="9"
-                    fontWeight="600"
+                    fill={labelColor}
+                    stroke={labelStroke}
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                    fontSize="11"
+                    fontWeight="700"
                     textAnchor="middle"
                     dominantBaseline="middle"
                     className="pointer-events-none select-none"
@@ -280,9 +288,12 @@ const Canvas: React.FC<CanvasProps> = ({
                   <text
                     x={targetLabelX}
                     y={targetLabelY}
-                    fill={linkColor}
-                    fontSize="9"
-                    fontWeight="600"
+                    fill={labelColor}
+                    stroke={labelStroke}
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                    fontSize="11"
+                    fontWeight="700"
                     textAnchor="middle"
                     dominantBaseline="middle"
                     className="pointer-events-none select-none"

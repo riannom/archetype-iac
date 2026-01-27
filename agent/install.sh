@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Aura Agent Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/riannom/aura-iac/main/agent/install.sh | sudo bash -s -- [OPTIONS]
+# Archetype Agent Installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/agent/install.sh | sudo bash -s -- [OPTIONS]
 #
 # Options:
 #   --name NAME           Agent name (required)
@@ -13,9 +13,9 @@ set -e
 #   --no-containerlab     Skip containerlab installation
 #   --uninstall           Remove the agent
 
-INSTALL_DIR="/opt/aura-agent"
-SERVICE_NAME="aura-agent"
-REPO_URL="https://github.com/riannom/aura-iac.git"
+INSTALL_DIR="/opt/archetype-agent"
+SERVICE_NAME="archetype-agent"
+REPO_URL="https://github.com/riannom/archetype-iac.git"
 BRANCH="main"
 
 # Colors
@@ -77,13 +77,13 @@ done
 
 # Uninstall
 if [ "$UNINSTALL" = true ]; then
-    log_info "Uninstalling Aura Agent..."
+    log_info "Uninstalling Archetype Agent..."
     systemctl stop $SERVICE_NAME 2>/dev/null || true
     systemctl disable $SERVICE_NAME 2>/dev/null || true
     rm -f /etc/systemd/system/$SERVICE_NAME.service
     systemctl daemon-reload
     rm -rf $INSTALL_DIR
-    log_info "Aura Agent uninstalled successfully"
+    log_info "Archetype Agent uninstalled successfully"
     exit 0
 fi
 
@@ -135,7 +135,7 @@ else
 fi
 
 log_info "Detected OS: $OS $VERSION"
-log_info "Installing Aura Agent: $AGENT_NAME"
+log_info "Installing Archetype Agent: $AGENT_NAME"
 log_info "Controller: $CONTROLLER_URL"
 log_info "Local IP: $LOCAL_IP"
 log_info "Port: $AGENT_PORT"
@@ -208,7 +208,7 @@ if [ "$INSTALL_CONTAINERLAB" = true ]; then
 fi
 
 # Create install directory
-log_info "Setting up Aura Agent in $INSTALL_DIR..."
+log_info "Setting up Archetype Agent in $INSTALL_DIR..."
 mkdir -p $INSTALL_DIR
 
 # Clone or update repository
@@ -235,24 +235,24 @@ pip install --quiet -r $INSTALL_DIR/repo/agent/requirements.txt
 # Create environment file
 log_info "Creating configuration..."
 cat > $INSTALL_DIR/agent.env << EOF
-# Aura Agent Configuration
-AURA_AGENT_AGENT_NAME=$AGENT_NAME
-AURA_AGENT_CONTROLLER_URL=$CONTROLLER_URL
-AURA_AGENT_LOCAL_IP=$LOCAL_IP
-AURA_AGENT_AGENT_PORT=$AGENT_PORT
-AURA_AGENT_ENABLE_CONTAINERLAB=true
-AURA_AGENT_ENABLE_VXLAN=true
-AURA_AGENT_WORKSPACE_PATH=/var/lib/aura-agent
+# Archetype Agent Configuration
+ARCHETYPE_AGENT_AGENT_NAME=$AGENT_NAME
+ARCHETYPE_AGENT_CONTROLLER_URL=$CONTROLLER_URL
+ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
+ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT
+ARCHETYPE_AGENT_ENABLE_CONTAINERLAB=true
+ARCHETYPE_AGENT_ENABLE_VXLAN=true
+ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
 EOF
 
 # Create workspace directory
-mkdir -p /var/lib/aura-agent
+mkdir -p /var/lib/archetype-agent
 
 # Create systemd service
 log_info "Creating systemd service..."
 cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
 [Unit]
-Description=Aura Network Lab Agent
+Description=Archetype Network Lab Agent
 After=network.target docker.service
 Requires=docker.service
 
@@ -279,7 +279,7 @@ systemctl daemon-reload
 systemctl enable $SERVICE_NAME
 
 # Start the service
-log_info "Starting Aura Agent..."
+log_info "Starting Archetype Agent..."
 systemctl start $SERVICE_NAME
 
 # Wait for startup
@@ -287,15 +287,15 @@ sleep 3
 
 # Check status
 if systemctl is-active --quiet $SERVICE_NAME; then
-    log_info "Aura Agent started successfully!"
+    log_info "Archetype Agent started successfully!"
 else
-    log_error "Aura Agent failed to start. Check logs with: journalctl -u $SERVICE_NAME -f"
+    log_error "Archetype Agent failed to start. Check logs with: journalctl -u $SERVICE_NAME -f"
     exit 1
 fi
 
 echo ""
 echo "=============================================="
-echo -e "${GREEN}Aura Agent Installation Complete!${NC}"
+echo -e "${GREEN}Archetype Agent Installation Complete!${NC}"
 echo "=============================================="
 echo ""
 echo "Agent Name:    $AGENT_NAME"

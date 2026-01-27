@@ -1,4 +1,4 @@
-# Aura-IAC API Reference
+# Archetype-IAC API Reference
 
 ## Base URL
 
@@ -118,7 +118,7 @@ Authorization: Bearer <token>
 
 ## Topology Format
 
-Aura uses containerlab-compatible YAML format with an additional `host` field for multi-host deployment.
+Archetype uses containerlab-compatible YAML format with an additional `host` field for multi-host deployment.
 
 ### Single-Host Topology
 

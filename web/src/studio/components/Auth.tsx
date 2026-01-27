@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import { ArchetypeIcon } from '../../components/icons';
 
 interface AuthProps {
   onLogin: (username: string) => void;
@@ -22,10 +23,8 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
       <div className="w-full max-w-md relative animate-in fade-in slide-in-from-bottom-4 duration-700">
         <div className="flex flex-col items-center mb-10">
-          <div className="w-16 h-16 bg-sage-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-sage-500/20 mb-4 border border-sage-400/30">
-            <i className="fa-solid fa-bolt-lightning text-white text-3xl"></i>
-          </div>
-          <h1 className="text-4xl font-black text-stone-900 dark:text-white tracking-tighter uppercase">AURA</h1>
+          <ArchetypeIcon size={56} className="text-sage-600 dark:text-sage-400 mb-4" />
+          <h1 className="text-4xl font-black text-stone-900 dark:text-white tracking-tighter uppercase">ARCHETYPE</h1>
           <p className="text-sage-600 dark:text-sage-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">Visual Studio</p>
         </div>
 
@@ -63,7 +62,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
               type="submit"
               className="w-full py-3 bg-sage-600 hover:bg-sage-500 text-white font-bold rounded-xl shadow-lg shadow-sage-900/20 transition-all active:scale-[0.98] mt-4"
             >
-              Sign In to Aura
+              Sign In to Archetype
             </button>
           </form>
         </div>

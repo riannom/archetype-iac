@@ -1,4 +1,4 @@
-"""Aura Agent - Host-level orchestration agent.
+"""Archetype Agent - Host-level orchestration agent.
 
 This agent runs on each compute host and handles:
 - Container/VM lifecycle via containerlab or libvirt
@@ -159,7 +159,7 @@ def get_resource_usage() -> dict:
         disk_total_gb = round(disk.total / (1024 ** 3), 2)
 
         # Docker container counts and details
-        # Only count Aura-related containers (containerlab nodes + aura-iac system)
+        # Only count Archetype-related containers (containerlab nodes + archetype system)
         containers_running = 0
         containers_total = 0
         container_details = []
@@ -169,19 +169,19 @@ def get_resource_usage() -> dict:
             all_containers = client.containers.list(all=True)
 
             # Collect detailed container info with lab associations
-            # Only include containerlab nodes and aura-iac system containers
+            # Only include containerlab nodes and archetype system containers
             for c in all_containers:
                 labels = c.labels
                 # Containerlab stores lab prefix in 'containerlab' label
                 lab_prefix = labels.get("containerlab", "")
                 is_clab_node = bool(labels.get("clab-node-name"))
-                is_aura_system = c.name.startswith("aura-iac-")
+                is_archetype_system = c.name.startswith("archetype-")
 
                 # Only include relevant containers
-                if not is_clab_node and not is_aura_system:
+                if not is_clab_node and not is_archetype_system:
                     continue
 
-                # Count only Aura-related containers
+                # Count only Archetype-related containers
                 containers_total += 1
                 if c.status == "running":
                     containers_running += 1
@@ -193,7 +193,7 @@ def get_resource_usage() -> dict:
                     "node_name": labels.get("clab-node-name"),
                     "node_kind": labels.get("clab-node-kind"),
                     "image": c.image.tags[0] if c.image.tags else c.image.short_id,
-                    "is_system": is_aura_system,
+                    "is_system": is_archetype_system,
                 })
         except Exception:
             pass
@@ -344,7 +344,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="Aura Agent",
+    title="Archetype Agent",
     version="0.1.0",
     lifespan=lifespan,
 )

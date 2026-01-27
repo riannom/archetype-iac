@@ -61,10 +61,10 @@ class ContainerlabProvider(Provider):
         """Get path to topology file in workspace."""
         return workspace / "topology.clab.yml"
 
-    def _strip_aura_fields(self, topology_yaml: str, lab_id: str = "") -> str:
-        """Strip Aura-specific fields and convert to containerlab format.
+    def _strip_archetype_fields(self, topology_yaml: str, lab_id: str = "") -> str:
+        """Strip Archetype-specific fields and convert to containerlab format.
 
-        The 'host' field is used by Aura for multi-host placement but is not
+        The 'host' field is used by Archetype for multi-host placement but is not
         a valid containerlab field.
 
         Also wraps flat topology in containerlab format if needed:
@@ -234,8 +234,8 @@ class ContainerlabProvider(Provider):
         # Ensure workspace exists
         workspace.mkdir(parents=True, exist_ok=True)
 
-        # Strip Aura-specific fields and convert to containerlab format
-        clean_topology = self._strip_aura_fields(topology_yaml, lab_id)
+        # Strip Archetype-specific fields and convert to containerlab format
+        clean_topology = self._strip_archetype_fields(topology_yaml, lab_id)
 
         # Write topology file
         topo_path = self._topology_path(workspace)

@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     global _agent_monitor_task
 
     # Startup
-    logger.info("Starting Aura API controller")
+    logger.info("Starting Archetype API controller")
 
     # Create database tables
     logger.info("Creating database tables")
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    logger.info("Shutting down Aura API controller")
+    logger.info("Shutting down Archetype API controller")
 
     if _agent_monitor_task:
         _agent_monitor_task.cancel()

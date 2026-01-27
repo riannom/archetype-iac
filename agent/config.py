@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     docker_socket: str = "unix:///var/run/docker.sock"
 
     # Workspace for lab files
-    workspace_path: str = "/var/lib/aura-agent"
+    workspace_path: str = "/var/lib/archetype-agent"
 
     # Communication timeouts (seconds)
     registration_timeout: float = 10.0
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 4
 
     class Config:
-        env_prefix = "AURA_AGENT_"
+        env_prefix = "ARCHETYPE_AGENT_"
 
 
 settings = Settings()

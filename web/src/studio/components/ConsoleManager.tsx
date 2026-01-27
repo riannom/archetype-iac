@@ -140,7 +140,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                   onClick={() => {
                     if (!activeNode) return;
                     const url = `/studio/console/${encodeURIComponent(labId)}/${encodeURIComponent(activeNode.id)}`;
-                    window.open(url, `aura-console-${activeNode.id}`, 'width=960,height=640');
+                    window.open(url, `archetype-console-${activeNode.id}`, 'width=960,height=640');
                   }}
                 >
                   <i className="fa-solid fa-up-right-from-square text-[9px]"></i>

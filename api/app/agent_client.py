@@ -1,4 +1,4 @@
-"""Client for communicating with Aura agents."""
+"""Client for communicating with Archetype agents."""
 
 from __future__ import annotations
 

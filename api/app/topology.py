@@ -69,7 +69,7 @@ def graph_to_yaml(graph: TopologyGraph) -> str:
     used_names: set[str] = set()
     for node in graph.nodes:
         safe_name = _safe_node_name(node.name, used_names)
-        name_map[node.name] = safe_name
+        name_map[node.id] = safe_name
         used_names.add(safe_name)
         node_data: dict[str, Any] = {}
         if node.device:
@@ -332,7 +332,7 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
 
     for node in graph.nodes:
         safe_name = _safe_node_name(node.name, used_names)
-        name_map[node.name] = safe_name
+        name_map[node.id] = safe_name
         used_names.add(safe_name)
 
         node_data: dict[str, Any] = {}
