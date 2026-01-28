@@ -230,6 +230,7 @@ async def delete_lab(
     database.query(models.NodePlacement).filter(models.NodePlacement.lab_id == lab_id).delete()
     database.query(models.NodeState).filter(models.NodeState.lab_id == lab_id).delete()
     database.query(models.LinkState).filter(models.LinkState.lab_id == lab_id).delete()
+    database.query(models.ConfigSnapshot).filter(models.ConfigSnapshot.lab_id == lab_id).delete()
 
     # Delete workspace files
     workspace = lab_workspace(lab.id)
@@ -1123,4 +1124,473 @@ def sync_link_states(
         message=f"Link states synchronized",
         links_created=created,
         links_updated=updated,
+    )
+
+
+# ============================================================================
+# Config Extraction Endpoint
+# ============================================================================
+
+
+@router.post("/labs/{lab_id}/extract-configs")
+async def extract_configs(
+    lab_id: str,
+    create_snapshot: bool = True,
+    snapshot_type: str = "manual",
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Extract running configs from all cEOS nodes in a lab.
+
+    This endpoint manually triggers config extraction from all running cEOS
+    containers in the lab. The configs are saved to the workspace as
+    startup-config files for persistence across container restarts.
+
+    Args:
+        create_snapshot: If True, creates config snapshots after extraction
+        snapshot_type: Type of snapshot to create ("manual" or "auto_stop")
+
+    Returns:
+        Dict with 'success', 'extracted_count', 'snapshots_created', and optionally 'error' keys
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get agent for this lab
+    lab_provider = get_lab_provider(lab)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if not agent:
+        raise HTTPException(status_code=503, detail="No healthy agent available")
+
+    # Call agent to extract configs
+    result = await agent_client.extract_configs_on_agent(agent, lab.id)
+
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Config extraction failed: {result.get('error', 'Unknown error')}"
+        )
+
+    extracted_count = result.get("extracted_count", 0)
+    snapshots_created = 0
+
+    # Optionally create snapshots after extraction
+    if create_snapshot and extracted_count > 0:
+        workspace = lab_workspace(lab.id)
+        configs_dir = workspace / "configs"
+
+        if configs_dir.exists():
+            for node_dir in configs_dir.iterdir():
+                if not node_dir.is_dir():
+                    continue
+                config_file = node_dir / "startup-config"
+                if not config_file.exists():
+                    continue
+
+                content = config_file.read_text(encoding="utf-8")
+                content_hash = _compute_content_hash(content)
+                node_name = node_dir.name
+
+                # Check for duplicate
+                latest_snapshot = (
+                    database.query(models.ConfigSnapshot)
+                    .filter(
+                        models.ConfigSnapshot.lab_id == lab_id,
+                        models.ConfigSnapshot.node_name == node_name,
+                    )
+                    .order_by(models.ConfigSnapshot.created_at.desc())
+                    .first()
+                )
+
+                if latest_snapshot and latest_snapshot.content_hash == content_hash:
+                    continue
+
+                # Create snapshot
+                snapshot = models.ConfigSnapshot(
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    content=content,
+                    content_hash=content_hash,
+                    snapshot_type=snapshot_type,
+                )
+                database.add(snapshot)
+                snapshots_created += 1
+
+            database.commit()
+
+    return {
+        "success": True,
+        "extracted_count": extracted_count,
+        "snapshots_created": snapshots_created,
+        "message": f"Extracted {extracted_count} cEOS configs, created {snapshots_created} snapshot(s)",
+    }
+
+
+# ============================================================================
+# Saved Config Retrieval Endpoints
+# ============================================================================
+
+
+@router.get("/labs/{lab_id}/configs")
+def get_all_configs(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Get all saved startup configs for a lab.
+
+    Returns a list of configs saved in the workspace/configs/ directory.
+    Each config includes the node name, config content, and last modified time.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+    workspace = lab_workspace(lab.id)
+    configs_dir = workspace / "configs"
+
+    configs = []
+    if configs_dir.exists():
+        for node_dir in configs_dir.iterdir():
+            if not node_dir.is_dir():
+                continue
+            config_file = node_dir / "startup-config"
+            if config_file.exists():
+                stat = config_file.stat()
+                configs.append({
+                    "node_name": node_dir.name,
+                    "config": config_file.read_text(encoding="utf-8"),
+                    "last_modified": stat.st_mtime,
+                    "exists": True,
+                })
+
+    return {"configs": configs}
+
+
+@router.get("/labs/{lab_id}/configs/{node_name}")
+def get_node_config(
+    lab_id: str,
+    node_name: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Get saved startup config for a specific node.
+
+    Returns the config content if it exists, or 404 if not found.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+    workspace = lab_workspace(lab.id)
+    config_file = workspace / "configs" / node_name / "startup-config"
+
+    if not config_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No saved config found for node '{node_name}'"
+        )
+
+    stat = config_file.stat()
+    return {
+        "node_name": node_name,
+        "config": config_file.read_text(encoding="utf-8"),
+        "last_modified": stat.st_mtime,
+        "exists": True,
+    }
+
+
+# ============================================================================
+# Config Snapshot Endpoints
+# ============================================================================
+
+
+def _compute_content_hash(content: str) -> str:
+    """Compute SHA256 hash of config content for deduplication."""
+    import hashlib
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+@router.get("/labs/{lab_id}/config-snapshots")
+def list_config_snapshots(
+    lab_id: str,
+    node_name: str | None = None,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.ConfigSnapshotsResponse:
+    """List all config snapshots for a lab.
+
+    Optionally filter by node_name query parameter.
+    Returns snapshots ordered by created_at descending (newest first).
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    query = (
+        database.query(models.ConfigSnapshot)
+        .filter(models.ConfigSnapshot.lab_id == lab_id)
+    )
+
+    if node_name:
+        query = query.filter(models.ConfigSnapshot.node_name == node_name)
+
+    snapshots = query.order_by(models.ConfigSnapshot.created_at.desc()).all()
+
+    return schemas.ConfigSnapshotsResponse(
+        snapshots=[schemas.ConfigSnapshotOut.model_validate(s) for s in snapshots]
+    )
+
+
+@router.get("/labs/{lab_id}/config-snapshots/{node_name}/list")
+def list_node_config_snapshots(
+    lab_id: str,
+    node_name: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.ConfigSnapshotsResponse:
+    """List all config snapshots for a specific node.
+
+    Returns snapshots ordered by created_at descending (newest first).
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    snapshots = (
+        database.query(models.ConfigSnapshot)
+        .filter(
+            models.ConfigSnapshot.lab_id == lab_id,
+            models.ConfigSnapshot.node_name == node_name,
+        )
+        .order_by(models.ConfigSnapshot.created_at.desc())
+        .all()
+    )
+
+    return schemas.ConfigSnapshotsResponse(
+        snapshots=[schemas.ConfigSnapshotOut.model_validate(s) for s in snapshots]
+    )
+
+
+@router.post("/labs/{lab_id}/config-snapshots")
+async def create_config_snapshot(
+    lab_id: str,
+    payload: schemas.ConfigSnapshotCreate | None = None,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.ConfigSnapshotsResponse:
+    """Create config snapshots from current saved configs.
+
+    If node_name is provided, creates a snapshot for that node only.
+    Otherwise, creates snapshots for all nodes with saved configs.
+
+    Snapshots are deduplicated by content hash - if the content hasn't
+    changed since the last snapshot, a new one won't be created.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+    workspace = lab_workspace(lab.id)
+    configs_dir = workspace / "configs"
+
+    if not configs_dir.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No saved configs found. Run 'Extract Configs' first."
+        )
+
+    created_snapshots = []
+    node_name = payload.node_name if payload else None
+
+    # Determine which nodes to snapshot
+    if node_name:
+        node_dirs = [configs_dir / node_name]
+        if not node_dirs[0].exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"No saved config found for node '{node_name}'"
+            )
+    else:
+        node_dirs = [d for d in configs_dir.iterdir() if d.is_dir()]
+
+    for node_dir in node_dirs:
+        config_file = node_dir / "startup-config"
+        if not config_file.exists():
+            continue
+
+        content = config_file.read_text(encoding="utf-8")
+        content_hash = _compute_content_hash(content)
+        current_node_name = node_dir.name
+
+        # Check for duplicate - skip if content hash matches most recent snapshot
+        latest_snapshot = (
+            database.query(models.ConfigSnapshot)
+            .filter(
+                models.ConfigSnapshot.lab_id == lab_id,
+                models.ConfigSnapshot.node_name == current_node_name,
+            )
+            .order_by(models.ConfigSnapshot.created_at.desc())
+            .first()
+        )
+
+        if latest_snapshot and latest_snapshot.content_hash == content_hash:
+            # Content unchanged, skip creating duplicate
+            continue
+
+        # Create new snapshot
+        snapshot = models.ConfigSnapshot(
+            lab_id=lab_id,
+            node_name=current_node_name,
+            content=content,
+            content_hash=content_hash,
+            snapshot_type="manual",
+        )
+        database.add(snapshot)
+        created_snapshots.append(snapshot)
+
+    database.commit()
+
+    # Refresh to get database-generated fields
+    for snapshot in created_snapshots:
+        database.refresh(snapshot)
+
+    return schemas.ConfigSnapshotsResponse(
+        snapshots=[schemas.ConfigSnapshotOut.model_validate(s) for s in created_snapshots]
+    )
+
+
+@router.delete("/labs/{lab_id}/config-snapshots/{snapshot_id}")
+def delete_config_snapshot(
+    lab_id: str,
+    snapshot_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Delete a specific config snapshot."""
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    snapshot = (
+        database.query(models.ConfigSnapshot)
+        .filter(
+            models.ConfigSnapshot.id == snapshot_id,
+            models.ConfigSnapshot.lab_id == lab_id,
+        )
+        .first()
+    )
+
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    database.delete(snapshot)
+    database.commit()
+
+    return {"status": "deleted", "snapshot_id": snapshot_id}
+
+
+@router.post("/labs/{lab_id}/config-diff")
+def generate_config_diff(
+    lab_id: str,
+    payload: schemas.ConfigDiffRequest,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.ConfigDiffResponse:
+    """Generate a unified diff between two config snapshots.
+
+    Uses Python's difflib to compute the diff. Returns structured diff
+    lines with line numbers and change types for easy frontend rendering.
+    """
+    import difflib
+
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Fetch both snapshots
+    snapshot_a = (
+        database.query(models.ConfigSnapshot)
+        .filter(
+            models.ConfigSnapshot.id == payload.snapshot_id_a,
+            models.ConfigSnapshot.lab_id == lab_id,
+        )
+        .first()
+    )
+
+    snapshot_b = (
+        database.query(models.ConfigSnapshot)
+        .filter(
+            models.ConfigSnapshot.id == payload.snapshot_id_b,
+            models.ConfigSnapshot.lab_id == lab_id,
+        )
+        .first()
+    )
+
+    if not snapshot_a:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Snapshot A not found: {payload.snapshot_id_a}"
+        )
+
+    if not snapshot_b:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Snapshot B not found: {payload.snapshot_id_b}"
+        )
+
+    # Generate unified diff
+    lines_a = snapshot_a.content.splitlines(keepends=True)
+    lines_b = snapshot_b.content.splitlines(keepends=True)
+
+    diff = list(difflib.unified_diff(
+        lines_a,
+        lines_b,
+        fromfile=f"{snapshot_a.node_name} ({snapshot_a.created_at.strftime('%Y-%m-%d %H:%M')})",
+        tofile=f"{snapshot_b.node_name} ({snapshot_b.created_at.strftime('%Y-%m-%d %H:%M')})",
+        lineterm="",
+    ))
+
+    # Parse diff into structured lines
+    diff_lines: list[schemas.ConfigDiffLine] = []
+    additions = 0
+    deletions = 0
+    line_num_a = 0
+    line_num_b = 0
+
+    for line in diff:
+        # Strip trailing newline for cleaner display
+        line_content = line.rstrip("\n\r")
+
+        if line.startswith("---") or line.startswith("+++"):
+            diff_lines.append(schemas.ConfigDiffLine(
+                content=line_content,
+                type="header",
+            ))
+        elif line.startswith("@@"):
+            # Parse hunk header to get line numbers
+            # Format: @@ -start,count +start,count @@
+            import re
+            match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+            if match:
+                line_num_a = int(match.group(1)) - 1  # -1 because we increment before use
+                line_num_b = int(match.group(2)) - 1
+            diff_lines.append(schemas.ConfigDiffLine(
+                content=line_content,
+                type="header",
+            ))
+        elif line.startswith("-"):
+            line_num_a += 1
+            deletions += 1
+            diff_lines.append(schemas.ConfigDiffLine(
+                line_number_a=line_num_a,
+                content=line_content[1:],  # Remove leading -
+                type="removed",
+            ))
+        elif line.startswith("+"):
+            line_num_b += 1
+            additions += 1
+            diff_lines.append(schemas.ConfigDiffLine(
+                line_number_b=line_num_b,
+                content=line_content[1:],  # Remove leading +
+                type="added",
+            ))
+        elif line.startswith(" "):
+            line_num_a += 1
+            line_num_b += 1
+            diff_lines.append(schemas.ConfigDiffLine(
+                line_number_a=line_num_a,
+                line_number_b=line_num_b,
+                content=line_content[1:],  # Remove leading space
+                type="unchanged",
+            ))
+
+    return schemas.ConfigDiffResponse(
+        snapshot_a=schemas.ConfigSnapshotOut.model_validate(snapshot_a),
+        snapshot_b=schemas.ConfigSnapshotOut.model_validate(snapshot_b),
+        diff_lines=diff_lines,
+        additions=additions,
+        deletions=deletions,
     )

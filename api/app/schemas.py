@@ -382,3 +382,61 @@ class LinkStateSyncResponse(BaseModel):
     message: str
     links_updated: int = 0
     links_created: int = 0
+
+
+# =============================================================================
+# Config Snapshot Schemas
+# =============================================================================
+
+
+class ConfigSnapshotOut(BaseModel):
+    """Output schema for a single config snapshot."""
+
+    id: str
+    lab_id: str
+    node_name: str
+    content: str
+    content_hash: str
+    snapshot_type: str  # "manual" or "auto_stop"
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ConfigSnapshotsResponse(BaseModel):
+    """Response schema for listing config snapshots."""
+
+    snapshots: list[ConfigSnapshotOut]
+
+
+class ConfigSnapshotCreate(BaseModel):
+    """Input schema for creating a config snapshot."""
+
+    node_name: str | None = None  # If None, snapshot all nodes
+
+
+class ConfigDiffRequest(BaseModel):
+    """Input schema for generating a diff between two snapshots."""
+
+    snapshot_id_a: str
+    snapshot_id_b: str
+
+
+class ConfigDiffLine(BaseModel):
+    """A single line in a unified diff."""
+
+    line_number_a: int | None = None  # Line number in version A (None for additions)
+    line_number_b: int | None = None  # Line number in version B (None for deletions)
+    content: str
+    type: str  # "unchanged", "added", "removed", "header"
+
+
+class ConfigDiffResponse(BaseModel):
+    """Response schema for a config diff."""
+
+    snapshot_a: ConfigSnapshotOut
+    snapshot_b: ConfigSnapshotOut
+    diff_lines: list[ConfigDiffLine]
+    additions: int = 0
+    deletions: int = 0

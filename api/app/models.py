@@ -189,3 +189,29 @@ class LinkState(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ConfigSnapshot(Base):
+    """Configuration snapshot for tracking device configs over time.
+
+    This model stores point-in-time snapshots of device configurations,
+    enabling config versioning, comparison, and rollback. Snapshots can
+    be created manually or automatically (e.g., on node stop).
+
+    Features:
+    - Content hash (SHA256) for deduplication - identical configs share hash
+    - Snapshot types: "manual" (user-triggered), "auto_stop" (on node stop)
+    - Per-node snapshots with timestamps for timeline views
+    """
+    __tablename__ = "config_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"))
+    node_name: Mapped[str] = mapped_column(String(100))
+    # Full configuration content
+    content: Mapped[str] = mapped_column(Text)
+    # SHA256 hash of content for deduplication detection
+    content_hash: Mapped[str] = mapped_column(String(64))
+    # Snapshot type: "manual" or "auto_stop"
+    snapshot_type: Mapped[str] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
