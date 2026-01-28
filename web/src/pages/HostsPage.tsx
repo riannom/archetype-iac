@@ -89,7 +89,7 @@ const HostsPage: React.FC = () => {
   const getRoleBadgeColor = (role: string) => {
     if (role === 'controller') return 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 border-purple-200 dark:border-purple-700';
     if (role === 'agent+controller') return 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-700';
-    return 'bg-sage-100 dark:bg-sage-900/30 text-sage-600 dark:text-sage-400 border-sage-200 dark:border-sage-700';
+    return 'bg-sage-100 dark:bg-sage-800 text-sage-600 dark:text-sage-400 border-sage-200 dark:border-sage-700';
   };
 
   const getRoleLabel = (role: string) => {
