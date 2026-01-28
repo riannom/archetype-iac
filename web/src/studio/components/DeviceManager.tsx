@@ -167,6 +167,109 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     qcow2InputRef.current?.click();
   }
 
+  /**
+   * Parse error message from response, handling HTML error pages gracefully.
+   */
+  function parseErrorMessage(text: string): string {
+    // Check if it's an HTML error page (e.g., nginx 504 timeout)
+    if (text.includes('<html>') || text.includes('<!DOCTYPE')) {
+      // Try to extract the title
+      const titleMatch = text.match(/<title>([^<]+)<\/title>/i);
+      if (titleMatch) {
+        return titleMatch[1].trim();
+      }
+      // Try to extract h1 content
+      const h1Match = text.match(/<h1>([^<]+)<\/h1>/i);
+      if (h1Match) {
+        return h1Match[1].trim();
+      }
+      return 'Server error (check if the operation completed)';
+    }
+    // Try to parse as JSON error
+    try {
+      const json = JSON.parse(text);
+      return json.detail || json.message || json.error || text;
+    } catch {
+      return text || 'Upload failed';
+    }
+  }
+
+  /**
+   * Upload file with streaming progress via Server-Sent Events.
+   * This provides real-time feedback during the server-side processing phase.
+   */
+  async function uploadImageWithStreaming(
+    file: File,
+    onProgress: (percent: number, message: string) => void
+  ): Promise<{ output?: string; images?: string[] }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = localStorage.getItem('token');
+
+    // Use streaming endpoint
+    const response = await fetch(`${API_BASE_URL}/images/load?stream=true`, {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(parseErrorMessage(text));
+    }
+
+    // Read SSE stream
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Streaming not supported');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: { output?: string; images?: string[] } = {};
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Process complete SSE events
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+      let eventType = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (eventType === 'progress') {
+              onProgress(data.percent || 0, data.message || 'Processing...');
+            } else if (eventType === 'complete') {
+              result = { output: data.message, images: data.images };
+              onProgress(100, data.message || 'Complete!');
+            } else if (eventType === 'error') {
+              throw new Error(data.message || 'Import failed');
+            }
+          } catch (e) {
+            if (e instanceof SyntaxError) {
+              console.warn('Failed to parse SSE data:', line);
+            } else {
+              throw e;
+            }
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Fallback upload without streaming (for older behavior).
+   */
   function uploadWithProgress(
     url: string,
     file: File,
@@ -205,7 +308,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
             resolve({});
           }
         } else {
-          reject(new Error(request.responseText || 'Upload failed'));
+          reject(new Error(parseErrorMessage(request.responseText)));
         }
       };
       request.send(formData);
@@ -215,17 +318,17 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   async function uploadImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    let processingNoticeShown = false;
+
     try {
       setUploadStatus(`Uploading ${file.name}...`);
       setUploadProgress(0);
-      const data = (await uploadWithProgress(`${API_BASE_URL}/images/load`, file, (value) => {
-        setUploadProgress(value);
-        if (value !== null && value >= 100 && !processingNoticeShown) {
-          processingNoticeShown = true;
-          setUploadStatus('Upload complete. Importing image (this may take a few minutes for large files)...');
-        }
-      })) as { output?: string; images?: string[] };
+
+      // Use streaming upload for real-time progress
+      const data = await uploadImageWithStreaming(file, (percent, message) => {
+        setUploadProgress(percent);
+        setUploadStatus(message);
+      });
+
       if (data.images && data.images.length === 0) {
         setUploadStatus('Upload finished, but no images were detected.');
       } else {
@@ -234,7 +337,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       onUploadImage();
       onRefresh();
     } catch (error) {
-      setUploadStatus(error instanceof Error ? error.message : 'Upload failed');
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+      setUploadStatus(errorMessage);
     } finally {
       event.target.value = '';
       setUploadProgress(null);
