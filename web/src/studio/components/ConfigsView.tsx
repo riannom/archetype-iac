@@ -289,7 +289,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                     }}
                     className={`w-full px-3 py-2.5 flex items-center gap-3 text-left transition-colors outline-none focus:outline-none focus:ring-0 active:outline-none ${
                       isSelected
-                        ? 'bg-sage-100 dark:bg-sage-900/30 border-r-2 border-sage-500'
+                        ? 'bg-sage-600/20 border-r-2 border-sage-500'
                         : 'bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 focus:bg-transparent dark:focus:bg-transparent active:bg-stone-100 dark:active:bg-stone-800'
                     }`}
                   >
@@ -400,7 +400,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                   onClick={() => handleSnapshotClick(snapshot.id)}
                   className={`p-3 rounded-lg border cursor-pointer transition-all group outline-none ${
                     isSelected
-                      ? 'bg-sage-100 dark:bg-sage-900/30 border-sage-300 dark:border-sage-700'
+                      ? 'bg-sage-600/20 border-sage-500'
                       : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
                   }`}
                 >
