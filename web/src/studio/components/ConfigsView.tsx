@@ -287,10 +287,10 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                       setSelectedSnapshotIds(new Set());
                       setViewMode('view');
                     }}
-                    className={`w-full px-3 py-2.5 flex items-center gap-3 text-left transition-colors focus:outline-none ${
+                    className={`w-full px-3 py-2.5 flex items-center gap-3 text-left transition-colors outline-none focus:outline-none focus:ring-0 active:outline-none ${
                       isSelected
                         ? 'bg-sage-100 dark:bg-sage-900/30 border-r-2 border-sage-500'
-                        : 'bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800'
+                        : 'bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 focus:bg-transparent dark:focus:bg-transparent active:bg-stone-100 dark:active:bg-stone-800'
                     }`}
                   >
                     <div className={`w-2 h-2 rounded-full ${getNodeStatusColor(nodeName)}`} />
@@ -398,10 +398,10 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                 <div
                   key={snapshot.id}
                   onClick={() => handleSnapshotClick(snapshot.id)}
-                  className={`p-3 rounded-lg border cursor-pointer transition-all group ${
+                  className={`p-3 rounded-lg border cursor-pointer transition-all group outline-none ${
                     isSelected
                       ? 'bg-sage-100 dark:bg-sage-900/30 border-sage-300 dark:border-sage-700'
-                      : 'bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700'
+                      : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
