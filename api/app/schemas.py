@@ -84,6 +84,8 @@ class GraphLink(BaseModel):
 class GraphNode(BaseModel):
     id: str
     name: str  # Display name for UI
+    # Node type: "device" for lab devices, "external" for external network connections
+    node_type: str = "device"
     device: str | None = None
     image: str | None = None
     version: str | None = None
@@ -93,6 +95,11 @@ class GraphNode(BaseModel):
     host: str | None = None  # Agent ID for multi-host placement
     network_mode: str | None = None  # Container network mode (e.g., "bridge", "host", "none")
     container_name: str | None = None  # Name used by containerlab (YAML key), may differ from display name
+    # External network fields (when node_type="external")
+    connection_type: str | None = None  # "vlan" or "bridge"
+    parent_interface: str | None = None  # e.g., "ens192", "eth0"
+    vlan_id: int | None = None  # VLAN ID (1-4094)
+    bridge_name: str | None = None  # e.g., "br-prod"
 
 
 class TopologyGraph(BaseModel):

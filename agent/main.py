@@ -1233,6 +1233,156 @@ async def check_node_ready(lab_id: str, node_name: str) -> dict:
     }
 
 
+# --- Network Interface Discovery Endpoints ---
+
+@app.get("/interfaces")
+async def list_interfaces() -> dict:
+    """List available network interfaces on this host.
+
+    Returns physical interfaces that can be used for VLAN sub-interfaces
+    or external network connections.
+    """
+    import subprocess
+
+    interfaces = []
+
+    try:
+        # Get list of interfaces using ip command
+        result = subprocess.run(
+            ["ip", "-j", "link", "show"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            import json
+            link_data = json.loads(result.stdout)
+
+            for link in link_data:
+                name = link.get("ifname", "")
+                # Skip loopback, docker, and veth interfaces
+                if name in ("lo",) or name.startswith(("docker", "veth", "br-", "clab")):
+                    continue
+
+                # Get interface state and type
+                operstate = link.get("operstate", "unknown")
+                link_type = link.get("link_type", "")
+
+                # Get IP addresses for this interface
+                addr_result = subprocess.run(
+                    ["ip", "-j", "addr", "show", name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                ipv4_addresses = []
+                if addr_result.returncode == 0:
+                    addr_data = json.loads(addr_result.stdout)
+                    for iface in addr_data:
+                        for addr_info in iface.get("addr_info", []):
+                            if addr_info.get("family") == "inet":
+                                ipv4_addresses.append(f"{addr_info['local']}/{addr_info.get('prefixlen', 24)}")
+
+                interfaces.append({
+                    "name": name,
+                    "state": operstate,
+                    "type": link_type,
+                    "ipv4_addresses": ipv4_addresses,
+                    "mac": link.get("address"),
+                    # Indicate if this is a VLAN sub-interface
+                    "is_vlan": "." in name,
+                })
+
+    except Exception as e:
+        print(f"Error listing interfaces: {e}")
+        return {"interfaces": [], "error": str(e)}
+
+    return {"interfaces": interfaces}
+
+
+@app.get("/bridges")
+async def list_bridges() -> dict:
+    """List available Linux bridges on this host.
+
+    Returns bridges that can be used for external network connections.
+    """
+    import subprocess
+
+    bridges = []
+
+    try:
+        # Get list of bridges using bridge command
+        result = subprocess.run(
+            ["bridge", "-j", "link", "show"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            import json
+            bridge_data = json.loads(result.stdout)
+
+            # Extract unique bridge names (master field)
+            seen_bridges = set()
+            for link in bridge_data:
+                master = link.get("master")
+                if master and master not in seen_bridges:
+                    seen_bridges.add(master)
+
+            # Get details for each bridge
+            for bridge_name in sorted(seen_bridges):
+                # Skip containerlab and docker bridges
+                if bridge_name.startswith(("clab", "docker", "br-")):
+                    continue
+
+                bridge_info = {"name": bridge_name, "interfaces": []}
+
+                # Get interfaces attached to this bridge
+                for link in bridge_data:
+                    if link.get("master") == bridge_name:
+                        bridge_info["interfaces"].append(link.get("ifname"))
+
+                bridges.append(bridge_info)
+
+    except FileNotFoundError:
+        # bridge command not available, try ip command
+        try:
+            result = subprocess.run(
+                ["ip", "-j", "link", "show", "type", "bridge"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                import json
+                link_data = json.loads(result.stdout)
+
+                for link in link_data:
+                    name = link.get("ifname", "")
+                    # Skip containerlab and docker bridges
+                    if name.startswith(("clab", "docker", "br-")):
+                        continue
+
+                    bridges.append({
+                        "name": name,
+                        "state": link.get("operstate", "unknown"),
+                        "interfaces": [],  # Would need additional queries
+                    })
+
+        except Exception as e:
+            print(f"Error listing bridges: {e}")
+            return {"bridges": [], "error": str(e)}
+
+    except Exception as e:
+        print(f"Error listing bridges: {e}")
+        return {"bridges": [], "error": str(e)}
+
+    return {"bridges": bridges}
+
+
 # --- Console Endpoint ---
 
 # Import console shell configuration from central vendor registry

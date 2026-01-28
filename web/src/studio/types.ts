@@ -8,6 +8,12 @@ export enum DeviceType {
   CONTAINER = 'container'
 }
 
+// Node type discriminator for canvas nodes
+export type NodeType = 'device' | 'external';
+
+// Connection type for external networks
+export type ExternalConnectionType = 'vlan' | 'bridge';
+
 export type AnnotationType = 'text' | 'rect' | 'circle' | 'arrow' | 'caption';
 
 export interface Annotation {
@@ -86,10 +92,55 @@ export interface ImageLibraryEntry {
   compatible_devices?: string[];
 }
 
-export interface Node {
+// Base node interface with common properties
+interface BaseNode {
   id: string;
   name: string;
+  x: number;
+  y: number;
+  label?: string;
+}
+
+// Device node - represents a lab device (router, switch, etc.)
+export interface DeviceNode extends BaseNode {
+  nodeType: 'device';
   container_name?: string; // Immutable container identifier (set on first save, never changes)
+  type: DeviceType;
+  model: string;
+  version: string;
+  cpu?: number;
+  memory?: number;
+  config?: string;
+}
+
+// External network node - represents an external network connection
+export interface ExternalNetworkNode extends BaseNode {
+  nodeType: 'external';
+  connectionType: ExternalConnectionType; // 'vlan' or 'bridge'
+  parentInterface?: string; // e.g., 'ens192', 'eth0' - for VLAN mode
+  vlanId?: number; // VLAN ID (1-4094) - for VLAN mode
+  bridgeName?: string; // e.g., 'br-prod' - for bridge mode
+  host?: string; // Agent/host ID where this external network is located
+}
+
+// Union type for all node types
+export type Node = DeviceNode | ExternalNetworkNode;
+
+// Type guard for device nodes
+export function isDeviceNode(node: Node): node is DeviceNode {
+  return node.nodeType === 'device' || !('nodeType' in node) || node.nodeType === undefined;
+}
+
+// Type guard for external network nodes
+export function isExternalNetworkNode(node: Node): node is ExternalNetworkNode {
+  return 'nodeType' in node && node.nodeType === 'external';
+}
+
+// Legacy Node type for backward compatibility (alias to DeviceNode)
+export type LegacyNode = {
+  id: string;
+  name: string;
+  container_name?: string;
   type: DeviceType;
   model: string;
   version: string;
@@ -99,7 +150,7 @@ export interface Node {
   cpu?: number;
   memory?: number;
   config?: string;
-}
+};
 
 export interface Link {
   id: string;

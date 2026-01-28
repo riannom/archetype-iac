@@ -459,6 +459,7 @@ class ContainerlabProvider(Provider):
         lab_id: str,
         topology_yaml: str,
         workspace: Path,
+        agent_id: str | None = None,
     ) -> DeployResult:
         """Deploy a containerlab topology.
 
@@ -478,6 +479,16 @@ class ContainerlabProvider(Provider):
 
         # Ensure flash directories exist for cEOS nodes (required for config persistence)
         self._ensure_ceos_flash_dirs(clean_topology, workspace)
+
+        # Set up external network VLAN interfaces before containerlab deploy
+        try:
+            from agent.network.vlan import setup_external_networks
+            created_vlans = await setup_external_networks(lab_id, topology_yaml, agent_id)
+            if created_vlans:
+                logger.info(f"Created {len(created_vlans)} VLAN interfaces for external networks")
+        except Exception as e:
+            logger.warning(f"Failed to set up external network VLANs: {e}")
+            # Continue with deploy - external networks are optional
 
         # Write topology file
         topo_path = self._topology_path(workspace)
@@ -629,6 +640,16 @@ class ContainerlabProvider(Provider):
                         container.remove(force=True)
                     except Exception:
                         pass
+
+                # Clean up external network VLAN interfaces
+                try:
+                    from agent.network.vlan import cleanup_external_networks
+                    deleted_vlans = await cleanup_external_networks(lab_id)
+                    if deleted_vlans:
+                        logger.info(f"Cleaned up {len(deleted_vlans)} VLAN interfaces")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up external network VLANs: {e}")
+
                 return DestroyResult(
                     success=True,
                     stdout=f"Removed {len(containers)} containers by prefix",
@@ -645,6 +666,16 @@ class ContainerlabProvider(Provider):
             workspace,
             timeout=settings.destroy_timeout,
         )
+
+        # Clean up external network VLAN interfaces after containerlab destroy
+        try:
+            from agent.network.vlan import cleanup_external_networks
+            deleted_vlans = await cleanup_external_networks(lab_id)
+            if deleted_vlans:
+                logger.info(f"Cleaned up {len(deleted_vlans)} VLAN interfaces")
+                stdout += f"\nCleaned up {len(deleted_vlans)} VLAN interfaces"
+        except Exception as e:
+            logger.warning(f"Failed to clean up external network VLANs: {e}")
 
         if returncode != 0:
             return DestroyResult(

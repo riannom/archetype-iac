@@ -7,10 +7,11 @@ interface SidebarProps {
   categories: { name: string; models?: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
   onAddDevice: (model: DeviceModel) => void;
   onAddAnnotation: (type: AnnotationType) => void;
+  onAddExternalNetwork?: () => void;
   imageLibrary?: ImageLibraryEntry[];
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotation, imageLibrary = [] }) => {
+const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotation, onAddExternalNetwork, imageLibrary = [] }) => {
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(categories.map(c => c.name))
   );
@@ -243,6 +244,12 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     { type: 'caption', icon: 'fa-comment', label: 'Note' },
   ];
 
+  // External network connection tool
+  const externalNetworkTool = {
+    icon: 'fa-cloud',
+    label: 'External Network',
+  };
+
   return (
     <div className="w-64 bg-white/40 dark:bg-stone-900/40 backdrop-blur-md border-r border-stone-200 dark:border-stone-800 flex flex-col h-full overflow-hidden">
       <div className="p-4 border-b border-stone-200 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-800/30">
@@ -268,9 +275,38 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
       />
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
+        {/* External Networks Section */}
+        {onAddExternalNetwork && (
+          <div className="mb-4">
+            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100/50 dark:bg-stone-800/20 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10">
+              <span>Connectivity</span>
+            </div>
+            <div className="p-2">
+              <button
+                onClick={onAddExternalNetwork}
+                draggable
+                onDragEnd={onAddExternalNetwork}
+                className="w-full flex items-center p-3 rounded-lg bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30 hover:from-blue-100 hover:to-purple-100 dark:hover:from-blue-900/40 dark:hover:to-purple-900/40 border border-blue-200 dark:border-blue-800/50 hover:border-blue-300 dark:hover:border-blue-700 transition-all gap-3 group shadow-sm cursor-grab active:cursor-grabbing"
+              >
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shadow-md">
+                  <i className={`fa-solid ${externalNetworkTool.icon} text-white text-sm`}></i>
+                </div>
+                <div className="flex-1 text-left">
+                  <div className="text-[11px] font-bold text-stone-700 dark:text-stone-200">{externalNetworkTool.label}</div>
+                  <div className="text-[9px] text-stone-500 dark:text-stone-400">Connect to VLAN or bridge</div>
+                </div>
+                <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                  <i className="fa-solid fa-plus-circle text-blue-500 dark:text-blue-400"></i>
+                </div>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tools Section */}
         <div className="mb-4">
           <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100/50 dark:bg-stone-800/20 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10">
-            <span>Tools</span>
+            <span>Annotations</span>
           </div>
           <div className="p-2 grid grid-cols-2 gap-2">
             {annotationTools.map(tool => (

@@ -1,6 +1,6 @@
 
-import React, { useCallback, useState } from 'react';
-import { DeviceModel, Node } from '../types';
+import React, { useCallback, useMemo, useState } from 'react';
+import { DeviceModel, Node, isDeviceNode, DeviceNode } from '../types';
 
 export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'error';
 
@@ -19,6 +19,9 @@ interface RuntimeControlProps {
 const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig }) => {
   const [isExtracting, setIsExtracting] = useState(false);
 
+  // Filter to device nodes only (external networks don't have runtime status)
+  const deviceNodes = useMemo(() => nodes.filter(isDeviceNode), [nodes]);
+
   const getStatusColor = (status: RuntimeStatus) => {
     switch (status) {
       case 'running': return 'text-green-500 bg-green-500/10 border-green-500/20';
@@ -29,7 +32,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
   };
 
   // Check if any nodes are currently running or booting
-  const hasRunningNodes = nodes.some(node => {
+  const hasRunningNodes = deviceNodes.some(node => {
     const status = runtimeStates[node.id];
     return status === 'running' || status === 'booting';
   });
@@ -157,7 +160,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-200/50 dark:divide-stone-800/50">
-              {nodes.map(node => {
+              {deviceNodes.map(node => {
                 const status = runtimeStates[node.id] || 'stopped';
                 const model = deviceModels.find(m => m.id === node.model);
                 return (

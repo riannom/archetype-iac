@@ -1,9 +1,10 @@
 
 import React, { useState } from 'react';
-import { Node, Link, Annotation, DeviceModel } from '../types';
+import { Node, Link, Annotation, DeviceModel, isExternalNetworkNode, isDeviceNode, ExternalNetworkNode, DeviceNode } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
 import InterfaceSelect from './InterfaceSelect';
 import { PortManager } from '../hooks/usePortManager';
+import ExternalNetworkConfig from './ExternalNetworkConfig';
 
 interface PropertiesPanelProps {
   selectedItem: Node | Link | Annotation | null;
@@ -19,10 +20,11 @@ interface PropertiesPanelProps {
   deviceModels: DeviceModel[];
   portManager: PortManager;
   onOpenConfigViewer?: (nodeId: string, nodeName: string) => void;
+  agents?: { id: string; name: string }[];
 }
 
 const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
-  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer
+  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, agents = []
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'hardware' | 'connectivity' | 'config'>('general');
 
@@ -31,8 +33,23 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   }
 
   const isLink = 'source' in selectedItem && 'target' in selectedItem;
-  const isNode = 'model' in selectedItem;
-  const isAnnotation = !isLink && !isNode;
+  const isNodeItem = 'x' in selectedItem && 'y' in selectedItem && !isLink;
+  const isAnnotation = isNodeItem && 'type' in selectedItem && typeof (selectedItem as Annotation).type === 'string' && ['text', 'rect', 'circle', 'arrow', 'caption'].includes((selectedItem as Annotation).type as string);
+
+  // Check if this is an external network node
+  if (isNodeItem && !isAnnotation && isExternalNetworkNode(selectedItem as Node)) {
+    const extNode = selectedItem as ExternalNetworkNode;
+    return (
+      <ExternalNetworkConfig
+        node={extNode}
+        onUpdate={(id, updates) => onUpdateNode(id, updates as Partial<Node>)}
+        onDelete={onDelete}
+        agents={agents}
+      />
+    );
+  }
+
+  const isNode = isNodeItem && !isAnnotation && isDeviceNode(selectedItem as Node);
 
   if (isAnnotation) {
     const ann = selectedItem as Annotation;
@@ -118,7 +135,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     );
   }
 
-  const node = selectedItem as Node;
+  const node = selectedItem as DeviceNode;
   const nodeLinks = links.filter(l => l.source === node.id || l.target === node.id);
   const model = deviceModels.find(m => m.id === node.model);
   const status = runtimeStates[node.id] || 'stopped';

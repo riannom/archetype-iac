@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from 'react';
-import { Node, Link } from '../types';
+import { Node, Link, isDeviceNode, DeviceNode } from '../types';
 import {
   getAvailableInterfaces,
   getNextAvailableInterface,
@@ -26,11 +26,16 @@ export interface PortManager {
  * for new connections.
  */
 export function usePortManager(nodes: Node[], links: Link[]): PortManager {
-  // Build a map of nodeId -> model for quick lookups
+  // Build a map of nodeId -> model for quick lookups (device nodes only)
   const nodeModelMap = useMemo(() => {
     const map = new Map<string, string>();
     nodes.forEach((node) => {
-      map.set(node.id, node.model);
+      if (isDeviceNode(node)) {
+        map.set(node.id, node.model);
+      } else {
+        // External network nodes use a placeholder model
+        map.set(node.id, 'external');
+      }
     });
     return map;
   }, [nodes]);

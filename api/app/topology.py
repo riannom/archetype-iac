@@ -441,6 +441,8 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
     - 'kind' instead of 'device'
     - Links use 'endpoints' array format
     - Topology is nested under 'topology' key
+    - External network nodes are not added to the nodes section
+    - Links to external networks use containerlab external endpoint format
     """
     import re
 
@@ -454,7 +456,16 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
     used_names: set[str] = set()
     node_kinds: dict[str, str] = {}  # Track kind per node for interface provisioning
 
+    # Build a map of external network nodes for link processing
+    external_networks: dict[str, GraphNode] = {}
     for node in graph.nodes:
+        if getattr(node, 'node_type', 'device') == 'external':
+            external_networks[node.id] = node
+
+    for node in graph.nodes:
+        # Skip external network nodes - they don't become containerlab nodes
+        if getattr(node, 'node_type', 'device') == 'external':
+            continue
         # Use container_name if provided (immutable after first creation),
         # otherwise generate a safe name from display name
         if node.container_name:
@@ -533,16 +544,81 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         match = re.search(r'(\d+)$', iface_name)
         return int(match.group(1)) if match else None
 
+    def _get_external_endpoint(ext_node: GraphNode) -> str:
+        """Generate containerlab external endpoint string for an external network node.
+
+        Returns format like 'macvlan:eth0.100' for VLAN or 'bridge:br-prod' for bridge.
+        """
+        conn_type = getattr(ext_node, 'connection_type', 'bridge')
+        if conn_type == 'vlan':
+            parent = getattr(ext_node, 'parent_interface', 'eth0')
+            vlan_id = getattr(ext_node, 'vlan_id', 100)
+            # VLAN sub-interface name (e.g., eth0.100)
+            return f"macvlan:{parent}.{vlan_id}"
+        else:
+            # Bridge connection
+            bridge = getattr(ext_node, 'bridge_name', 'br-ext')
+            return f"bridge:{bridge}"
+
     for link in graph.links:
         if len(link.endpoints) != 2:
             continue  # Skip non-p2p links for now
 
         ep_a, ep_b = link.endpoints
 
-        # Handle external endpoints
+        # Handle external endpoints (legacy format with type field)
         if ep_a.type != "node" or ep_b.type != "node":
-            continue  # Skip external links for basic containerlab
+            continue  # Skip old-style external links
 
+        # Check if either endpoint is an external network node
+        ext_a = external_networks.get(ep_a.node)
+        ext_b = external_networks.get(ep_b.node)
+
+        if ext_a and ext_b:
+            # Both endpoints are external networks - invalid, skip
+            continue
+
+        if ext_a:
+            # ep_a is external network, ep_b is the lab device
+            node_b = name_map.get(ep_b.node, ep_b.node)
+            if ep_b.ifname:
+                iface_b = ep_b.ifname
+            else:
+                iface_b = f"eth{interface_counters.get(node_b, 1)}"
+                interface_counters[node_b] = interface_counters.get(node_b, 1) + 1
+
+            # Track used interface
+            idx_b = _extract_interface_index(iface_b)
+            if idx_b is not None and node_b in used_interfaces:
+                used_interfaces[node_b].add(idx_b)
+
+            ext_endpoint = _get_external_endpoint(ext_a)
+            links.append({
+                "endpoints": [f"{node_b}:{iface_b}", ext_endpoint]
+            })
+            continue
+
+        if ext_b:
+            # ep_b is external network, ep_a is the lab device
+            node_a = name_map.get(ep_a.node, ep_a.node)
+            if ep_a.ifname:
+                iface_a = ep_a.ifname
+            else:
+                iface_a = f"eth{interface_counters.get(node_a, 1)}"
+                interface_counters[node_a] = interface_counters.get(node_a, 1) + 1
+
+            # Track used interface
+            idx_a = _extract_interface_index(iface_a)
+            if idx_a is not None and node_a in used_interfaces:
+                used_interfaces[node_a].add(idx_a)
+
+            ext_endpoint = _get_external_endpoint(ext_b)
+            links.append({
+                "endpoints": [f"{node_a}:{iface_a}", ext_endpoint]
+            })
+            continue
+
+        # Both endpoints are regular lab devices
         node_a = name_map.get(ep_a.node, ep_a.node)
         node_b = name_map.get(ep_b.node, ep_b.node)
 

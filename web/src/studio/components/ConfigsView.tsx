@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Node } from '../types';
+import { Node, isDeviceNode, DeviceNode } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
 import ConfigDiffViewer from './ConfigDiffViewer';
 
@@ -37,16 +37,19 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Filter to device nodes only (external networks don't have configs)
+  const deviceNodes = useMemo(() => nodes.filter(isDeviceNode), [nodes]);
+
   // Map container_name -> display name for UI display
   const nodeDisplayNames = useMemo(() => {
     const map = new Map<string, string>();
-    nodes.forEach((n) => {
+    deviceNodes.forEach((n) => {
       const containerName = n.container_name || n.name;
       // Prefer display name, but use container_name as fallback
       map.set(containerName, n.name);
     });
     return map;
-  }, [nodes]);
+  }, [deviceNodes]);
 
   // Get unique node names from snapshots (these are container names)
   const nodeNamesWithSnapshots = useMemo(() => {
@@ -57,8 +60,8 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
 
   // Get all node container names (from topology) - use container_name for matching
   const allNodeContainerNames = useMemo(() => {
-    return nodes.map((n) => n.container_name || n.name).sort();
-  }, [nodes]);
+    return deviceNodes.map((n) => n.container_name || n.name).sort();
+  }, [deviceNodes]);
 
   // Merge node names from both sources (using container names as canonical key)
   const nodeNames = useMemo(() => {
@@ -217,7 +220,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
 
   // Get node status indicator color (nodeName is container_name)
   const getNodeStatusColor = (containerName: string) => {
-    const node = nodes.find((n) => (n.container_name || n.name) === containerName);
+    const node = deviceNodes.find((n) => (n.container_name || n.name) === containerName);
     if (!node) return 'bg-stone-400';
     const status = runtimeStates[node.id];
     switch (status) {

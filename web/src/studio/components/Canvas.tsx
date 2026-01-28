@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect, useCallback, useMemo, memo } from 'react';
-import { Node, Link, DeviceType, Annotation, DeviceModel } from '../types';
+import { Node, Link, DeviceType, Annotation, DeviceModel, isExternalNetworkNode, isDeviceNode } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
 import { useTheme } from '../../theme/index';
 
@@ -239,7 +239,21 @@ const Canvas: React.FC<CanvasProps> = ({
             if (!source || !target) return null;
             const isSelected = selectedId === link.id;
             const isHovered = hoveredLinkId === link.id;
-            const linkColor = isSelected ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F') : (isHovered ? (effectiveMode === 'dark' ? '#84CC16' : '#65A30D') : (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
+
+            // Check if either endpoint is an external network node
+            const isExternalLink = isExternalNetworkNode(source) || isExternalNetworkNode(target);
+
+            // Use blue colors for external links, green/gray for regular links
+            let linkColor: string;
+            if (isExternalLink) {
+              linkColor = isSelected
+                ? (effectiveMode === 'dark' ? '#3B82F6' : '#2563EB')
+                : (isHovered ? (effectiveMode === 'dark' ? '#60A5FA' : '#3B82F6') : (effectiveMode === 'dark' ? '#6366F1' : '#A5B4FC'));
+            } else {
+              linkColor = isSelected
+                ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F')
+                : (isHovered ? (effectiveMode === 'dark' ? '#84CC16' : '#65A30D') : (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
+            }
 
             // Calculate port label positions (~40px along line from each node, offset perpendicular)
             const dx = target.x - source.x;
@@ -264,7 +278,16 @@ const Canvas: React.FC<CanvasProps> = ({
             return (
               <g key={link.id} className="pointer-events-auto cursor-pointer">
                 <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="transparent" strokeWidth="12" onMouseDown={(e) => handleLinkMouseDown(e, link.id)} onMouseEnter={() => setHoveredLinkId(link.id)} onMouseLeave={() => setHoveredLinkId(null)} />
-                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={linkColor} strokeWidth={isSelected || isHovered ? "3" : "2"} className={draggingNode ? '' : 'transition-[stroke,stroke-width] duration-150'} />
+                <line
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  stroke={linkColor}
+                  strokeWidth={isSelected || isHovered ? "3" : "2"}
+                  strokeDasharray={isExternalLink ? "6 4" : undefined}
+                  className={draggingNode ? '' : 'transition-[stroke,stroke-width] duration-150'}
+                />
                 {/* Port labels */}
                 {link.sourceInterface && (
                   <text
@@ -320,9 +343,44 @@ const Canvas: React.FC<CanvasProps> = ({
         </svg>
 
         {nodes.map(node => {
+          // Check if this is an external network node
+          if (isExternalNetworkNode(node)) {
+            // Render external network node with cloud shape
+            const extNode = node;
+            const vlanLabel = extNode.connectionType === 'vlan'
+              ? `VLAN ${extNode.vlanId || '?'}`
+              : extNode.bridgeName || 'Bridge';
+
+            return (
+              <div
+                key={node.id}
+                style={{ left: node.x - 28, top: node.y - 20 }}
+                onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
+                onMouseUp={(e) => handleNodeMouseUp(e, node.id)}
+                onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
+                className={`absolute w-14 h-10 flex items-center justify-center cursor-pointer shadow-md transition-[box-shadow,background-color,border-color,transform] duration-150 rounded-2xl
+                  ${selectedId === node.id
+                    ? 'ring-2 ring-blue-500 bg-gradient-to-br from-blue-100 to-purple-100 dark:from-blue-900/60 dark:to-purple-900/60 shadow-lg shadow-blue-500/20'
+                    : 'bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950/40 dark:to-purple-950/40 border border-blue-300 dark:border-blue-700'}
+                  ${linkingNode === node.id ? 'ring-2 ring-blue-400 scale-110' : ''}
+                  hover:border-blue-400 z-10 select-none group`}
+              >
+                <i className="fa-solid fa-cloud text-blue-500 dark:text-blue-400 text-lg"></i>
+                <div className="absolute top-full mt-1 text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-white/90 dark:bg-stone-900/80 px-1.5 rounded shadow-sm border border-blue-200 dark:border-blue-800 whitespace-nowrap pointer-events-none">
+                  {node.name}
+                </div>
+                <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[8px] font-bold text-blue-500 dark:text-blue-400 bg-white/80 dark:bg-stone-900/80 px-1 rounded whitespace-nowrap pointer-events-none">
+                  {vlanLabel}
+                </div>
+              </div>
+            );
+          }
+
+          // Regular device node rendering
+          const deviceNode = node as import('../types').DeviceNode;
           const status = runtimeStates[node.id];
-          const isRouter = node.type === DeviceType.ROUTER;
-          const isSwitch = node.type === DeviceType.SWITCH;
+          const isRouter = isDeviceNode(node) && deviceNode.type === DeviceType.ROUTER;
+          const isSwitch = isDeviceNode(node) && deviceNode.type === DeviceType.SWITCH;
 
           let borderRadius = '8px';
           if (isRouter) borderRadius = '50%';
@@ -358,7 +416,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 ${linkingNode === node.id ? 'ring-2 ring-sage-400 scale-110' : ''}
                 hover:border-sage-400 z-10 select-none group`}
             >
-              <i className={`fa-solid ${getNodeIcon(node.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
+              <i className={`fa-solid ${getNodeIcon(deviceNode.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
               {getStatusDot()}
               <div className="absolute top-full mt-1 text-[10px] font-bold text-stone-700 dark:text-stone-300 bg-white/90 dark:bg-stone-900/80 px-1 rounded shadow-sm border border-stone-200 dark:border-stone-700 whitespace-nowrap pointer-events-none">
                 {node.name}
@@ -382,9 +440,18 @@ const Canvas: React.FC<CanvasProps> = ({
       {contextMenu && (
         <div className="fixed z-[100] w-52 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl py-2 animate-in fade-in zoom-in duration-100" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(e) => e.stopPropagation()}>
           <div className="px-4 py-2 border-b border-stone-100 dark:border-stone-800 mb-1 flex items-center justify-between">
-            <span className="text-[10px] font-black text-stone-400 dark:text-stone-500 uppercase tracking-widest">{contextMenu.type === 'node' ? 'Node Actions' : 'Link Actions'}</span>
+            <span className="text-[10px] font-black text-stone-400 dark:text-stone-500 uppercase tracking-widest">
+              {contextMenu.type === 'node'
+                ? (isExternalNetworkNode(nodeMap.get(contextMenu.id)!) ? 'External Network' : 'Node Actions')
+                : 'Link Actions'}
+            </span>
           </div>
           {contextMenu.type === 'node' && (() => {
+            const contextNode = nodeMap.get(contextMenu.id);
+            // External network nodes only have delete action
+            if (contextNode && isExternalNetworkNode(contextNode)) {
+              return null;
+            }
             const nodeStatus = runtimeStates[contextMenu.id] || 'stopped';
             const hasRunningNodes = nodes.some(n => {
               const s = runtimeStates[n.id];
@@ -411,7 +478,12 @@ const Canvas: React.FC<CanvasProps> = ({
             );
           })()}
           <button onClick={() => handleAction('delete')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-red-600 dark:text-red-500 hover:bg-red-600 hover:text-white transition-colors">
-            <i className="fa-solid fa-trash-can w-4"></i> {contextMenu.type === 'node' ? 'Remove Device' : 'Delete Connection'}
+            <i className="fa-solid fa-trash-can w-4"></i>
+            {contextMenu.type === 'node'
+              ? (nodeMap.get(contextMenu.id) && isExternalNetworkNode(nodeMap.get(contextMenu.id)!)
+                  ? 'Remove External Network'
+                  : 'Remove Device')
+              : 'Delete Connection'}
           </button>
         </div>
       )}

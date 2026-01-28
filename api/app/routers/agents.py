@@ -354,3 +354,63 @@ def unregister_agent(
     database.commit()
 
     return {"status": "deleted"}
+
+
+# --- Network Interface/Bridge Discovery Proxy ---
+
+@router.get("/{agent_id}/interfaces")
+async def list_agent_interfaces(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Proxy request to agent for listing available network interfaces.
+
+    Used for external network configuration (VLAN parent interfaces).
+    """
+    import httpx
+
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if host.status != "online":
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{host.address}/interfaces")
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Agent error: {e}")
+
+
+@router.get("/{agent_id}/bridges")
+async def list_agent_bridges(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Proxy request to agent for listing available Linux bridges.
+
+    Used for external network configuration (bridge mode).
+    """
+    import httpx
+
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if host.status != "online":
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{host.address}/bridges")
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Agent error: {e}")

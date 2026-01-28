@@ -11,7 +11,7 @@ import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
 import ConfigViewerModal from './components/ConfigViewerModal';
 import ConfigsView from './components/ConfigsView';
-import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, ImageLibraryEntry, LabLayout, Link, Node } from './types';
+import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, ImageLibraryEntry, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
@@ -169,12 +169,32 @@ const buildDeviceModels = (
 const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] => {
   const modelMap = new Map(models.map((model) => [model.id, model]));
   return graph.nodes.map((node, index) => {
-    const modelId = node.device || node.id;
-    const model = modelMap.get(modelId);
     const column = index % 5;
     const row = Math.floor(index / 5);
-    return {
+
+    // Handle external network nodes
+    if ((node as any).node_type === 'external') {
+      const extNode: ExternalNetworkNode = {
+        id: node.id,
+        nodeType: 'external',
+        name: node.name || node.id,
+        connectionType: (node as any).connection_type || 'vlan',
+        parentInterface: (node as any).parent_interface,
+        vlanId: (node as any).vlan_id,
+        bridgeName: (node as any).bridge_name,
+        host: (node as any).host,
+        x: 220 + column * 160,
+        y: 180 + row * 140,
+      };
+      return extNode;
+    }
+
+    // Handle device nodes
+    const modelId = node.device || node.id;
+    const model = modelMap.get(modelId);
+    const deviceNode: DeviceNode = {
       id: node.id,
+      nodeType: 'device',
       name: node.name || node.id,
       container_name: node.container_name || undefined, // Preserve container_name from backend
       type: model?.type || DeviceType.CONTAINER,
@@ -185,6 +205,7 @@ const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] =>
       cpu: 1,
       memory: 1024,
     };
+    return deviceNode;
   });
 };
 
@@ -286,6 +307,9 @@ const StudioPage: React.FC = () => {
     } catch {
       return [];
     }
+  });
+  const [agents, setAgents] = useState<{ id: string; name: string }[]>(() => {
+    return [];
   });
   const [authRequired, setAuthRequired] = useState(false);
   const [authEmail, setAuthEmail] = useState('');
@@ -461,14 +485,32 @@ const StudioPage: React.FC = () => {
     async (labId: string, currentNodes: Node[], currentLinks: Link[]) => {
       if (currentNodes.length === 0) return;
       const graph: TopologyGraph = {
-        nodes: currentNodes.map((node) => ({
-          id: node.id,
-          name: node.name,
-          // Include container_name for backend container identity (immutable after first save)
-          container_name: node.container_name,
-          device: node.model,
-          version: node.version,
-        })),
+        nodes: currentNodes.map((node) => {
+          // Handle external network nodes
+          if (isExternalNetworkNode(node)) {
+            return {
+              id: node.id,
+              name: node.name,
+              node_type: 'external',
+              connection_type: node.connectionType,
+              parent_interface: node.parentInterface,
+              vlan_id: node.vlanId,
+              bridge_name: node.bridgeName,
+              host: node.host,
+            };
+          }
+          // Handle device nodes
+          const deviceNode = node as DeviceNode;
+          return {
+            id: node.id,
+            name: node.name,
+            node_type: 'device',
+            // Include container_name for backend container identity (immutable after first save)
+            container_name: deviceNode.container_name,
+            device: deviceNode.model,
+            version: deviceNode.version,
+          };
+        }),
         links: currentLinks.map((link) => ({
           endpoints: [
             { node: link.source, ifname: link.sourceInterface },
@@ -520,6 +562,15 @@ const StudioPage: React.FC = () => {
     // Load vendor categories from unified registry (provides device catalog + rich metadata)
     const vendorData = await studioRequest<DeviceCategory[]>('/vendors');
     setVendorCategories(vendorData || []);
+  }, [studioRequest]);
+
+  const loadAgents = useCallback(async () => {
+    try {
+      const data = await studioRequest<{ id: string; name: string; address: string; status: string }[]>('/agents');
+      setAgents((data || []).filter((a) => a.status === 'online').map((a) => ({ id: a.id, name: a.name })));
+    } catch {
+      // Agents may not be available
+    }
   }, [studioRequest]);
 
   const loadSystemMetrics = useCallback(async () => {
@@ -693,7 +744,8 @@ const StudioPage: React.FC = () => {
     loadLabs();
     loadDevices();
     loadSystemMetrics();
-  }, [loadLabs, loadDevices, loadSystemMetrics]);
+    loadAgents();
+  }, [loadLabs, loadDevices, loadSystemMetrics, loadAgents]);
 
   // Load lab statuses when labs change
   useEffect(() => {
@@ -860,8 +912,9 @@ const StudioPage: React.FC = () => {
   const handleAddDevice = (model: DeviceModel) => {
     const id = Math.random().toString(36).slice(2, 9);
     const displayName = `${model.id.toUpperCase()}-${nodes.length + 1}`;
-    const newNode: Node = {
+    const newNode: DeviceNode = {
       id,
+      nodeType: 'device',
       name: displayName,
       // Generate immutable container_name at creation time
       // This name is used by containerlab and never changes even if display name changes
@@ -876,6 +929,23 @@ const StudioPage: React.FC = () => {
     };
     setNodes((prev) => [...prev, newNode]);
     // Don't set any status for new nodes - they should show no status icon until deployed
+    setSelectedId(id);
+    // Auto-save topology after a delay
+    setTimeout(() => triggerTopologySave(), 100);
+  };
+
+  const handleAddExternalNetwork = () => {
+    const id = Math.random().toString(36).slice(2, 9);
+    const extNetCount = nodes.filter((n) => isExternalNetworkNode(n)).length;
+    const newNode: ExternalNetworkNode = {
+      id,
+      nodeType: 'external',
+      name: `External-${extNetCount + 1}`,
+      connectionType: 'vlan',
+      x: 350 + Math.random() * 50,
+      y: 250 + Math.random() * 50,
+    };
+    setNodes((prev) => [...prev, newNode]);
     setSelectedId(id);
     // Auto-save topology after a delay
     setTimeout(() => triggerTopologySave(), 100);
@@ -1012,9 +1082,15 @@ const StudioPage: React.FC = () => {
   };
 
   const handleUpdateNode = (id: string, updates: Partial<Node>) => {
-    setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, ...updates } : node)));
-    // Auto-save topology if name, model, or version changed
-    if (updates.name || updates.model || updates.version) {
+    setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, ...updates } as Node : node)));
+    // Auto-save topology if name, model, or version changed (device nodes only)
+    const deviceUpdates = updates as Partial<DeviceNode>;
+    if (updates.name || deviceUpdates.model || deviceUpdates.version) {
+      triggerTopologySave();
+    }
+    // Also save if external network fields change
+    const extUpdates = updates as Partial<ExternalNetworkNode>;
+    if (extUpdates.connectionType || extUpdates.parentInterface || extUpdates.vlanId || extUpdates.bridgeName || extUpdates.host) {
       triggerTopologySave();
     }
   };
@@ -1087,13 +1163,31 @@ const StudioPage: React.FC = () => {
     if (!activeLab) return;
     addTaskLogEntry('info', 'Saving topology...');
     const graph: TopologyGraph = {
-      nodes: nodes.map((node) => ({
-        id: node.id,
-        name: node.name,
-        container_name: node.container_name,
-        device: node.model,
-        version: node.version,
-      })),
+      nodes: nodes.map((node) => {
+        // Handle external network nodes
+        if (isExternalNetworkNode(node)) {
+          return {
+            id: node.id,
+            name: node.name,
+            node_type: 'external',
+            connection_type: node.connectionType,
+            parent_interface: node.parentInterface,
+            vlan_id: node.vlanId,
+            bridge_name: node.bridgeName,
+            host: node.host,
+          };
+        }
+        // Handle device nodes
+        const deviceNode = node as DeviceNode;
+        return {
+          id: node.id,
+          name: node.name,
+          node_type: 'device',
+          container_name: deviceNode.container_name,
+          device: deviceNode.model,
+          version: deviceNode.version,
+        };
+      }),
       links: links.map((link) => ({
         endpoints: [
           { node: link.source, ifname: link.sourceInterface },
@@ -1206,7 +1300,7 @@ const StudioPage: React.FC = () => {
       default:
         return (
           <>
-            <Sidebar categories={deviceCategories} onAddDevice={handleAddDevice} onAddAnnotation={handleAddAnnotation} imageLibrary={imageLibrary} />
+            <Sidebar categories={deviceCategories} onAddDevice={handleAddDevice} onAddAnnotation={handleAddAnnotation} onAddExternalNetwork={handleAddExternalNetwork} imageLibrary={imageLibrary} />
             <Canvas
               nodes={nodes}
               links={links}
@@ -1242,6 +1336,7 @@ const StudioPage: React.FC = () => {
                   onUpdateStatus={handleUpdateStatus}
                   portManager={portManager}
                   onOpenConfigViewer={handleOpenConfigViewer}
+                  agents={agents}
                 />
               </div>
             </div>
