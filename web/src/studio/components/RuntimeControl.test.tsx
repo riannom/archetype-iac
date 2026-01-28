@@ -109,9 +109,10 @@ describe("RuntimeControl", () => {
   it("shows Deploy Lab button when lab is not deployed", () => {
     render(<RuntimeControl {...defaultProps} />);
 
-    expect(
-      screen.getByRole("button", { name: /deploy lab/i })
-    ).toBeInTheDocument();
+    // Look for the header Deploy Lab button by its title attribute
+    const deployButton = screen.getByTitle("Deploy all nodes in the topology");
+    expect(deployButton).toBeInTheDocument();
+    expect(deployButton).toHaveTextContent("Deploy Lab");
   });
 
   it("shows Start All and Stop All buttons when lab is deployed", () => {
@@ -209,7 +210,7 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} />);
 
-      await user.click(screen.getByRole("button", { name: /deploy lab/i }));
+      await user.click(screen.getByTitle("Deploy all nodes in the topology"));
 
       expect(mockStudioRequest).toHaveBeenCalledWith(
         "/labs/test-lab-123/nodes/desired-state",
@@ -225,7 +226,7 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} />);
 
-      await user.click(screen.getByRole("button", { name: /deploy lab/i }));
+      await user.click(screen.getByTitle("Deploy all nodes in the topology"));
 
       await waitFor(() => {
         expect(mockStudioRequest).toHaveBeenCalledWith(
@@ -240,7 +241,7 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} />);
 
-      await user.click(screen.getByRole("button", { name: /deploy lab/i }));
+      await user.click(screen.getByTitle("Deploy all nodes in the topology"));
 
       expect(mockOnUpdateStatus).toHaveBeenCalledWith("node-1", "booting");
       expect(mockOnUpdateStatus).toHaveBeenCalledWith("node-2", "booting");
