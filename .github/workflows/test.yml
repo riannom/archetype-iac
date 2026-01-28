@@ -31,7 +31,7 @@ jobs:
       - name: Run API tests
         run: |
           cd api
-          pytest tests/ -v --tb=short
+          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -v --tb=short
 
       - name: Install Agent dependencies
         run: |
