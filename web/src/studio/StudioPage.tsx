@@ -1418,13 +1418,6 @@ const StudioPage: React.FC = () => {
           loadLabs();
           loadSystemMetrics();
         }}
-        deviceModels={deviceModels}
-        imageCatalog={imageCatalog}
-        imageLibrary={imageLibrary}
-        customDevices={customDevices}
-        onAddCustomDevice={(device) => updateCustomDevices([...customDevices, device])}
-        onRemoveCustomDevice={(deviceId) => updateCustomDevices(customDevices.filter((item) => item.id !== deviceId))}
-        onRefreshDevices={loadDevices}
       />
     );
   }
