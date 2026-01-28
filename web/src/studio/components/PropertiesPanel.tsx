@@ -122,6 +122,12 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   const model = deviceModels.find(m => m.id === node.model);
   const status = runtimeStates[node.id] || 'stopped';
 
+  // Check if any nodes are currently running (lab is deployed)
+  const hasRunningNodes = nodes.some(n => {
+    const s = runtimeStates[n.id];
+    return s === 'running' || s === 'booting';
+  });
+
   return (
     <div className="w-80 bg-white dark:bg-stone-900 border-l border-stone-200 dark:border-stone-700 overflow-hidden flex flex-col">
       <div className="p-4 border-b border-stone-200 dark:border-stone-700 flex justify-between items-center bg-stone-100/50 dark:bg-stone-800/50">
@@ -152,11 +158,19 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                </div>
                <div className="grid grid-cols-2 gap-2 mt-4">
                   {status === 'stopped' ? (
-                    <button onClick={() => onUpdateStatus(node.id, 'booting')} className="flex items-center justify-center gap-2 py-2 bg-green-600 hover:bg-green-500 text-white text-[10px] font-bold rounded-lg transition-all"><i className="fa-solid fa-play"></i> START</button>
+                    <button
+                      onClick={() => onUpdateStatus(node.id, 'booting')}
+                      className="flex items-center justify-center gap-2 py-2 bg-green-600 hover:bg-green-500 text-white text-[10px] font-bold rounded-lg transition-all"
+                      title={hasRunningNodes ? "Start this node" : "Deploy lab (starts all nodes)"}
+                    >
+                      <i className={`fa-solid ${hasRunningNodes ? 'fa-play' : 'fa-rocket'}`}></i> {hasRunningNodes ? 'START' : 'DEPLOY'}
+                    </button>
                   ) : (
                     <button onClick={() => onUpdateStatus(node.id, 'stopped')} className="flex items-center justify-center gap-2 py-2 bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold rounded-lg transition-all"><i className="fa-solid fa-power-off"></i> STOP</button>
                   )}
-                  <button onClick={() => onUpdateStatus(node.id, 'booting')} className="flex items-center justify-center gap-2 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[10px] font-bold rounded-lg transition-all border border-stone-300 dark:border-stone-700"><i className="fa-solid fa-rotate"></i> RELOAD</button>
+                  {status !== 'stopped' && (
+                    <button onClick={() => onUpdateStatus(node.id, 'booting')} className="flex items-center justify-center gap-2 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[10px] font-bold rounded-lg transition-all border border-stone-300 dark:border-stone-700"><i className="fa-solid fa-rotate"></i> RELOAD</button>
+                  )}
                </div>
             </div>
 

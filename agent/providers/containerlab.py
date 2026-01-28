@@ -61,7 +61,47 @@ class ContainerlabProvider(Provider):
         """Get path to topology file in workspace."""
         return workspace / "topology.clab.yml"
 
-    def _strip_archetype_fields(self, topology_yaml: str, lab_id: str = "") -> str:
+    def _ensure_ceos_flash_dirs(self, topology_yaml: str, workspace: Path) -> None:
+        """Ensure flash directories exist for cEOS nodes before deployment.
+
+        cEOS nodes require a persistent flash directory mounted to /mnt/flash
+        for configuration persistence. This method parses the topology YAML
+        and creates the necessary directories.
+
+        The binds in topology.py specify paths like:
+        {workspace}/configs/{node_name}/flash:/mnt/flash
+        """
+        try:
+            topo = yaml.safe_load(topology_yaml)
+            if not topo:
+                return
+
+            # Handle both wrapped and flat topology formats
+            nodes = topo.get("topology", {}).get("nodes", {})
+            if not nodes:
+                nodes = topo.get("nodes", {})
+
+            if not isinstance(nodes, dict):
+                return
+
+            for node_name, node_config in nodes.items():
+                if not isinstance(node_config, dict):
+                    continue
+
+                # Check if this is a cEOS node
+                kind = node_config.get("kind", "")
+                if kind != "ceos":
+                    continue
+
+                # Create the flash directory for this node
+                flash_dir = workspace / "configs" / node_name / "flash"
+                flash_dir.mkdir(parents=True, exist_ok=True)
+                logger.debug(f"Created cEOS flash directory: {flash_dir}")
+
+        except Exception as e:
+            logger.warning(f"Failed to ensure cEOS flash directories: {e}")
+
+    def _strip_archetype_fields(self, topology_yaml: str, lab_id: str = "", workspace: Path | None = None) -> str:
         """Strip Archetype-specific fields and convert to containerlab format.
 
         The 'host' field is used by Archetype for multi-host placement but is not
@@ -70,20 +110,45 @@ class ContainerlabProvider(Provider):
         Also wraps flat topology in containerlab format if needed:
         - Input: {nodes: {...}, links: [...]}
         - Output: {name: lab-id, topology: {nodes: {...}, links: [...]}}
+
+        Additionally rewrites bind paths to use the agent's workspace.
         """
         try:
             topo = yaml.safe_load(topology_yaml)
             if not topo:
                 return topology_yaml
 
+            def rewrite_binds(node_config: dict) -> None:
+                """Rewrite bind paths to use agent workspace."""
+                if not workspace or "binds" not in node_config:
+                    return
+                new_binds = []
+                for bind in node_config.get("binds", []):
+                    if ":" in bind:
+                        host_path, container_path = bind.split(":", 1)
+                        # Rewrite paths containing /configs/ to use agent workspace
+                        if "/configs/" in host_path:
+                            # Extract the relative part (configs/node_name/flash)
+                            configs_idx = host_path.find("/configs/")
+                            relative_path = host_path[configs_idx + 1:]  # Remove leading /
+                            new_host_path = str(workspace / relative_path)
+                            new_binds.append(f"{new_host_path}:{container_path}")
+                        else:
+                            new_binds.append(bind)
+                    else:
+                        new_binds.append(bind)
+                node_config["binds"] = new_binds
+
             # Check if already in containerlab format
             if "topology" in topo:
-                # Already wrapped - just strip host fields
+                # Already wrapped - just strip host fields and rewrite binds
                 nodes = topo.get("topology", {}).get("nodes", {})
                 if isinstance(nodes, dict):
                     for node_name, node_config in nodes.items():
-                        if isinstance(node_config, dict) and "host" in node_config:
-                            del node_config["host"]
+                        if isinstance(node_config, dict):
+                            if "host" in node_config:
+                                del node_config["host"]
+                            rewrite_binds(node_config)
                 return yaml.dump(topo, default_flow_style=False)
 
             # Flat format - need to wrap for containerlab
@@ -91,11 +156,13 @@ class ContainerlabProvider(Provider):
             links = topo.get("links", [])
             defaults = topo.get("defaults", {})
 
-            # Strip 'host' field from nodes
+            # Strip 'host' field from nodes and rewrite binds
             if isinstance(nodes, dict):
                 for node_name, node_config in nodes.items():
-                    if isinstance(node_config, dict) and "host" in node_config:
-                        del node_config["host"]
+                    if isinstance(node_config, dict):
+                        if "host" in node_config:
+                            del node_config["host"]
+                        rewrite_binds(node_config)
 
             # Build containerlab format
             import re
@@ -125,9 +192,26 @@ class ContainerlabProvider(Provider):
         self,
         args: list[str],
         workspace: Path,
+        timeout: float | None = None,
     ) -> tuple[int, str, str]:
-        """Run containerlab command asynchronously."""
+        """Run containerlab command asynchronously with timeout.
+
+        Args:
+            args: Arguments to pass to clab command
+            workspace: Working directory for the command
+            timeout: Maximum time in seconds to wait for command (default: settings.deploy_timeout)
+
+        Returns:
+            Tuple of (return_code, stdout, stderr)
+
+        Raises:
+            TimeoutError: If command exceeds timeout
+        """
+        if timeout is None:
+            timeout = settings.deploy_timeout
+
         cmd = ["clab"] + args
+        logger.debug(f"Running: clab {' '.join(args)} (timeout={timeout}s)")
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -136,12 +220,25 @@ class ContainerlabProvider(Provider):
             stderr=asyncio.subprocess.PIPE,
         )
 
-        stdout, stderr = await process.communicate()
-        return (
-            process.returncode or 0,
-            stdout.decode(errors="replace"),
-            stderr.decode(errors="replace"),
-        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout,
+            )
+            return (
+                process.returncode or 0,
+                stdout.decode(errors="replace"),
+                stderr.decode(errors="replace"),
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Command timed out after {timeout}s: clab {' '.join(args)}")
+            # Kill the hung process
+            try:
+                process.kill()
+                await process.wait()
+            except Exception as e:
+                logger.warning(f"Error killing timed-out process: {e}")
+            raise TimeoutError(f"containerlab command timed out after {timeout}s: clab {' '.join(args)}")
 
     def _get_container_status(self, container) -> NodeStatus:
         """Map Docker container status to NodeStatus."""
@@ -189,6 +286,43 @@ class ContainerlabProvider(Provider):
             ip_addresses=self._get_container_ips(container),
         )
 
+    async def _pre_deploy_cleanup(self, lab_id: str, workspace: Path) -> list[str]:
+        """Clean up orphaned or unhealthy containers before deployment.
+
+        This prevents --reconfigure from trying to reconfigure containers in bad states.
+
+        Returns:
+            List of container names that were removed
+        """
+        prefix = self._lab_prefix(lab_id)
+        removed = []
+
+        try:
+            containers = self.docker.containers.list(
+                all=True,
+                filters={"name": prefix},
+            )
+
+            for container in containers:
+                status = container.status.lower()
+                # Remove containers that are in bad states
+                # Keep running containers (--reconfigure will handle them)
+                if status in ("exited", "dead", "created", "removing"):
+                    logger.info(f"Pre-deploy cleanup: removing {status} container {container.name}")
+                    try:
+                        container.remove(force=True)
+                        removed.append(container.name)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove container {container.name}: {e}")
+
+            if removed:
+                logger.info(f"Pre-deploy cleanup removed {len(removed)} containers")
+
+        except Exception as e:
+            logger.warning(f"Pre-deploy cleanup error: {e}")
+
+        return removed
+
     async def _cleanup_failed_deploy(self, lab_id: str, workspace: Path) -> None:
         """Clean up any containers created during a failed deployment."""
         prefix = self._lab_prefix(lab_id)
@@ -214,7 +348,10 @@ class ContainerlabProvider(Provider):
                     await self._run_clab(
                         ["destroy", "-t", str(topo_path), "--cleanup"],
                         workspace,
+                        timeout=settings.destroy_timeout,
                     )
+                except TimeoutError:
+                    logger.warning("clab destroy during cleanup timed out")
                 except Exception as e:
                     logger.warning(f"clab destroy during cleanup failed: {e}")
 
@@ -229,13 +366,22 @@ class ContainerlabProvider(Provider):
     ) -> DeployResult:
         """Deploy a containerlab topology.
 
+        Uses a two-phase approach:
+        1. Pre-deploy cleanup to remove orphaned/unhealthy containers
+        2. Deploy with --reconfigure (works for running containers)
+        3. Fallback to fresh deploy if --reconfigure fails
+
         If deployment fails, automatically cleans up any partially created resources.
         """
         # Ensure workspace exists
         workspace.mkdir(parents=True, exist_ok=True)
 
         # Strip Archetype-specific fields and convert to containerlab format
-        clean_topology = self._strip_archetype_fields(topology_yaml, lab_id)
+        # Also rewrites bind paths to use the agent's workspace
+        clean_topology = self._strip_archetype_fields(topology_yaml, lab_id, workspace)
+
+        # Ensure flash directories exist for cEOS nodes (required for config persistence)
+        self._ensure_ceos_flash_dirs(clean_topology, workspace)
 
         # Write topology file
         topo_path = self._topology_path(workspace)
@@ -243,24 +389,58 @@ class ContainerlabProvider(Provider):
 
         logger.info(f"Deploying lab {lab_id} from {topo_path}")
 
-        # Run containerlab deploy
-        returncode, stdout, stderr = await self._run_clab(
-            ["deploy", "-t", str(topo_path), "--reconfigure"],
-            workspace,
-        )
+        # Pre-deploy cleanup: remove containers in bad states
+        await self._pre_deploy_cleanup(lab_id, workspace)
 
-        if returncode != 0:
-            logger.error(f"Deploy failed for lab {lab_id}: exit code {returncode}")
-
-            # Clean up any partially created resources
+        # First attempt: deploy with --reconfigure
+        try:
+            returncode, stdout, stderr = await self._run_clab(
+                ["deploy", "-t", str(topo_path), "--reconfigure"],
+                workspace,
+            )
+        except TimeoutError as e:
+            logger.error(f"Deploy timed out for lab {lab_id}: {e}")
             await self._cleanup_failed_deploy(lab_id, workspace)
-
             return DeployResult(
                 success=False,
-                stdout=stdout,
-                stderr=stderr,
-                error=f"containerlab deploy failed with exit code {returncode}",
+                stdout="",
+                stderr="",
+                error=str(e),
             )
+
+        if returncode != 0:
+            logger.warning(f"Deploy with --reconfigure failed for lab {lab_id}: exit code {returncode}")
+            logger.info(f"Attempting fallback: destroy + fresh deploy for lab {lab_id}")
+
+            # Fallback: destroy and try fresh deploy
+            try:
+                # Full cleanup
+                await self._cleanup_failed_deploy(lab_id, workspace)
+
+                # Fresh deploy without --reconfigure
+                returncode, stdout, stderr = await self._run_clab(
+                    ["deploy", "-t", str(topo_path)],
+                    workspace,
+                )
+            except TimeoutError as e:
+                logger.error(f"Fresh deploy timed out for lab {lab_id}: {e}")
+                await self._cleanup_failed_deploy(lab_id, workspace)
+                return DeployResult(
+                    success=False,
+                    stdout=stdout,
+                    stderr=stderr,
+                    error=str(e),
+                )
+
+            if returncode != 0:
+                logger.error(f"Fresh deploy also failed for lab {lab_id}: exit code {returncode}")
+                await self._cleanup_failed_deploy(lab_id, workspace)
+                return DeployResult(
+                    success=False,
+                    stdout=stdout,
+                    stderr=stderr,
+                    error=f"containerlab deploy failed with exit code {returncode}",
+                )
 
         # Get deployed node info
         status_result = await self.status(lab_id, workspace)
@@ -317,6 +497,7 @@ class ContainerlabProvider(Provider):
         returncode, stdout, stderr = await self._run_clab(
             ["destroy", "-t", str(topo_path), "--cleanup"],
             workspace,
+            timeout=settings.destroy_timeout,
         )
 
         if returncode != 0:

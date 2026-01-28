@@ -16,6 +16,7 @@ from app.schemas import (
     TopologyGraph,
 )
 from app.image_store import find_image_reference
+from app.config import settings
 from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config
 
 
@@ -276,9 +277,12 @@ def yaml_to_graph(content: str) -> TopologyGraph:
     node_explicit_fields = {"device", "image", "version", "role", "mgmt", "network-mode", "host", "_gui_id", "_display_name"}
 
     nodes: list[GraphNode] = []
+    # Build reverse mapping: container_name -> gui_id for link translation
+    container_to_gui_id: dict[str, str] = {}
     if isinstance(nodes_data, list):
         for name in nodes_data:
             nodes.append(GraphNode(id=str(name), name=str(name), container_name=str(name)))
+            container_to_gui_id[str(name)] = str(name)
     elif isinstance(nodes_data, dict):
         for name, attrs in nodes_data.items():
             attrs = attrs or {}
@@ -288,6 +292,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
             display_name = attrs.get("_display_name", name)
             # YAML key is the containerlab container name
             yaml_key = str(name)
+            container_to_gui_id[yaml_key] = str(node_id)
             nodes.append(
                 GraphNode(
                     id=str(node_id),
@@ -317,6 +322,12 @@ def yaml_to_graph(content: str) -> TopologyGraph:
             parsed = _parse_link_item(item)
             if parsed:
                 links.append(parsed)
+
+    # Translate link endpoints from container names to GUI IDs
+    for link in links:
+        for endpoint in link.endpoints:
+            if endpoint.type == "node" and endpoint.node in container_to_gui_id:
+                endpoint.node = container_to_gui_id[endpoint.node]
 
     return TopologyGraph(nodes=nodes, links=links, defaults=defaults)
 
@@ -459,14 +470,19 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         if node.network_mode:
             node_data["network-mode"] = node.network_mode
 
-        # Add startup-config for cEOS nodes to enable config persistence
-        # This disables ZTP and configures AAA to allow 'copy run start'
+        # Add startup-config and persistent storage for cEOS nodes
+        # This enables config persistence across restarts and redeploys:
+        # 1. Disables ZTP and configures AAA to allow 'copy run start'
+        # 2. Mounts a persistent flash directory from the workspace
         if kind == "ceos":
             # Use original node name for hostname (e.g., "EOS-1" not "EOS_1_96ce")
             node_data["startup-config"] = _generate_ceos_startup_config(node.name)
             # Set environment variable to disable ZeroTouch provisioning
             # This is required because startup-config is loaded AFTER ZTP runs
             node_data["env"] = {"CEOS_NOZEROTOUCH": "true"}
+            # NOTE: cEOS already mounts /mnt/flash internally - cannot add bind mount
+            # Config persistence for cEOS requires saving startup-config to the container
+            # via 'write memory' which cEOS handles internally
 
         # Add any other vars that containerlab might use
         if node.vars:

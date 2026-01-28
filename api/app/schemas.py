@@ -337,3 +337,48 @@ class JobCallbackResponse(BaseModel):
 
     success: bool
     message: str | None = None
+
+
+# =============================================================================
+# Link State Management Schemas
+# =============================================================================
+
+
+class LinkStateOut(BaseModel):
+    """Output schema for a single link's state."""
+
+    id: str
+    lab_id: str
+    link_name: str
+    source_node: str
+    source_interface: str
+    target_node: str
+    target_interface: str
+    desired_state: str  # "up" or "down"
+    actual_state: str  # "up", "down", "unknown", "error"
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class LinkStateUpdate(BaseModel):
+    """Input schema for updating a link's desired state."""
+
+    state: str = Field(..., pattern="^(up|down)$")
+
+
+class LinkStatesResponse(BaseModel):
+    """Response schema for listing all link states in a lab."""
+
+    links: list[LinkStateOut]
+
+
+class LinkStateSyncResponse(BaseModel):
+    """Response schema for link sync operations."""
+
+    message: str
+    links_updated: int = 0
+    links_created: int = 0

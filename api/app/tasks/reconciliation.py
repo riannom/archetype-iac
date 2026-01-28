@@ -10,12 +10,14 @@ Key scenarios handled:
 3. Stale pending states - Nodes stuck in "pending" with no active job
 4. Stale starting states - Labs stuck in "starting" for too long
 5. Stuck jobs - Labs with jobs that have exceeded their timeout
+6. Link state initialization - Ensure link states exist for deployed labs
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from app import agent_client, models
 from app.config import settings
@@ -23,6 +25,101 @@ from app.db import SessionLocal
 from app.utils.job import is_job_within_timeout
 
 logger = logging.getLogger(__name__)
+
+
+def _generate_link_name(
+    source_node: str,
+    source_interface: str,
+    target_node: str,
+    target_interface: str,
+) -> str:
+    """Generate a canonical link name from endpoints.
+
+    Link names are sorted alphabetically to ensure the same link always gets
+    the same name regardless of endpoint order.
+    """
+    ep_a = f"{source_node}:{source_interface}"
+    ep_b = f"{target_node}:{target_interface}"
+    # Sort endpoints alphabetically for consistent naming
+    if ep_a <= ep_b:
+        return f"{ep_a}-{ep_b}"
+    return f"{ep_b}-{ep_a}"
+
+
+def _ensure_link_states_for_lab(session, lab_id: str, topology_yaml: str) -> int:
+    """Ensure LinkState records exist for all links in a lab's topology.
+
+    This is called during reconciliation to create missing link state records
+    for labs that may have been deployed before link state tracking was added.
+
+    Returns the number of link states created.
+    """
+    from app.topology import yaml_to_graph
+
+    try:
+        graph = yaml_to_graph(topology_yaml)
+    except Exception as e:
+        logger.debug(f"Failed to parse topology for lab {lab_id}: {e}")
+        return 0
+
+    # Get existing link states
+    existing = (
+        session.query(models.LinkState)
+        .filter(models.LinkState.lab_id == lab_id)
+        .all()
+    )
+    existing_names = {ls.link_name for ls in existing}
+
+    # Build node ID to name mapping
+    node_id_to_name: dict[str, str] = {}
+    for node in graph.nodes:
+        node_id_to_name[node.id] = node.container_name or node.name
+
+    created_count = 0
+
+    for link in graph.links:
+        if len(link.endpoints) != 2:
+            continue
+
+        ep_a, ep_b = link.endpoints
+
+        # Skip external endpoints
+        if ep_a.type != "node" or ep_b.type != "node":
+            continue
+
+        source_node = node_id_to_name.get(ep_a.node, ep_a.node)
+        target_node = node_id_to_name.get(ep_b.node, ep_b.node)
+        source_interface = ep_a.ifname or "eth0"
+        target_interface = ep_b.ifname or "eth0"
+
+        link_name = _generate_link_name(
+            source_node, source_interface, target_node, target_interface
+        )
+
+        if link_name not in existing_names:
+            # Ensure canonical ordering
+            if f"{source_node}:{source_interface}" <= f"{target_node}:{target_interface}":
+                src_n, src_i = source_node, source_interface
+                tgt_n, tgt_i = target_node, target_interface
+            else:
+                src_n, src_i = target_node, target_interface
+                tgt_n, tgt_i = source_node, source_interface
+
+            new_state = models.LinkState(
+                lab_id=lab_id,
+                link_name=link_name,
+                source_node=src_n,
+                source_interface=src_i,
+                target_node=tgt_n,
+                target_interface=tgt_i,
+                desired_state="up",
+                actual_state="unknown",
+            )
+            session.add(new_state)
+            existing_names.add(link_name)
+            created_count += 1
+
+    return created_count
 
 
 async def reconcile_lab_states():
@@ -81,6 +178,11 @@ async def reconcile_lab_states():
         for node in unready_running_nodes:
             labs_to_reconcile.add(node.lab_id)
 
+        # FIRST: Always check readiness for running nodes (this doesn't interfere with jobs)
+        # This is separate because readiness checks should happen even when jobs are running
+        if unready_running_nodes:
+            await _check_readiness_for_nodes(session, unready_running_nodes)
+
         if not labs_to_reconcile:
             return  # Nothing to reconcile
 
@@ -95,8 +197,59 @@ async def reconcile_lab_states():
         session.close()
 
 
+async def _check_readiness_for_nodes(session, nodes: list):
+    """Check boot readiness for running nodes.
+
+    This is separate from full state reconciliation because readiness checks
+    are non-destructive and should happen even when jobs are running.
+    """
+    from app.utils.lab import get_lab_provider
+
+    # Group nodes by lab_id for efficient agent lookup
+    nodes_by_lab: dict[str, list] = {}
+    for node in nodes:
+        if node.lab_id not in nodes_by_lab:
+            nodes_by_lab[node.lab_id] = []
+        nodes_by_lab[node.lab_id].append(node)
+
+    for lab_id, lab_nodes in nodes_by_lab.items():
+        lab = session.get(models.Lab, lab_id)
+        if not lab:
+            continue
+
+        try:
+            lab_provider = get_lab_provider(lab)
+            agent = await agent_client.get_agent_for_lab(
+                session, lab, required_provider=lab_provider
+            )
+            if not agent:
+                logger.debug(f"No agent for lab {lab_id}, skipping readiness check")
+                continue
+
+            for ns in lab_nodes:
+                # Set boot_started_at if not already set
+                if not ns.boot_started_at:
+                    ns.boot_started_at = datetime.now(timezone.utc)
+
+                try:
+                    readiness = await agent_client.check_node_readiness(
+                        agent, lab_id, ns.node_name
+                    )
+                    if readiness.get("is_ready", False):
+                        ns.is_ready = True
+                        logger.info(f"Node {ns.node_name} in lab {lab_id} is now ready")
+                except Exception as e:
+                    logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
+
+            session.commit()
+
+        except Exception as e:
+            logger.error(f"Error checking readiness for lab {lab_id}: {e}")
+
+
 async def _reconcile_single_lab(session, lab_id: str):
     """Reconcile a single lab's state with actual container status."""
+    from app.storage import topology_path
     from app.utils.lab import get_lab_provider
 
     lab = session.get(models.Lab, lab_id)
@@ -131,6 +284,17 @@ async def _reconcile_single_lab(session, lab_id: str):
                 f"(action={active_job.action}, status={active_job.status}), "
                 f"proceeding with state reconciliation"
             )
+
+    # Ensure link states exist for this lab (for backwards compatibility)
+    topo_path = topology_path(lab_id)
+    if topo_path.exists():
+        try:
+            topology_yaml = topo_path.read_text(encoding="utf-8")
+            links_created = _ensure_link_states_for_lab(session, lab_id, topology_yaml)
+            if links_created > 0:
+                logger.info(f"Created {links_created} link state(s) for lab {lab_id}")
+        except Exception as e:
+            logger.debug(f"Failed to ensure link states for lab {lab_id}: {e}")
 
     # Get an agent to query for status
     try:
@@ -251,6 +415,50 @@ async def _reconcile_single_lab(session, lab_id: str):
 
         if lab.state != old_lab_state:
             logger.info(f"Reconciled lab {lab_id} state: {old_lab_state} -> {lab.state}")
+
+        # Reconcile link states based on node states
+        # Build a map of node name -> actual state for quick lookup
+        node_actual_states: dict[str, str] = {}
+        for ns in node_states:
+            node_actual_states[ns.node_name] = ns.actual_state
+
+        # Update link states
+        link_states = (
+            session.query(models.LinkState)
+            .filter(models.LinkState.lab_id == lab_id)
+            .all()
+        )
+
+        for ls in link_states:
+            old_actual = ls.actual_state
+            source_state = node_actual_states.get(ls.source_node, "unknown")
+            target_state = node_actual_states.get(ls.target_node, "unknown")
+
+            # Determine link actual state based on endpoint node states
+            if source_state == "running" and target_state == "running":
+                # Both nodes running - link is operational
+                # If user wants it down, actual is still "up" from infrastructure perspective
+                # The desired_state tracks user intent
+                ls.actual_state = "up"
+                ls.error_message = None
+            elif source_state in ("error",) or target_state in ("error",):
+                # At least one node is in error state
+                ls.actual_state = "error"
+                ls.error_message = "One or more endpoint nodes in error state"
+            elif source_state in ("stopped", "undeployed") or target_state in ("stopped", "undeployed"):
+                # At least one node is stopped/undeployed
+                ls.actual_state = "down"
+                ls.error_message = None
+            else:
+                # Unknown or transitional states
+                ls.actual_state = "unknown"
+                ls.error_message = None
+
+            if ls.actual_state != old_actual:
+                logger.debug(
+                    f"Reconciled link {ls.link_name} in lab {lab_id}: "
+                    f"{old_actual} -> {ls.actual_state}"
+                )
 
         session.commit()
 

@@ -331,14 +331,15 @@ const Canvas: React.FC<CanvasProps> = ({
           // Status indicator: green=running, gray=stopped, yellow=booting, red=error, no dot=undeployed
           const getStatusDot = () => {
             if (!status) return null; // No status = undeployed, no indicator
-            let dotColor = 'bg-stone-400'; // stopped
+            let dotColor = '#a8a29e'; // stone-400 (stopped)
             let animate = false;
-            if (status === 'running') dotColor = 'bg-green-500';
-            else if (status === 'booting') { dotColor = 'bg-yellow-500'; animate = true; }
-            else if (status === 'error') dotColor = 'bg-red-500';
+            if (status === 'running') dotColor = '#22c55e'; // green-500
+            else if (status === 'booting') { dotColor = '#eab308'; animate = true; } // yellow-500
+            else if (status === 'error') dotColor = '#ef4444'; // red-500
             return (
               <div
-                className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${dotColor} border-2 border-white dark:border-stone-800 shadow-sm ${animate ? 'animate-pulse' : ''}`}
+                className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-white dark:border-stone-800 shadow-sm ${animate ? 'animate-pulse' : ''}`}
+                style={{ backgroundColor: dotColor, transition: 'background-color 300ms ease-in-out' }}
                 title={status}
               />
             );
@@ -383,20 +384,32 @@ const Canvas: React.FC<CanvasProps> = ({
           <div className="px-4 py-2 border-b border-stone-100 dark:border-stone-800 mb-1 flex items-center justify-between">
             <span className="text-[10px] font-black text-stone-400 dark:text-stone-500 uppercase tracking-widest">{contextMenu.type === 'node' ? 'Node Actions' : 'Link Actions'}</span>
           </div>
-          {contextMenu.type === 'node' && (
-            <>
-              <button onClick={() => handleAction('console')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-sage-600 hover:text-white transition-colors">
-                <i className="fa-solid fa-terminal w-4"></i> Open Console
-              </button>
-              <button onClick={() => handleAction('start')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-green-600 dark:text-green-400 hover:bg-green-600 hover:text-white transition-colors">
-                <i className="fa-solid fa-play w-4"></i> Power On
-              </button>
-              <button onClick={() => handleAction('stop')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-red-600 dark:text-red-400 hover:bg-red-600 hover:text-white transition-colors">
-                <i className="fa-solid fa-power-off w-4"></i> Power Off
-              </button>
-              <div className="h-px bg-stone-100 dark:bg-stone-800 my-1 mx-2"></div>
-            </>
-          )}
+          {contextMenu.type === 'node' && (() => {
+            const nodeStatus = runtimeStates[contextMenu.id] || 'stopped';
+            const hasRunningNodes = nodes.some(n => {
+              const s = runtimeStates[n.id];
+              return s === 'running' || s === 'booting';
+            });
+            const isNodeRunning = nodeStatus === 'running' || nodeStatus === 'booting';
+            return (
+              <>
+                <button onClick={() => handleAction('console')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-sage-600 hover:text-white transition-colors">
+                  <i className="fa-solid fa-terminal w-4"></i> Open Console
+                </button>
+                {!isNodeRunning && (
+                  <button onClick={() => handleAction('start')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-green-600 dark:text-green-400 hover:bg-green-600 hover:text-white transition-colors">
+                    <i className={`fa-solid ${hasRunningNodes ? 'fa-play' : 'fa-rocket'} w-4`}></i> {hasRunningNodes ? 'Start Node' : 'Deploy Lab'}
+                  </button>
+                )}
+                {isNodeRunning && (
+                  <button onClick={() => handleAction('stop')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-red-600 dark:text-red-400 hover:bg-red-600 hover:text-white transition-colors">
+                    <i className="fa-solid fa-power-off w-4"></i> Stop Node
+                  </button>
+                )}
+                <div className="h-px bg-stone-100 dark:bg-stone-800 my-1 mx-2"></div>
+              </>
+            );
+          })()}
           <button onClick={() => handleAction('delete')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-red-600 dark:text-red-500 hover:bg-red-600 hover:text-white transition-colors">
             <i className="fa-solid fa-trash-can w-4"></i> {contextMenu.type === 'node' ? 'Remove Device' : 'Delete Connection'}
           </button>

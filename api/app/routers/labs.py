@@ -229,6 +229,7 @@ async def delete_lab(
     database.query(models.LabFile).filter(models.LabFile.lab_id == lab_id).delete()
     database.query(models.NodePlacement).filter(models.NodePlacement.lab_id == lab_id).delete()
     database.query(models.NodeState).filter(models.NodeState.lab_id == lab_id).delete()
+    database.query(models.LinkState).filter(models.LinkState.lab_id == lab_id).delete()
 
     # Delete workspace files
     workspace = lab_workspace(lab.id)
@@ -314,6 +315,10 @@ def import_graph(
 
     # Create/update NodeState records for all nodes in the topology
     _upsert_node_states(database, lab.id, payload)
+
+    # Create/update LinkState records for all links in the topology
+    _upsert_link_states(database, lab.id, payload)
+
     database.commit()
 
     return schemas.LabOut.model_validate(lab)
@@ -821,4 +826,301 @@ async def sync_lab(
         job_id=job.id,
         message=f"Sync job queued for {len(node_ids)} node(s)",
         nodes_to_sync=node_ids,
+    )
+
+
+# ============================================================================
+# Link State Management Endpoints
+# ============================================================================
+
+
+def _generate_link_name(
+    source_node: str,
+    source_interface: str,
+    target_node: str,
+    target_interface: str,
+) -> str:
+    """Generate a canonical link name from endpoints.
+
+    Link names are sorted alphabetically to ensure the same link always gets
+    the same name regardless of endpoint order.
+    """
+    ep_a = f"{source_node}:{source_interface}"
+    ep_b = f"{target_node}:{target_interface}"
+    # Sort endpoints alphabetically for consistent naming
+    if ep_a <= ep_b:
+        return f"{ep_a}-{ep_b}"
+    return f"{ep_b}-{ep_a}"
+
+
+def _upsert_link_states(
+    database: Session,
+    lab_id: str,
+    graph: schemas.TopologyGraph,
+) -> tuple[int, int]:
+    """Create or update LinkState records for all links in a topology graph.
+
+    New links are initialized with desired_state='up', actual_state='unknown'.
+    Existing links retain their desired_state (user preference persists).
+    Links removed from topology have their LinkState records deleted.
+
+    Returns:
+        Tuple of (created_count, updated_count)
+    """
+    # Get existing link states for this lab
+    existing_states = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.lab_id == lab_id)
+        .all()
+    )
+    existing_by_name = {ls.link_name: ls for ls in existing_states}
+
+    # Build node ID to name mapping for resolving link endpoints
+    # Node endpoints in links reference node IDs, not names
+    node_id_to_name: dict[str, str] = {}
+    for node in graph.nodes:
+        # Use container_name (YAML key) for consistency with containerlab
+        node_id_to_name[node.id] = node.container_name or node.name
+
+    # Track which links are in the current topology
+    current_link_names: set[str] = set()
+    created_count = 0
+    updated_count = 0
+
+    for link in graph.links:
+        if len(link.endpoints) != 2:
+            continue  # Skip non-point-to-point links
+
+        ep_a, ep_b = link.endpoints
+
+        # Skip external endpoints (bridge, macvlan, host)
+        if ep_a.type != "node" or ep_b.type != "node":
+            continue
+
+        # Resolve node IDs to names
+        source_node = node_id_to_name.get(ep_a.node, ep_a.node)
+        target_node = node_id_to_name.get(ep_b.node, ep_b.node)
+        source_interface = ep_a.ifname or "eth0"
+        target_interface = ep_b.ifname or "eth0"
+
+        # Generate canonical link name
+        link_name = _generate_link_name(
+            source_node, source_interface, target_node, target_interface
+        )
+        current_link_names.add(link_name)
+
+        if link_name in existing_by_name:
+            # Update existing link state (source/target may have changed order)
+            ls = existing_by_name[link_name]
+            # Ensure canonical ordering is preserved
+            if f"{source_node}:{source_interface}" <= f"{target_node}:{target_interface}":
+                ls.source_node = source_node
+                ls.source_interface = source_interface
+                ls.target_node = target_node
+                ls.target_interface = target_interface
+            else:
+                ls.source_node = target_node
+                ls.source_interface = target_interface
+                ls.target_node = source_node
+                ls.target_interface = source_interface
+            updated_count += 1
+        else:
+            # Create new link state
+            # Ensure canonical ordering
+            if f"{source_node}:{source_interface}" <= f"{target_node}:{target_interface}":
+                src_n, src_i = source_node, source_interface
+                tgt_n, tgt_i = target_node, target_interface
+            else:
+                src_n, src_i = target_node, target_interface
+                tgt_n, tgt_i = source_node, source_interface
+
+            new_state = models.LinkState(
+                lab_id=lab_id,
+                link_name=link_name,
+                source_node=src_n,
+                source_interface=src_i,
+                target_node=tgt_n,
+                target_interface=tgt_i,
+                desired_state="up",
+                actual_state="unknown",
+            )
+            database.add(new_state)
+            created_count += 1
+
+    # Delete link states for links no longer in topology
+    for existing_name, existing_state in existing_by_name.items():
+        if existing_name not in current_link_names:
+            database.delete(existing_state)
+
+    return created_count, updated_count
+
+
+def _ensure_link_states_exist(
+    database: Session,
+    lab_id: str,
+) -> None:
+    """Ensure LinkState records exist for all links in the topology.
+
+    Reads topology file and calls _upsert_link_states if topology exists.
+    Safe to call multiple times - idempotent operation.
+    """
+    topo_path = topology_path(lab_id)
+    if topo_path.exists():
+        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+        _upsert_link_states(database, lab_id, graph)
+        database.commit()
+
+
+@router.get("/labs/{lab_id}/links/states")
+def list_link_states(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LinkStatesResponse:
+    """Get all link states for a lab.
+
+    Returns the desired and actual state for each link in the topology.
+    Auto-creates missing LinkState records for labs with existing topologies.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Check if topology exists and sync LinkState records
+    topo_path = topology_path(lab.id)
+    if topo_path.exists():
+        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+        _upsert_link_states(database, lab.id, graph)
+        database.commit()
+
+    states = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.lab_id == lab_id)
+        .order_by(models.LinkState.link_name)
+        .all()
+    )
+
+    return schemas.LinkStatesResponse(
+        links=[schemas.LinkStateOut.model_validate(s) for s in states]
+    )
+
+
+@router.get("/labs/{lab_id}/links/{link_name}/state")
+def get_link_state(
+    lab_id: str,
+    link_name: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LinkStateOut:
+    """Get the state for a specific link."""
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_link_states_exist(database, lab.id)
+
+    state = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.link_name == link_name,
+        )
+        .first()
+    )
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Link '{link_name}' not found")
+
+    return schemas.LinkStateOut.model_validate(state)
+
+
+@router.put("/labs/{lab_id}/links/{link_name}/state")
+def set_link_state(
+    lab_id: str,
+    link_name: str,
+    payload: schemas.LinkStateUpdate,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LinkStateOut:
+    """Set the desired state for a link (up or down).
+
+    This updates the desired state in the database. The actual state
+    will be reconciled by the reconciliation system or can be triggered
+    by a manual sync operation.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_link_states_exist(database, lab.id)
+
+    state = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.link_name == link_name,
+        )
+        .first()
+    )
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Link '{link_name}' not found")
+
+    state.desired_state = payload.state
+    database.commit()
+    database.refresh(state)
+
+    return schemas.LinkStateOut.model_validate(state)
+
+
+@router.put("/labs/{lab_id}/links/desired-state")
+def set_all_links_desired_state(
+    lab_id: str,
+    payload: schemas.LinkStateUpdate,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LinkStatesResponse:
+    """Set the desired state for all links in a lab.
+
+    Useful for "Enable All Links" or "Disable All Links" operations.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_link_states_exist(database, lab.id)
+
+    states = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.lab_id == lab_id)
+        .all()
+    )
+    for state in states:
+        state.desired_state = payload.state
+    database.commit()
+
+    # Refresh and return all states
+    states = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.lab_id == lab_id)
+        .order_by(models.LinkState.link_name)
+        .all()
+    )
+    return schemas.LinkStatesResponse(
+        links=[schemas.LinkStateOut.model_validate(s) for s in states]
+    )
+
+
+@router.post("/labs/{lab_id}/links/sync")
+def sync_link_states(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LinkStateSyncResponse:
+    """Sync link states from the current topology.
+
+    This refreshes the LinkState records to match the current topology file.
+    New links are created, removed links are deleted.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    topo_path = topology_path(lab.id)
+    if not topo_path.exists():
+        raise HTTPException(status_code=404, detail="Topology not found")
+
+    graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+    created, updated = _upsert_link_states(database, lab.id, graph)
+    database.commit()
+
+    return schemas.LinkStateSyncResponse(
+        message=f"Link states synchronized",
+        links_created=created,
+        links_updated=updated,
     )

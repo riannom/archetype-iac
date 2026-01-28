@@ -149,3 +149,43 @@ class NodeState(Base):
     boot_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class LinkState(Base):
+    """Per-link desired/actual state for lab lifecycle management.
+
+    This model enables per-link control where each link tracks:
+    - desired_state: What the user wants ("up" or "down")
+    - actual_state: Current reality ("up", "down", "unknown", "error")
+
+    Links are identified by a unique name generated from their endpoints.
+    The source/target node and interface fields store the link topology
+    for reference and display purposes.
+
+    Link states:
+    - "up": Link is enabled and active
+    - "down": Link is administratively disabled
+    - "unknown": Link state cannot be determined
+    - "error": Link is in an error state
+    """
+    __tablename__ = "link_states"
+    __table_args__ = (UniqueConstraint("lab_id", "link_name", name="uq_link_state_lab_link"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"))
+    # Unique identifier for this link within the lab (e.g., "node1:eth1-node2:eth1")
+    link_name: Mapped[str] = mapped_column(String(255))
+    # Source endpoint
+    source_node: Mapped[str] = mapped_column(String(100))
+    source_interface: Mapped[str] = mapped_column(String(100))
+    # Target endpoint
+    target_node: Mapped[str] = mapped_column(String(100))
+    target_interface: Mapped[str] = mapped_column(String(100))
+    # desired_state: What the user wants - "up" or "down"
+    desired_state: Mapped[str] = mapped_column(String(50), default="up")
+    # actual_state: Current reality - "up", "down", "unknown", "error"
+    actual_state: Mapped[str] = mapped_column(String(50), default="unknown")
+    # Error message if actual_state is "error"
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

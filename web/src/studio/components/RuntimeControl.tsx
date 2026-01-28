@@ -24,6 +24,15 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     }
   };
 
+  // Check if any nodes are currently running or booting
+  const hasRunningNodes = nodes.some(node => {
+    const status = runtimeStates[node.id];
+    return status === 'running' || status === 'booting';
+  });
+
+  // Check if lab is deployed (any node has ever been started)
+  const isLabDeployed = hasRunningNodes;
+
   const handleBulkAction = useCallback(async (action: 'running' | 'stopped') => {
     if (!labId || nodes.length === 0) return;
 
@@ -58,18 +67,32 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
             <p className="text-stone-500 dark:text-stone-400 text-sm mt-1">Live operational state and lifecycle management for your topology.</p>
           </div>
           <div className="flex gap-3">
-            <button
-              onClick={() => handleBulkAction('running')}
-              className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
-            >
-              <i className="fa-solid fa-play mr-2"></i> Start All
-            </button>
-            <button
-              onClick={() => handleBulkAction('stopped')}
-              className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
-            >
-              <i className="fa-solid fa-stop mr-2"></i> Stop All
-            </button>
+            {!isLabDeployed ? (
+              <button
+                onClick={() => handleBulkAction('running')}
+                className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
+                title="Deploy all nodes in the topology"
+              >
+                <i className="fa-solid fa-rocket mr-2"></i> Deploy Lab
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => handleBulkAction('running')}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
+                  title="Start all stopped nodes"
+                >
+                  <i className="fa-solid fa-play mr-2"></i> Start All
+                </button>
+                <button
+                  onClick={() => handleBulkAction('stopped')}
+                  className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
+                  title="Stop all running nodes"
+                >
+                  <i className="fa-solid fa-stop mr-2"></i> Stop All
+                </button>
+              </>
+            )}
           </div>
         </header>
 
@@ -122,26 +145,28 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                               <button
                                 onClick={() => onUpdateStatus(node.id, 'booting')}
                                 className="p-2 text-green-500 hover:bg-green-500/10 rounded-lg transition-all"
-                                title="Power On"
+                                title={isLabDeployed ? "Start this node" : "Deploy lab (starts all nodes)"}
                               >
-                                <i className="fa-solid fa-play"></i>
+                                <i className={`fa-solid ${isLabDeployed ? 'fa-play' : 'fa-rocket'}`}></i>
                               </button>
                             ) : (
                               <button
                                 onClick={() => onUpdateStatus(node.id, 'stopped')}
                                 className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
-                                title="Power Off"
+                                title="Stop this node"
                               >
                                 <i className="fa-solid fa-power-off"></i>
                               </button>
                             )}
-                            <button
-                              onClick={() => onUpdateStatus(node.id, 'booting')}
-                              className="p-2 text-stone-400 hover:bg-stone-400/10 rounded-lg transition-all"
-                              title="Reload"
-                            >
-                              <i className="fa-solid fa-rotate"></i>
-                            </button>
+                            {status !== 'stopped' && (
+                              <button
+                                onClick={() => onUpdateStatus(node.id, 'booting')}
+                                className="p-2 text-stone-400 hover:bg-stone-400/10 rounded-lg transition-all"
+                                title="Restart this node"
+                              >
+                                <i className="fa-solid fa-rotate"></i>
+                              </button>
+                            )}
                         </>
                       </div>
                     </td>
