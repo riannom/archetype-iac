@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # Container operations
     container_stop_timeout: int = 10
 
+    # Deploy operation timeouts (seconds)
+    deploy_timeout: float = 900.0  # 15 minutes for containerlab deploy
+    destroy_timeout: float = 300.0  # 5 minutes for containerlab destroy
+    lock_acquire_timeout: float = 30.0  # Time to wait for deploy lock
+
     # VXLAN networking
     vxlan_vni_base: int = 100000
     vxlan_vni_max: int = 199999

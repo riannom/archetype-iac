@@ -126,7 +126,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
             className={`
               px-2 py-1 rounded-md text-[10px] font-bold
               ${hasImages
-                ? 'bg-sage-100 dark:bg-sage-900/30 text-sage-700 dark:text-sage-400'
+                ? 'bg-sage-100 dark:bg-sage-800 text-sage-700 dark:text-sage-400'
                 : 'bg-stone-100 dark:bg-stone-800 text-stone-500'
               }
             `}

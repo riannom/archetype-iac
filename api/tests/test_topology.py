@@ -671,5 +671,83 @@ def test_containerlab_yaml_ceos_alias_resolution():
     assert "hostname R1" in yaml_str
 
 
+def test_containerlab_yaml_ceos_has_binds_for_persistence():
+    """Test that cEOS nodes have binds for config persistence."""
+    import yaml as pyyaml
+    from app.config import settings
+
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="ceos"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    parsed = pyyaml.safe_load(yaml_str)
+
+    # Verify the cEOS node has binds configured
+    nodes = parsed.get("topology", {}).get("nodes", {})
+    r1_node = nodes.get("R1", {})
+
+    assert "binds" in r1_node, "cEOS node should have binds for config persistence"
+    binds = r1_node["binds"]
+    assert isinstance(binds, list), "binds should be a list"
+    assert len(binds) >= 1, "Should have at least one bind"
+
+    # Verify the bind mounts flash directory
+    flash_bind = binds[0]
+    assert ":/mnt/flash" in flash_bind, "Bind should mount to /mnt/flash"
+    assert "/configs/R1/flash" in flash_bind, "Bind should include node-specific flash dir"
+    assert settings.netlab_workspace in flash_bind, "Bind should use workspace path"
+
+
+def test_containerlab_yaml_linux_has_no_binds():
+    """Test that non-cEOS nodes don't get persistence binds."""
+    import yaml as pyyaml
+
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="h1", name="H1", device="linux"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    parsed = pyyaml.safe_load(yaml_str)
+
+    # Linux nodes shouldn't have binds for config persistence
+    nodes = parsed.get("topology", {}).get("nodes", {})
+    h1_node = nodes.get("H1", {})
+
+    assert "binds" not in h1_node, "Linux node should not have persistence binds"
+
+
+def test_containerlab_yaml_mixed_nodes_binds():
+    """Test that only cEOS nodes get persistence binds in mixed topology."""
+    import yaml as pyyaml
+
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="ceos"),
+            GraphNode(id="h1", name="H1", device="linux"),
+            GraphNode(id="s1", name="S1", device="srlinux"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    parsed = pyyaml.safe_load(yaml_str)
+
+    nodes = parsed.get("topology", {}).get("nodes", {})
+
+    # cEOS should have binds
+    assert "binds" in nodes.get("R1", {}), "cEOS node should have binds"
+
+    # Linux and SR Linux should not have binds
+    assert "binds" not in nodes.get("H1", {}), "Linux node should not have binds"
+    assert "binds" not in nodes.get("S1", {}), "SR Linux node should not have binds"
+
+
 # To run these tests:
 # cd api && pytest tests/test_topology.py -v

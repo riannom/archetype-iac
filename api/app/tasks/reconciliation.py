@@ -169,6 +169,13 @@ async def reconcile_lab_states():
             .all()
         )
 
+        # Find nodes in error state - they may have recovered
+        error_nodes = (
+            session.query(models.NodeState)
+            .filter(models.NodeState.actual_state == "error")
+            .all()
+        )
+
         # Collect unique lab IDs that need reconciliation
         labs_to_reconcile = set()
         for lab in transitional_labs:
@@ -176,6 +183,8 @@ async def reconcile_lab_states():
         for node in stale_pending_nodes:
             labs_to_reconcile.add(node.lab_id)
         for node in unready_running_nodes:
+            labs_to_reconcile.add(node.lab_id)
+        for node in error_nodes:
             labs_to_reconcile.add(node.lab_id)
 
         # FIRST: Always check readiness for running nodes (this doesn't interfere with jobs)

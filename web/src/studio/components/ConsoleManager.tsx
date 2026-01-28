@@ -172,7 +172,10 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
               )}
               {win.deviceIds.map((nodeId) => {
                 const nodeState = nodeStates[nodeId];
-                const isReady = nodeState?.is_ready !== false; // Default to ready if unknown
+                // Only show boot warning for running nodes that aren't ready yet
+                // For error/stopped/pending states, don't show boot warning
+                const isRunning = nodeState?.actual_state === 'running';
+                const isReady = !isRunning || nodeState?.is_ready !== false;
                 return (
                   <div
                     key={nodeId}

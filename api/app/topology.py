@@ -17,6 +17,7 @@ from app.schemas import (
 )
 from app.image_store import find_image_reference
 from app.config import settings
+from app.storage import lab_workspace
 from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config
 
 
@@ -104,6 +105,28 @@ def _generate_ceos_startup_config(node_name: str) -> str:
     if not hostname:
         hostname = "ceos"
     return _CEOS_STARTUP_CONFIG_TEMPLATE.format(hostname=hostname)
+
+
+def _get_saved_startup_config(lab_id: str, node_name: str) -> str | None:
+    """Check for a saved startup-config for a node and return its contents.
+
+    Looks for saved config at: {workspace}/configs/{node_name}/startup-config
+
+    Args:
+        lab_id: The lab ID to look up the workspace
+        node_name: The node name (container_name) to check for saved config
+
+    Returns:
+        The saved config contents if found, None otherwise
+    """
+    config_path = lab_workspace(lab_id) / "configs" / node_name / "startup-config"
+    if config_path.exists() and config_path.is_file():
+        try:
+            return config_path.read_text(encoding="utf-8")
+        except (OSError, IOError):
+            # If we can't read it, fall back to default
+            return None
+    return None
 
 
 def _safe_node_name(name: str, used: set[str]) -> str:
@@ -475,8 +498,14 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         # 1. Disables ZTP and configures AAA to allow 'copy run start'
         # 2. Mounts a persistent flash directory from the workspace
         if kind == "ceos":
-            # Use original node name for hostname (e.g., "EOS-1" not "EOS_1_96ce")
-            node_data["startup-config"] = _generate_ceos_startup_config(node.name)
+            # Check for saved startup-config first, fall back to generated default
+            # Saved configs are stored at: {workspace}/configs/{node_name}/startup-config
+            saved_config = _get_saved_startup_config(lab_id, safe_name)
+            if saved_config:
+                node_data["startup-config"] = saved_config
+            else:
+                # Use original node name for hostname (e.g., "EOS-1" not "EOS_1_96ce")
+                node_data["startup-config"] = _generate_ceos_startup_config(node.name)
             # Set environment variable to disable ZeroTouch provisioning
             # This is required because startup-config is loaded AFTER ZTP runs
             node_data["env"] = {"CEOS_NOZEROTOUCH": "true"}

@@ -24,7 +24,7 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
       onClick={onSelect}
       className={`p-3 rounded-lg border cursor-pointer transition-all ${
         isSelected
-          ? 'bg-sage-50 dark:bg-sage-900/20 border-sage-500 dark:border-sage-600 shadow-sm'
+          ? 'bg-sage-50 dark:bg-sage-800 border-sage-500 dark:border-sage-600 shadow-sm'
           : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700'
       }`}
     >

@@ -1,5 +1,5 @@
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { DeviceModel, Node } from '../types';
 
 export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'error';
@@ -12,9 +12,13 @@ interface RuntimeControlProps {
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
   onRefreshStates: () => void;
   studioRequest: <T>(path: string, options?: RequestInit) => Promise<T>;
+  onOpenConfigViewer?: () => void;
+  onOpenNodeConfig?: (nodeId: string, nodeName: string) => void;
 }
 
-const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest }) => {
+const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig }) => {
+  const [isExtracting, setIsExtracting] = useState(false);
+
   const getStatusColor = (status: RuntimeStatus) => {
     switch (status) {
       case 'running': return 'text-green-500 bg-green-500/10 border-green-500/20';
@@ -58,6 +62,33 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     }
   }, [labId, nodes, studioRequest, onUpdateStatus, onRefreshStates]);
 
+  const handleExtractConfigs = useCallback(async () => {
+    const confirmed = window.confirm(
+      "Before extracting, make sure you've run 'copy running start' on each device to save your running config to startup config.\n\nExtract configs from all running nodes?"
+    );
+    if (!confirmed) return;
+
+    setIsExtracting(true);
+    try {
+      await studioRequest(`/labs/${labId}/extract-configs`, { method: 'POST' });
+      alert('Configs extracted successfully!');
+    } catch (error) {
+      console.error('Extract configs failed:', error);
+      alert('Failed to extract configs. Check console for details.');
+    } finally {
+      setIsExtracting(false);
+    }
+  }, [labId, studioRequest]);
+
+  const handleStopAll = useCallback(async () => {
+    const confirmed = window.confirm(
+      "Stopping all nodes will first extract configs from running cEOS devices. This may take a moment.\n\nContinue with Stop All?"
+    );
+    if (!confirmed) return;
+
+    await handleBulkAction('stopped');
+  }, [handleBulkAction]);
+
   return (
     <div className="flex-1 bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden animate-in fade-in duration-300">
       <div className="p-8 max-w-7xl mx-auto w-full flex-1 flex flex-col overflow-hidden">
@@ -85,12 +116,30 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                   <i className="fa-solid fa-play mr-2"></i> Start All
                 </button>
                 <button
-                  onClick={() => handleBulkAction('stopped')}
+                  onClick={handleStopAll}
                   className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
                   title="Stop all running nodes"
                 >
                   <i className="fa-solid fa-stop mr-2"></i> Stop All
                 </button>
+                <button
+                  onClick={handleExtractConfigs}
+                  disabled={isExtracting || !hasRunningNodes}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-blue-900/20"
+                  title="Extract configs from all running nodes"
+                >
+                  <i className={`fa-solid ${isExtracting ? 'fa-spinner fa-spin' : 'fa-download'} mr-2`}></i>
+                  {isExtracting ? 'Extracting...' : 'Extract Configs'}
+                </button>
+                {onOpenConfigViewer && (
+                  <button
+                    onClick={onOpenConfigViewer}
+                    className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
+                    title="View saved configurations"
+                  >
+                    <i className="fa-solid fa-file-code mr-2"></i> View Configs
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -165,6 +214,15 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                                 title="Restart this node"
                               >
                                 <i className="fa-solid fa-rotate"></i>
+                              </button>
+                            )}
+                            {onOpenNodeConfig && (
+                              <button
+                                onClick={() => onOpenNodeConfig(node.id, node.container_name || node.name)}
+                                className="p-2 text-blue-500 hover:bg-blue-500/10 rounded-lg transition-all"
+                                title="View saved config"
+                              >
+                                <i className="fa-solid fa-file-code"></i>
                               </button>
                             )}
                         </>

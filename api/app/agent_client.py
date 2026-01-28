@@ -781,6 +781,37 @@ async def container_action(
         return {"success": False, "error": str(e)}
 
 
+async def extract_configs_on_agent(
+    agent: models.Host,
+    lab_id: str,
+) -> dict:
+    """Extract running configs from all cEOS nodes in a lab.
+
+    Args:
+        agent: The agent managing the lab
+        lab_id: Lab identifier
+
+    Returns:
+        Dict with 'success', 'extracted_count', and optionally 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/extract-configs"
+    logger.info(f"Extracting configs for lab {lab_id} via agent {agent.id}")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, timeout=120.0)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("success"):
+                logger.info(f"Extracted {result.get('extracted_count', 0)} configs for lab {lab_id}")
+            else:
+                logger.warning(f"Config extraction failed for lab {lab_id}: {result.get('error')}")
+            return result
+    except Exception as e:
+        logger.error(f"Failed to extract configs for lab {lab_id} on agent {agent.id}: {e}")
+        return {"success": False, "extracted_count": 0, "error": str(e)}
+
+
 async def setup_cross_host_link(
     database: Session,
     lab_id: str,

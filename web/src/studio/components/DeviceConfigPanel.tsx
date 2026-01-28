@@ -89,7 +89,7 @@ const ConfigField: React.FC<ConfigFieldProps> = ({
             type={type}
             value={inputValue}
             onChange={(e) => onChange?.(type === 'number' ? Number(e.target.value) : e.target.value)}
-            className="w-24 px-2 py-1 text-xs font-mono text-right bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded focus:outline-none focus:ring-1 focus:ring-sage-500"
+            className="w-24 px-2 py-1 text-xs font-mono text-right text-stone-900 dark:text-stone-100 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded focus:outline-none focus:ring-1 focus:ring-sage-500"
           />
           {unit && <span className="text-[10px] text-stone-400">{unit}</span>}
         </div>
