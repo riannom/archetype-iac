@@ -9,7 +9,7 @@ from pathlib import Path
 
 import docker
 import yaml
-from docker.errors import NotFound, APIError
+from docker.errors import NotFound, APIError, ImageNotFound
 
 from agent.config import settings
 from agent.providers.base import (
@@ -24,6 +24,16 @@ from agent.providers.base import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class MissingImagesError(Exception):
+    """Raised when one or more Docker images are not available."""
+
+    def __init__(self, missing_images: list[tuple[str, str]]):
+        """Initialize with list of (node_name, image) tuples."""
+        self.missing_images = missing_images
+        images_str = ", ".join(f"{node}: {img}" for node, img in missing_images)
+        super().__init__(f"Missing Docker images: {images_str}")
 
 
 class ContainerlabProvider(Provider):
@@ -60,6 +70,189 @@ class ContainerlabProvider(Provider):
     def _topology_path(self, workspace: Path) -> Path:
         """Get path to topology file in workspace."""
         return workspace / "topology.clab.yml"
+
+    def _validate_images(self, topology_yaml: str) -> list[tuple[str, str]]:
+        """Validate that all Docker images in the topology exist.
+
+        Args:
+            topology_yaml: The topology YAML content
+
+        Returns:
+            List of (node_name, image) tuples for missing images
+
+        This performs pre-deployment validation to catch missing images early
+        and provide clear error messages to users.
+        """
+        missing_images: list[tuple[str, str]] = []
+
+        try:
+            topo = yaml.safe_load(topology_yaml)
+            if not topo:
+                return missing_images
+
+            # Handle both wrapped and flat topology formats
+            nodes = topo.get("topology", {}).get("nodes", {})
+            if not nodes:
+                nodes = topo.get("nodes", {})
+
+            if not isinstance(nodes, dict):
+                return missing_images
+
+            for node_name, node_config in nodes.items():
+                if not isinstance(node_config, dict):
+                    continue
+
+                image = node_config.get("image")
+                if not image:
+                    continue
+
+                # Check if the image exists locally
+                try:
+                    self.docker.images.get(image)
+                except ImageNotFound:
+                    missing_images.append((node_name, image))
+                except APIError as e:
+                    logger.warning(f"Error checking image {image}: {e}")
+
+        except Exception as e:
+            logger.warning(f"Failed to validate images: {e}")
+
+        return missing_images
+
+    def _format_missing_images_error(self, missing_images: list[tuple[str, str]]) -> str:
+        """Format a user-friendly error message for missing images.
+
+        Args:
+            missing_images: List of (node_name, image) tuples
+
+        Returns:
+            Formatted error message with guidance
+        """
+        lines = [
+            "=" * 60,
+            "DEPLOYMENT FAILED: Missing Docker Images",
+            "=" * 60,
+            "",
+            "The following nodes require Docker images that are not available:",
+            "",
+        ]
+
+        for node_name, image in missing_images:
+            lines.append(f"  • Node '{node_name}' requires image: {image}")
+
+        lines.extend([
+            "",
+            "To resolve this issue:",
+            "  1. Upload the required images via the Images page in the GUI",
+            "  2. Or manually import the images using: docker load -i <image-file>",
+            "  3. Or pull images from a registry: docker pull <image-name>",
+            "",
+            "For cEOS images, download from arista.com and upload via the GUI.",
+            "=" * 60,
+        ])
+
+        return "\n".join(lines)
+
+    def _build_verbose_error_output(
+        self,
+        title: str,
+        user_error: str,
+        stdout: str,
+        stderr: str,
+        returncode: int,
+    ) -> str:
+        """Build verbose error output for task log.
+
+        Args:
+            title: Error title (e.g., "DEPLOYMENT FAILED")
+            user_error: User-friendly error message
+            stdout: Standard output from command
+            stderr: Standard error from command
+            returncode: Exit code from command
+
+        Returns:
+            Formatted verbose error output
+        """
+        lines = [
+            "=" * 60,
+            title,
+            "=" * 60,
+            "",
+            f"Error: {user_error}",
+            "",
+            f"Exit code: {returncode}",
+            "",
+        ]
+
+        if stdout and stdout.strip():
+            lines.extend([
+                "-" * 40,
+                "STDOUT:",
+                "-" * 40,
+                stdout.strip(),
+                "",
+            ])
+
+        if stderr and stderr.strip():
+            lines.extend([
+                "-" * 40,
+                "STDERR:",
+                "-" * 40,
+                stderr.strip(),
+                "",
+            ])
+
+        lines.append("=" * 60)
+        return "\n".join(lines)
+
+    def _parse_deploy_error(self, stdout: str, stderr: str, returncode: int) -> str:
+        """Parse containerlab output to provide user-friendly error messages.
+
+        Args:
+            stdout: Standard output from containerlab
+            stderr: Standard error from containerlab
+            returncode: Exit code from containerlab
+
+        Returns:
+            User-friendly error message
+        """
+        combined_output = f"{stdout}\n{stderr}".lower()
+
+        # Check for common error patterns
+        if "image" in combined_output and ("not found" in combined_output or "no such image" in combined_output):
+            # Extract image name if possible
+            match = re.search(r'image["\s:]+([^\s"]+)["\s]*(not found|does not exist)', combined_output, re.IGNORECASE)
+            if match:
+                image_name = match.group(1)
+                return (
+                    f"Docker image '{image_name}' not found.\n"
+                    f"Please upload the image via the Images page or import it manually."
+                )
+            return (
+                "One or more Docker images not found.\n"
+                "Please check that all required images are available."
+            )
+
+        if "permission denied" in combined_output:
+            return (
+                "Permission denied during deployment.\n"
+                "The agent may not have sufficient privileges to create containers."
+            )
+
+        if "network" in combined_output and ("already exists" in combined_output or "in use" in combined_output):
+            return (
+                "Network conflict detected.\n"
+                "A network with the same name already exists. Try destroying the lab first."
+            )
+
+        if "port" in combined_output and "already" in combined_output and ("bound" in combined_output or "use" in combined_output):
+            return (
+                "Port conflict detected.\n"
+                "A required port is already in use by another container or service."
+            )
+
+        # Default error message
+        return f"containerlab deploy failed with exit code {returncode}"
 
     def _ensure_ceos_flash_dirs(self, topology_yaml: str, workspace: Path) -> None:
         """Ensure flash directories exist for cEOS nodes before deployment.
@@ -464,9 +657,10 @@ class ContainerlabProvider(Provider):
         """Deploy a containerlab topology.
 
         Uses a two-phase approach:
-        1. Pre-deploy cleanup to remove orphaned/unhealthy containers
-        2. Deploy with --reconfigure (works for running containers)
-        3. Fallback to fresh deploy if --reconfigure fails
+        1. Pre-deploy validation (check images exist)
+        2. Pre-deploy cleanup to remove orphaned/unhealthy containers
+        3. Deploy with --reconfigure (works for running containers)
+        4. Fallback to fresh deploy if --reconfigure fails
 
         If deployment fails, automatically cleans up any partially created resources.
         """
@@ -476,6 +670,22 @@ class ContainerlabProvider(Provider):
         # Strip Archetype-specific fields and convert to containerlab format
         # Also rewrites bind paths to use the agent's workspace
         clean_topology = self._strip_archetype_fields(topology_yaml, lab_id, workspace)
+
+        # Pre-deployment validation: check that all required images exist
+        logger.info(f"Validating Docker images for lab {lab_id}...")
+        missing_images = self._validate_images(clean_topology)
+        if missing_images:
+            error_msg = self._format_missing_images_error(missing_images)
+            logger.error(f"Image validation failed for lab {lab_id}: {len(missing_images)} missing images")
+            for node_name, image in missing_images:
+                logger.error(f"  Missing: {image} (required by node '{node_name}')")
+            return DeployResult(
+                success=False,
+                stdout="",
+                stderr=error_msg,
+                error=f"Missing {len(missing_images)} Docker image(s). See task log for details.",
+            )
+        logger.info(f"Image validation passed for lab {lab_id}")
 
         # Ensure flash directories exist for cEOS nodes (required for config persistence)
         self._ensure_ceos_flash_dirs(clean_topology, workspace)
@@ -500,6 +710,7 @@ class ContainerlabProvider(Provider):
         await self._pre_deploy_cleanup(lab_id, workspace)
 
         # First attempt: deploy with --reconfigure
+        logger.info(f"Starting containerlab deploy for lab {lab_id}...")
         try:
             returncode, stdout, stderr = await self._run_clab(
                 ["deploy", "-t", str(topo_path), "--reconfigure"],
@@ -508,11 +719,25 @@ class ContainerlabProvider(Provider):
         except TimeoutError as e:
             logger.error(f"Deploy timed out for lab {lab_id}: {e}")
             await self._cleanup_failed_deploy(lab_id, workspace)
+
+            timeout_error = (
+                f"Deployment timed out after {settings.deploy_timeout} seconds.\n"
+                "This may indicate that containers are taking too long to start.\n"
+                "Check that the host has sufficient resources (CPU, memory)."
+            )
+            verbose_output = self._build_verbose_error_output(
+                "DEPLOYMENT TIMEOUT",
+                timeout_error,
+                "",
+                str(e),
+                -1,
+            )
+
             return DeployResult(
                 success=False,
                 stdout="",
-                stderr="",
-                error=str(e),
+                stderr=verbose_output,
+                error=timeout_error,
             )
 
         if returncode != 0:
@@ -532,21 +757,50 @@ class ContainerlabProvider(Provider):
             except TimeoutError as e:
                 logger.error(f"Fresh deploy timed out for lab {lab_id}: {e}")
                 await self._cleanup_failed_deploy(lab_id, workspace)
+
+                timeout_error = (
+                    f"Deployment timed out after {settings.deploy_timeout} seconds.\n"
+                    "This may indicate that containers are taking too long to start.\n"
+                    "Check that the host has sufficient resources (CPU, memory)."
+                )
+                verbose_output = self._build_verbose_error_output(
+                    "DEPLOYMENT TIMEOUT",
+                    timeout_error,
+                    stdout,
+                    stderr,
+                    -1,
+                )
+
                 return DeployResult(
                     success=False,
                     stdout=stdout,
-                    stderr=stderr,
-                    error=str(e),
+                    stderr=verbose_output,
+                    error=timeout_error,
                 )
 
             if returncode != 0:
                 logger.error(f"Fresh deploy also failed for lab {lab_id}: exit code {returncode}")
+                logger.error(f"Deploy stdout:\n{stdout}")
+                logger.error(f"Deploy stderr:\n{stderr}")
                 await self._cleanup_failed_deploy(lab_id, workspace)
+
+                # Parse error to provide user-friendly message
+                user_error = self._parse_deploy_error(stdout, stderr, returncode)
+
+                # Build verbose error output for task log
+                verbose_stderr = self._build_verbose_error_output(
+                    "DEPLOYMENT FAILED",
+                    user_error,
+                    stdout,
+                    stderr,
+                    returncode,
+                )
+
                 return DeployResult(
                     success=False,
                     stdout=stdout,
-                    stderr=stderr,
-                    error=f"containerlab deploy failed with exit code {returncode}",
+                    stderr=verbose_stderr,
+                    error=user_error,
                 )
 
         # Get deployed node info
@@ -678,13 +932,26 @@ class ContainerlabProvider(Provider):
             logger.warning(f"Failed to clean up external network VLANs: {e}")
 
         if returncode != 0:
+            logger.error(f"Destroy failed for lab {lab_id}: exit code {returncode}")
+            logger.error(f"Destroy stdout:\n{stdout}")
+            logger.error(f"Destroy stderr:\n{stderr}")
+
+            verbose_stderr = self._build_verbose_error_output(
+                "DESTROY FAILED",
+                f"containerlab destroy failed with exit code {returncode}",
+                stdout,
+                stderr,
+                returncode,
+            )
+
             return DestroyResult(
                 success=False,
                 stdout=stdout,
-                stderr=stderr,
+                stderr=verbose_stderr,
                 error=f"containerlab destroy failed with exit code {returncode}",
             )
 
+        logger.info(f"Destroy completed for lab {lab_id}")
         return DestroyResult(
             success=True,
             stdout=stdout,

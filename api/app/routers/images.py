@@ -1,15 +1,21 @@
 """Image upload and management endpoints."""
 from __future__ import annotations
 
+import asyncio
+import json
 import lzma
 import os
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
+import time
 from pathlib import Path
+from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app import models
 from app.auth import get_current_user
@@ -26,6 +32,9 @@ from app.image_store import (
 )
 
 router = APIRouter(prefix="/images", tags=["images"])
+
+# Track upload progress for streaming status
+_upload_progress: dict[str, dict] = {}
 
 
 def _is_docker_image_tar(tar_path: str) -> bool:
@@ -49,11 +58,349 @@ def _is_docker_image_tar(tar_path: str) -> bool:
         return False
 
 
+def _format_size(size_bytes: int) -> str:
+    """Format bytes as human-readable size."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
+def _run_docker_with_progress(
+    cmd: list[str],
+    progress_callback: callable,
+    operation_name: str,
+) -> tuple[int, str, str]:
+    """Run a docker command and stream progress updates.
+
+    Args:
+        cmd: The docker command to run
+        progress_callback: Function to call with status updates
+        operation_name: Name of the operation for status messages
+
+    Returns:
+        Tuple of (return_code, stdout, stderr)
+    """
+    progress_callback(f"Starting {operation_name}...")
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    stdout_lines = []
+    stderr_lines = []
+
+    # Read output in real-time
+    def read_stream(stream, lines_list, is_stderr=False):
+        for line in iter(stream.readline, ''):
+            line = line.strip()
+            if line:
+                lines_list.append(line)
+                # Parse docker load progress messages
+                if not is_stderr:
+                    if "Loading layer" in line or "Loaded image" in line:
+                        progress_callback(line)
+                    elif line.startswith("sha256:"):
+                        progress_callback(f"Processing layer: {line[:20]}...")
+
+    # Run reading in threads to handle both streams
+    stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_lines, False))
+    stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_lines, True))
+
+    stdout_thread.start()
+    stderr_thread.start()
+
+    # Wait for process to complete
+    process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+
+    return process.returncode, "\n".join(stdout_lines), "\n".join(stderr_lines)
+
+
 @router.post("/load")
 def load_image(
     file: UploadFile = File(...),
     current_user: models.User = Depends(get_current_user),
+    stream: bool = Query(default=False, description="Stream progress updates via SSE"),
 ):
+    """Load a Docker image from a tar archive.
+
+    If stream=true, returns Server-Sent Events with progress updates.
+    Otherwise returns a JSON response when complete.
+    """
+    if stream:
+        return StreamingResponse(
+            _load_image_streaming(file),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+            },
+        )
+
+    # Non-streaming mode (original behavior)
+    return _load_image_sync(file)
+
+
+def _send_sse_event(event_type: str, data: dict) -> str:
+    """Format a Server-Sent Event message."""
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _load_image_streaming(file: UploadFile) -> AsyncGenerator[str, None]:
+    """Stream image loading progress via Server-Sent Events."""
+    filename = file.filename or "image.tar"
+    suffixes = Path(filename).suffixes
+    suffix = "".join(suffixes) if suffixes else ".tar"
+    temp_path = ""
+    load_path = ""
+    decompressed_path = ""
+
+    try:
+        # Phase 1: Save uploaded file
+        yield _send_sse_event("progress", {
+            "phase": "saving",
+            "message": f"Saving uploaded file: {filename}...",
+            "percent": 5,
+        })
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+            # Read in chunks and report progress
+            chunk_size = 1024 * 1024  # 1MB chunks
+            bytes_written = 0
+            content = await file.read()
+            total_size = len(content)
+
+            # Write in chunks for progress reporting
+            for i in range(0, total_size, chunk_size):
+                chunk = content[i:i + chunk_size]
+                tmp_file.write(chunk)
+                bytes_written += len(chunk)
+                percent = min(30, 5 + int((bytes_written / total_size) * 25))
+                yield _send_sse_event("progress", {
+                    "phase": "saving",
+                    "message": f"Saving file... {_format_size(bytes_written)} / {_format_size(total_size)}",
+                    "percent": percent,
+                })
+
+            temp_path = tmp_file.name
+
+        load_path = temp_path
+        file_size = os.path.getsize(temp_path)
+
+        yield _send_sse_event("progress", {
+            "phase": "saved",
+            "message": f"File saved ({_format_size(file_size)}). Checking format...",
+            "percent": 30,
+        })
+
+        # Phase 2: Decompress if needed
+        if filename.lower().endswith((".tar.xz", ".txz", ".xz")):
+            yield _send_sse_event("progress", {
+                "phase": "decompressing",
+                "message": "Decompressing XZ archive (this may take a while for large files)...",
+                "percent": 35,
+            })
+
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_tar:
+                    with lzma.open(temp_path, "rb") as source:
+                        # Read and decompress in chunks
+                        chunk_size = 1024 * 1024  # 1MB
+                        bytes_decompressed = 0
+                        while True:
+                            chunk = source.read(chunk_size)
+                            if not chunk:
+                                break
+                            tmp_tar.write(chunk)
+                            bytes_decompressed += len(chunk)
+                            if bytes_decompressed % (10 * 1024 * 1024) == 0:  # Update every 10MB
+                                yield _send_sse_event("progress", {
+                                    "phase": "decompressing",
+                                    "message": f"Decompressing... {_format_size(bytes_decompressed)} extracted",
+                                    "percent": 40,
+                                })
+                    decompressed_path = tmp_tar.name
+
+                load_path = decompressed_path
+                decompressed_size = os.path.getsize(decompressed_path)
+
+                yield _send_sse_event("progress", {
+                    "phase": "decompressed",
+                    "message": f"Decompression complete ({_format_size(decompressed_size)})",
+                    "percent": 50,
+                })
+            except lzma.LZMAError as exc:
+                yield _send_sse_event("error", {
+                    "message": f"Failed to decompress archive: {exc}",
+                })
+                return
+
+        # Phase 3: Detect format
+        yield _send_sse_event("progress", {
+            "phase": "detecting",
+            "message": "Detecting image format...",
+            "percent": 55,
+        })
+
+        is_docker_image = _is_docker_image_tar(load_path)
+        loaded_images = []
+        output = ""
+
+        # Phase 4: Load into Docker
+        if is_docker_image:
+            yield _send_sse_event("progress", {
+                "phase": "loading",
+                "message": "Docker image detected. Running 'docker load' (this may take several minutes)...",
+                "percent": 60,
+            })
+
+            # Run docker load with progress tracking
+            process = subprocess.Popen(
+                ["docker", "load", "-i", load_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+            output_lines = []
+            layer_count = 0
+            for line in iter(process.stdout.readline, ''):
+                line = line.strip()
+                if line:
+                    output_lines.append(line)
+                    if "Loading layer" in line:
+                        layer_count += 1
+                        yield _send_sse_event("progress", {
+                            "phase": "loading",
+                            "message": f"Loading layer {layer_count}...",
+                            "detail": line,
+                            "percent": min(95, 60 + layer_count * 3),
+                        })
+                    elif "Loaded image:" in line:
+                        image_name = line.split("Loaded image:", 1)[-1].strip()
+                        loaded_images.append(image_name)
+                        yield _send_sse_event("progress", {
+                            "phase": "loading",
+                            "message": f"Loaded: {image_name}",
+                            "percent": 95,
+                        })
+                    elif "Loaded image ID:" in line:
+                        image_id = line.split("Loaded image ID:", 1)[-1].strip()
+                        loaded_images.append(image_id)
+
+            process.wait()
+            output = "\n".join(output_lines)
+
+            if process.returncode != 0:
+                yield _send_sse_event("error", {
+                    "message": output.strip() or "docker load failed",
+                })
+                return
+        else:
+            # Raw filesystem tar (e.g., cEOS) - use docker import
+            base_name = Path(filename).stem
+            for ext in [".tar", ".gz", ".xz"]:
+                if base_name.lower().endswith(ext):
+                    base_name = base_name[:-len(ext)]
+            image_name = base_name.lower().replace(" ", "-").replace("_", "-")
+            image_tag = f"{image_name}:imported"
+
+            yield _send_sse_event("progress", {
+                "phase": "importing",
+                "message": f"Filesystem archive detected. Importing as '{image_tag}'...",
+                "percent": 60,
+            })
+
+            result = subprocess.run(
+                ["docker", "import", load_path, image_tag],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            if result.returncode != 0:
+                yield _send_sse_event("error", {
+                    "message": output.strip() or "docker import failed",
+                })
+                return
+
+            image_id = output.strip().split(":")[-1][:12] if output.strip() else ""
+            loaded_images.append(image_tag)
+            output = f"Imported filesystem as {image_tag} (ID: {image_id})"
+
+            yield _send_sse_event("progress", {
+                "phase": "imported",
+                "message": f"Import complete: {image_tag}",
+                "percent": 95,
+            })
+
+        if not loaded_images:
+            yield _send_sse_event("error", {
+                "message": output.strip() or "No images detected in archive",
+            })
+            return
+
+        # Phase 5: Update manifest
+        yield _send_sse_event("progress", {
+            "phase": "finalizing",
+            "message": "Updating image library...",
+            "percent": 98,
+        })
+
+        manifest = load_manifest()
+
+        # Check for duplicates
+        for image_ref in loaded_images:
+            potential_id = f"docker:{image_ref}"
+            if find_image_by_id(manifest, potential_id):
+                yield _send_sse_event("error", {
+                    "message": f"Image '{image_ref}' already exists in the library",
+                })
+                return
+
+        for image_ref in loaded_images:
+            device_id, version = detect_device_from_filename(image_ref)
+            entry = create_image_entry(
+                image_id=f"docker:{image_ref}",
+                kind="docker",
+                reference=image_ref,
+                filename=filename,
+                device_id=device_id,
+                version=version,
+                size_bytes=file_size,
+            )
+            manifest["images"].append(entry)
+        save_manifest(manifest)
+
+        # Final success event
+        yield _send_sse_event("complete", {
+            "message": output.strip() or "Image loaded successfully",
+            "images": loaded_images,
+            "percent": 100,
+        })
+
+    except Exception as e:
+        yield _send_sse_event("error", {
+            "message": str(e),
+        })
+    finally:
+        await file.close()
+        if decompressed_path and os.path.exists(decompressed_path):
+            os.unlink(decompressed_path)
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _load_image_sync(file: UploadFile) -> dict:
+    """Original synchronous image loading (non-streaming)."""
     filename = file.filename or "image.tar"
     suffixes = Path(filename).suffixes
     suffix = "".join(suffixes) if suffixes else ".tar"
