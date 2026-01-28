@@ -264,18 +264,37 @@ class ContainerlabProvider(Provider):
         Returns:
             True if config was extracted successfully, False otherwise
         """
+        content = await self._extract_node_config_content(container_name, workspace, node_name)
+        return content is not None
+
+    async def _extract_node_config_content(
+        self,
+        container_name: str,
+        workspace: Path,
+        node_name: str,
+    ) -> str | None:
+        """Extract running-config from a cEOS node, save to workspace, and return content.
+
+        Args:
+            container_name: Docker container name
+            workspace: Lab workspace directory
+            node_name: Node name for config file naming
+
+        Returns:
+            Config content if extracted successfully, None otherwise
+        """
         try:
             container = self.docker.containers.get(container_name)
 
             # Only extract from running containers
             if container.status.lower() != "running":
                 logger.debug(f"Skipping config extraction for {container_name}: container not running")
-                return False
+                return None
 
             # Only extract from cEOS nodes
             if not self._is_ceos_container(container):
                 logger.debug(f"Skipping config extraction for {container_name}: not a cEOS node")
-                return False
+                return None
 
             logger.info(f"Extracting running-config from {container_name}")
 
@@ -289,13 +308,13 @@ class ContainerlabProvider(Provider):
             if exit_code != 0:
                 stderr = output[1].decode(errors="replace") if output[1] else ""
                 logger.warning(f"Failed to extract config from {container_name}: exit code {exit_code}, stderr: {stderr}")
-                return False
+                return None
 
             stdout = output[0].decode(errors="replace") if output[0] else ""
 
             if not stdout.strip():
                 logger.warning(f"Empty config extracted from {container_name}")
-                return False
+                return None
 
             # Save config to workspace/configs/{node_name}/startup-config
             config_dir = workspace / "configs" / node_name
@@ -305,17 +324,17 @@ class ContainerlabProvider(Provider):
             config_path.write_text(stdout, encoding="utf-8")
             logger.info(f"Saved running-config to {config_path}")
 
-            return True
+            return stdout
 
         except NotFound:
             logger.debug(f"Container {container_name} not found for config extraction")
-            return False
+            return None
         except APIError as e:
             logger.warning(f"Docker API error extracting config from {container_name}: {e}")
-            return False
+            return None
         except Exception as e:
             logger.warning(f"Error extracting config from {container_name}: {e}")
-            return False
+            return None
 
     def _get_container_status(self, container) -> NodeStatus:
         """Map Docker container status to NodeStatus."""
@@ -539,7 +558,7 @@ class ContainerlabProvider(Provider):
             stderr=stderr,
         )
 
-    async def _extract_all_ceos_configs(self, lab_id: str, workspace: Path) -> int:
+    async def _extract_all_ceos_configs(self, lab_id: str, workspace: Path) -> list[tuple[str, str]]:
         """Extract configs from all running cEOS containers for a lab.
 
         Args:
@@ -547,10 +566,10 @@ class ContainerlabProvider(Provider):
             workspace: Lab workspace directory
 
         Returns:
-            Number of configs successfully extracted
+            List of (node_name, config_content) tuples for successfully extracted configs
         """
         prefix = self._lab_prefix(lab_id)
-        extracted_count = 0
+        extracted_configs: list[tuple[str, str]] = []
 
         try:
             containers = self.docker.containers.list(
@@ -574,16 +593,17 @@ class ContainerlabProvider(Provider):
                 node_name = name[len(prefix) + 1:]
 
                 # Extract config
-                if await self._extract_node_config(container.name, workspace, node_name):
-                    extracted_count += 1
+                config_content = await self._extract_node_config_content(container.name, workspace, node_name)
+                if config_content:
+                    extracted_configs.append((node_name, config_content))
 
         except Exception as e:
             logger.warning(f"Error extracting cEOS configs for lab {lab_id}: {e}")
 
-        if extracted_count > 0:
-            logger.info(f"Extracted {extracted_count} cEOS configs before destroy")
+        if extracted_configs:
+            logger.info(f"Extracted {len(extracted_configs)} cEOS configs")
 
-        return extracted_count
+        return extracted_configs
 
     async def destroy(
         self,

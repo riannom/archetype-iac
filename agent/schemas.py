@@ -255,3 +255,24 @@ class OverlayStatusResponse(BaseModel):
     """Agent -> Controller: Status of all overlay networks."""
     tunnels: list[TunnelInfo] = Field(default_factory=list)
     bridges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# --- Config Extraction ---
+
+class ExtractConfigsRequest(BaseModel):
+    """Controller -> Agent: Extract configs from running cEOS nodes."""
+    lab_id: str
+
+
+class ExtractedConfig(BaseModel):
+    """A single extracted node configuration."""
+    node_name: str
+    content: str
+
+
+class ExtractConfigsResponse(BaseModel):
+    """Agent -> Controller: Config extraction result."""
+    success: bool
+    extracted_count: int = 0
+    configs: list[ExtractedConfig] = Field(default_factory=list)
+    error: str | None = None

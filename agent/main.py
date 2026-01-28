@@ -40,6 +40,9 @@ from agent.schemas import (
     DestroyRequest,
     DiscoveredLab,
     DiscoverLabsResponse,
+    ExtractConfigsRequest,
+    ExtractConfigsResponse,
+    ExtractedConfig,
     HeartbeatRequest,
     HeartbeatResponse,
     JobResult,
@@ -512,72 +515,89 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
     # Check if deploy is already in progress
     if lock.locked():
         print(f"Deploy already in progress for lab {lab_id}, waiting...")
-        # Wait for the lock and return the cached result
-        async with lock:
-            # Deploy finished while we were waiting, check for cached result
-            if lab_id in _deploy_results:
-                cached = _deploy_results.get(lab_id)
-                if cached:
-                    print(f"Returning cached deploy result for lab {lab_id}")
-                    # Return the same result but with this job's ID
-                    return JobResult(
-                        job_id=request.job_id,
-                        status=cached.status,
-                        stdout=cached.stdout,
-                        stderr=cached.stderr,
-                        error_message=cached.error_message,
-                    )
-        # No cached result, continue with deploy
-
-    async with lock:
+        # Try to acquire lock with timeout
         try:
-            provider = get_provider_for_request(request.provider.value)
-            workspace = get_workspace(lab_id)
-            print(f"Deploy starting: workspace={workspace}")
-
-            result = await provider.deploy(
-                lab_id=lab_id,
-                topology_yaml=request.topology_yaml,
-                workspace=workspace,
+            async with asyncio.timeout(settings.lock_acquire_timeout):
+                async with lock:
+                    # Deploy finished while we were waiting, check for cached result
+                    if lab_id in _deploy_results:
+                        cached = _deploy_results.get(lab_id)
+                        if cached:
+                            print(f"Returning cached deploy result for lab {lab_id}")
+                            # Return the same result but with this job's ID
+                            return JobResult(
+                                job_id=request.job_id,
+                                status=cached.status,
+                                stdout=cached.stdout,
+                                stderr=cached.stderr,
+                                error_message=cached.error_message,
+                            )
+                    # No cached result, continue with deploy below
+        except asyncio.TimeoutError:
+            print(f"Timeout waiting for deploy lock on lab {lab_id}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Deploy already in progress for lab {lab_id}, try again later"
             )
 
-            print(f"Deploy finished: success={result.success}")
+    # Try to acquire lock with timeout
+    try:
+        async with asyncio.timeout(settings.lock_acquire_timeout):
+            async with lock:
+                try:
+                    provider = get_provider_for_request(request.provider.value)
+                    workspace = get_workspace(lab_id)
+                    print(f"Deploy starting: workspace={workspace}")
 
-            if result.success:
-                job_result = JobResult(
-                    job_id=request.job_id,
-                    status=JobStatus.COMPLETED,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
-                )
-            else:
-                job_result = JobResult(
-                    job_id=request.job_id,
-                    status=JobStatus.FAILED,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
-                    error_message=result.error,
-                )
+                    result = await provider.deploy(
+                        lab_id=lab_id,
+                        topology_yaml=request.topology_yaml,
+                        workspace=workspace,
+                    )
 
-            # Cache result briefly for concurrent requests
-            _deploy_results[lab_id] = job_result
-            # Clean up cache after a short delay
-            asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
+                    print(f"Deploy finished: success={result.success}")
 
-            return job_result
+                    if result.success:
+                        job_result = JobResult(
+                            job_id=request.job_id,
+                            status=JobStatus.COMPLETED,
+                            stdout=result.stdout,
+                            stderr=result.stderr,
+                        )
+                    else:
+                        job_result = JobResult(
+                            job_id=request.job_id,
+                            status=JobStatus.FAILED,
+                            stdout=result.stdout,
+                            stderr=result.stderr,
+                            error_message=result.error,
+                        )
 
-        except Exception as e:
-            print(f"Deploy error: {e}")
-            import traceback
-            traceback.print_exc()
-            job_result = JobResult(
-                job_id=request.job_id,
-                status=JobStatus.FAILED,
-                error_message=str(e),
-            )
-            _deploy_results[lab_id] = job_result
-            asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
-            return job_result
+                    # Cache result briefly for concurrent requests
+                    _deploy_results[lab_id] = job_result
+                    # Clean up cache after a short delay
+                    asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
+
+                    return job_result
+
+                except Exception as e:
+                    print(f"Deploy error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    job_result = JobResult(
+                        job_id=request.job_id,
+                        status=JobStatus.FAILED,
+                        error_message=str(e),
+                    )
+                    _deploy_results[lab_id] = job_result
+                    asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
+                    return job_result
+    except asyncio.TimeoutError:
+        print(f"Timeout waiting for deploy lock on lab {lab_id}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Deploy already in progress for lab {lab_id}, try again later"
+        )
 
 
 async def _execute_deploy_with_callback(
@@ -601,45 +621,57 @@ async def _execute_deploy_with_callback(
 
     started_at = datetime.now(timezone.utc)
 
-    async with lock:
-        try:
-            provider = get_provider_for_request(provider_name)
-            workspace = get_workspace(lab_id)
-            print(f"Async deploy starting: workspace={workspace}")
+    try:
+        async with asyncio.timeout(settings.lock_acquire_timeout):
+            async with lock:
+                try:
+                    provider = get_provider_for_request(provider_name)
+                    workspace = get_workspace(lab_id)
+                    print(f"Async deploy starting: workspace={workspace}")
 
-            result = await provider.deploy(
-                lab_id=lab_id,
-                topology_yaml=topology_yaml,
-                workspace=workspace,
-            )
+                    result = await provider.deploy(
+                        lab_id=lab_id,
+                        topology_yaml=topology_yaml,
+                        workspace=workspace,
+                    )
 
-            print(f"Async deploy finished: success={result.success}")
+                    print(f"Async deploy finished: success={result.success}")
 
-            # Build callback payload
-            payload = CallbackPayload(
-                job_id=job_id,
-                agent_id=AGENT_ID,
-                status="completed" if result.success else "failed",
-                stdout=result.stdout or "",
-                stderr=result.stderr or "",
-                error_message=result.error if not result.success else None,
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc),
-            )
+                    # Build callback payload
+                    payload = CallbackPayload(
+                        job_id=job_id,
+                        agent_id=AGENT_ID,
+                        status="completed" if result.success else "failed",
+                        stdout=result.stdout or "",
+                        stderr=result.stderr or "",
+                        error_message=result.error if not result.success else None,
+                        started_at=started_at,
+                        completed_at=datetime.now(timezone.utc),
+                    )
 
-        except Exception as e:
-            print(f"Async deploy error: {e}")
-            import traceback
-            traceback.print_exc()
+                except Exception as e:
+                    print(f"Async deploy error: {e}")
+                    import traceback
+                    traceback.print_exc()
 
-            payload = CallbackPayload(
-                job_id=job_id,
-                agent_id=AGENT_ID,
-                status="failed",
-                error_message=str(e),
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc),
-            )
+                    payload = CallbackPayload(
+                        job_id=job_id,
+                        agent_id=AGENT_ID,
+                        status="failed",
+                        error_message=str(e),
+                        started_at=started_at,
+                        completed_at=datetime.now(timezone.utc),
+                    )
+    except asyncio.TimeoutError:
+        print(f"Async deploy timeout waiting for lock on lab {lab_id}")
+        payload = CallbackPayload(
+            job_id=job_id,
+            agent_id=AGENT_ID,
+            status="failed",
+            error_message=f"Deploy already in progress for lab {lab_id}, timed out waiting for lock",
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
+        )
 
     # Deliver callback (outside the lock)
     await deliver_callback(callback_url, payload)
@@ -832,6 +864,46 @@ async def lab_status(request: LabStatusRequest) -> LabStatusResponse:
         nodes=nodes,
         error=result.error,
     )
+
+
+@app.post("/labs/{lab_id}/extract-configs")
+async def extract_configs(lab_id: str) -> ExtractConfigsResponse:
+    """Extract running configs from all cEOS nodes in a lab.
+
+    This extracts the running-config from all running cEOS containers
+    and saves them to the workspace as startup-config files for persistence.
+    Returns both the count and the actual config content for each node.
+    """
+    print(f"Extract configs request: lab={lab_id}")
+
+    try:
+        provider = get_provider_for_request("containerlab")
+        workspace = get_workspace(lab_id)
+
+        # Call the provider's extract method - now returns list of (node_name, content) tuples
+        extracted_configs = await provider._extract_all_ceos_configs(lab_id, workspace)
+
+        # Convert to response format
+        configs = [
+            ExtractedConfig(node_name=node_name, content=content)
+            for node_name, content in extracted_configs
+        ]
+
+        return ExtractConfigsResponse(
+            success=True,
+            extracted_count=len(configs),
+            configs=configs,
+        )
+
+    except Exception as e:
+        print(f"Extract configs error: {e}")
+        import traceback
+        traceback.print_exc()
+        return ExtractConfigsResponse(
+            success=False,
+            extracted_count=0,
+            error=str(e),
+        )
 
 
 # --- Container Control Endpoints ---
