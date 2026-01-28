@@ -678,6 +678,17 @@ const StudioPage: React.FC = () => {
     setJobs(data.jobs || []);
   }, [studioRequest]);
 
+  // Refresh node states from the agent (queries actual container status)
+  // This is called once when entering a lab to ensure states are fresh
+  const refreshNodeStatesFromAgent = useCallback(async (labId: string) => {
+    try {
+      await studioRequest(`/labs/${labId}/nodes/refresh`, { method: 'POST' });
+    } catch {
+      // Agent may be unavailable - states will still load from DB
+      console.warn('Failed to refresh node states from agent');
+    }
+  }, [studioRequest]);
+
   useEffect(() => {
     loadLabs();
     loadDevices();
@@ -707,6 +718,13 @@ const StudioPage: React.FC = () => {
     if (!activeLab) return;
     loadGraph(activeLab.id);
   }, [activeLab, loadGraph]);
+
+  // Refresh node states from agent when entering a lab
+  // This ensures we have accurate container status, especially after restarts
+  useEffect(() => {
+    if (!activeLab) return;
+    refreshNodeStatesFromAgent(activeLab.id);
+  }, [activeLab, refreshNodeStatesFromAgent]);
 
   useEffect(() => {
     if (!activeLab || nodes.length === 0) return;
@@ -1174,7 +1192,12 @@ const StudioPage: React.FC = () => {
             runtimeStates={runtimeStates}
             deviceModels={deviceModels}
             onUpdateStatus={handleUpdateStatus}
-            onRefreshStates={() => loadNodeStates(activeLab?.id || '', nodes)}
+            onRefreshStates={async () => {
+              if (activeLab) {
+                await refreshNodeStatesFromAgent(activeLab.id);
+                await loadNodeStates(activeLab.id, nodes);
+              }
+            }}
             studioRequest={studioRequest}
             onOpenConfigViewer={() => handleOpenConfigViewer()}
             onOpenNodeConfig={handleOpenConfigViewer}
