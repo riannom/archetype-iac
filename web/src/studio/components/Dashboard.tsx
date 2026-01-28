@@ -5,6 +5,8 @@ import { useTheme, ThemeSelector } from '../../theme/index';
 import { useUser } from '../../contexts/UserContext';
 import SystemStatusStrip from './SystemStatusStrip';
 import { ArchetypeIcon } from '../../components/icons';
+import DeviceManager from './DeviceManager';
+import { DeviceModel, ImageLibraryEntry } from '../types';
 
 interface LabSummary {
   id: string;
@@ -42,6 +44,18 @@ interface SystemMetrics {
   is_multi_host?: boolean;
 }
 
+interface CustomDevice {
+  id: string;
+  label: string;
+}
+
+interface ImageCatalogEntry {
+  clab?: string;
+  libvirt?: string;
+  virtualbox?: string;
+  caveats?: string[];
+}
+
 interface DashboardProps {
   labs: LabSummary[];
   labStatuses?: Record<string, LabStatus>;
@@ -51,13 +65,38 @@ interface DashboardProps {
   onDelete: (labId: string) => void;
   onRefresh: () => void;
   onRename?: (labId: string, newName: string) => void;
+  // Image management props
+  deviceModels?: DeviceModel[];
+  imageCatalog?: Record<string, ImageCatalogEntry>;
+  imageLibrary?: ImageLibraryEntry[];
+  customDevices?: CustomDevice[];
+  onAddCustomDevice?: (device: CustomDevice) => void;
+  onRemoveCustomDevice?: (deviceId: string) => void;
+  onRefreshDevices?: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics, onSelect, onCreate, onDelete, onRefresh, onRename }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+  labs,
+  labStatuses,
+  systemMetrics,
+  onSelect,
+  onCreate,
+  onDelete,
+  onRefresh,
+  onRename,
+  deviceModels = [],
+  imageCatalog = {},
+  imageLibrary = [],
+  customDevices = [],
+  onAddCustomDevice,
+  onRemoveCustomDevice,
+  onRefreshDevices,
+}) => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user } = useUser();
   const navigate = useNavigate();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
+  const [showImageManager, setShowImageManager] = useState(false);
   const [editingLabId, setEditingLabId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const isAdmin = user?.is_admin ?? false;
@@ -120,6 +159,15 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
           >
             <i className="fa-solid fa-microchip text-xs"></i>
             <span className="text-[10px] font-bold uppercase">Nodes</span>
+          </button>
+
+          <button
+            onClick={() => setShowImageManager(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+            title="Manage Images"
+          >
+            <i className="fa-solid fa-layer-group text-xs"></i>
+            <span className="text-[10px] font-bold uppercase">Images</span>
           </button>
 
           <button
@@ -265,6 +313,39 @@ const Dashboard: React.FC<DashboardProps> = ({ labs, labStatuses, systemMetrics,
       isOpen={showThemeSelector}
       onClose={() => setShowThemeSelector(false)}
     />
+
+    {/* Image Manager Modal */}
+    {showImageManager && (
+      <div className="fixed inset-0 z-50 flex flex-col bg-stone-50 dark:bg-stone-900">
+        {/* Modal Header */}
+        <div className="h-14 border-b border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 flex items-center justify-between px-6">
+          <div className="flex items-center gap-3">
+            <i className="fa-solid fa-layer-group text-sage-600 dark:text-sage-400"></i>
+            <h2 className="text-lg font-bold text-stone-900 dark:text-white">Image Management</h2>
+          </div>
+          <button
+            onClick={() => setShowImageManager(false)}
+            className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 hover:text-stone-700 dark:hover:text-stone-300 transition-colors"
+          >
+            <i className="fa-solid fa-times text-lg"></i>
+          </button>
+        </div>
+        {/* DeviceManager Content */}
+        <div className="flex-1 overflow-hidden">
+          <DeviceManager
+            deviceModels={deviceModels}
+            imageCatalog={imageCatalog}
+            imageLibrary={imageLibrary}
+            customDevices={customDevices}
+            onAddCustomDevice={onAddCustomDevice || (() => {})}
+            onRemoveCustomDevice={onRemoveCustomDevice || (() => {})}
+            onUploadImage={onRefreshDevices || (() => {})}
+            onUploadQcow2={onRefreshDevices || (() => {})}
+            onRefresh={onRefreshDevices || (() => {})}
+          />
+        </div>
+      </div>
+    )}
     </>
   );
 };

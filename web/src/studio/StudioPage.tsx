@@ -4,12 +4,13 @@ import Canvas from './components/Canvas';
 import TopBar from './components/TopBar';
 import PropertiesPanel from './components/PropertiesPanel';
 import ConsoleManager from './components/ConsoleManager';
-import DeviceManager from './components/DeviceManager';
 import RuntimeControl, { RuntimeStatus } from './components/RuntimeControl';
 import StatusBar from './components/StatusBar';
 import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
+import ConfigViewerModal from './components/ConfigViewerModal';
+import ConfigsView from './components/ConfigsView';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, ImageLibraryEntry, LabLayout, Link, Node } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
@@ -263,7 +264,7 @@ const StudioPage: React.FC = () => {
   const isAdmin = user?.is_admin ?? false;
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
-  const [view, setView] = useState<'designer' | 'images' | 'runtime'>('designer');
+  const [view, setView] = useState<'designer' | 'configs' | 'runtime'>('designer');
   const [nodes, setNodes] = useState<Node[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -296,6 +297,9 @@ const StudioPage: React.FC = () => {
   const [jobs, setJobs] = useState<any[]>([]);
   const prevJobsRef = useRef<Map<string, string>>(new Map());
   const [labStatuses, setLabStatuses] = useState<Record<string, { running: number; total: number }>>({});
+  // Config viewer modal state
+  const [configViewerOpen, setConfigViewerOpen] = useState(false);
+  const [configViewerNode, setConfigViewerNode] = useState<{ id: string; name: string } | null>(null);
   const layoutDirtyRef = useRef(false);
   const saveLayoutTimeoutRef = useRef<number | null>(null);
   const topologyDirtyRef = useRef(false);
@@ -639,7 +643,17 @@ const StudioPage: React.FC = () => {
       });
 
       setNodeStates(statesByNodeId);
-      setRuntimeStates(runtimeByNodeId);
+      // Use functional update to merge with previous state and only update if changed
+      // This prevents flickering when polling returns the same data
+      setRuntimeStates((prev) => {
+        // Check if anything actually changed - if not, return previous state to prevent re-render
+        const prevKeys = Object.keys(prev).sort();
+        const newKeys = Object.keys(runtimeByNodeId).sort();
+        if (prevKeys.length === newKeys.length && prevKeys.every((k, i) => k === newKeys[i] && prev[k] === runtimeByNodeId[k])) {
+          return prev; // No change, skip update
+        }
+        return runtimeByNodeId;
+      });
     } catch {
       // Node states endpoint may fail for new labs - use job-based fallback
     }
@@ -903,6 +917,20 @@ const StudioPage: React.FC = () => {
     });
   };
 
+  const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string) => {
+    if (nodeId && nodeName) {
+      setConfigViewerNode({ id: nodeId, name: nodeName });
+    } else {
+      setConfigViewerNode(null);
+    }
+    setConfigViewerOpen(true);
+  }, []);
+
+  const handleCloseConfigViewer = useCallback(() => {
+    setConfigViewerOpen(false);
+    setConfigViewerNode(null);
+  }, []);
+
   const handleNodeMove = useCallback((id: string, x: number, y: number) => {
     setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, x, y } : node)));
     triggerLayoutSave();
@@ -1081,20 +1109,33 @@ const StudioPage: React.FC = () => {
 
   const selectedItem = nodes.find((node) => node.id === selectedId) || links.find((link) => link.id === selectedId) || annotations.find((ann) => ann.id === selectedId) || null;
 
+  // Handle extract configs for ConfigsView
+  const handleExtractConfigs = useCallback(async () => {
+    if (!activeLab) return;
+    addTaskLogEntry('info', 'Extracting configs...');
+    try {
+      const result = await studioRequest<{ success: boolean; extracted_count: number; snapshots_created: number; message: string }>(
+        `/labs/${activeLab.id}/extract-configs?create_snapshot=true&snapshot_type=manual`,
+        { method: 'POST' }
+      );
+      addTaskLogEntry('success', result.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Extract failed';
+      addTaskLogEntry('error', `Extract failed: ${message}`);
+      throw error;
+    }
+  }, [activeLab, studioRequest, addTaskLogEntry]);
+
   const renderView = () => {
     switch (view) {
-      case 'images':
+      case 'configs':
         return (
-          <DeviceManager
-            deviceModels={deviceModels}
-            imageCatalog={imageCatalog}
-            imageLibrary={imageLibrary}
-            customDevices={customDevices}
-            onAddCustomDevice={(device) => updateCustomDevices([...customDevices, device])}
-            onRemoveCustomDevice={(deviceId) => updateCustomDevices(customDevices.filter((item) => item.id !== deviceId))}
-            onUploadImage={loadDevices}
-            onUploadQcow2={loadDevices}
-            onRefresh={loadDevices}
+          <ConfigsView
+            labId={activeLab?.id || ''}
+            nodes={nodes}
+            runtimeStates={runtimeStates}
+            studioRequest={studioRequest}
+            onExtractConfigs={handleExtractConfigs}
           />
         );
       case 'runtime':
@@ -1107,6 +1148,8 @@ const StudioPage: React.FC = () => {
             onUpdateStatus={handleUpdateStatus}
             onRefreshStates={() => loadNodeStates(activeLab?.id || '', nodes)}
             studioRequest={studioRequest}
+            onOpenConfigViewer={() => handleOpenConfigViewer()}
+            onOpenNodeConfig={handleOpenConfigViewer}
           />
         );
       default:
@@ -1147,6 +1190,7 @@ const StudioPage: React.FC = () => {
                   deviceModels={deviceModels}
                   onUpdateStatus={handleUpdateStatus}
                   portManager={portManager}
+                  onOpenConfigViewer={handleOpenConfigViewer}
                 />
               </div>
             </div>
@@ -1218,6 +1262,13 @@ const StudioPage: React.FC = () => {
           loadLabs();
           loadSystemMetrics();
         }}
+        deviceModels={deviceModels}
+        imageCatalog={imageCatalog}
+        imageLibrary={imageLibrary}
+        customDevices={customDevices}
+        onAddCustomDevice={(device) => updateCustomDevices([...customDevices, device])}
+        onRemoveCustomDevice={(deviceId) => updateCustomDevices(customDevices.filter((item) => item.id !== deviceId))}
+        onRefreshDevices={loadDevices}
       />
     );
   }
@@ -1243,12 +1294,12 @@ const StudioPage: React.FC = () => {
           Runtime
         </button>
         <button
-          onClick={() => setView('images')}
+          onClick={() => setView('configs')}
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'images' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+            view === 'configs' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
           }`}
         >
-          Images
+          Configs
         </button>
       </div>
       {isAdmin && <SystemStatusStrip metrics={systemMetrics} />}
@@ -1303,6 +1354,14 @@ const StudioPage: React.FC = () => {
           </div>
         </div>
       )}
+      <ConfigViewerModal
+        isOpen={configViewerOpen}
+        onClose={handleCloseConfigViewer}
+        labId={activeLab?.id || ''}
+        nodeId={configViewerNode?.id}
+        nodeName={configViewerNode?.name}
+        studioRequest={studioRequest}
+      />
     </div>
   );
 };
