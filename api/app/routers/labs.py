@@ -1143,8 +1143,8 @@ async def extract_configs(
     """Extract running configs from all cEOS nodes in a lab.
 
     This endpoint manually triggers config extraction from all running cEOS
-    containers in the lab. The configs are saved to the workspace as
-    startup-config files for persistence across container restarts.
+    containers in the lab. The configs are received from the agent and saved
+    to the API's workspace for persistence.
 
     Args:
         create_snapshot: If True, creates config snapshots after extraction
@@ -1171,24 +1171,30 @@ async def extract_configs(
         )
 
     extracted_count = result.get("extracted_count", 0)
+    configs = result.get("configs", [])
     snapshots_created = 0
 
-    # Optionally create snapshots after extraction
-    if create_snapshot and extracted_count > 0:
+    # Save configs to API workspace and create snapshots
+    if configs:
         workspace = lab_workspace(lab.id)
         configs_dir = workspace / "configs"
+        configs_dir.mkdir(parents=True, exist_ok=True)
 
-        if configs_dir.exists():
-            for node_dir in configs_dir.iterdir():
-                if not node_dir.is_dir():
-                    continue
-                config_file = node_dir / "startup-config"
-                if not config_file.exists():
-                    continue
+        for config_data in configs:
+            node_name = config_data.get("node_name")
+            content = config_data.get("content")
+            if not node_name or not content:
+                continue
 
-                content = config_file.read_text(encoding="utf-8")
+            # Save config to workspace
+            node_config_dir = configs_dir / node_name
+            node_config_dir.mkdir(parents=True, exist_ok=True)
+            config_file = node_config_dir / "startup-config"
+            config_file.write_text(content, encoding="utf-8")
+
+            # Create snapshot if requested
+            if create_snapshot:
                 content_hash = _compute_content_hash(content)
-                node_name = node_dir.name
 
                 # Check for duplicate
                 latest_snapshot = (
