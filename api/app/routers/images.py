@@ -33,8 +33,9 @@ from app.image_store import (
 
 router = APIRouter(prefix="/images", tags=["images"])
 
-# Track upload progress for streaming status
+# Track upload progress for polling
 _upload_progress: dict[str, dict] = {}
+_upload_lock = threading.Lock()
 
 
 def _is_docker_image_tar(tar_path: str) -> bool:
@@ -122,20 +123,84 @@ def _run_docker_with_progress(
     return process.returncode, "\n".join(stdout_lines), "\n".join(stderr_lines)
 
 
+def _update_progress(upload_id: str, phase: str, message: str, percent: int, **kwargs):
+    """Update progress for an upload."""
+    with _upload_lock:
+        _upload_progress[upload_id] = {
+            "phase": phase,
+            "message": message,
+            "percent": percent,
+            "timestamp": time.time(),
+            **kwargs
+        }
+
+
+def _get_progress(upload_id: str) -> dict | None:
+    """Get progress for an upload."""
+    with _upload_lock:
+        return _upload_progress.get(upload_id)
+
+
+def _clear_progress(upload_id: str):
+    """Clear progress for an upload."""
+    with _upload_lock:
+        _upload_progress.pop(upload_id, None)
+
+
+@router.get("/load/{upload_id}/progress")
+def get_upload_progress(
+    upload_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Poll for upload progress."""
+    progress = _get_progress(upload_id)
+    if progress is None:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    return progress
+
+
 @router.post("/load")
 def load_image(
     file: UploadFile = File(...),
     current_user: models.User = Depends(get_current_user),
     stream: bool = Query(default=False, description="Stream progress updates via SSE"),
+    background: bool = Query(default=False, description="Run in background with polling"),
 ):
     """Load a Docker image from a tar archive.
 
+    If background=true, returns immediately with an upload_id for polling progress.
     If stream=true, returns Server-Sent Events with progress updates.
     Otherwise returns a JSON response when complete.
     """
+    if background:
+        # Background mode with polling
+        import uuid
+        upload_id = str(uuid.uuid4())[:8]
+        filename = file.filename or "image.tar"
+        content = file.file.read()
+        file.file.close()
+
+        _update_progress(upload_id, "starting", "Upload received, starting import...", 5)
+
+        # Start background thread
+        thread = threading.Thread(
+            target=_load_image_background,
+            args=(upload_id, filename, content),
+            daemon=True
+        )
+        thread.start()
+
+        return {"upload_id": upload_id, "status": "started"}
+
     if stream:
+        # Read file content BEFORE returning StreamingResponse
+        # because UploadFile gets closed after endpoint returns
+        filename = file.filename or "image.tar"
+        content = file.file.read()
+        file.file.close()
+
         return StreamingResponse(
-            _load_image_streaming(file),
+            _load_image_streaming(filename, content),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -153,9 +218,9 @@ def _send_sse_event(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
-async def _load_image_streaming(file: UploadFile) -> AsyncGenerator[str, None]:
-    """Stream image loading progress via Server-Sent Events."""
-    filename = file.filename or "image.tar"
+def _load_image_background(upload_id: str, filename: str, content: bytes):
+    """Process image upload in background thread with progress updates."""
+    print(f"[UPLOAD {upload_id}] Starting background processing for {filename}")
     suffixes = Path(filename).suffixes
     suffix = "".join(suffixes) if suffixes else ".tar"
     temp_path = ""
@@ -163,21 +228,189 @@ async def _load_image_streaming(file: UploadFile) -> AsyncGenerator[str, None]:
     decompressed_path = ""
 
     try:
-        # Phase 1: Save uploaded file
+        # Phase 1: Save to temp file
+        print(f"[UPLOAD {upload_id}] Phase 1: Saving file")
+        _update_progress(upload_id, "saving", f"Saving {filename}...", 10)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+            tmp_file.write(content)
+            temp_path = tmp_file.name
+
+        load_path = temp_path
+        file_size = os.path.getsize(temp_path)
+        print(f"[UPLOAD {upload_id}] File saved: {file_size} bytes, checking if decompression needed")
+        _update_progress(upload_id, "saved", f"File saved ({_format_size(file_size)})", 30)
+
+        # Phase 2: Decompress if needed
+        print(f"[UPLOAD {upload_id}] Filename: {filename}, checking for .xz extension")
+        if filename.lower().endswith((".tar.xz", ".txz", ".xz")):
+            print(f"[UPLOAD {upload_id}] Phase 2: Decompressing XZ archive")
+            _update_progress(upload_id, "decompressing", "Decompressing XZ archive...", 35)
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_tar:
+                    with lzma.open(temp_path, "rb") as source:
+                        shutil.copyfileobj(source, tmp_tar)
+                    decompressed_path = tmp_tar.name
+                load_path = decompressed_path
+                decompressed_size = os.path.getsize(decompressed_path)
+                print(f"[UPLOAD {upload_id}] Decompression complete: {decompressed_size} bytes")
+                _update_progress(upload_id, "decompressed", "Decompression complete", 50)
+            except lzma.LZMAError as exc:
+                print(f"[UPLOAD {upload_id}] Decompression failed: {exc}")
+                _update_progress(upload_id, "error", f"Decompression failed: {exc}", 0, error=True)
+                return
+        else:
+            print(f"[UPLOAD {upload_id}] No decompression needed")
+
+        # Phase 3: Detect format
+        print(f"[UPLOAD {upload_id}] Phase 3: Detecting format of {load_path}")
+        _update_progress(upload_id, "detecting", "Detecting image format...", 55)
+        is_docker_image = _is_docker_image_tar(load_path)
+        print(f"[UPLOAD {upload_id}] Is docker image: {is_docker_image}")
+        loaded_images = []
+
+        # Phase 4: Import
+        if is_docker_image:
+            print(f"[UPLOAD {upload_id}] Phase 4: Running docker load")
+            _update_progress(upload_id, "loading", "Running docker load...", 60)
+            try:
+                result = subprocess.run(
+                    ["docker", "load", "-i", load_path],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=600,  # 10 minute timeout
+                )
+                print(f"[UPLOAD {upload_id}] docker load returned: {result.returncode}")
+            except subprocess.TimeoutExpired:
+                print(f"[UPLOAD {upload_id}] docker load timed out after 600 seconds")
+                _update_progress(upload_id, "error", "docker load timed out", 0, error=True)
+                return
+            output = (result.stdout or "") + (result.stderr or "")
+            if result.returncode != 0:
+                _update_progress(upload_id, "error", output.strip() or "docker load failed", 0, error=True)
+                return
+            for line in output.splitlines():
+                if "Loaded image:" in line:
+                    loaded_images.append(line.split("Loaded image:", 1)[-1].strip())
+                elif "Loaded image ID:" in line:
+                    loaded_images.append(line.split("Loaded image ID:", 1)[-1].strip())
+        else:
+            base_name = Path(filename).stem
+            for ext in [".tar", ".gz", ".xz"]:
+                if base_name.lower().endswith(ext):
+                    base_name = base_name[:-len(ext)]
+            image_name = base_name.lower().replace(" ", "-").replace("_", "-")
+            image_tag = f"{image_name}:imported"
+
+            print(f"[UPLOAD {upload_id}] Phase 4: Importing as {image_tag}", flush=True)
+            _update_progress(upload_id, "importing", f"Importing as {image_tag}...", 60)
+
+            try:
+                # Use Popen to avoid potential blocking issues with subprocess.run in threads
+                print(f"[UPLOAD {upload_id}] Starting docker import subprocess", flush=True)
+                proc = subprocess.Popen(
+                    ["docker", "import", load_path, image_tag],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                print(f"[UPLOAD {upload_id}] Waiting for docker import to complete...", flush=True)
+                stdout, stderr = proc.communicate(timeout=600)
+                print(f"[UPLOAD {upload_id}] docker import returned: {proc.returncode}", flush=True)
+                result_returncode = proc.returncode
+                output = (stdout.decode() if stdout else "") + (stderr.decode() if stderr else "")
+            except subprocess.TimeoutExpired:
+                print(f"[UPLOAD {upload_id}] docker import timed out after 600 seconds", flush=True)
+                proc.kill()
+                _update_progress(upload_id, "error", "docker import timed out", 0, error=True)
+                return
+            except Exception as e:
+                print(f"[UPLOAD {upload_id}] docker import exception: {e}", flush=True)
+                _update_progress(upload_id, "error", f"docker import failed: {e}", 0, error=True)
+                return
+            if result_returncode != 0:
+                print(f"[UPLOAD {upload_id}] docker import failed: {output}", flush=True)
+                _update_progress(upload_id, "error", output.strip() or "docker import failed", 0, error=True)
+                return
+            loaded_images.append(image_tag)
+            output = f"Imported as {image_tag}"
+            print(f"[UPLOAD {upload_id}] Import successful: {image_tag}")
+
+        if not loaded_images:
+            print(f"[UPLOAD {upload_id}] No images detected")
+            _update_progress(upload_id, "error", "No images detected", 0, error=True)
+            return
+
+        # Phase 5: Update manifest
+        print(f"[UPLOAD {upload_id}] Phase 5: Updating manifest")
+        _update_progress(upload_id, "finalizing", "Updating image library...", 95)
+
+        manifest = load_manifest()
+        for image_ref in loaded_images:
+            potential_id = f"docker:{image_ref}"
+            if find_image_by_id(manifest, potential_id):
+                print(f"[UPLOAD {upload_id}] Image already exists: {image_ref}")
+                _update_progress(upload_id, "error", f"Image {image_ref} already exists", 0, error=True)
+                return
+
+        for image_ref in loaded_images:
+            device_id, version = detect_device_from_filename(image_ref)
+            entry = create_image_entry(
+                image_id=f"docker:{image_ref}",
+                kind="docker",
+                reference=image_ref,
+                filename=filename,
+                device_id=device_id,
+                version=version,
+                size_bytes=file_size,
+            )
+            manifest["images"].append(entry)
+        save_manifest(manifest)
+
+        print(f"[UPLOAD {upload_id}] Complete! Setting progress to 100%")
+        _update_progress(upload_id, "complete", output or "Image loaded successfully", 100,
+                        images=loaded_images, complete=True)
+        print(f"[UPLOAD {upload_id}] Progress updated to complete")
+
+    except Exception as e:
+        import traceback
+        print(f"[UPLOAD {upload_id}] Exception: {e}")
+        traceback.print_exc()
+        _update_progress(upload_id, "error", str(e), 0, error=True)
+    finally:
+        if decompressed_path and os.path.exists(decompressed_path):
+            os.unlink(decompressed_path)
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+async def _load_image_streaming(filename: str, content: bytes) -> AsyncGenerator[str, None]:
+    """Stream image loading progress via Server-Sent Events.
+
+    Args:
+        filename: Original filename of the uploaded file
+        content: File content as bytes (already read from UploadFile)
+    """
+    suffixes = Path(filename).suffixes
+    suffix = "".join(suffixes) if suffixes else ".tar"
+    temp_path = ""
+    load_path = ""
+    decompressed_path = ""
+
+    try:
+        # Phase 1: Save uploaded file to temp
+        total_size = len(content)
         yield _send_sse_event("progress", {
             "phase": "saving",
-            "message": f"Saving uploaded file: {filename}...",
+            "message": f"Processing uploaded file: {filename} ({_format_size(total_size)})...",
             "percent": 5,
         })
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-            # Read in chunks and report progress
+            # Write in chunks for progress reporting
             chunk_size = 1024 * 1024  # 1MB chunks
             bytes_written = 0
-            content = await file.read()
-            total_size = len(content)
 
-            # Write in chunks for progress reporting
             for i in range(0, total_size, chunk_size):
                 chunk = content[i:i + chunk_size]
                 tmp_file.write(chunk)
@@ -261,18 +494,22 @@ async def _load_image_streaming(file: UploadFile) -> AsyncGenerator[str, None]:
                 "percent": 60,
             })
 
-            # Run docker load with progress tracking
-            process = subprocess.Popen(
-                ["docker", "load", "-i", load_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
+            # Run docker load with async subprocess for progress tracking
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "load", "-i", load_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
             )
 
             output_lines = []
             layer_count = 0
-            for line in iter(process.stdout.readline, ''):
-                line = line.strip()
+
+            # Read output line by line asynchronously
+            while True:
+                line_bytes = await proc.stdout.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode().strip()
                 if line:
                     output_lines.append(line)
                     if "Loading layer" in line:
@@ -295,10 +532,10 @@ async def _load_image_streaming(file: UploadFile) -> AsyncGenerator[str, None]:
                         image_id = line.split("Loaded image ID:", 1)[-1].strip()
                         loaded_images.append(image_id)
 
-            process.wait()
+            await proc.wait()
             output = "\n".join(output_lines)
 
-            if process.returncode != 0:
+            if proc.returncode != 0:
                 yield _send_sse_event("error", {
                     "message": output.strip() or "docker load failed",
                 })
@@ -317,16 +554,23 @@ async def _load_image_streaming(file: UploadFile) -> AsyncGenerator[str, None]:
                 "message": f"Filesystem archive detected. Importing as '{image_tag}'...",
                 "percent": 60,
             })
+            await asyncio.sleep(0)  # Yield to event loop
 
-            result = subprocess.run(
-                ["docker", "import", load_path, image_tag],
-                capture_output=True,
-                text=True,
-                check=False,
+            print(f"[SSE] Starting docker import for {image_tag}")
+
+            # Use async subprocess to avoid blocking the event loop
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "import", load_path, image_tag,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            output = (result.stdout or "") + (result.stderr or "")
+            stdout_bytes, stderr_bytes = await proc.communicate()
+            output = (stdout_bytes.decode() if stdout_bytes else "") + (stderr_bytes.decode() if stderr_bytes else "")
 
-            if result.returncode != 0:
+            print(f"[SSE] Docker import completed, returncode={proc.returncode}")
+
+            if proc.returncode != 0:
+                print(f"[SSE] Docker import failed: {output}")
                 yield _send_sse_event("error", {
                     "message": output.strip() or "docker import failed",
                 })
@@ -336,11 +580,13 @@ async def _load_image_streaming(file: UploadFile) -> AsyncGenerator[str, None]:
             loaded_images.append(image_tag)
             output = f"Imported filesystem as {image_tag} (ID: {image_id})"
 
+            print(f"[SSE] Import successful: {image_tag}, sending progress event")
             yield _send_sse_event("progress", {
                 "phase": "imported",
                 "message": f"Import complete: {image_tag}",
                 "percent": 95,
             })
+            await asyncio.sleep(0)  # Yield to event loop
 
         if not loaded_images:
             yield _send_sse_event("error", {
@@ -380,19 +626,25 @@ async def _load_image_streaming(file: UploadFile) -> AsyncGenerator[str, None]:
             manifest["images"].append(entry)
         save_manifest(manifest)
 
-        # Final success event
+        # Final success event - add small delay to ensure proper flushing
+        await asyncio.sleep(0.1)
         yield _send_sse_event("complete", {
             "message": output.strip() or "Image loaded successfully",
             "images": loaded_images,
             "percent": 100,
         })
+        # Extra newline to ensure event boundary
+        yield "\n"
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         yield _send_sse_event("error", {
             "message": str(e),
         })
+        yield "\n"
     finally:
-        await file.close()
+        # Clean up temp files
         if decompressed_path and os.path.exists(decompressed_path):
             os.unlink(decompressed_path)
         if temp_path and os.path.exists(temp_path):

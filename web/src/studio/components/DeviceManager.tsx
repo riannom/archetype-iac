@@ -195,21 +195,27 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   }
 
   /**
-   * Upload file with streaming progress via Server-Sent Events.
+   * Upload file with background processing and progress polling.
    * This provides real-time feedback during the server-side processing phase.
    */
-  async function uploadImageWithStreaming(
+  async function uploadImageWithPolling(
     file: File,
     onProgress: (percent: number, message: string) => void
   ): Promise<{ output?: string; images?: string[] }> {
     const formData = new FormData();
     formData.append('file', file);
     const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
 
-    // Use streaming endpoint
-    const response = await fetch(`${API_BASE_URL}/images/load?stream=true`, {
+    onProgress(0, 'Uploading file...');
+
+    // Start background upload
+    const response = await fetch(`${API_BASE_URL}/images/load?background=true`, {
       method: 'POST',
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      headers,
       body: formData,
     });
 
@@ -218,53 +224,44 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       throw new Error(parseErrorMessage(text));
     }
 
-    // Read SSE stream
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('Streaming not supported');
+    const { upload_id } = await response.json();
+    if (!upload_id) {
+      throw new Error('No upload ID returned');
     }
 
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let result: { output?: string; images?: string[] } = {};
+    onProgress(5, 'Upload started, processing...');
 
+    // Poll for progress
+    let lastPercent = 5;
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      await new Promise(resolve => setTimeout(resolve, 500)); // Poll every 500ms
 
-      buffer += decoder.decode(value, { stream: true });
+      const progressResponse = await fetch(`${API_BASE_URL}/images/load/${upload_id}/progress`, {
+        headers,
+      });
 
-      // Process complete SSE events
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-      let eventType = '';
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === 'progress') {
-              onProgress(data.percent || 0, data.message || 'Processing...');
-            } else if (eventType === 'complete') {
-              result = { output: data.message, images: data.images };
-              onProgress(100, data.message || 'Complete!');
-            } else if (eventType === 'error') {
-              throw new Error(data.message || 'Import failed');
-            }
-          } catch (e) {
-            if (e instanceof SyntaxError) {
-              console.warn('Failed to parse SSE data:', line);
-            } else {
-              throw e;
-            }
-          }
+      if (!progressResponse.ok) {
+        if (progressResponse.status === 404) {
+          throw new Error('Upload not found - it may have completed or expired');
         }
+        continue; // Retry on other errors
+      }
+
+      const progress = await progressResponse.json();
+
+      if (progress.percent !== lastPercent || progress.message) {
+        lastPercent = progress.percent;
+        onProgress(progress.percent, progress.message || 'Processing...');
+      }
+
+      if (progress.error) {
+        throw new Error(progress.message || 'Import failed');
+      }
+
+      if (progress.complete) {
+        return { output: progress.message, images: progress.images };
       }
     }
-
-    return result;
   }
 
   /**
@@ -323,8 +320,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       setUploadStatus(`Uploading ${file.name}...`);
       setUploadProgress(0);
 
-      // Use streaming upload for real-time progress
-      const data = await uploadImageWithStreaming(file, (percent, message) => {
+      // Use polling-based upload for reliable progress tracking
+      const data = await uploadImageWithPolling(file, (percent, message) => {
         setUploadProgress(percent);
         setUploadStatus(message);
       });
