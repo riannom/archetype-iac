@@ -278,7 +278,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
         {/* External Networks Section */}
         {onAddExternalNetwork && (
           <div className="mb-4">
-            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100/50 dark:bg-stone-800/20 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10">
+            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100 dark:bg-stone-800 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10">
               <span>Connectivity</span>
             </div>
             <div className="p-2">
@@ -305,7 +305,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
 
         {/* Tools Section */}
         <div className="mb-4">
-          <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100/50 dark:bg-stone-800/20 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10">
+          <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100 dark:bg-stone-800 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10">
             <span>Annotations</span>
           </div>
           <div className="p-2 grid grid-cols-2 gap-2">
@@ -326,7 +326,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
           <div key={category.name} className="mb-2">
             <button
               onClick={() => toggleCategory(category.name)}
-              className="w-full px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100/50 dark:bg-stone-800/20 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10 hover:bg-stone-200/50 dark:hover:bg-stone-700/30 transition-colors"
+              className="w-full px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100 dark:bg-stone-800 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
             >
               <span className="flex items-center gap-2">
                 {category.name}
