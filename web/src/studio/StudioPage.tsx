@@ -294,8 +294,13 @@ const StudioPage: React.FC = () => {
   const [authLoading, setAuthLoading] = useState(false);
   const [taskLog, setTaskLog] = useState<TaskLogEntry[]>([]);
   const [isTaskLogVisible, setIsTaskLogVisible] = useState(true);
+  const [taskLogClearedAt, setTaskLogClearedAt] = useState<number>(() => {
+    const stored = localStorage.getItem('archetype_tasklog_cleared_at');
+    return stored ? parseInt(stored, 10) : 0;
+  });
   const [jobs, setJobs] = useState<any[]>([]);
   const prevJobsRef = useRef<Map<string, string>>(new Map());
+  const isInitialJobLoadRef = useRef(true);
   const [labStatuses, setLabStatuses] = useState<Record<string, { running: number; total: number }>>({});
   // Config viewer modal state
   const [configViewerOpen, setConfigViewerOpen] = useState(false);
@@ -344,11 +349,19 @@ const StudioPage: React.FC = () => {
     setTaskLog((prev) => [...prev.slice(-99), { id, timestamp: new Date(), level, message, jobId }]);
   }, []);
 
-  const clearTaskLog = useCallback(() => setTaskLog([]), []);
+  const clearTaskLog = useCallback(() => {
+    const now = Date.now();
+    setTaskLogClearedAt(now);
+    localStorage.setItem('archetype_tasklog_cleared_at', now.toString());
+  }, []);
 
   const deviceModels = useMemo(
     () => buildDeviceModels(vendorCategories, imageLibrary, customDevices),
     [vendorCategories, imageLibrary, customDevices]
+  );
+  const filteredTaskLog = useMemo(
+    () => taskLog.filter((entry) => entry.timestamp.getTime() > taskLogClearedAt),
+    [taskLog, taskLogClearedAt]
   );
   const deviceCategories = useMemo<DeviceCategory[]>(() => {
     // Use vendor categories from API if available, otherwise fall back to flat structure
@@ -728,6 +741,17 @@ const StudioPage: React.FC = () => {
     const prevStatuses = prevJobsRef.current;
     const newStatuses = new Map<string, string>();
 
+    // On initial load, just populate the ref without logging
+    // This prevents re-logging all existing jobs on page refresh
+    if (isInitialJobLoadRef.current && jobs.length > 0) {
+      for (const job of jobs) {
+        newStatuses.set(job.id, job.status);
+      }
+      prevJobsRef.current = newStatuses;
+      isInitialJobLoadRef.current = false;
+      return;
+    }
+
     for (const job of jobs) {
       const jobKey = job.id;
       const prevStatus = prevStatuses.get(jobKey);
@@ -782,6 +806,10 @@ const StudioPage: React.FC = () => {
       window.clearTimeout(saveLayoutTimeoutRef.current);
       saveLayoutTimeoutRef.current = null;
     }
+    // Reset job tracking for new lab context
+    setJobs([]);
+    prevJobsRef.current = new Map();
+    isInitialJobLoadRef.current = true;
     setActiveLab(lab);
     setAnnotations([]);
     setConsoleWindows([]);
@@ -1327,9 +1355,9 @@ const StudioPage: React.FC = () => {
           onUpdateWindowPos={(id, x, y) => setConsoleWindows((prev) => prev.map((win) => (win.id === id ? { ...win, x, y } : win)))}
         />
       </div>
-      <StatusBar />
+      <StatusBar nodeStates={nodeStates} />
       <TaskLogPanel
-        entries={taskLog}
+        entries={filteredTaskLog}
         isVisible={isTaskLogVisible}
         onToggle={() => setIsTaskLogVisible(!isTaskLogVisible)}
         onClear={clearTaskLog}
