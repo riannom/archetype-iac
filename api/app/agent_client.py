@@ -18,6 +18,9 @@ from app.db import SessionLocal
 
 logger = logging.getLogger(__name__)
 
+# Retry configuration (exported for backward compatibility)
+MAX_RETRIES = settings.agent_max_retries
+
 # Cache for healthy agents
 _agent_cache: dict[str, tuple[str, datetime]] = {}  # agent_id -> (address, last_check)
 
