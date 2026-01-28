@@ -47,7 +47,7 @@
                 900: 'var(--color-accent-900)',
                 950: 'var(--color-accent-950)',
               },
-              // Dynamic neutral colors via CSS variables
+              // Dynamic neutral colors via CSS variables (for components that need theme-aware neutrals)
               neutral: {
                 50: 'var(--color-neutral-50)',
                 100: 'var(--color-neutral-100)',
@@ -61,6 +61,10 @@
                 900: 'var(--color-neutral-900)',
                 950: 'var(--color-neutral-950)',
               },
+              // NOTE: 'stone' is NOT aliased to neutral CSS variables intentionally.
+              // stone-* classes use Tailwind's default values so that dark: prefix works correctly.
+              // Components using stone-50 dark:stone-900 rely on the dark: variant switching.
+              // If we aliased stone to CSS variables, both would resolve to the same value.
             },
           },
         },

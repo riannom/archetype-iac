@@ -4,6 +4,7 @@ import AgentsPopup from './AgentsPopup';
 import ContainersPopup from './ContainersPopup';
 import ResourcesPopup from './ResourcesPopup';
 import StoragePopup from './StoragePopup';
+import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
 
 interface PerHostMetrics {
   id: string;
@@ -50,24 +51,6 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
       </div>
     );
   }
-
-  const getCpuColor = (percent: number) => {
-    if (percent >= 80) return 'bg-red-500';
-    if (percent >= 60) return 'bg-amber-500';
-    return 'bg-sage-500';
-  };
-
-  const getMemoryColor = (percent: number) => {
-    if (percent >= 85) return 'bg-red-500';
-    if (percent >= 70) return 'bg-amber-500';
-    return 'bg-blue-500';
-  };
-
-  const getStorageColor = (percent: number) => {
-    if (percent >= 90) return 'bg-red-500';
-    if (percent >= 75) return 'bg-amber-500';
-    return 'bg-violet-500';
-  };
 
   const clickableClass = "hover:bg-stone-200/70 dark:hover:bg-stone-700/70 rounded-md px-2 py-1 -mx-2 -my-1 cursor-pointer transition-colors";
 

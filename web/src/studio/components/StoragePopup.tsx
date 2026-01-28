@@ -1,5 +1,7 @@
 import React from 'react';
 import DetailPopup from './DetailPopup';
+import { getStorageColor } from '../../utils/status';
+import { formatStorageSize } from '../../utils/format';
 
 interface PerHostMetrics {
   id: string;
@@ -23,19 +25,6 @@ interface StoragePopupProps {
 }
 
 const StoragePopup: React.FC<StoragePopupProps> = ({ isOpen, onClose, perHost, totals }) => {
-  const getStorageColor = (percent: number) => {
-    if (percent >= 90) return 'bg-red-500';
-    if (percent >= 75) return 'bg-amber-500';
-    return 'bg-violet-500';
-  };
-
-  const formatSize = (gb: number) => {
-    if (gb >= 1000) {
-      return `${(gb / 1000).toFixed(2)} TB`;
-    }
-    return `${gb.toFixed(2)} GB`;
-  };
-
   return (
     <DetailPopup isOpen={isOpen} onClose={onClose} title="Storage Usage" width="max-w-xl">
       <div className="space-y-6">
@@ -46,7 +35,7 @@ const StoragePopup: React.FC<StoragePopupProps> = ({ isOpen, onClose, perHost, t
               Total Storage
             </span>
             <span className="text-sm text-stone-600 dark:text-stone-400">
-              {formatSize(totals.used_gb)} / {formatSize(totals.total_gb)}
+              {formatStorageSize(totals.used_gb)} / {formatStorageSize(totals.total_gb)}
             </span>
           </div>
           <div className="h-4 bg-stone-200 dark:bg-stone-700 rounded overflow-hidden">
@@ -73,7 +62,7 @@ const StoragePopup: React.FC<StoragePopupProps> = ({ isOpen, onClose, perHost, t
                   <div className="flex items-center justify-between text-xs mb-1">
                     <span className="font-medium text-stone-700 dark:text-stone-300">{host.name}</span>
                     <span className="text-stone-500 dark:text-stone-400">
-                      {formatSize(host.storage_used_gb)} / {formatSize(host.storage_total_gb)}
+                      {formatStorageSize(host.storage_used_gb)} / {formatStorageSize(host.storage_total_gb)}
                     </span>
                   </div>
                   <div className="h-4 bg-stone-200 dark:bg-stone-700 rounded overflow-hidden">
