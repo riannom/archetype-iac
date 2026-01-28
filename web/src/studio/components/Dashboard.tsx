@@ -24,6 +24,11 @@ interface SystemMetrics {
   containers: { running: number; total: number };
   cpu_percent: number;
   memory_percent: number;
+  memory?: {
+    used_gb: number;
+    total_gb: number;
+    percent: number;
+  };
   storage?: {
     used_gb: number;
     total_gb: number;
@@ -36,6 +41,8 @@ interface SystemMetrics {
     name: string;
     cpu_percent: number;
     memory_percent: number;
+    memory_used_gb: number;
+    memory_total_gb: number;
     storage_percent: number;
     storage_used_gb: number;
     storage_total_gb: number;

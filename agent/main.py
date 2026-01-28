@@ -209,6 +209,8 @@ def get_resource_usage() -> dict:
         # Memory usage
         memory = psutil.virtual_memory()
         memory_percent = memory.percent
+        memory_used_gb = round(memory.used / (1024 ** 3), 2)
+        memory_total_gb = round(memory.total / (1024 ** 3), 2)
 
         # Disk usage for workspace partition
         disk_path = settings.workspace_path if settings.workspace_path else "/"
@@ -260,6 +262,8 @@ def get_resource_usage() -> dict:
         return {
             "cpu_percent": cpu_percent,
             "memory_percent": memory_percent,
+            "memory_used_gb": memory_used_gb,
+            "memory_total_gb": memory_total_gb,
             "disk_percent": disk_percent,
             "disk_used_gb": disk_used_gb,
             "disk_total_gb": disk_total_gb,

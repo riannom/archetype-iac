@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import DetailPopup from './DetailPopup';
 import { formatTimestamp } from '../../utils/format';
-import { getCpuColor, getMemoryColor } from '../../utils/status';
+import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
 
 interface AgentDetail {
   id: string;
@@ -17,11 +17,26 @@ interface AgentDetail {
   resource_usage: {
     cpu_percent: number;
     memory_percent: number;
+    memory_used_gb: number;
+    memory_total_gb: number;
+    storage_percent: number;
+    storage_used_gb: number;
+    storage_total_gb: number;
     containers_running: number;
     containers_total: number;
   };
   last_heartbeat: string | null;
 }
+
+const formatMemorySize = (gb: number): string => {
+  if (gb >= 1024) {
+    return `${(gb / 1024).toFixed(1)} TB`;
+  }
+  if (gb >= 1) {
+    return `${gb.toFixed(1)} GB`;
+  }
+  return `${(gb * 1024).toFixed(0)} MB`;
+};
 
 interface AgentsPopupProps {
   isOpen: boolean;
@@ -103,7 +118,7 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
               </div>
 
               {/* Resource Bars */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div>
                   <div className="flex items-center justify-between text-xs mb-1">
                     <span className="text-stone-500 dark:text-stone-400">CPU</span>
@@ -131,6 +146,30 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
                       style={{ width: `${Math.min(agent.resource_usage.memory_percent, 100)}%` }}
                     />
                   </div>
+                  {agent.resource_usage.memory_total_gb > 0 && (
+                    <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                      {formatMemorySize(agent.resource_usage.memory_used_gb)}/{formatMemorySize(agent.resource_usage.memory_total_gb)}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="text-stone-500 dark:text-stone-400">Storage</span>
+                    <span className="font-medium text-stone-700 dark:text-stone-300">
+                      {agent.resource_usage.storage_percent.toFixed(0)}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${getStorageColor(agent.resource_usage.storage_percent)} transition-all`}
+                      style={{ width: `${Math.min(agent.resource_usage.storage_percent, 100)}%` }}
+                    />
+                  </div>
+                  {agent.resource_usage.storage_total_gb > 0 && (
+                    <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                      {formatMemorySize(agent.resource_usage.storage_used_gb)}/{formatMemorySize(agent.resource_usage.storage_total_gb)}
+                    </span>
+                  )}
                 </div>
               </div>
 

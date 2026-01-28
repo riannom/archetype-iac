@@ -297,6 +297,8 @@ def list_agents_detailed(
             "resource_usage": {
                 "cpu_percent": resource_usage.get("cpu_percent", 0),
                 "memory_percent": resource_usage.get("memory_percent", 0),
+                "memory_used_gb": resource_usage.get("memory_used_gb", 0),
+                "memory_total_gb": resource_usage.get("memory_total_gb", 0),
                 "storage_percent": resource_usage.get("disk_percent", 0),
                 "storage_used_gb": resource_usage.get("disk_used_gb", 0),
                 "storage_total_gb": resource_usage.get("disk_total_gb", 0),

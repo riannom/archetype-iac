@@ -38,6 +38,8 @@ interface HostDetailed {
   resource_usage: {
     cpu_percent: number;
     memory_percent: number;
+    memory_used_gb: number;
+    memory_total_gb: number;
     storage_percent: number;
     storage_used_gb: number;
     storage_total_gb: number;
@@ -237,7 +239,12 @@ const HostsPage: React.FC = () => {
                         <div>
                           <div className="flex justify-between text-xs mb-1">
                             <span className="text-stone-500 dark:text-stone-400">Memory</span>
-                            <span className="font-medium text-stone-700 dark:text-stone-300">{host.resource_usage.memory_percent.toFixed(0)}%</span>
+                            <span className="font-medium text-stone-700 dark:text-stone-300">
+                              {host.resource_usage.memory_total_gb > 0
+                                ? `${formatStorageSize(host.resource_usage.memory_used_gb)} / ${formatStorageSize(host.resource_usage.memory_total_gb)}`
+                                : `${host.resource_usage.memory_percent.toFixed(0)}%`
+                              }
+                            </span>
                           </div>
                           <div className="h-2 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">
                             <div className={`h-full ${getMemoryColor(host.resource_usage.memory_percent)} transition-all`} style={{ width: `${Math.min(host.resource_usage.memory_percent, 100)}%` }}></div>

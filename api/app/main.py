@@ -637,6 +637,8 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     # Aggregate resource usage from all online agents
     total_cpu = 0.0
     total_memory = 0.0
+    total_memory_used = 0.0
+    total_memory_total = 0.0
     total_disk_used = 0.0
     total_disk_total = 0.0
     total_containers_running = 0
@@ -653,6 +655,8 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
             usage = json.loads(host.resource_usage) if host.resource_usage else {}
             host_cpu = usage.get("cpu_percent", 0)
             host_memory = usage.get("memory_percent", 0)
+            host_memory_used = usage.get("memory_used_gb", 0)
+            host_memory_total = usage.get("memory_total_gb", 0)
             host_disk_percent = usage.get("disk_percent", 0)
             host_disk_used = usage.get("disk_used_gb", 0)
             host_disk_total = usage.get("disk_total_gb", 0)
@@ -660,6 +664,8 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
 
             total_cpu += host_cpu
             total_memory += host_memory
+            total_memory_used += host_memory_used
+            total_memory_total += host_memory_total
             total_disk_used += host_disk_used
             total_disk_total += host_disk_total
             total_containers_running += host_containers
@@ -671,6 +677,8 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
                 "name": host.name,
                 "cpu_percent": round(host_cpu, 1),
                 "memory_percent": round(host_memory, 1),
+                "memory_used_gb": host_memory_used,
+                "memory_total_gb": host_memory_total,
                 "storage_percent": round(host_disk_percent, 1),
                 "storage_used_gb": host_disk_used,
                 "storage_total_gb": host_disk_total,
@@ -704,6 +712,11 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
         "containers": {"running": total_containers_running, "total": total_containers},
         "cpu_percent": round(avg_cpu, 1),
         "memory_percent": round(avg_memory, 1),
+        "memory": {
+            "used_gb": round(total_memory_used, 2),
+            "total_gb": round(total_memory_total, 2),
+            "percent": round(avg_memory, 1),
+        },
         "storage": {
             "used_gb": round(total_disk_used, 2),
             "total_gb": round(total_disk_total, 2),
@@ -809,6 +822,8 @@ def get_resource_distribution(database: Session = Depends(db.get_db)) -> dict:
             "name": host.name,
             "cpu_percent": usage.get("cpu_percent", 0),
             "memory_percent": usage.get("memory_percent", 0),
+            "memory_used_gb": usage.get("memory_used_gb", 0),
+            "memory_total_gb": usage.get("memory_total_gb", 0),
             "containers": usage.get("containers_running", 0),
         })
 

@@ -7,8 +7,20 @@ interface AgentResource {
   name: string;
   cpu_percent: number;
   memory_percent: number;
+  memory_used_gb: number;
+  memory_total_gb: number;
   containers: number;
 }
+
+const formatMemorySize = (gb: number): string => {
+  if (gb >= 1024) {
+    return `${(gb / 1024).toFixed(1)} TB`;
+  }
+  if (gb >= 1) {
+    return `${gb.toFixed(1)} GB`;
+  }
+  return `${(gb * 1024).toFixed(0)} MB`;
+};
 
 interface LabResource {
   id: string;
@@ -66,12 +78,15 @@ const ResourcesPopup: React.FC<ResourcesPopupProps> = ({ isOpen, onClose, type }
               <div className="space-y-3">
                 {data.by_agent.map(agent => {
                   const percent = agent[metricKey];
+                  const memoryInfo = type === 'memory' && agent.memory_total_gb > 0
+                    ? ` · ${formatMemorySize(agent.memory_used_gb)}/${formatMemorySize(agent.memory_total_gb)}`
+                    : '';
                   return (
                     <div key={agent.id}>
                       <div className="flex items-center justify-between text-xs mb-1">
                         <span className="font-medium text-stone-700 dark:text-stone-300">{agent.name}</span>
                         <span className="text-stone-500 dark:text-stone-400">
-                          {percent.toFixed(1)}% · {agent.containers} containers
+                          {percent.toFixed(1)}%{memoryInfo} · {agent.containers} containers
                         </span>
                       </div>
                       <div className="h-4 bg-stone-200 dark:bg-stone-700 rounded overflow-hidden">

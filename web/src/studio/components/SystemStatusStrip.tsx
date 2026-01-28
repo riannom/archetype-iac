@@ -11,6 +11,8 @@ interface PerHostMetrics {
   name: string;
   cpu_percent: number;
   memory_percent: number;
+  memory_used_gb: number;
+  memory_total_gb: number;
   storage_percent: number;
   storage_used_gb: number;
   storage_total_gb: number;
@@ -22,6 +24,11 @@ interface SystemMetrics {
   containers: { running: number; total: number };
   cpu_percent: number;
   memory_percent: number;
+  memory?: {
+    used_gb: number;
+    total_gb: number;
+    percent: number;
+  };
   storage?: {
     used_gb: number;
     total_gb: number;
@@ -32,6 +39,16 @@ interface SystemMetrics {
   per_host?: PerHostMetrics[];
   is_multi_host?: boolean;
 }
+
+const formatMemorySize = (gb: number): string => {
+  if (gb >= 1024) {
+    return `${(gb / 1024).toFixed(1)} TB`;
+  }
+  if (gb >= 1) {
+    return `${gb.toFixed(1)} GB`;
+  }
+  return `${(gb * 1024).toFixed(0)} MB`;
+};
 
 interface SystemStatusStripProps {
   metrics: SystemMetrics | null;
@@ -138,6 +155,11 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
           <span className="text-xs font-bold text-stone-700 dark:text-stone-300 w-10 text-right">
             {metrics.memory_percent.toFixed(0)}%
           </span>
+          {metrics.memory && (
+            <span className="text-[10px] text-stone-400 dark:text-stone-500">
+              {formatMemorySize(metrics.memory.used_gb)}/{formatMemorySize(metrics.memory.total_gb)}
+            </span>
+          )}
         </button>
 
         {/* Storage */}
@@ -156,6 +178,9 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
             </div>
             <span className="text-xs font-bold text-stone-700 dark:text-stone-300 w-10 text-right">
               {metrics.storage.percent.toFixed(0)}%
+            </span>
+            <span className="text-[10px] text-stone-400 dark:text-stone-500">
+              {formatMemorySize(metrics.storage.used_gb)}/{formatMemorySize(metrics.storage.total_gb)}
             </span>
           </button>
         )}
@@ -241,6 +266,11 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                   <span className="text-[10px] font-medium text-stone-600 dark:text-stone-400 w-8 text-right">
                     {host.memory_percent.toFixed(0)}%
                   </span>
+                  {host.memory_used_gb > 0 && (
+                    <span className="text-[9px] text-stone-400 dark:text-stone-500">
+                      {formatMemorySize(host.memory_used_gb)}/{formatMemorySize(host.memory_total_gb)}
+                    </span>
+                  )}
                 </div>
 
                 {/* Storage */}
@@ -256,6 +286,11 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                   <span className="text-[10px] font-medium text-stone-600 dark:text-stone-400 w-8 text-right">
                     {host.storage_percent.toFixed(0)}%
                   </span>
+                  {host.storage_total_gb > 0 && (
+                    <span className="text-[9px] text-stone-400 dark:text-stone-500">
+                      {formatMemorySize(host.storage_used_gb)}/{formatMemorySize(host.storage_total_gb)}
+                    </span>
+                  )}
                 </div>
               </div>
             ))}
