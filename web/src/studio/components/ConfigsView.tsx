@@ -37,25 +37,41 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Get unique node names from snapshots
+  // Map container_name -> display name for UI display
+  const nodeDisplayNames = useMemo(() => {
+    const map = new Map<string, string>();
+    nodes.forEach((n) => {
+      const containerName = n.container_name || n.name;
+      // Prefer display name, but use container_name as fallback
+      map.set(containerName, n.name);
+    });
+    return map;
+  }, [nodes]);
+
+  // Get unique node names from snapshots (these are container names)
   const nodeNamesWithSnapshots = useMemo(() => {
     const names = new Set<string>();
     snapshots.forEach((s) => names.add(s.node_name));
     return Array.from(names).sort();
   }, [snapshots]);
 
-  // Get all node names (from topology)
-  const allNodeNames = useMemo(() => {
-    return nodes.map((n) => n.name).sort();
+  // Get all node container names (from topology) - use container_name for matching
+  const allNodeContainerNames = useMemo(() => {
+    return nodes.map((n) => n.container_name || n.name).sort();
   }, [nodes]);
 
-  // Merge node names from both sources
+  // Merge node names from both sources (using container names as canonical key)
   const nodeNames = useMemo(() => {
     const names = new Set<string>();
-    allNodeNames.forEach((n) => names.add(n));
+    allNodeContainerNames.forEach((n) => names.add(n));
     nodeNamesWithSnapshots.forEach((n) => names.add(n));
     return Array.from(names).sort();
-  }, [allNodeNames, nodeNamesWithSnapshots]);
+  }, [allNodeContainerNames, nodeNamesWithSnapshots]);
+
+  // Get display name for a container name
+  const getDisplayName = (containerName: string) => {
+    return nodeDisplayNames.get(containerName) || containerName;
+  };
 
   // Get snapshots for selected node
   const nodeSnapshots = useMemo(() => {
@@ -199,9 +215,9 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
     });
   };
 
-  // Get node status indicator color
-  const getNodeStatusColor = (nodeName: string) => {
-    const node = nodes.find((n) => n.name === nodeName);
+  // Get node status indicator color (nodeName is container_name)
+  const getNodeStatusColor = (containerName: string) => {
+    const node = nodes.find((n) => (n.container_name || n.name) === containerName);
     if (!node) return 'bg-stone-400';
     const status = runtimeStates[node.id];
     switch (status) {
@@ -274,16 +290,17 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                 No nodes in topology
               </div>
             ) : (
-              nodeNames.map((nodeName) => {
-                const hasSnapshots = nodeNamesWithSnapshots.includes(nodeName);
-                const snapshotCount = snapshots.filter((s) => s.node_name === nodeName).length;
-                const isSelected = selectedNodeName === nodeName;
+              nodeNames.map((containerName) => {
+                const hasSnapshots = nodeNamesWithSnapshots.includes(containerName);
+                const snapshotCount = snapshots.filter((s) => s.node_name === containerName).length;
+                const isSelected = selectedNodeName === containerName;
+                const displayName = getDisplayName(containerName);
 
                 return (
                   <button
-                    key={nodeName}
+                    key={containerName}
                     onClick={() => {
-                      setSelectedNodeName(nodeName);
+                      setSelectedNodeName(containerName);
                       setSelectedSnapshotIds(new Set());
                       setViewMode('view');
                     }}
@@ -293,7 +310,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                         : 'bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 focus:bg-transparent dark:focus:bg-transparent active:bg-stone-100 dark:active:bg-stone-800'
                     }`}
                   >
-                    <div className={`w-2 h-2 rounded-full ${getNodeStatusColor(nodeName)}`} />
+                    <div className={`w-2 h-2 rounded-full ${getNodeStatusColor(containerName)}`} />
                     <div className="flex-1 min-w-0">
                       <div
                         className={`text-xs font-medium truncate ${
@@ -302,7 +319,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                             : 'text-stone-700 dark:text-stone-300'
                         }`}
                       >
-                        {nodeName}
+                        {displayName}
                       </div>
                       {hasSnapshots && (
                         <div className="text-[10px] text-stone-500">
@@ -324,7 +341,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
         <div className="w-72 border-r border-stone-200 dark:border-stone-800 flex flex-col overflow-hidden">
           <div className="p-3 border-b border-stone-200 dark:border-stone-800 flex items-center justify-between">
             <div className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">
-              Snapshots{selectedNodeName ? `: ${selectedNodeName}` : ''}
+              Snapshots{selectedNodeName ? `: ${getDisplayName(selectedNodeName)}` : ''}
             </div>
             {nodeSnapshots.length > 1 && (
               <div className="flex gap-1">
