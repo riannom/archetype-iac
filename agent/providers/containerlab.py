@@ -240,6 +240,83 @@ class ContainerlabProvider(Provider):
                 logger.warning(f"Error killing timed-out process: {e}")
             raise TimeoutError(f"containerlab command timed out after {timeout}s: clab {' '.join(args)}")
 
+    def _is_ceos_container(self, container) -> bool:
+        """Check if a container is a cEOS node based on containerlab labels."""
+        try:
+            kind = container.labels.get("clab-node-kind", "")
+            return kind == "ceos"
+        except Exception:
+            return False
+
+    async def _extract_node_config(
+        self,
+        container_name: str,
+        workspace: Path,
+        node_name: str,
+    ) -> bool:
+        """Extract running-config from a cEOS node and save to workspace.
+
+        Args:
+            container_name: Docker container name
+            workspace: Lab workspace directory
+            node_name: Node name for config file naming
+
+        Returns:
+            True if config was extracted successfully, False otherwise
+        """
+        try:
+            container = self.docker.containers.get(container_name)
+
+            # Only extract from running containers
+            if container.status.lower() != "running":
+                logger.debug(f"Skipping config extraction for {container_name}: container not running")
+                return False
+
+            # Only extract from cEOS nodes
+            if not self._is_ceos_container(container):
+                logger.debug(f"Skipping config extraction for {container_name}: not a cEOS node")
+                return False
+
+            logger.info(f"Extracting running-config from {container_name}")
+
+            # Run 'Cli -p 15 -c "show running-config"' to get the config
+            # The -p 15 flag enables privileged mode (level 15) required for show running-config
+            exit_code, output = container.exec_run(
+                cmd=['Cli', '-p', '15', '-c', 'show running-config'],
+                demux=True,
+            )
+
+            if exit_code != 0:
+                stderr = output[1].decode(errors="replace") if output[1] else ""
+                logger.warning(f"Failed to extract config from {container_name}: exit code {exit_code}, stderr: {stderr}")
+                return False
+
+            stdout = output[0].decode(errors="replace") if output[0] else ""
+
+            if not stdout.strip():
+                logger.warning(f"Empty config extracted from {container_name}")
+                return False
+
+            # Save config to workspace/configs/{node_name}/startup-config
+            config_dir = workspace / "configs" / node_name
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "startup-config"
+
+            config_path.write_text(stdout, encoding="utf-8")
+            logger.info(f"Saved running-config to {config_path}")
+
+            return True
+
+        except NotFound:
+            logger.debug(f"Container {container_name} not found for config extraction")
+            return False
+        except APIError as e:
+            logger.warning(f"Docker API error extracting config from {container_name}: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Error extracting config from {container_name}: {e}")
+            return False
+
     def _get_container_status(self, container) -> NodeStatus:
         """Map Docker container status to NodeStatus."""
         status = container.status.lower()
@@ -462,6 +539,52 @@ class ContainerlabProvider(Provider):
             stderr=stderr,
         )
 
+    async def _extract_all_ceos_configs(self, lab_id: str, workspace: Path) -> int:
+        """Extract configs from all running cEOS containers for a lab.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace directory
+
+        Returns:
+            Number of configs successfully extracted
+        """
+        prefix = self._lab_prefix(lab_id)
+        extracted_count = 0
+
+        try:
+            containers = self.docker.containers.list(
+                all=True,
+                filters={"name": prefix},
+            )
+
+            for container in containers:
+                # Skip non-running containers
+                if container.status.lower() != "running":
+                    continue
+
+                # Skip non-cEOS containers
+                if not self._is_ceos_container(container):
+                    continue
+
+                # Extract node name from container name
+                name = container.name
+                if not name.startswith(prefix + "-"):
+                    continue
+                node_name = name[len(prefix) + 1:]
+
+                # Extract config
+                if await self._extract_node_config(container.name, workspace, node_name):
+                    extracted_count += 1
+
+        except Exception as e:
+            logger.warning(f"Error extracting cEOS configs for lab {lab_id}: {e}")
+
+        if extracted_count > 0:
+            logger.info(f"Extracted {extracted_count} cEOS configs before destroy")
+
+        return extracted_count
+
     async def destroy(
         self,
         lab_id: str,
@@ -469,6 +592,9 @@ class ContainerlabProvider(Provider):
     ) -> DestroyResult:
         """Destroy a containerlab topology."""
         topo_path = self._topology_path(workspace)
+
+        # Extract configs from all running cEOS containers before destroy
+        await self._extract_all_ceos_configs(lab_id, workspace)
 
         if not topo_path.exists():
             # Try to destroy by prefix if topology file is missing
@@ -604,6 +730,10 @@ class ContainerlabProvider(Provider):
 
         try:
             container = self.docker.containers.get(container_name)
+
+            # Extract config before stopping (for cEOS nodes)
+            await self._extract_node_config(container_name, workspace, node_name)
+
             container.stop(timeout=settings.container_stop_timeout)
 
             # Refresh container state
