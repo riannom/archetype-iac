@@ -1,0 +1,116 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            api/requirements.txt
+            agent/requirements.txt
+
+      - name: Install API dependencies
+        run: |
+          cd api
+          pip install -r requirements.txt
+
+      - name: Run API tests
+        run: |
+          cd api
+          pytest tests/ -v --tb=short
+
+      - name: Install Agent dependencies
+        run: |
+          cd agent
+          pip install -r requirements.txt
+
+      - name: Run Agent tests
+        run: |
+          cd agent
+          pytest tests/ -v --tb=short
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd web
+          npm ci
+
+      - name: Run tests
+        run: |
+          cd web
+          npm test -- --run
+
+      - name: Run coverage
+        run: |
+          cd web
+          npm run test:coverage -- --run
+        continue-on-error: true
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff on API
+        run: |
+          cd api
+          ruff check . || true
+
+      - name: Run ruff on Agent
+        run: |
+          cd agent
+          ruff check . || true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd web
+          npm ci
+
+      - name: Type check
+        run: |
+          cd web
+          npx tsc --noEmit || true
