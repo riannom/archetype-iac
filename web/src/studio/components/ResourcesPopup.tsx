@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import DetailPopup from './DetailPopup';
+import { getCpuColor, getMemoryColor } from '../../utils/status';
 
 interface AgentResource {
   id: string;
@@ -41,18 +42,6 @@ const ResourcesPopup: React.FC<ResourcesPopupProps> = ({ isOpen, onClose, type }
         .finally(() => setLoading(false));
     }
   }, [isOpen]);
-
-  const getCpuColor = (percent: number) => {
-    if (percent >= 80) return 'bg-red-500';
-    if (percent >= 60) return 'bg-amber-500';
-    return 'bg-sage-500';
-  };
-
-  const getMemoryColor = (percent: number) => {
-    if (percent >= 85) return 'bg-red-500';
-    if (percent >= 70) return 'bg-amber-500';
-    return 'bg-blue-500';
-  };
 
   const getBarColor = type === 'cpu' ? getCpuColor : getMemoryColor;
   const title = type === 'cpu' ? 'CPU Usage Distribution' : 'Memory Usage Distribution';

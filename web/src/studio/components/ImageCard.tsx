@@ -1,6 +1,7 @@
 import React from 'react';
 import { ImageLibraryEntry } from '../types';
 import { useDragHandlers, useDragContext } from '../contexts/DragContext';
+import { formatSize, formatDate } from '../../utils/format';
 
 interface ImageCardProps {
   image: ImageLibraryEntry;
@@ -30,20 +31,6 @@ const ImageCard: React.FC<ImageCardProps> = ({
   });
 
   const isDragging = dragState.draggedImageId === image.id;
-
-  const formatSize = (bytes: number | null): string => {
-    if (!bytes) return '';
-    const gb = bytes / (1024 * 1024 * 1024);
-    if (gb >= 1) return `${gb.toFixed(1)} GB`;
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(0)} MB`;
-  };
-
-  const formatDate = (dateStr: string | null): string => {
-    if (!dateStr) return '';
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
 
   const getKindIcon = () => {
     if (image.kind === 'docker') {

@@ -4,6 +4,18 @@ import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { apiRequest } from '../api';
 import { ArchetypeIcon } from '../components/icons';
+import { formatStorageSize, formatTimestamp } from '../utils/format';
+import {
+  getCpuColor,
+  getMemoryColor,
+  getStorageColor,
+  getConnectionStatusColor,
+  getConnectionStatusText,
+  getRoleBadgeColor,
+  getRoleLabel,
+  type ConnectionStatus,
+  type RoleBadgeType,
+} from '../utils/status';
 
 interface LabInfo {
   id: string;
@@ -73,69 +85,6 @@ const HostsPage: React.FC = () => {
   if (!userLoading && !user) {
     return <Navigate to="/" replace />;
   }
-
-  const getStatusColor = (status: string) => {
-    if (status === 'online') return 'bg-green-500';
-    if (status === 'degraded') return 'bg-amber-500';
-    return 'bg-red-500';
-  };
-
-  const getStatusText = (status: string) => {
-    if (status === 'online') return 'Online';
-    if (status === 'degraded') return 'Degraded';
-    return 'Offline';
-  };
-
-  const getRoleBadgeColor = (role: string) => {
-    if (role === 'controller') return 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 border-purple-200 dark:border-purple-700';
-    if (role === 'agent+controller') return 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-700';
-    return 'bg-sage-100 dark:bg-sage-800 text-sage-600 dark:text-sage-400 border-sage-200 dark:border-sage-700';
-  };
-
-  const getRoleLabel = (role: string) => {
-    if (role === 'controller') return 'Controller';
-    if (role === 'agent+controller') return 'Agent + Controller';
-    return 'Agent';
-  };
-
-  const getCpuColor = (percent: number) => {
-    if (percent >= 80) return 'bg-red-500';
-    if (percent >= 60) return 'bg-amber-500';
-    return 'bg-sage-500';
-  };
-
-  const getMemoryColor = (percent: number) => {
-    if (percent >= 85) return 'bg-red-500';
-    if (percent >= 70) return 'bg-amber-500';
-    return 'bg-blue-500';
-  };
-
-  const getStorageColor = (percent: number) => {
-    if (percent >= 90) return 'bg-red-500';
-    if (percent >= 75) return 'bg-amber-500';
-    return 'bg-violet-500';
-  };
-
-  const formatSize = (gb: number) => {
-    if (gb >= 1000) {
-      return `${(gb / 1000).toFixed(1)}TB`;
-    }
-    return `${gb.toFixed(1)}GB`;
-  };
-
-  const formatTimestamp = (ts: string | null) => {
-    if (!ts) return 'Never';
-    const date = new Date(ts);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const seconds = Math.floor(diff / 1000);
-    if (seconds < 60) return `${seconds}s ago`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    return date.toLocaleDateString();
-  };
 
   const toggleLabsExpanded = (hostId: string) => {
     setExpandedLabs(prev => {
@@ -247,14 +196,14 @@ const HostsPage: React.FC = () => {
                       {/* Header */}
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center gap-3">
-                          <div className={`w-3 h-3 rounded-full ${getStatusColor(host.status)} ${host.status === 'online' ? 'animate-pulse' : ''}`}></div>
+                          <div className={`w-3 h-3 rounded-full ${getConnectionStatusColor(host.status as ConnectionStatus)} ${host.status === 'online' ? 'animate-pulse' : ''}`}></div>
                           <div>
                             <h3 className="font-bold text-stone-900 dark:text-white">{host.name}</h3>
                             <p className="text-xs text-stone-500">{host.address}</p>
                           </div>
                         </div>
-                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${getRoleBadgeColor(host.role)}`}>
-                          {getRoleLabel(host.role)}
+                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${getRoleBadgeColor(host.role as RoleBadgeType)}`}>
+                          {getRoleLabel(host.role as RoleBadgeType)}
                         </span>
                       </div>
 
@@ -262,7 +211,7 @@ const HostsPage: React.FC = () => {
                       <div className="flex items-center gap-4 text-xs text-stone-500 dark:text-stone-400 mb-4">
                         <span className="flex items-center gap-1">
                           <i className="fa-solid fa-circle text-[8px]" style={{ color: host.status === 'online' ? '#22c55e' : '#ef4444' }}></i>
-                          {getStatusText(host.status)}
+                          {getConnectionStatusText(host.status as ConnectionStatus)}
                         </span>
                         <span>v{host.version}</span>
                         <span className="text-stone-400">
@@ -300,7 +249,7 @@ const HostsPage: React.FC = () => {
                           <div className="flex justify-between text-xs mb-1">
                             <span className="text-stone-500 dark:text-stone-400">Storage</span>
                             <span className="font-medium text-stone-700 dark:text-stone-300">
-                              {formatSize(host.resource_usage.storage_used_gb)} / {formatSize(host.resource_usage.storage_total_gb)}
+                              {formatStorageSize(host.resource_usage.storage_used_gb)} / {formatStorageSize(host.resource_usage.storage_total_gb)}
                             </span>
                           </div>
                           <div className="h-2 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">

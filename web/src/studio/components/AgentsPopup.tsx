@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import DetailPopup from './DetailPopup';
+import { formatTimestamp } from '../../utils/format';
+import { getCpuColor, getMemoryColor } from '../../utils/status';
 
 interface AgentDetail {
   id: string;
@@ -41,33 +43,6 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
     }
   }, [isOpen]);
 
-  const formatRelativeTime = (isoString: string | null): string => {
-    if (!isoString) return 'Never';
-    const date = new Date(isoString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-
-    if (diffSec < 60) return `${diffSec}s ago`;
-    const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    return `${Math.floor(diffHr / 24)}d ago`;
-  };
-
-  const getCpuColor = (percent: number) => {
-    if (percent >= 80) return 'bg-red-500';
-    if (percent >= 60) return 'bg-amber-500';
-    return 'bg-sage-500';
-  };
-
-  const getMemoryColor = (percent: number) => {
-    if (percent >= 85) return 'bg-red-500';
-    if (percent >= 70) return 'bg-amber-500';
-    return 'bg-blue-500';
-  };
-
   return (
     <DetailPopup isOpen={isOpen} onClose={onClose} title="Agents" width="max-w-2xl">
       {loading ? (
@@ -102,7 +77,7 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
                     {agent.status}
                   </span>
                   <p className="text-xs text-stone-400 mt-1">
-                    v{agent.version} · {formatRelativeTime(agent.last_heartbeat)}
+                    v{agent.version} · {formatTimestamp(agent.last_heartbeat)}
                   </p>
                 </div>
               </div>
