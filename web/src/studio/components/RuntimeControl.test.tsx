@@ -406,9 +406,10 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
 
-      // Each node should have a config button
+      // Each node should have a config button, plus one header View Configs button
+      // Total: 2 per-node + 1 header = 3
       const configButtons = document.querySelectorAll(".fa-file-code");
-      expect(configButtons.length).toBe(2);
+      expect(configButtons.length).toBe(3);
     });
   });
 
