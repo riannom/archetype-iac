@@ -831,8 +831,8 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
                         key={img.id}
                         className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
                           selectedImages.has(img.id)
-                            ? 'bg-sage-50 dark:bg-sage-900/20 border-sage-300 dark:border-sage-700'
-                            : 'bg-white dark:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-stone-300'
+                            ? 'bg-sage-50 dark:bg-sage-900/40 border-sage-300 dark:border-sage-700'
+                            : 'bg-white dark:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
                         }`}
                       >
                         <input
