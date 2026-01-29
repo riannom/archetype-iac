@@ -6,6 +6,7 @@ import DeviceCard from './DeviceCard';
 import ImageCard from './ImageCard';
 import ImageFilterBar, { ImageAssignmentFilter } from './ImageFilterBar';
 import FilterChip from './FilterChip';
+import ISOImportModal from '../../components/ISOImportModal';
 
 interface ImageCatalogEntry {
   clab?: string;
@@ -46,6 +47,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   const [customDeviceLabel, setCustomDeviceLabel] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const qcow2InputRef = useRef<HTMLInputElement | null>(null);
+  const [showISOModal, setShowISOModal] = useState(false);
 
   // Device filters
   const [deviceSearch, setDeviceSearch] = useState('');
@@ -438,6 +440,12 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                 <i className="fa-solid fa-hard-drive mr-2"></i> Upload QCOW2
               </button>
               <button
+                onClick={() => setShowISOModal(true)}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
+              >
+                <i className="fa-solid fa-compact-disc mr-2"></i> Import ISO
+              </button>
+              <button
                 onClick={onRefresh}
                 className="px-3 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg text-xs font-bold transition-all"
               >
@@ -744,6 +752,16 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           Drop on a device to assign
         </div>
       )}
+
+      {/* ISO Import Modal */}
+      <ISOImportModal
+        isOpen={showISOModal}
+        onClose={() => setShowISOModal(false)}
+        onImportComplete={() => {
+          onRefresh();
+          setShowISOModal(false);
+        }}
+      />
     </div>
   );
 };
