@@ -30,6 +30,7 @@ interface HostDetailed {
   status: string;
   version: string;
   role: 'agent' | 'controller' | 'agent+controller';
+  image_sync_strategy?: string;
   capabilities: {
     providers?: string[];
     features?: string[];
@@ -50,6 +51,15 @@ interface HostDetailed {
   lab_count: number;
   last_heartbeat: string | null;
 }
+
+type SyncStrategy = 'push' | 'pull' | 'on_demand' | 'disabled';
+
+const SYNC_STRATEGY_OPTIONS: { value: SyncStrategy; label: string; description: string }[] = [
+  { value: 'on_demand', label: 'On Demand', description: 'Sync when deployment needs image' },
+  { value: 'push', label: 'Push', description: 'Receive images on upload' },
+  { value: 'pull', label: 'Pull', description: 'Pull images when online' },
+  { value: 'disabled', label: 'Disabled', description: 'Manual sync only' },
+];
 
 const HostsPage: React.FC = () => {
   const { effectiveMode, toggleMode } = useTheme();
@@ -98,6 +108,22 @@ const HostsPage: React.FC = () => {
       }
       return next;
     });
+  };
+
+  const updateSyncStrategy = async (hostId: string, strategy: SyncStrategy) => {
+    try {
+      await apiRequest(`/agents/${hostId}/sync-strategy`, {
+        method: 'PUT',
+        body: JSON.stringify({ strategy }),
+      });
+      // Update local state
+      setHosts(prev => prev.map(h =>
+        h.id === hostId ? { ...h, image_sync_strategy: strategy } : h
+      ));
+    } catch (err) {
+      console.error('Failed to update sync strategy:', err);
+      alert(err instanceof Error ? err.message : 'Failed to update sync strategy');
+    }
   };
 
   return (
@@ -276,6 +302,31 @@ const HostsPage: React.FC = () => {
                             {host.capabilities.providers.join(', ')}
                           </span>
                         )}
+                      </div>
+
+                      {/* Image Sync Strategy */}
+                      <div className="py-2 border-t border-stone-100 dark:border-stone-800">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-stone-500 dark:text-stone-400">
+                            <i className="fa-solid fa-sync mr-1.5"></i>
+                            Image Sync
+                          </span>
+                          <select
+                            value={host.image_sync_strategy || 'on_demand'}
+                            onChange={(e) => updateSyncStrategy(host.id, e.target.value as SyncStrategy)}
+                            disabled={host.status !== 'online'}
+                            className="text-xs bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded px-2 py-1 text-stone-700 dark:text-stone-300 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-sage-500"
+                          >
+                            {SYNC_STRATEGY_OPTIONS.map(opt => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          {SYNC_STRATEGY_OPTIONS.find(o => o.value === (host.image_sync_strategy || 'on_demand'))?.description}
+                        </p>
                       </div>
 
                       {/* Labs */}
