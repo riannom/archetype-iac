@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import DetailPopup from './DetailPopup';
 
 interface ContainerInfo {
@@ -27,12 +27,50 @@ interface ContainersData {
 interface ContainersPopupProps {
   isOpen: boolean;
   onClose: () => void;
+  filterHostName?: string;
 }
 
-const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose }) => {
+const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose, filterHostName }) => {
   const [data, setData] = useState<ContainersData | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedLabs, setExpandedLabs] = useState<Set<string>>(new Set());
+
+  // Filter data by host if filterHostName is provided
+  const filteredData = useMemo(() => {
+    if (!data || !filterHostName) return data;
+
+    // Filter lab containers
+    const filteredByLab: Record<string, LabContainers> = {};
+    for (const [labId, labData] of Object.entries(data.by_lab)) {
+      const filteredContainers = labData.containers.filter(c => c.agent_name === filterHostName);
+      if (filteredContainers.length > 0) {
+        filteredByLab[labId] = {
+          name: labData.name,
+          containers: filteredContainers,
+        };
+      }
+    }
+
+    // Filter system containers
+    const filteredSystemContainers = data.system_containers.filter(c => c.agent_name === filterHostName);
+
+    // Recompute totals for filtered data
+    const allFilteredContainers = [
+      ...Object.values(filteredByLab).flatMap(l => l.containers),
+      ...filteredSystemContainers,
+    ];
+    const totalRunning = allFilteredContainers.filter(c => c.status === 'running').length;
+    const totalStopped = allFilteredContainers.filter(c => c.status !== 'running').length;
+
+    return {
+      by_lab: filteredByLab,
+      system_containers: filteredSystemContainers,
+      total_running: totalRunning,
+      total_stopped: totalStopped,
+    };
+  }, [data, filterHostName]);
+
+  const popupTitle = filterHostName ? `Containers on ${filterHostName}` : 'Containers';
 
   useEffect(() => {
     if (isOpen) {
@@ -68,32 +106,32 @@ const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose }) =>
   );
 
   return (
-    <DetailPopup isOpen={isOpen} onClose={onClose} title="Containers" width="max-w-2xl">
+    <DetailPopup isOpen={isOpen} onClose={onClose} title={popupTitle} width="max-w-2xl">
       {loading ? (
         <div className="flex items-center justify-center py-8">
           <i className="fa-solid fa-spinner fa-spin text-stone-400" />
           <span className="ml-2 text-sm text-stone-500">Loading...</span>
         </div>
-      ) : data ? (
+      ) : filteredData ? (
         <div className="space-y-4">
           {/* Summary */}
           <div className="flex items-center gap-4 p-3 bg-stone-100 dark:bg-stone-800 rounded-lg">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full bg-green-500"></div>
               <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
-                {data.total_running} running
+                {filteredData.total_running} running
               </span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full bg-stone-400"></div>
               <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
-                {data.total_stopped} stopped
+                {filteredData.total_stopped} stopped
               </span>
             </div>
           </div>
 
           {/* Lab Containers */}
-          {Object.entries(data.by_lab).map(([labId, labData]) => (
+          {Object.entries(filteredData.by_lab).map(([labId, labData]) => (
             <div key={labId} className="border border-stone-200 dark:border-stone-700 rounded-lg overflow-hidden">
               <button
                 onClick={() => toggleLab(labId)}
@@ -141,7 +179,7 @@ const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose }) =>
           ))}
 
           {/* System Containers */}
-          {data.system_containers.length > 0 && (
+          {filteredData.system_containers.length > 0 && (
             <div className="border border-stone-200 dark:border-stone-700 rounded-lg overflow-hidden">
               <button
                 onClick={() => toggleLab('_system')}
@@ -152,13 +190,13 @@ const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose }) =>
                   <i className="fa-solid fa-gear text-stone-500" />
                   <span className="font-medium text-stone-600 dark:text-stone-400">System Containers</span>
                   <span className="text-xs text-stone-500 dark:text-stone-400">
-                    {data.system_containers.length} container{data.system_containers.length !== 1 ? 's' : ''}
+                    {filteredData.system_containers.length} container{filteredData.system_containers.length !== 1 ? 's' : ''}
                   </span>
                 </div>
               </button>
               {expandedLabs.has('_system') && (
                 <div className="divide-y divide-stone-100 dark:divide-stone-700">
-                  {data.system_containers.map((container, idx) => (
+                  {filteredData.system_containers.map((container, idx) => (
                     <div key={idx} className="px-4 py-2 flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <i className="fa-solid fa-cube text-stone-400 text-xs" />
@@ -181,7 +219,7 @@ const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose }) =>
           )}
 
           {/* Empty State */}
-          {Object.keys(data.by_lab).length === 0 && data.system_containers.length === 0 && (
+          {Object.keys(filteredData.by_lab).length === 0 && filteredData.system_containers.length === 0 && (
             <div className="text-center py-8 text-stone-500 dark:text-stone-400">
               <i className="fa-solid fa-cube text-2xl mb-2" />
               <p className="text-sm">No containers found</p>

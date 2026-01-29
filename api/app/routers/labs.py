@@ -468,9 +468,42 @@ async def list_node_states(
             except Exception:
                 pass  # Best effort - don't fail the request if refresh fails
 
-    return schemas.NodeStatesResponse(
-        nodes=[schemas.NodeStateOut.model_validate(s) for s in states]
+    # Enrich states with host information
+    # 1. Query NodePlacement records for node -> host mapping
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id)
+        .all()
     )
+    placement_by_node = {p.node_name: p.host_id for p in placements}
+
+    # 2. Get all relevant host IDs (from placements or lab's default agent)
+    host_ids = set(placement_by_node.values())
+    if lab.agent_id:
+        host_ids.add(lab.agent_id)
+
+    # 3. Query host names
+    hosts = {}
+    if host_ids:
+        host_records = (
+            database.query(models.Host)
+            .filter(models.Host.id.in_(host_ids))
+            .all()
+        )
+        hosts = {h.id: h.name for h in host_records}
+
+    # 4. Build enriched response
+    enriched_nodes = []
+    for s in states:
+        node_data = schemas.NodeStateOut.model_validate(s)
+        # Try placement first, then fall back to lab's agent
+        host_id = placement_by_node.get(s.node_name) or lab.agent_id
+        if host_id:
+            node_data.host_id = host_id
+            node_data.host_name = hosts.get(host_id)
+        enriched_nodes.append(node_data)
+
+    return schemas.NodeStatesResponse(nodes=enriched_nodes)
 
 
 @router.get("/labs/{lab_id}/nodes/{node_id}/state")

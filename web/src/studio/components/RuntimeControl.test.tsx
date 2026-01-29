@@ -65,6 +65,7 @@ describe("RuntimeControl", () => {
     labId: "test-lab-123",
     nodes: mockNodes,
     runtimeStates: {} as Record<string, RuntimeStatus>,
+    nodeStates: {} as Record<string, { id: string; node_id: string; node_name: string; host_id?: string | null; host_name?: string | null }>,
     deviceModels: mockDeviceModels,
     onUpdateStatus: mockOnUpdateStatus,
     onRefreshStates: mockOnRefreshStates,

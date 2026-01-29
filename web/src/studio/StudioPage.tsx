@@ -42,6 +42,9 @@ interface NodeStateEntry {
   image_sync_status?: string | null;
   // Image sync progress/error message
   image_sync_message?: string | null;
+  // Host/agent info for multi-host visibility
+  host_id?: string | null;
+  host_name?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1328,6 +1331,7 @@ const StudioPage: React.FC = () => {
             labId={activeLab?.id || ''}
             nodes={nodes}
             runtimeStates={runtimeStates}
+            nodeStates={nodeStates}
             deviceModels={deviceModels}
             onUpdateStatus={handleUpdateStatus}
             onRefreshStates={async () => {

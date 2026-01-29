@@ -4,10 +4,19 @@ import { DeviceModel, Node, isDeviceNode, DeviceNode } from '../types';
 
 export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'error';
 
+interface NodeStateEntry {
+  id: string;
+  node_id: string;
+  node_name: string;
+  host_id?: string | null;
+  host_name?: string | null;
+}
+
 interface RuntimeControlProps {
   labId: string;
   nodes: Node[];
   runtimeStates: Record<string, RuntimeStatus>;
+  nodeStates: Record<string, NodeStateEntry>;
   deviceModels: DeviceModel[];
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
   onRefreshStates: () => void;
@@ -16,7 +25,7 @@ interface RuntimeControlProps {
   onOpenNodeConfig?: (nodeId: string, nodeName: string) => void;
 }
 
-const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig }) => {
+const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig }) => {
   const [isExtracting, setIsExtracting] = useState(false);
 
   // Filter to device nodes only (external networks don't have runtime status)
@@ -155,6 +164,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Device Name</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Model / Version</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Status</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Agent</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Utilization</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest text-right">Actions</th>
               </tr>
@@ -163,6 +173,8 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
               {deviceNodes.map(node => {
                 const status = runtimeStates[node.id] || 'stopped';
                 const model = deviceModels.find(m => m.id === node.model);
+                const nodeState = nodeStates[node.id];
+                const hostName = nodeState?.host_name;
                 return (
                   <tr key={node.id} className="hover:bg-stone-100/50 dark:hover:bg-stone-800/30 transition-colors group">
                     <td className="px-6 py-4">
@@ -184,6 +196,16 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                       <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border transition-all ${getStatusColor(status)}`}>
                         {status}
                       </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      {hostName ? (
+                        <div className="flex items-center gap-1.5">
+                          <i className="fa-solid fa-server text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                          <span className="text-xs text-stone-600 dark:text-stone-400">{hostName}</span>
+                        </div>
+                      ) : (
+                        <span className="text-stone-400 dark:text-stone-600 text-xs">-</span>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <span className="text-stone-400 dark:text-stone-700 text-[10px] font-bold italic">
@@ -236,7 +258,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
               })}
               {nodes.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-20 text-center text-stone-500 dark:text-stone-600 italic text-sm">
+                  <td colSpan={6} className="px-6 py-20 text-center text-stone-500 dark:text-stone-600 italic text-sm">
                     No devices in current topology. Return to Designer to add nodes.
                   </td>
                 </tr>

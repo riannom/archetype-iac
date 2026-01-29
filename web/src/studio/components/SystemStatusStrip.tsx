@@ -59,7 +59,18 @@ type PopupType = 'agents' | 'containers' | 'cpu' | 'memory' | 'storage' | null;
 const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
   const [activePopup, setActivePopup] = useState<PopupType>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [containerHostFilter, setContainerHostFilter] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  const handleCloseContainersPopup = () => {
+    setActivePopup(null);
+    setContainerHostFilter(null);
+  };
+
+  const handleOpenHostContainers = (hostName: string) => {
+    setContainerHostFilter(hostName);
+    setActivePopup('containers');
+  };
 
   if (!metrics) {
     return (
@@ -228,13 +239,17 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                 </div>
 
                 {/* Containers for this host */}
-                <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => handleOpenHostContainers(host.name)}
+                  className="flex items-center gap-1.5 hover:bg-stone-200/70 dark:hover:bg-stone-600/50 rounded px-1 -mx-1 transition-colors"
+                  title={`View containers on ${host.name}`}
+                >
                   <i className="fa-solid fa-cube text-stone-400 dark:text-stone-500 text-[10px]"></i>
                   <span className="text-[11px] text-stone-600 dark:text-stone-400">
                     <span className="font-bold text-stone-700 dark:text-stone-300">{host.containers_running}</span>
                     <span className="text-stone-400 dark:text-stone-500 ml-0.5">containers</span>
                   </span>
-                </div>
+                </button>
 
                 <div className="h-4 w-px bg-stone-300/50 dark:bg-stone-600/50"></div>
 
@@ -305,7 +320,8 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
       />
       <ContainersPopup
         isOpen={activePopup === 'containers'}
-        onClose={() => setActivePopup(null)}
+        onClose={handleCloseContainersPopup}
+        filterHostName={containerHostFilter || undefined}
       />
       <ResourcesPopup
         isOpen={activePopup === 'cpu' || activePopup === 'memory'}

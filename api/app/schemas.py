@@ -252,6 +252,9 @@ class NodeStateOut(BaseModel):
     image_sync_status: str | None = None
     # Image sync progress/error message
     image_sync_message: str | None = None
+    # Host/agent info for multi-host visibility
+    host_id: str | None = None
+    host_name: str | None = None
     created_at: datetime
     updated_at: datetime
 
