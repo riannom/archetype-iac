@@ -10,6 +10,7 @@ import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
 import ConfigViewerModal from './components/ConfigViewerModal';
+import JobLogModal from './components/JobLogModal';
 import ConfigsView from './components/ConfigsView';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, ImageLibraryEntry, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
@@ -329,6 +330,9 @@ const StudioPage: React.FC = () => {
   // Config viewer modal state
   const [configViewerOpen, setConfigViewerOpen] = useState(false);
   const [configViewerNode, setConfigViewerNode] = useState<{ id: string; name: string } | null>(null);
+  // Job log modal state
+  const [jobLogModalOpen, setJobLogModalOpen] = useState(false);
+  const [jobLogModalJobId, setJobLogModalJobId] = useState<string | null>(null);
   const layoutDirtyRef = useRef(false);
   const saveLayoutTimeoutRef = useRef<number | null>(null);
   const topologyDirtyRef = useRef(false);
@@ -1059,6 +1063,18 @@ const StudioPage: React.FC = () => {
     setConfigViewerNode(null);
   }, []);
 
+  const handleTaskLogEntryClick = useCallback((entry: TaskLogEntry) => {
+    if (entry.jobId) {
+      setJobLogModalJobId(entry.jobId);
+      setJobLogModalOpen(true);
+    }
+  }, []);
+
+  const handleCloseJobLogModal = useCallback(() => {
+    setJobLogModalOpen(false);
+    setJobLogModalJobId(null);
+  }, []);
+
   const handleNodeMove = useCallback((id: string, x: number, y: number) => {
     setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, x, y } : node)));
     triggerLayoutSave();
@@ -1484,6 +1500,7 @@ const StudioPage: React.FC = () => {
         isVisible={isTaskLogVisible}
         onToggle={() => setIsTaskLogVisible(!isTaskLogVisible)}
         onClear={clearTaskLog}
+        onEntryClick={handleTaskLogEntryClick}
       />
       {showYamlModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md">
@@ -1511,6 +1528,13 @@ const StudioPage: React.FC = () => {
         labId={activeLab?.id || ''}
         nodeId={configViewerNode?.id}
         nodeName={configViewerNode?.name}
+        studioRequest={studioRequest}
+      />
+      <JobLogModal
+        isOpen={jobLogModalOpen}
+        onClose={handleCloseJobLogModal}
+        labId={activeLab?.id || ''}
+        jobId={jobLogModalJobId || ''}
         studioRequest={studioRequest}
       />
     </div>
