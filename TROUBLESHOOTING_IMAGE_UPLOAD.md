@@ -77,12 +77,31 @@ Note: Never saw "docker import returned" or "Waiting for docker import" logs
 ## Hypothesis
 The subprocess.Popen or subprocess.run is blocking/hanging when called from a daemon thread in Python. The docker import actually completes (image appears in `docker images`) but the subprocess call never returns to Python.
 
-## Next Steps to Try
-1. Check if Python threading + subprocess has known issues
-2. Try using `concurrent.futures.ThreadPoolExecutor` instead of raw threading
-3. Try running docker import via shell (`subprocess.Popen(['sh', '-c', 'docker import ...'])`)
-4. Add non-blocking I/O or use select() to read subprocess output
-5. Consider using a proper task queue (RQ/Celery) instead of threads
+## Resolution (2026-01-28)
+
+**Root cause**: Pipe deadlock in daemon threads. When using `subprocess.Popen` with `stdout=PIPE, stderr=PIPE` in a daemon thread, the `communicate()` call can hang indefinitely even though the subprocess completes. This is a known Python issue related to how pipes are handled in threads.
+
+**Fix**: Use file-based output capture instead of pipes:
+```python
+# Instead of:
+proc = subprocess.Popen(cmd, stdout=PIPE, stderr=PIPE)
+stdout, stderr = proc.communicate()
+
+# Use:
+with tempfile.NamedTemporaryFile(...) as stdout_file, ...:
+    result = subprocess.run(cmd, stdout=stdout_file, stderr=stderr_file)
+    # Read output from files after process completes
+```
+
+This avoids the pipe deadlock because:
+1. Files don't have the same buffering/blocking issues as pipes
+2. The subprocess writes directly to disk, not to a pipe buffer
+3. Python reads from files after the process exits, not during execution
+
+**Alternative solutions considered but not needed**:
+1. `concurrent.futures.ThreadPoolExecutor` - might help but doesn't address pipe issue
+2. Shell wrapper (`sh -c 'docker import ...'`) - adds complexity
+3. RQ/Celery task queue - heavier solution, good for future consideration
 
 ## Files Modified
 - `agent/providers/containerlab.py` - deploy error handling
