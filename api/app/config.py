@@ -79,5 +79,19 @@ class Settings(BaseSettings):
     feature_multihost_labs: bool = True
     feature_vxlan_overlay: bool = True
 
+    # Image synchronization settings
+    # Enable/disable image sync feature
+    image_sync_enabled: bool = True
+    # Fallback strategy when agent has no preference: push, pull, on_demand, disabled
+    image_sync_fallback_strategy: str = "on_demand"
+    # Always check for missing images before deployment
+    image_sync_pre_deploy_check: bool = True
+    # Maximum seconds for a single image sync operation
+    image_sync_timeout: int = 600
+    # Maximum concurrent sync operations per agent
+    image_sync_max_concurrent: int = 2
+    # Chunk size for streaming image data (1MB default)
+    image_sync_chunk_size: int = 1048576
+
 
 settings = Settings()

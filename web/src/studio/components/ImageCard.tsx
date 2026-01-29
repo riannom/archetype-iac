@@ -1,14 +1,17 @@
-import React from 'react';
-import { ImageLibraryEntry } from '../types';
+import React, { useState } from 'react';
+import { ImageLibraryEntry, ImageHostStatus } from '../types';
 import { useDragHandlers, useDragContext } from '../contexts/DragContext';
 import { formatSize, formatDate } from '../../utils/format';
+import { apiRequest } from '../../api';
 
 interface ImageCardProps {
   image: ImageLibraryEntry;
   onUnassign?: () => void;
   onSetDefault?: () => void;
   onDelete?: () => void;
+  onSync?: () => void;
   compact?: boolean;
+  showSyncStatus?: boolean;
 }
 
 const ImageCard: React.FC<ImageCardProps> = ({
@@ -16,7 +19,9 @@ const ImageCard: React.FC<ImageCardProps> = ({
   onUnassign,
   onSetDefault,
   onDelete,
+  onSync,
   compact = false,
+  showSyncStatus = false,
 }) => {
   const { dragState } = useDragContext();
   const { handleDragStart, handleDragEnd } = useDragHandlers({
@@ -29,6 +34,8 @@ const ImageCard: React.FC<ImageCardProps> = ({
     vendor: image.vendor,
     size_bytes: image.size_bytes,
   });
+
+  const [syncing, setSyncing] = useState(false);
 
   const isDragging = dragState.draggedImageId === image.id;
 
@@ -45,6 +52,41 @@ const ImageCard: React.FC<ImageCardProps> = ({
     }
     return 'text-orange-500';
   };
+
+  const getSyncStatusSummary = () => {
+    if (!image.host_status || image.host_status.length === 0) return null;
+    const synced = image.host_status.filter(h => h.status === 'synced').length;
+    const failed = image.host_status.filter(h => h.status === 'failed').length;
+    const syncing = image.host_status.filter(h => h.status === 'syncing').length;
+    const total = image.host_status.length;
+
+    if (syncing > 0) return { icon: 'fa-sync fa-spin', color: 'text-blue-500', label: 'Syncing' };
+    if (failed > 0) return { icon: 'fa-exclamation-triangle', color: 'text-red-500', label: `${failed} failed` };
+    if (synced === total) return { icon: 'fa-check-circle', color: 'text-green-500', label: 'All synced' };
+    if (synced > 0) return { icon: 'fa-circle-half-stroke', color: 'text-yellow-500', label: `${synced}/${total}` };
+    return { icon: 'fa-question-circle', color: 'text-stone-400', label: 'Unknown' };
+  };
+
+  const handleSync = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (syncing) return;
+
+    setSyncing(true);
+    try {
+      await apiRequest(`/images/library/${encodeURIComponent(image.id)}/sync`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      onSync?.();
+    } catch (err) {
+      console.error('Failed to sync image:', err);
+      alert(err instanceof Error ? err.message : 'Sync failed');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const syncStatus = showSyncStatus ? getSyncStatusSummary() : null;
 
   if (compact) {
     return (
@@ -130,6 +172,17 @@ const ImageCard: React.FC<ImageCardProps> = ({
 
           {/* Actions */}
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Sync button for Docker images */}
+            {showSyncStatus && image.kind === 'docker' && (
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="p-1.5 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 disabled:opacity-50"
+                title="Sync to all agents"
+              >
+                <i className={`fa-solid fa-sync text-xs ${syncing ? 'fa-spin' : ''}`} />
+              </button>
+            )}
             {image.device_id && !image.is_default && onSetDefault && (
               <button
                 onClick={(e) => {
@@ -189,6 +242,13 @@ const ImageCard: React.FC<ImageCardProps> = ({
             <span className="px-1.5 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded font-bold">
               DEFAULT
             </span>
+          )}
+          {/* Sync status indicator */}
+          {syncStatus && (
+            <div className="flex items-center gap-1" title={`Agent sync: ${syncStatus.label}`}>
+              <i className={`fa-solid ${syncStatus.icon} ${syncStatus.color}`} />
+              <span className="text-stone-600 dark:text-stone-400">{syncStatus.label}</span>
+            </div>
           )}
         </div>
 

@@ -76,6 +76,15 @@ export interface DeviceConfig {
   effective: Record<string, unknown>;
 }
 
+export interface ImageHostStatus {
+  host_id: string;
+  host_name: string;
+  status: 'synced' | 'syncing' | 'failed' | 'missing' | 'unknown';
+  size_bytes?: number | null;
+  synced_at?: string | null;
+  error_message?: string | null;
+}
+
 export interface ImageLibraryEntry {
   id: string;
   kind: string;
@@ -90,6 +99,8 @@ export interface ImageLibraryEntry {
   is_default?: boolean;
   notes?: string;
   compatible_devices?: string[];
+  // Sync status across agents (populated by API)
+  host_status?: ImageHostStatus[];
 }
 
 // Base node interface with common properties

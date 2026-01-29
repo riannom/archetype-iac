@@ -24,6 +24,7 @@ interface DeviceManagerProps {
   onUploadImage: () => void;
   onUploadQcow2: () => void;
   onRefresh: () => void;
+  showSyncStatus?: boolean;
 }
 
 const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
@@ -35,6 +36,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   onUploadImage,
   onUploadQcow2,
   onRefresh,
+  showSyncStatus = true,
 }) => {
   const { dragState, unassignImage, assignImageToDevice, deleteImage } = useDragContext();
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
@@ -684,6 +686,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                         image={img}
                         onUnassign={() => handleUnassignImage(img.id)}
                         onDelete={() => handleDeleteImage(img.id)}
+                        onSync={onRefresh}
+                        showSyncStatus={showSyncStatus}
                       />
                     ))}
                   </div>
@@ -710,6 +714,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                           onUnassign={() => handleUnassignImage(img.id)}
                           onSetDefault={() => handleSetDefaultImage(img.id, deviceId)}
                           onDelete={() => handleDeleteImage(img.id)}
+                          onSync={onRefresh}
+                          showSyncStatus={showSyncStatus}
                         />
                       ))}
                     </div>

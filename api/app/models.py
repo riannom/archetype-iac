@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -103,6 +103,12 @@ class Host(Base):
     capabilities: Mapped[str] = mapped_column(Text, default="{}")  # JSON: providers, features
     version: Mapped[str] = mapped_column(String(50), default="")
     resource_usage: Mapped[str] = mapped_column(Text, default="{}")  # JSON: cpu_percent, memory_percent, etc.
+    # Image sync strategy: push, pull, on_demand, disabled
+    # - push: Receive images immediately when uploaded to controller
+    # - pull: Pull missing images when agent comes online
+    # - on_demand: Sync only when deployment requires an image
+    # - disabled: No automatic sync, manual only
+    image_sync_strategy: Mapped[str] = mapped_column(String(50), default="on_demand")
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -214,4 +220,74 @@ class ConfigSnapshot(Base):
     content_hash: Mapped[str] = mapped_column(String(64))
     # Snapshot type: "manual" or "auto_stop"
     snapshot_type: Mapped[str] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ImageHost(Base):
+    """Tracks which images exist on which agents.
+
+    This model enables image synchronization across a multi-agent deployment.
+    Each record represents an image's presence (or absence) on a specific agent.
+
+    Status values:
+    - synced: Image exists on agent and matches controller
+    - syncing: Transfer in progress
+    - failed: Last sync attempt failed
+    - missing: Image should exist but doesn't (needs sync)
+    - unknown: Status not yet determined
+    """
+    __tablename__ = "image_hosts"
+    __table_args__ = (UniqueConstraint("image_id", "host_id", name="uq_image_host"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    # Image ID from the image library (e.g., "docker:ceos:4.28.0F")
+    image_id: Mapped[str] = mapped_column(String(255), index=True)
+    # Foreign key to hosts table
+    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    # Docker image reference (e.g., "ceos:4.28.0F")
+    reference: Mapped[str] = mapped_column(String(255))
+    # Sync status: synced, syncing, failed, missing, unknown
+    status: Mapped[str] = mapped_column(String(50), default="unknown")
+    # Image size in bytes (if known) - using BigInteger for large images
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # When the image was last synced to this host
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Error message if status is 'failed'
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ImageSyncJob(Base):
+    """Tracks image transfer operations with progress.
+
+    Each sync job represents a single image transfer from controller to agent.
+    Progress is tracked as bytes transferred and percentage complete.
+
+    Status values:
+    - pending: Job created, waiting to start
+    - transferring: Streaming image data to agent
+    - loading: Agent is loading image into Docker
+    - completed: Sync finished successfully
+    - failed: Sync failed
+    - cancelled: User cancelled the sync
+    """
+    __tablename__ = "image_sync_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    # Image ID from the image library
+    image_id: Mapped[str] = mapped_column(String(255), index=True)
+    # Target agent
+    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    # Job status: pending, transferring, loading, completed, failed, cancelled
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    # Progress tracking - using BigInteger for large file transfers
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
+    bytes_transferred: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    # Error message if failed
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Timestamps
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

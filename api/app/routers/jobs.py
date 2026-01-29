@@ -16,6 +16,7 @@ from app.netlab import run_netlab_command
 from app.storage import lab_workspace, topology_path
 from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
 from app.topology import analyze_topology, graph_to_containerlab_yaml, yaml_to_graph
+from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.utils.lab import get_lab_or_404, get_lab_provider
 
@@ -175,6 +176,46 @@ async def lab_up(
         agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
         if not agent:
             raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+
+    # Pre-deploy image sync check (if enabled)
+    if settings.image_sync_enabled and settings.image_sync_pre_deploy_check and clab_yaml:
+        from app.tasks.image_sync import get_images_from_topology, ensure_images_for_deployment
+
+        # Get image references from topology
+        image_refs = get_images_from_topology(clab_yaml)
+        if image_refs:
+            # Determine target agent for single-host or first agent for multi-host
+            target_host_id = None
+            if is_multihost and analysis:
+                # For multi-host, check all agents have required images
+                # For now, we check the first placement's host
+                first_host = list(analysis.placements.keys())[0]
+                target_agent = await agent_client.get_agent_by_name(
+                    database, first_host, required_provider=lab_provider
+                )
+                if target_agent:
+                    target_host_id = target_agent.id
+            else:
+                # Single-host deployment uses the selected agent
+                target_host_id = agent.id if agent else None
+
+            if target_host_id:
+                all_ready, missing = await ensure_images_for_deployment(
+                    target_host_id,
+                    image_refs,
+                    timeout=settings.image_sync_timeout,
+                    database=database,
+                )
+                if not all_ready and missing:
+                    # Images still missing after sync attempt
+                    missing_str = ", ".join(missing[:3])  # Show first 3
+                    if len(missing) > 3:
+                        missing_str += f" (+{len(missing) - 3} more)"
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Required images not available on agent: {missing_str}. "
+                               f"Upload images or manually sync them to the agent."
+                    )
 
     # Create job record
     job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")

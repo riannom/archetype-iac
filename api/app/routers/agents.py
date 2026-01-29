@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import db, models
+from app.config import settings
 
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -68,6 +70,7 @@ class HostOut(BaseModel):
     status: str
     capabilities: dict
     version: str
+    image_sync_strategy: str = "on_demand"
     last_heartbeat: datetime | None
     created_at: datetime
 
@@ -88,7 +91,7 @@ class DashboardMetrics(BaseModel):
 # --- Endpoints ---
 
 @router.post("/register", response_model=RegistrationResponse)
-def register_agent(
+async def register_agent(
     request: RegistrationRequest,
     database: Session = Depends(db.get_db),
 ) -> RegistrationResponse:
@@ -97,8 +100,13 @@ def register_agent(
     Prevents duplicate agents by checking name and address.
     If an agent with the same name or address already exists,
     updates that record instead of creating a new one.
+
+    After registration, triggers image reconciliation in the background
+    to sync ImageHost records with actual agent inventory.
     """
     agent = request.agent
+    host_id = None
+    is_new_registration = False
 
     # First check if agent already exists by ID
     existing = database.get(models.Host, agent.agent_id)
@@ -112,64 +120,81 @@ def register_agent(
         existing.version = agent.version
         existing.last_heartbeat = datetime.now(timezone.utc)
         database.commit()
+        host_id = agent.agent_id
 
-        return RegistrationResponse(
+        response = RegistrationResponse(
             success=True,
             message="Agent re-registered",
             assigned_id=agent.agent_id,
         )
-
-    # Check for existing agent with same name or address (agent restarted with new ID)
-    existing_by_name = (
-        database.query(models.Host)
-        .filter(models.Host.name == agent.name)
-        .first()
-    )
-    existing_by_address = (
-        database.query(models.Host)
-        .filter(models.Host.address == agent.address)
-        .first()
-    )
-
-    # Prefer matching by name, fall back to address
-    existing_duplicate = existing_by_name or existing_by_address
-
-    if existing_duplicate:
-        # Update existing record in place to preserve foreign key references
-        # (labs and jobs may reference this agent)
-        existing_duplicate.name = agent.name
-        existing_duplicate.address = agent.address
-        existing_duplicate.status = "online"
-        existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
-        existing_duplicate.version = agent.version
-        existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
-        database.commit()
-
-        # Return the existing ID so agent can use it for heartbeats
-        return RegistrationResponse(
-            success=True,
-            message="Agent re-registered (updated existing record)",
-            assigned_id=existing_duplicate.id,
+    else:
+        # Check for existing agent with same name or address (agent restarted with new ID)
+        existing_by_name = (
+            database.query(models.Host)
+            .filter(models.Host.name == agent.name)
+            .first()
+        )
+        existing_by_address = (
+            database.query(models.Host)
+            .filter(models.Host.address == agent.address)
+            .first()
         )
 
-    # Create new agent (first time registration)
-    host = models.Host(
-        id=agent.agent_id,
-        name=agent.name,
-        address=agent.address,
-        status="online",
-        capabilities=json.dumps(agent.capabilities.model_dump()),
-        version=agent.version,
-        last_heartbeat=datetime.now(timezone.utc),
-    )
-    database.add(host)
-    database.commit()
+        # Prefer matching by name, fall back to address
+        existing_duplicate = existing_by_name or existing_by_address
 
-    return RegistrationResponse(
-        success=True,
-        message="Agent registered",
-        assigned_id=agent.agent_id,
-    )
+        if existing_duplicate:
+            # Update existing record in place to preserve foreign key references
+            # (labs and jobs may reference this agent)
+            existing_duplicate.name = agent.name
+            existing_duplicate.address = agent.address
+            existing_duplicate.status = "online"
+            existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
+            existing_duplicate.version = agent.version
+            existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
+            database.commit()
+            host_id = existing_duplicate.id
+
+            # Return the existing ID so agent can use it for heartbeats
+            response = RegistrationResponse(
+                success=True,
+                message="Agent re-registered (updated existing record)",
+                assigned_id=existing_duplicate.id,
+            )
+        else:
+            # Create new agent (first time registration)
+            host = models.Host(
+                id=agent.agent_id,
+                name=agent.name,
+                address=agent.address,
+                status="online",
+                capabilities=json.dumps(agent.capabilities.model_dump()),
+                version=agent.version,
+                last_heartbeat=datetime.now(timezone.utc),
+            )
+            database.add(host)
+            database.commit()
+            host_id = agent.agent_id
+            is_new_registration = True
+
+            response = RegistrationResponse(
+                success=True,
+                message="Agent registered",
+                assigned_id=agent.agent_id,
+            )
+
+    # Trigger image reconciliation in background
+    if host_id and settings.image_sync_enabled:
+        from app.tasks.image_sync import reconcile_agent_images, pull_images_on_registration
+
+        # Reconcile image inventory
+        asyncio.create_task(reconcile_agent_images(host_id))
+
+        # If pull strategy, trigger image sync
+        if is_new_registration:
+            asyncio.create_task(pull_images_on_registration(host_id))
+
+    return response
 
 
 @router.post("/{agent_id}/heartbeat", response_model=HeartbeatResponse)
@@ -220,6 +245,7 @@ def list_agents(
             status=host.status,
             capabilities=capabilities,
             version=host.version,
+            image_sync_strategy=host.image_sync_strategy or "on_demand",
             last_heartbeat=host.last_heartbeat,
             created_at=host.created_at,
         ))
@@ -336,6 +362,7 @@ def get_agent(
         status=host.status,
         capabilities=capabilities,
         version=host.version,
+        image_sync_strategy=host.image_sync_strategy or "on_demand",
         last_heartbeat=host.last_heartbeat,
         created_at=host.created_at,
     )
@@ -356,6 +383,109 @@ def unregister_agent(
     database.commit()
 
     return {"status": "deleted"}
+
+
+class UpdateSyncStrategyRequest(BaseModel):
+    """Request to update agent's image sync strategy."""
+    strategy: str  # push, pull, on_demand, disabled
+
+
+@router.put("/{agent_id}/sync-strategy")
+def update_sync_strategy(
+    agent_id: str,
+    request: UpdateSyncStrategyRequest,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Update an agent's image synchronization strategy.
+
+    Valid strategies:
+    - push: Receive images immediately when uploaded to controller
+    - pull: Pull missing images when agent comes online
+    - on_demand: Sync only when deployment requires an image
+    - disabled: No automatic sync, manual only
+    """
+    valid_strategies = {"push", "pull", "on_demand", "disabled"}
+    if request.strategy not in valid_strategies:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid strategy. Must be one of: {', '.join(valid_strategies)}"
+        )
+
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    host.image_sync_strategy = request.strategy
+    database.commit()
+
+    return {
+        "agent_id": agent_id,
+        "strategy": request.strategy,
+        "message": f"Sync strategy updated to '{request.strategy}'"
+    }
+
+
+@router.get("/{agent_id}/images")
+async def list_agent_images(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Get image sync status for all library images on an agent.
+
+    Returns the status of each library image on this specific agent,
+    including whether it's synced, missing, or in progress.
+    """
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get all ImageHost records for this agent
+    image_hosts = database.query(models.ImageHost).filter(
+        models.ImageHost.host_id == agent_id
+    ).all()
+
+    result = []
+    for ih in image_hosts:
+        result.append({
+            "image_id": ih.image_id,
+            "reference": ih.reference,
+            "status": ih.status,
+            "size_bytes": ih.size_bytes,
+            "synced_at": ih.synced_at.isoformat() if ih.synced_at else None,
+            "error_message": ih.error_message,
+        })
+
+    return {
+        "agent_id": agent_id,
+        "agent_name": host.name,
+        "images": result,
+    }
+
+
+@router.post("/{agent_id}/images/reconcile")
+async def reconcile_agent_images_endpoint(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Trigger image reconciliation for an agent.
+
+    Queries the agent for its actual Docker images and updates
+    the ImageHost records to reflect reality. Use this after
+    manually loading images on an agent.
+    """
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if host.status != "online":
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+    from app.tasks.image_sync import reconcile_agent_images
+
+    # Run reconciliation
+    await reconcile_agent_images(agent_id, database)
+
+    return {"message": f"Reconciliation completed for agent '{host.name}'"}
 
 
 # --- Network Interface/Bridge Discovery Proxy ---

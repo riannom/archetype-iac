@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.config import settings
@@ -40,11 +40,19 @@ from agent.schemas import (
     DestroyRequest,
     DiscoveredLab,
     DiscoverLabsResponse,
+    DockerImageInfo,
     ExtractConfigsRequest,
     ExtractConfigsResponse,
     ExtractedConfig,
     HeartbeatRequest,
     HeartbeatResponse,
+    ImageExistsResponse,
+    ImageInventoryResponse,
+    ImagePullProgress,
+    ImagePullRequest,
+    ImagePullResponse,
+    ImageReceiveRequest,
+    ImageReceiveResponse,
     JobResult,
     JobStatus,
     LabStatusRequest,
@@ -1385,6 +1393,391 @@ async def list_bridges() -> dict:
         return {"bridges": [], "error": str(e)}
 
     return {"bridges": bridges}
+
+
+# --- Image Synchronization Endpoints ---
+
+# Track active image pull jobs
+_image_pull_jobs: dict[str, ImagePullProgress] = {}
+
+
+def _get_docker_images() -> list[DockerImageInfo]:
+    """Get list of Docker images on this agent."""
+    try:
+        import docker
+        client = docker.from_env()
+        images = []
+
+        for img in client.images.list():
+            # Get image details
+            image_id = img.id
+            tags = img.tags or []
+            size_bytes = img.attrs.get("Size", 0)
+            created = img.attrs.get("Created", None)
+
+            images.append(DockerImageInfo(
+                id=image_id,
+                tags=tags,
+                size_bytes=size_bytes,
+                created=created,
+            ))
+
+        return images
+    except Exception as e:
+        print(f"Error listing Docker images: {e}")
+        return []
+
+
+@app.get("/images")
+def list_images() -> ImageInventoryResponse:
+    """List all Docker images on this agent.
+
+    Returns a list of images with their tags, sizes, and IDs.
+    Used by controller to check image availability before deployment.
+    """
+    images = _get_docker_images()
+    return ImageInventoryResponse(images=images)
+
+
+@app.get("/images/{reference:path}")
+def check_image(reference: str) -> ImageExistsResponse:
+    """Check if a specific image exists on this agent.
+
+    Args:
+        reference: Docker image reference (e.g., "ceos:4.28.0F")
+
+    Returns:
+        Whether the image exists and its details if found.
+    """
+    try:
+        import docker
+        client = docker.from_env()
+
+        # Try to get the image
+        try:
+            img = client.images.get(reference)
+            return ImageExistsResponse(
+                exists=True,
+                image=DockerImageInfo(
+                    id=img.id,
+                    tags=img.tags or [],
+                    size_bytes=img.attrs.get("Size", 0),
+                    created=img.attrs.get("Created", None),
+                ),
+            )
+        except docker.errors.ImageNotFound:
+            return ImageExistsResponse(exists=False)
+
+    except Exception as e:
+        print(f"Error checking image {reference}: {e}")
+        return ImageExistsResponse(exists=False)
+
+
+@app.post("/images/receive")
+async def receive_image(
+    file: UploadFile,
+    image_id: str = "",
+    reference: str = "",
+    total_bytes: int = 0,
+    job_id: str = "",
+) -> ImageReceiveResponse:
+    """Receive a streamed Docker image tar from controller.
+
+    This endpoint accepts a Docker image tar file (from `docker save`)
+    and loads it into the local Docker daemon.
+
+    Args:
+        file: The image tar file
+        image_id: Library image ID for tracking
+        reference: Docker reference (e.g., "ceos:4.28.0F")
+        total_bytes: Expected size for progress
+        job_id: Sync job ID for progress reporting
+
+    Returns:
+        Result of loading the image
+    """
+    import os
+    import subprocess
+    import tempfile
+
+    print(f"Receiving image: {reference} ({total_bytes} bytes)")
+
+    # Update progress if job_id provided
+    if job_id:
+        _image_pull_jobs[job_id] = ImagePullProgress(
+            job_id=job_id,
+            status="transferring",
+            progress_percent=0,
+            bytes_transferred=0,
+            total_bytes=total_bytes,
+        )
+
+    try:
+        # Save uploaded file to temp
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_file:
+            bytes_written = 0
+            chunk_size = 1024 * 1024  # 1MB chunks
+
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                tmp_file.write(chunk)
+                bytes_written += len(chunk)
+
+                # Update progress
+                if job_id and total_bytes > 0:
+                    percent = min(90, int((bytes_written / total_bytes) * 90))
+                    _image_pull_jobs[job_id] = ImagePullProgress(
+                        job_id=job_id,
+                        status="transferring",
+                        progress_percent=percent,
+                        bytes_transferred=bytes_written,
+                        total_bytes=total_bytes,
+                    )
+
+            tmp_path = tmp_file.name
+
+        print(f"Saved {bytes_written} bytes to {tmp_path}")
+
+        # Update status to loading
+        if job_id:
+            _image_pull_jobs[job_id] = ImagePullProgress(
+                job_id=job_id,
+                status="loading",
+                progress_percent=90,
+                bytes_transferred=bytes_written,
+                total_bytes=total_bytes,
+            )
+
+        # Load into Docker
+        result = subprocess.run(
+            ["docker", "load", "-i", tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 minute timeout for large images
+        )
+
+        # Clean up temp file
+        os.unlink(tmp_path)
+
+        if result.returncode != 0:
+            error_msg = result.stderr or result.stdout or "docker load failed"
+            print(f"Docker load failed: {error_msg}")
+            if job_id:
+                _image_pull_jobs[job_id] = ImagePullProgress(
+                    job_id=job_id,
+                    status="failed",
+                    progress_percent=0,
+                    error=error_msg,
+                )
+            return ImageReceiveResponse(success=False, error=error_msg)
+
+        # Parse loaded images from output
+        output = (result.stdout or "") + (result.stderr or "")
+        loaded_images = []
+        for line in output.splitlines():
+            if "Loaded image:" in line:
+                loaded_images.append(line.split("Loaded image:", 1)[-1].strip())
+            elif "Loaded image ID:" in line:
+                loaded_images.append(line.split("Loaded image ID:", 1)[-1].strip())
+
+        print(f"Successfully loaded images: {loaded_images}")
+
+        # Update final status
+        if job_id:
+            _image_pull_jobs[job_id] = ImagePullProgress(
+                job_id=job_id,
+                status="completed",
+                progress_percent=100,
+                bytes_transferred=bytes_written,
+                total_bytes=total_bytes,
+            )
+
+        return ImageReceiveResponse(success=True, loaded_images=loaded_images)
+
+    except subprocess.TimeoutExpired:
+        error_msg = "docker load timed out"
+        print(f"Error: {error_msg}")
+        if job_id:
+            _image_pull_jobs[job_id] = ImagePullProgress(
+                job_id=job_id,
+                status="failed",
+                error=error_msg,
+            )
+        return ImageReceiveResponse(success=False, error=error_msg)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        error_msg = str(e)
+        if job_id:
+            _image_pull_jobs[job_id] = ImagePullProgress(
+                job_id=job_id,
+                status="failed",
+                error=error_msg,
+            )
+        return ImageReceiveResponse(success=False, error=error_msg)
+
+
+@app.post("/images/pull")
+async def pull_image(request: ImagePullRequest) -> ImagePullResponse:
+    """Initiate pulling an image from the controller.
+
+    This endpoint starts an async pull operation where the agent
+    fetches the image from the controller's stream endpoint.
+
+    Args:
+        request: Image ID and reference to pull
+
+    Returns:
+        Job ID for tracking progress
+    """
+    import uuid
+
+    job_id = str(uuid.uuid4())[:8]
+
+    # Initialize job status
+    _image_pull_jobs[job_id] = ImagePullProgress(
+        job_id=job_id,
+        status="pending",
+    )
+
+    # Start async pull task
+    asyncio.create_task(_execute_pull_from_controller(
+        job_id=job_id,
+        image_id=request.image_id,
+        reference=request.reference,
+    ))
+
+    return ImagePullResponse(job_id=job_id, status="pending")
+
+
+async def _execute_pull_from_controller(job_id: str, image_id: str, reference: str):
+    """Execute image pull from controller in background.
+
+    Fetches the image stream from the controller and loads it locally.
+    """
+    import tempfile
+    import subprocess
+    import os
+
+    print(f"Starting pull from controller: {reference}")
+
+    try:
+        _image_pull_jobs[job_id] = ImagePullProgress(
+            job_id=job_id,
+            status="transferring",
+            progress_percent=5,
+        )
+
+        # Build stream URL - encode the image_id for the URL
+        from urllib.parse import quote
+        encoded_image_id = quote(image_id, safe='')
+        stream_url = f"{settings.controller_url}/images/library/{encoded_image_id}/stream"
+
+        print(f"Fetching from: {stream_url}")
+
+        # Stream the image from controller
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
+            async with client.stream("GET", stream_url) as response:
+                if response.status_code != 200:
+                    error_msg = f"Controller returned {response.status_code}"
+                    _image_pull_jobs[job_id] = ImagePullProgress(
+                        job_id=job_id,
+                        status="failed",
+                        error=error_msg,
+                    )
+                    return
+
+                # Get content length if available
+                total_bytes = int(response.headers.get("content-length", 0))
+
+                # Save to temp file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_file:
+                    bytes_written = 0
+                    async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
+                        tmp_file.write(chunk)
+                        bytes_written += len(chunk)
+
+                        # Update progress
+                        if total_bytes > 0:
+                            percent = min(85, int((bytes_written / total_bytes) * 85))
+                        else:
+                            percent = min(85, bytes_written // (1024 * 1024))  # 1% per MB
+                        _image_pull_jobs[job_id] = ImagePullProgress(
+                            job_id=job_id,
+                            status="transferring",
+                            progress_percent=percent,
+                            bytes_transferred=bytes_written,
+                            total_bytes=total_bytes,
+                        )
+
+                    tmp_path = tmp_file.name
+
+        print(f"Downloaded {bytes_written} bytes")
+
+        # Update to loading status
+        _image_pull_jobs[job_id] = ImagePullProgress(
+            job_id=job_id,
+            status="loading",
+            progress_percent=90,
+            bytes_transferred=bytes_written,
+            total_bytes=total_bytes,
+        )
+
+        # Load into Docker
+        result = subprocess.run(
+            ["docker", "load", "-i", tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+        os.unlink(tmp_path)
+
+        if result.returncode != 0:
+            error_msg = result.stderr or result.stdout or "docker load failed"
+            print(f"Docker load failed: {error_msg}")
+            _image_pull_jobs[job_id] = ImagePullProgress(
+                job_id=job_id,
+                status="failed",
+                error=error_msg,
+            )
+            return
+
+        print(f"Successfully loaded image: {reference}")
+        _image_pull_jobs[job_id] = ImagePullProgress(
+            job_id=job_id,
+            status="completed",
+            progress_percent=100,
+            bytes_transferred=bytes_written,
+            total_bytes=total_bytes,
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        _image_pull_jobs[job_id] = ImagePullProgress(
+            job_id=job_id,
+            status="failed",
+            error=str(e),
+        )
+
+
+@app.get("/images/pull/{job_id}/progress")
+def get_pull_progress(job_id: str) -> ImagePullProgress:
+    """Get progress of an image pull operation.
+
+    Args:
+        job_id: The job ID from the pull request
+
+    Returns:
+        Current progress of the pull operation
+    """
+    if job_id not in _image_pull_jobs:
+        raise HTTPException(status_code=404, detail="Pull job not found")
+    return _image_pull_jobs[job_id]
 
 
 # --- Console Endpoint ---

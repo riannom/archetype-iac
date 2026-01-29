@@ -11,14 +11,20 @@ import tarfile
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator
+from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-from app import models
+from app import db, models
 from app.auth import get_current_user
+from app.config import settings
 from app.image_store import (
     create_image_entry,
     delete_image_entry,
@@ -1007,3 +1013,525 @@ def get_images_for_device(
             images.append(item)
 
     return {"images": images}
+
+
+# --- Image Synchronization Endpoints ---
+
+class ImageHostStatus(BaseModel):
+    """Status of an image on a specific host."""
+    host_id: str
+    host_name: str
+    status: str  # synced, syncing, failed, missing, unknown
+    size_bytes: int | None = None
+    synced_at: datetime | None = None
+    error_message: str | None = None
+
+
+class ImageHostsResponse(BaseModel):
+    """Response for image hosts endpoint."""
+    image_id: str
+    hosts: list[ImageHostStatus] = Field(default_factory=list)
+
+
+class SyncRequest(BaseModel):
+    """Request to sync an image to hosts."""
+    host_ids: list[str] | None = None  # None means all hosts
+
+
+class SyncJobOut(BaseModel):
+    """Sync job information for API responses."""
+    id: str
+    image_id: str
+    host_id: str
+    host_name: str | None = None
+    status: str
+    progress_percent: int = 0
+    bytes_transferred: int = 0
+    total_bytes: int = 0
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+
+
+@router.get("/library/{image_id}/hosts")
+def get_image_hosts(
+    image_id: str,
+    current_user: models.User = Depends(get_current_user),
+    database: Session = Depends(db.get_db),
+) -> ImageHostsResponse:
+    """List all hosts with sync status for an image.
+
+    Returns the current sync status of the image on each registered agent.
+    This includes whether the image exists, when it was synced, and any errors.
+    """
+    # URL-decode the image_id (it may contain colons which get encoded)
+    from urllib.parse import unquote
+    image_id = unquote(image_id)
+
+    # Verify image exists in manifest
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found in library")
+
+    # Get all online hosts
+    hosts = database.query(models.Host).filter(models.Host.status == "online").all()
+
+    # Get existing ImageHost records
+    image_hosts = database.query(models.ImageHost).filter(
+        models.ImageHost.image_id == image_id
+    ).all()
+    hosts_by_id = {ih.host_id: ih for ih in image_hosts}
+
+    # Build response
+    result = []
+    for host in hosts:
+        if host.id in hosts_by_id:
+            ih = hosts_by_id[host.id]
+            result.append(ImageHostStatus(
+                host_id=host.id,
+                host_name=host.name,
+                status=ih.status,
+                size_bytes=ih.size_bytes,
+                synced_at=ih.synced_at,
+                error_message=ih.error_message,
+            ))
+        else:
+            # No record yet - status unknown
+            result.append(ImageHostStatus(
+                host_id=host.id,
+                host_name=host.name,
+                status="unknown",
+            ))
+
+    return ImageHostsResponse(image_id=image_id, hosts=result)
+
+
+@router.post("/library/{image_id}/sync")
+async def sync_image_to_hosts(
+    image_id: str,
+    request: SyncRequest,
+    current_user: models.User = Depends(get_current_user),
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Trigger sync of an image to specific or all hosts.
+
+    This creates sync jobs for each target host and starts the transfer
+    process in the background. Returns the created job IDs.
+    """
+    from urllib.parse import unquote
+    image_id = unquote(image_id)
+
+    # Verify image exists
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found in library")
+
+    # Only Docker images can be synced
+    if image.get("kind") != "docker":
+        raise HTTPException(status_code=400, detail="Only Docker images can be synced")
+
+    # Get target hosts
+    if request.host_ids:
+        hosts = database.query(models.Host).filter(
+            models.Host.id.in_(request.host_ids),
+            models.Host.status == "online"
+        ).all()
+    else:
+        hosts = database.query(models.Host).filter(
+            models.Host.status == "online"
+        ).all()
+
+    if not hosts:
+        raise HTTPException(status_code=400, detail="No online hosts to sync to")
+
+    # Create sync jobs
+    job_ids = []
+    for host in hosts:
+        # Check if already syncing
+        existing_job = database.query(models.ImageSyncJob).filter(
+            models.ImageSyncJob.image_id == image_id,
+            models.ImageSyncJob.host_id == host.id,
+            models.ImageSyncJob.status.in_(["pending", "transferring", "loading"])
+        ).first()
+
+        if existing_job:
+            job_ids.append(existing_job.id)
+            continue
+
+        # Create new job
+        job = models.ImageSyncJob(
+            id=str(uuid4()),
+            image_id=image_id,
+            host_id=host.id,
+            status="pending",
+        )
+        database.add(job)
+        job_ids.append(job.id)
+
+        # Update or create ImageHost record
+        image_host = database.query(models.ImageHost).filter(
+            models.ImageHost.image_id == image_id,
+            models.ImageHost.host_id == host.id
+        ).first()
+
+        if image_host:
+            image_host.status = "syncing"
+            image_host.error_message = None
+        else:
+            image_host = models.ImageHost(
+                id=str(uuid4()),
+                image_id=image_id,
+                host_id=host.id,
+                reference=image.get("reference", ""),
+                status="syncing",
+            )
+            database.add(image_host)
+
+    database.commit()
+
+    # Start sync tasks in background
+    for job_id in job_ids:
+        job = database.get(models.ImageSyncJob, job_id)
+        if job and job.status == "pending":
+            host = database.get(models.Host, job.host_id)
+            if host:
+                asyncio.create_task(_execute_sync_job(job_id, image_id, image, host))
+
+    return {"jobs": job_ids, "count": len(job_ids)}
+
+
+async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: models.Host):
+    """Execute a sync job in the background.
+
+    Streams the Docker image to the agent and updates job progress.
+    """
+    from app.db import SessionLocal
+
+    print(f"Starting sync job {job_id}: {image_id} -> {host.name}")
+
+    session = SessionLocal()
+    try:
+        # Get fresh job record
+        job = session.get(models.ImageSyncJob, job_id)
+        if not job:
+            print(f"Sync job {job_id} not found")
+            return
+
+        job.status = "transferring"
+        job.started_at = datetime.now(timezone.utc)
+        session.commit()
+
+        # Get image reference
+        reference = image.get("reference", "")
+        if not reference:
+            raise ValueError("Image has no Docker reference")
+
+        # Get image size from Docker
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.Size}}", reference],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                job.total_bytes = int(result.stdout.strip())
+                session.commit()
+        except Exception as e:
+            print(f"Could not get image size: {e}")
+
+        # Stream image to agent
+        # Use docker save and pipe to agent
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout)) as client:
+            # Create multipart form with streaming data
+            from urllib.parse import quote
+
+            # Build agent URL
+            agent_url = f"http://{host.address}/images/receive"
+
+            # Use subprocess to stream docker save output
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "save", reference,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            # Read all output (for now, TODO: true streaming)
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                error_msg = stderr.decode() if stderr else "docker save failed"
+                raise ValueError(error_msg)
+
+            # Update progress
+            job.bytes_transferred = len(stdout)
+            job.progress_percent = 50
+            session.commit()
+
+            # Send to agent
+            files = {"file": ("image.tar", stdout, "application/x-tar")}
+            params = {
+                "image_id": image_id,
+                "reference": reference,
+                "total_bytes": str(len(stdout)),
+                "job_id": job_id,
+            }
+
+            response = await client.post(
+                agent_url,
+                files=files,
+                params=params,
+            )
+
+            if response.status_code != 200:
+                raise ValueError(f"Agent returned {response.status_code}: {response.text}")
+
+            result = response.json()
+            if not result.get("success"):
+                raise ValueError(result.get("error", "Agent failed to load image"))
+
+        # Success
+        job.status = "completed"
+        job.progress_percent = 100
+        job.completed_at = datetime.now(timezone.utc)
+        session.commit()
+
+        # Update ImageHost record
+        image_host = session.query(models.ImageHost).filter(
+            models.ImageHost.image_id == image_id,
+            models.ImageHost.host_id == host.id
+        ).first()
+        if image_host:
+            image_host.status = "synced"
+            image_host.synced_at = datetime.now(timezone.utc)
+            image_host.size_bytes = job.total_bytes
+            image_host.error_message = None
+            session.commit()
+
+        print(f"Sync job {job_id} completed successfully")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Sync job {job_id} failed: {e}")
+
+        # Update job status
+        job = session.get(models.ImageSyncJob, job_id)
+        if job:
+            job.status = "failed"
+            job.error_message = str(e)
+            job.completed_at = datetime.now(timezone.utc)
+            session.commit()
+
+        # Update ImageHost status
+        image_host = session.query(models.ImageHost).filter(
+            models.ImageHost.image_id == image_id,
+            models.ImageHost.host_id == host.id
+        ).first()
+        if image_host:
+            image_host.status = "failed"
+            image_host.error_message = str(e)
+            session.commit()
+
+    finally:
+        session.close()
+
+
+@router.get("/library/{image_id}/stream")
+async def stream_image(
+    image_id: str,
+    current_user: models.User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Stream a Docker image tar for agents to pull.
+
+    This endpoint streams the output of `docker save` for the specified image.
+    Used by agents in pull mode to fetch images from the controller.
+    """
+    from urllib.parse import unquote
+    image_id = unquote(image_id)
+
+    # Verify image exists
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found in library")
+
+    if image.get("kind") != "docker":
+        raise HTTPException(status_code=400, detail="Only Docker images can be streamed")
+
+    reference = image.get("reference", "")
+    if not reference:
+        raise HTTPException(status_code=400, detail="Image has no Docker reference")
+
+    # Get image size for Content-Length header
+    content_length = None
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Size}}", reference],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            # Note: This is the image size, not the tar size
+            # Tar size is usually slightly larger
+            content_length = int(result.stdout.strip())
+    except Exception:
+        pass
+
+    async def generate():
+        """Stream docker save output."""
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "save", reference,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            while True:
+                chunk = await proc.stdout.read(settings.image_sync_chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+            # Check for errors
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                error_msg = stderr.decode() if stderr else "docker save failed"
+                print(f"Error streaming image: {error_msg}")
+
+        except Exception as e:
+            print(f"Error streaming image: {e}")
+            proc.kill()
+            raise
+
+    headers = {"Content-Type": "application/x-tar"}
+    if content_length:
+        headers["Content-Length"] = str(content_length)
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-tar",
+        headers=headers,
+    )
+
+
+@router.get("/sync-jobs")
+def list_sync_jobs(
+    status: str | None = None,
+    image_id: str | None = None,
+    host_id: str | None = None,
+    limit: int = 50,
+    current_user: models.User = Depends(get_current_user),
+    database: Session = Depends(db.get_db),
+) -> list[SyncJobOut]:
+    """List image sync jobs with optional filters.
+
+    Filters:
+    - status: Filter by job status (pending, transferring, loading, completed, failed)
+    - image_id: Filter by image ID
+    - host_id: Filter by target host ID
+    """
+    query = database.query(models.ImageSyncJob)
+
+    if status:
+        query = query.filter(models.ImageSyncJob.status == status)
+    if image_id:
+        from urllib.parse import unquote
+        query = query.filter(models.ImageSyncJob.image_id == unquote(image_id))
+    if host_id:
+        query = query.filter(models.ImageSyncJob.host_id == host_id)
+
+    jobs = query.order_by(models.ImageSyncJob.created_at.desc()).limit(limit).all()
+
+    # Get host names
+    host_ids = {j.host_id for j in jobs}
+    hosts = database.query(models.Host).filter(models.Host.id.in_(host_ids)).all()
+    host_names = {h.id: h.name for h in hosts}
+
+    return [
+        SyncJobOut(
+            id=job.id,
+            image_id=job.image_id,
+            host_id=job.host_id,
+            host_name=host_names.get(job.host_id),
+            status=job.status,
+            progress_percent=job.progress_percent,
+            bytes_transferred=job.bytes_transferred,
+            total_bytes=job.total_bytes,
+            error_message=job.error_message,
+            started_at=job.started_at,
+            completed_at=job.completed_at,
+            created_at=job.created_at,
+        )
+        for job in jobs
+    ]
+
+
+@router.get("/sync-jobs/{job_id}")
+def get_sync_job(
+    job_id: str,
+    current_user: models.User = Depends(get_current_user),
+    database: Session = Depends(db.get_db),
+) -> SyncJobOut:
+    """Get details of a specific sync job."""
+    job = database.get(models.ImageSyncJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Sync job not found")
+
+    host = database.get(models.Host, job.host_id)
+
+    return SyncJobOut(
+        id=job.id,
+        image_id=job.image_id,
+        host_id=job.host_id,
+        host_name=host.name if host else None,
+        status=job.status,
+        progress_percent=job.progress_percent,
+        bytes_transferred=job.bytes_transferred,
+        total_bytes=job.total_bytes,
+        error_message=job.error_message,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        created_at=job.created_at,
+    )
+
+
+@router.delete("/sync-jobs/{job_id}")
+def cancel_sync_job(
+    job_id: str,
+    current_user: models.User = Depends(get_current_user),
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Cancel a pending or in-progress sync job.
+
+    Only jobs in pending, transferring, or loading status can be cancelled.
+    Completed or failed jobs cannot be cancelled.
+    """
+    job = database.get(models.ImageSyncJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Sync job not found")
+
+    if job.status in ("completed", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel job with status '{job.status}'"
+        )
+
+    job.status = "cancelled"
+    job.completed_at = datetime.now(timezone.utc)
+    database.commit()
+
+    # Update ImageHost status back to unknown or missing
+    image_host = database.query(models.ImageHost).filter(
+        models.ImageHost.image_id == job.image_id,
+        models.ImageHost.host_id == job.host_id
+    ).first()
+    if image_host:
+        image_host.status = "unknown"
+        database.commit()
+
+    return {"status": "cancelled"}
