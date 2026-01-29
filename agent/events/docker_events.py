@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import queue
 from datetime import datetime, timezone
 
 import docker
@@ -55,6 +57,9 @@ class DockerEventListener(NodeEventListener):
         self._client: docker.DockerClient | None = None
         self._running = False
         self._stop_event = asyncio.Event()
+        self._thread_stop = threading.Event()
+        self._event_queue: queue.Queue = queue.Queue()
+        self._reader_thread: threading.Thread | None = None
         self._reconnect_delay = 1.0  # Start with 1 second
         self._max_reconnect_delay = 60.0  # Max 60 seconds
 
@@ -66,6 +71,7 @@ class DockerEventListener(NodeEventListener):
         """
         self._running = True
         self._stop_event.clear()
+        self._thread_stop.clear()
 
         while self._running and not self._stop_event.is_set():
             try:
@@ -74,7 +80,7 @@ class DockerEventListener(NodeEventListener):
                 logger.info("Docker event listener connected")
                 self._reconnect_delay = 1.0  # Reset on successful connection
 
-                # Listen for events in a thread (Docker SDK is sync)
+                # Listen for events using a background thread
                 await self._listen_loop(callback)
 
             except docker.errors.DockerException as e:
@@ -96,13 +102,25 @@ class DockerEventListener(NodeEventListener):
         self._running = False
         logger.info("Docker event listener stopped")
 
+    def _event_reader_thread(self, events) -> None:
+        """Background thread that reads Docker events and queues them."""
+        try:
+            for event in events:
+                if self._thread_stop.is_set():
+                    break
+                self._event_queue.put(event)
+        except Exception as e:
+            if not self._thread_stop.is_set():
+                self._event_queue.put(e)  # Signal error to main loop
+        finally:
+            self._event_queue.put(None)  # Signal end of stream
+
     async def _listen_loop(self, callback: EventCallback) -> None:
         """Main event listening loop.
 
-        Runs Docker events in a thread pool to avoid blocking the event loop.
+        Uses a background thread to read Docker events (blocking) and
+        an async queue consumer to process them.
         """
-        loop = asyncio.get_event_loop()
-
         # Get events generator - filters for container events
         events = self._client.events(
             decode=True,
@@ -112,17 +130,28 @@ class DockerEventListener(NodeEventListener):
             },
         )
 
+        # Start background thread to read events
+        self._thread_stop.clear()
+        self._event_queue = queue.Queue()
+        self._reader_thread = threading.Thread(
+            target=self._event_reader_thread,
+            args=(events,),
+            daemon=True,
+        )
+        self._reader_thread.start()
+
         try:
             while self._running and not self._stop_event.is_set():
                 try:
-                    # Check for event with timeout to allow checking stop flag
-                    event = await asyncio.wait_for(
-                        loop.run_in_executor(None, self._get_next_event, events),
-                        timeout=1.0,
-                    )
+                    # Check queue with timeout to allow checking stop flag
+                    event = self._event_queue.get(timeout=1.0)
 
+                    # Check for end of stream or error
                     if event is None:
-                        continue
+                        logger.warning("Docker events stream ended")
+                        break
+                    if isinstance(event, Exception):
+                        raise event
 
                     # Process the event
                     node_event = self._parse_event(event)
@@ -132,21 +161,16 @@ class DockerEventListener(NodeEventListener):
                         except Exception as e:
                             logger.error(f"Error in event callback: {e}")
 
-                except asyncio.TimeoutError:
+                except queue.Empty:
                     # Normal timeout, continue loop to check stop flag
                     continue
 
-        except StopIteration:
-            logger.warning("Docker events stream ended")
         finally:
+            # Stop the reader thread
+            self._thread_stop.set()
             events.close()
-
-    def _get_next_event(self, events) -> dict | None:
-        """Get next event from generator (runs in thread pool)."""
-        try:
-            return next(events)
-        except StopIteration:
-            return None
+            if self._reader_thread and self._reader_thread.is_alive():
+                self._reader_thread.join(timeout=2.0)
 
     def _parse_event(self, event: dict) -> NodeEvent | None:
         """Parse a Docker event into a NodeEvent.
@@ -228,6 +252,11 @@ class DockerEventListener(NodeEventListener):
         logger.info("Stopping Docker event listener...")
         self._running = False
         self._stop_event.set()
+        self._thread_stop.set()
+
+        # Wait for reader thread to finish
+        if self._reader_thread and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=2.0)
 
         if self._client:
             try:
