@@ -360,7 +360,9 @@ async def ensure_images_for_deployment(
     image_references: list[str],
     timeout: int | None = None,
     database: Session | None = None,
-) -> tuple[bool, list[str]]:
+    lab_id: str | None = None,
+    topology_yaml: str | None = None,
+) -> tuple[bool, list[str], list[str]]:
     """Ensure all required images exist on agent before deployment.
 
     This is the pre-deploy check that ensures images are available
@@ -372,14 +374,19 @@ async def ensure_images_for_deployment(
         image_references: List of Docker image references needed
         timeout: Max seconds to wait for sync (default from settings)
         database: Optional database session
+        lab_id: Optional lab ID for updating NodeState records
+        topology_yaml: Optional topology YAML for mapping images to nodes
 
     Returns:
-        Tuple of (all_ready, missing_images)
+        Tuple of (all_ready, missing_images, log_entries)
         - all_ready: True if all images are available
         - missing_images: List of image references that are still missing
+        - log_entries: List of log messages about what happened
     """
+    log_entries: list[str] = []
+
     if not settings.image_sync_pre_deploy_check:
-        return True, []
+        return True, [], log_entries
 
     if timeout is None:
         timeout = settings.image_sync_timeout
@@ -388,12 +395,31 @@ async def ensure_images_for_deployment(
     if own_session:
         database = SessionLocal()
 
+    # Get image-to-nodes mapping if we have lab context
+    image_to_nodes: dict[str, list[str]] = {}
+    if lab_id and topology_yaml:
+        image_to_nodes = get_image_to_nodes_map(topology_yaml)
+
+    def update_nodes_for_images(images: list[str], status: str | None, message: str | None = None):
+        """Helper to update NodeState for nodes using given images."""
+        if not lab_id or not image_to_nodes:
+            return
+        affected_nodes: set[str] = set()
+        for img in images:
+            if img in image_to_nodes:
+                affected_nodes.update(image_to_nodes[img])
+        if affected_nodes:
+            update_node_image_sync_status(database, lab_id, list(affected_nodes), status, message)
+
     try:
         host = database.get(models.Host, host_id)
         if not host or host.status != "online":
-            return False, image_references
+            return False, image_references, log_entries
 
         # Check which images are missing
+        log_entries.append(f"Checking {len(image_references)} image(s) on agent {host.name}...")
+        update_nodes_for_images(image_references, "checking", "Checking image availability...")
+
         missing = []
         for reference in image_references:
             exists = await check_agent_has_image(host, reference)
@@ -401,14 +427,19 @@ async def ensure_images_for_deployment(
                 missing.append(reference)
 
         if not missing:
-            return True, []
+            log_entries.append("All images already present on agent")
+            update_nodes_for_images(image_references, None, None)  # Clear status
+            return True, [], log_entries
 
-        print(f"Agent {host.name} missing images: {missing}")
+        log_entries.append(f"Agent {host.name} missing {len(missing)} image(s): {', '.join(missing[:3])}" +
+                          (f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""))
 
         # Check if on_demand sync is enabled
         strategy = host.image_sync_strategy or settings.image_sync_fallback_strategy
         if strategy == "disabled":
-            return False, missing
+            log_entries.append("Image sync is disabled for this agent")
+            update_nodes_for_images(missing, "failed", "Image sync disabled")
+            return False, missing, log_entries
 
         # Find image IDs in library for missing references
         manifest = load_manifest()
@@ -428,7 +459,14 @@ async def ensure_images_for_deployment(
 
         if not sync_tasks:
             # No images found in library
-            return False, missing
+            log_entries.append("Missing images not found in library - cannot sync")
+            update_nodes_for_images(missing, "failed", "Image not in library")
+            return False, missing, log_entries
+
+        # Update nodes to syncing status
+        syncing_refs = [ref for ref, _ in sync_tasks]
+        log_entries.append(f"Pushing {len(sync_tasks)} image(s) to agent {host.name}...")
+        update_nodes_for_images(syncing_refs, "syncing", f"Pushing image to {host.name}...")
 
         # Wait for syncs to complete with timeout
         try:
@@ -439,19 +477,37 @@ async def ensure_images_for_deployment(
 
             # Check results
             still_missing = []
+            synced_images = []
             for (reference, _), result in zip(sync_tasks, results):
                 if isinstance(result, Exception):
                     still_missing.append(reference)
+                    log_entries.append(f"  {reference}: FAILED - {str(result)[:100]}")
                 elif isinstance(result, tuple):
                     success, error = result
                     if not success:
                         still_missing.append(reference)
+                        log_entries.append(f"  {reference}: FAILED - {error or 'Unknown error'}")
+                    else:
+                        synced_images.append(reference)
+                        log_entries.append(f"  {reference}: synced successfully")
 
-            return len(still_missing) == 0, still_missing
+            # Update node states based on results
+            if synced_images:
+                update_nodes_for_images(synced_images, None, None)  # Clear status on success
+            if still_missing:
+                update_nodes_for_images(still_missing, "failed", "Image sync failed")
+
+            if not still_missing:
+                log_entries.append(f"All {len(synced_images)} image(s) synced successfully")
+            else:
+                log_entries.append(f"Image sync completed with {len(still_missing)} failure(s)")
+
+            return len(still_missing) == 0, still_missing, log_entries
 
         except asyncio.TimeoutError:
-            print(f"Image sync timed out after {timeout}s")
-            return False, missing
+            log_entries.append(f"Image sync timed out after {timeout}s")
+            update_nodes_for_images(syncing_refs, "failed", "Sync timed out")
+            return False, missing, log_entries
 
     finally:
         if own_session:
@@ -488,3 +544,70 @@ def get_images_from_topology(topology_yaml: str) -> list[str]:
     except Exception as e:
         print(f"Error parsing topology: {e}")
         return []
+
+
+def get_image_to_nodes_map(topology_yaml: str) -> dict[str, list[str]]:
+    """Extract a mapping from image references to node names.
+
+    Args:
+        topology_yaml: The topology.yml content
+
+    Returns:
+        Dict mapping image references to list of node names using that image
+    """
+    import yaml
+
+    try:
+        topology = yaml.safe_load(topology_yaml)
+        if not topology:
+            return {}
+
+        image_to_nodes: dict[str, list[str]] = {}
+        nodes = topology.get("topology", {}).get("nodes", {})
+
+        for node_name, node_config in nodes.items():
+            if isinstance(node_config, dict):
+                image = node_config.get("image")
+                if image:
+                    if image not in image_to_nodes:
+                        image_to_nodes[image] = []
+                    image_to_nodes[image].append(node_name)
+
+        return image_to_nodes
+
+    except Exception as e:
+        print(f"Error parsing topology: {e}")
+        return {}
+
+
+def update_node_image_sync_status(
+    database: Session,
+    lab_id: str,
+    node_names: list[str],
+    status: str | None,
+    message: str | None = None,
+) -> None:
+    """Update image sync status for nodes.
+
+    Args:
+        database: Database session
+        lab_id: Lab ID
+        node_names: List of node names to update
+        status: New status (None, "checking", "syncing", "synced", "failed")
+        message: Optional message (progress or error)
+    """
+    if not node_names:
+        return
+
+    # Update NodeState records
+    database.query(models.NodeState).filter(
+        models.NodeState.lab_id == lab_id,
+        models.NodeState.node_name.in_(node_names),
+    ).update(
+        {
+            models.NodeState.image_sync_status: status,
+            models.NodeState.image_sync_message: message,
+        },
+        synchronize_session=False,
+    )
+    database.commit()

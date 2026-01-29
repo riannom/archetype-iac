@@ -153,6 +153,8 @@ class JobOut(BaseModel):
     timeout_at: datetime | None = None  # When job will/did timeout
     is_stuck: bool = False  # True if past expected runtime
     error_summary: str | None = None  # One-liner error message for failed jobs
+    # Image sync events that occurred before job started (for task log display)
+    image_sync_events: list[str] | None = None
 
     class Config:
         from_attributes = True
@@ -246,6 +248,10 @@ class NodeStateOut(BaseModel):
     is_ready: bool = False
     # Boot timestamp for tracking how long boot is taking
     boot_started_at: datetime | None = None
+    # Image sync status: null (not syncing), "checking", "syncing", "synced", "failed"
+    image_sync_status: str | None = None
+    # Image sync progress/error message
+    image_sync_message: str | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -155,6 +155,10 @@ class NodeState(Base):
     is_ready: Mapped[bool] = mapped_column(default=False)
     # Timestamp when container started booting (for tracking boot duration)
     boot_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Image sync status: null (not syncing), "checking", "syncing", "synced", "failed"
+    image_sync_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Image sync progress/error message
+    image_sync_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

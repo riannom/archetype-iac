@@ -38,6 +38,10 @@ interface NodeStateEntry {
   error_message?: string | null;
   is_ready?: boolean;
   boot_started_at?: string | null;
+  // Image sync status: null (not syncing), "checking", "syncing", "synced", "failed"
+  image_sync_status?: string | null;
+  // Image sync progress/error message
+  image_sync_message?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1229,9 +1233,21 @@ const StudioPage: React.FC = () => {
         body: JSON.stringify(graph),
       });
       addTaskLogEntry('info', 'Deploying lab...');
-      await studioRequest(`/labs/${activeLab.id}/up`, {
+      const jobResponse = await studioRequest<{ id: string; image_sync_events?: string[] }>(`/labs/${activeLab.id}/up`, {
         method: 'POST',
       });
+      // Log image sync events if any
+      if (jobResponse.image_sync_events && jobResponse.image_sync_events.length > 0) {
+        for (const event of jobResponse.image_sync_events) {
+          // Determine log level based on event content
+          const level = event.toLowerCase().includes('failed') || event.toLowerCase().includes('error')
+            ? 'warning'
+            : event.toLowerCase().includes('success') || event.toLowerCase().includes('synced')
+            ? 'success'
+            : 'info';
+          addTaskLogEntry(level, event);
+        }
+      }
       addTaskLogEntry('success', 'Lab deployment queued');
       loadGraph(activeLab.id);
       loadJobs(activeLab.id, nodes);
@@ -1365,6 +1381,7 @@ const StudioPage: React.FC = () => {
                   portManager={portManager}
                   onOpenConfigViewer={handleOpenConfigViewer}
                   agents={agents}
+                  nodeStates={nodeStates}
                 />
               </div>
             </div>

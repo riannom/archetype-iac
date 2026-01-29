@@ -233,6 +233,7 @@ async def lab_up(
             raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
     # Pre-deploy image sync check (if enabled)
+    image_sync_log: list[str] = []
     if settings.image_sync_enabled and settings.image_sync_pre_deploy_check and clab_yaml:
         from app.tasks.image_sync import get_images_from_topology, ensure_images_for_deployment
 
@@ -255,11 +256,13 @@ async def lab_up(
                 target_host_id = agent.id if agent else None
 
             if target_host_id:
-                all_ready, missing = await ensure_images_for_deployment(
+                all_ready, missing, image_sync_log = await ensure_images_for_deployment(
                     target_host_id,
                     image_refs,
                     timeout=settings.image_sync_timeout,
                     database=database,
+                    lab_id=lab.id,
+                    topology_yaml=clab_yaml,
                 )
                 if not all_ready and missing:
                     # Images still missing after sync attempt
@@ -289,7 +292,11 @@ async def lab_up(
             job.id, lab.id, "up", topology_yaml=clab_yaml, provider=lab_provider
         ))
 
-    return schemas.JobOut.model_validate(job)
+    # Build response with image sync events
+    job_out = schemas.JobOut.model_validate(job)
+    if image_sync_log:
+        job_out.image_sync_events = image_sync_log
+    return job_out
 
 
 @router.post("/labs/{lab_id}/down")

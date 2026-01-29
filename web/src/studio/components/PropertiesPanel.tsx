@@ -6,6 +6,22 @@ import InterfaceSelect from './InterfaceSelect';
 import { PortManager } from '../hooks/usePortManager';
 import ExternalNetworkConfig from './ExternalNetworkConfig';
 
+interface NodeStateEntry {
+  id: string;
+  lab_id: string;
+  node_id: string;
+  node_name: string;
+  desired_state: 'stopped' | 'running';
+  actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'error';
+  error_message?: string | null;
+  is_ready?: boolean;
+  boot_started_at?: string | null;
+  image_sync_status?: string | null;
+  image_sync_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface PropertiesPanelProps {
   selectedItem: Node | Link | Annotation | null;
   onUpdateNode: (id: string, updates: Partial<Node>) => void;
@@ -21,10 +37,11 @@ interface PropertiesPanelProps {
   portManager: PortManager;
   onOpenConfigViewer?: (nodeId: string, nodeName: string) => void;
   agents?: { id: string; name: string }[];
+  nodeStates?: Record<string, NodeStateEntry>;
 }
 
 const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
-  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, agents = []
+  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, agents = [], nodeStates = {}
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'hardware' | 'connectivity' | 'config'>('general');
 
@@ -139,6 +156,9 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   const nodeLinks = links.filter(l => l.source === node.id || l.target === node.id);
   const model = deviceModels.find(m => m.id === node.model);
   const status = runtimeStates[node.id] || 'stopped';
+  const nodeState = nodeStates[node.id];
+  const imageSyncStatus = nodeState?.image_sync_status;
+  const imageSyncMessage = nodeState?.image_sync_message;
 
   // Check if any nodes are currently running (lab is deployed)
   const hasRunningNodes = nodes.some(n => {
@@ -174,6 +194,34 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                  <span className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Status</span>
                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${status === 'running' ? 'text-green-600 dark:text-green-500 border-green-500/20 bg-green-500/5' : status === 'booting' ? 'text-yellow-600 dark:text-yellow-500 border-yellow-500/20 bg-yellow-500/5' : 'text-stone-500 border-stone-300 dark:border-stone-700 bg-stone-100 dark:bg-stone-800'}`}>{status}</span>
                </div>
+               {/* Image sync status indicator */}
+               {imageSyncStatus && (
+                 <div className={`flex items-center gap-2 mt-2 p-2 rounded-lg text-[10px] ${
+                   imageSyncStatus === 'syncing' || imageSyncStatus === 'checking'
+                     ? 'bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400'
+                     : imageSyncStatus === 'failed'
+                     ? 'bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400'
+                     : 'bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400'
+                 }`}>
+                   <i className={`fa-solid ${
+                     imageSyncStatus === 'syncing' ? 'fa-cloud-arrow-up fa-beat-fade' :
+                     imageSyncStatus === 'checking' ? 'fa-magnifying-glass fa-beat-fade' :
+                     imageSyncStatus === 'failed' ? 'fa-circle-exclamation' :
+                     'fa-circle-check'
+                   }`} />
+                   <div className="flex-1">
+                     <div className="font-bold uppercase">
+                       {imageSyncStatus === 'syncing' ? 'Pushing Image' :
+                        imageSyncStatus === 'checking' ? 'Checking Image' :
+                        imageSyncStatus === 'failed' ? 'Image Sync Failed' :
+                        'Image Ready'}
+                     </div>
+                     {imageSyncMessage && (
+                       <div className="text-[9px] opacity-75 mt-0.5">{imageSyncMessage}</div>
+                     )}
+                   </div>
+                 </div>
+               )}
                <div className="grid grid-cols-2 gap-2 mt-4">
                   {status === 'stopped' ? (
                     <button
