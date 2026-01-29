@@ -23,9 +23,11 @@ interface RuntimeControlProps {
   studioRequest: <T>(path: string, options?: RequestInit) => Promise<T>;
   onOpenConfigViewer?: () => void;
   onOpenNodeConfig?: (nodeId: string, nodeName: string) => void;
+  agents?: { id: string; name: string }[];
+  onUpdateNode?: (id: string, updates: Partial<Node>) => void;
 }
 
-const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig }) => {
+const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig, agents = [], onUpdateNode }) => {
   const [isExtracting, setIsExtracting] = useState(false);
 
   // Filter to device nodes only (external networks don't have runtime status)
@@ -198,13 +200,27 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      {hostName ? (
+                      {agents.length > 1 ? (
+                        <select
+                          value={node.host || ''}
+                          onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
+                          disabled={status === 'running' || status === 'booting'}
+                          className="bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <option value="">Auto</option>
+                          {agents.map((agent) => (
+                            <option key={agent.id} value={agent.id}>
+                              {agent.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : hostName ? (
                         <div className="flex items-center gap-1.5">
                           <i className="fa-solid fa-server text-stone-400 dark:text-stone-500 text-[10px]"></i>
                           <span className="text-xs text-stone-600 dark:text-stone-400">{hostName}</span>
                         </div>
                       ) : (
-                        <span className="text-stone-400 dark:text-stone-600 text-xs">-</span>
+                        <span className="text-stone-400 dark:text-stone-600 text-xs">Auto</span>
                       )}
                     </td>
                     <td className="px-6 py-4">

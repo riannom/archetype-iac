@@ -240,6 +240,31 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                </div>
             </div>
 
+            {/* Agent Placement - only show when multiple agents available */}
+            {agents.length > 1 && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Agent Placement</label>
+                <select
+                  value={node.host || ''}
+                  onChange={(e) => onUpdateNode(node.id, { host: e.target.value || undefined })}
+                  disabled={status === 'running' || status === 'booting'}
+                  className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500 appearance-none disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <option value="">Auto (any available agent)</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[9px] text-stone-400 dark:text-stone-500">
+                  {status === 'running' || status === 'booting'
+                    ? 'Stop node to change agent placement'
+                    : 'Select which agent runs this node'}
+                </p>
+              </div>
+            )}
+
             <div className="space-y-2">
               <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Display Name</label>
               <input type="text" value={node.name} onChange={(e) => onUpdateNode(node.id, { name: e.target.value })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />

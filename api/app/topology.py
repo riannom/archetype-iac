@@ -190,6 +190,8 @@ def graph_to_yaml(graph: TopologyGraph) -> str:
             node_data["mgmt"] = node.mgmt
         if node.network_mode:
             node_data["network-mode"] = node.network_mode
+        if node.host:
+            node_data["host"] = node.host
         if node.vars:
             vars_copy = dict(node.vars)
             if "label" in vars_copy and "name" not in vars_copy:

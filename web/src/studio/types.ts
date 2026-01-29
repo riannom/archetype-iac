@@ -122,6 +122,7 @@ export interface DeviceNode extends BaseNode {
   cpu?: number;
   memory?: number;
   config?: string;
+  host?: string; // Agent ID for multi-host placement
 }
 
 // External network node - represents an external network connection
