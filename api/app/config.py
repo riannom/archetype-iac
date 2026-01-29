@@ -104,5 +104,13 @@ class Settings(BaseSettings):
     # Chunk size for streaming image data (1MB default)
     image_sync_chunk_size: int = 1048576
 
+    # ISO import settings
+    # Per-file extraction timeout (seconds) - large qcow2 files can take a while
+    iso_extraction_timeout: int = 1800  # 30 minutes
+    # Overall import job timeout (seconds)
+    iso_import_timeout: int = 14400  # 4 hours
+    # Docker load timeout for container images (seconds)
+    iso_docker_load_timeout: int = 600  # 10 minutes
+
 
 settings = Settings()
