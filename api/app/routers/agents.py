@@ -22,21 +22,25 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 def get_latest_agent_version() -> str:
     """Get the latest available agent version.
 
-    Reads from the agent/VERSION file in the repository.
+    Reads from the agent/VERSION file.
 
     Returns:
         Version string (e.g., "0.2.0")
     """
-    # Try to find the VERSION file relative to this file
-    # This file is at api/app/routers/agents.py
-    # Agent VERSION is at agent/VERSION
-    version_file = Path(__file__).parent.parent.parent.parent / "agent" / "VERSION"
+    # Try multiple possible locations for the VERSION file
+    possible_paths = [
+        # In Docker container: /app/agent/VERSION
+        Path("/app/agent/VERSION"),
+        # Relative to this file in development: api/app/routers/agents.py -> agent/VERSION
+        Path(__file__).parent.parent.parent.parent / "agent" / "VERSION",
+    ]
 
-    if version_file.exists():
-        try:
-            return version_file.read_text().strip()
-        except Exception:
-            pass
+    for version_file in possible_paths:
+        if version_file.exists():
+            try:
+                return version_file.read_text().strip()
+            except Exception:
+                pass
 
     return "0.0.0"
 
