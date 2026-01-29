@@ -2,18 +2,42 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models
 from app.auth import get_current_user
+from app.config import settings
 from app.utils.lab import get_lab_or_404
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["admin"])
+
+
+# --- Log Query Models ---
+
+class LogEntry(BaseModel):
+    """A single log entry from Loki."""
+    timestamp: str
+    level: str
+    service: str
+    message: str
+    correlation_id: str | None = None
+    logger: str | None = None
+    extra: dict[str, Any] | None = None
+
+
+class LogQueryResponse(BaseModel):
+    """Response from log query endpoint."""
+    entries: list[LogEntry]
+    total_count: int
+    has_more: bool
 
 
 @router.post("/reconcile")
@@ -229,3 +253,138 @@ async def refresh_lab_status(
             "nodes": [],
             "error": str(e),
         }
+
+
+# --- System Logs Endpoint ---
+
+@router.get("/logs")
+async def get_system_logs(
+    service: str | None = Query(None, description="Filter by service (api, worker, agent)"),
+    level: str | None = Query(None, description="Filter by log level (INFO, WARNING, ERROR)"),
+    since: str = Query("1h", description="Time range (15m, 1h, 24h)"),
+    search: str | None = Query(None, description="Search text in message"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum entries to return"),
+    current_user: models.User = Depends(get_current_user),
+) -> LogQueryResponse:
+    """Query system logs from Loki.
+
+    Requires admin access. Returns recent log entries with optional filtering.
+
+    Args:
+        service: Filter to specific service (api, worker, agent)
+        level: Filter to specific log level
+        since: Time range to query (15m, 1h, 24h)
+        search: Search text within log messages
+        limit: Maximum number of entries to return
+
+    Returns:
+        List of log entries matching the query
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Parse time range
+    time_ranges = {
+        "15m": 15 * 60,
+        "1h": 60 * 60,
+        "24h": 24 * 60 * 60,
+    }
+    seconds = time_ranges.get(since, 3600)
+    start_ns = (int(datetime.now(timezone.utc).timestamp()) - seconds) * 1_000_000_000
+
+    # Build LogQL query
+    # Base selector for archetype services
+    label_selectors = []
+    if service:
+        label_selectors.append(f'service="{service}"')
+    else:
+        label_selectors.append('service=~"api|worker|agent"')
+
+    selector = "{" + ",".join(label_selectors) + "}"
+
+    # Add pipeline stages for filtering
+    pipeline = []
+
+    # JSON parsing (logs are JSON formatted)
+    pipeline.append("| json")
+
+    if level:
+        pipeline.append(f'| level="{level}"')
+
+    if search:
+        # Line filter for search text
+        pipeline.append(f'|~ "{search}"')
+
+    query = selector + " " + " ".join(pipeline)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{settings.loki_url}/loki/api/v1/query_range",
+                params={
+                    "query": query,
+                    "start": start_ns,
+                    "limit": limit,
+                    "direction": "backward",  # Most recent first
+                },
+            )
+
+            if response.status_code != 200:
+                logger.warning(f"Loki query failed: {response.status_code} - {response.text}")
+                # Return empty result if Loki is not available
+                return LogQueryResponse(entries=[], total_count=0, has_more=False)
+
+            data = response.json()
+
+    except httpx.ConnectError:
+        logger.warning("Cannot connect to Loki - centralized logging may not be configured")
+        return LogQueryResponse(entries=[], total_count=0, has_more=False)
+    except Exception as e:
+        logger.error(f"Error querying Loki: {e}")
+        return LogQueryResponse(entries=[], total_count=0, has_more=False)
+
+    # Parse Loki response
+    entries = []
+    result_data = data.get("data", {}).get("result", [])
+
+    for stream in result_data:
+        labels = stream.get("stream", {})
+        service_name = labels.get("service", "unknown")
+
+        for value in stream.get("values", []):
+            timestamp_ns, log_line = value
+
+            # Parse the JSON log line
+            try:
+                import json
+                log_data = json.loads(log_line)
+                entry = LogEntry(
+                    timestamp=log_data.get("timestamp", ""),
+                    level=log_data.get("level", "INFO"),
+                    service=service_name,
+                    message=log_data.get("message", log_line),
+                    correlation_id=log_data.get("correlation_id"),
+                    logger=log_data.get("logger"),
+                    extra=log_data.get("extra"),
+                )
+            except (json.JSONDecodeError, TypeError):
+                # Non-JSON log line
+                # Convert nanosecond timestamp
+                ts = datetime.fromtimestamp(int(timestamp_ns) / 1_000_000_000, tz=timezone.utc)
+                entry = LogEntry(
+                    timestamp=ts.isoformat(),
+                    level="INFO",
+                    service=service_name,
+                    message=log_line,
+                )
+
+            entries.append(entry)
+
+    # Sort by timestamp (most recent first)
+    entries.sort(key=lambda e: e.timestamp, reverse=True)
+
+    return LogQueryResponse(
+        entries=entries[:limit],
+        total_count=len(entries),
+        has_more=len(entries) > limit,
+    )

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../../theme/index';
 import { useUser } from '../../contexts/UserContext';
 import SystemStatusStrip from './SystemStatusStrip';
+import SystemLogsModal from './SystemLogsModal';
 import { ArchetypeIcon } from '../../components/icons';
 
 interface LabSummary {
@@ -74,6 +75,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   const { user } = useUser();
   const navigate = useNavigate();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
+  const [showSystemLogs, setShowSystemLogs] = useState(false);
   const [editingLabId, setEditingLabId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const isAdmin = user?.is_admin ?? false;
@@ -119,14 +121,24 @@ const Dashboard: React.FC<DashboardProps> = ({
 
         <div className="flex items-center gap-3">
           {isAdmin && (
-            <button
-              onClick={() => navigate('/hosts')}
-              className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
-              title="Manage Hosts"
-            >
-              <i className="fa-solid fa-server text-xs"></i>
-              <span className="text-[10px] font-bold uppercase">Hosts</span>
-            </button>
+            <>
+              <button
+                onClick={() => navigate('/hosts')}
+                className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+                title="Manage Hosts"
+              >
+                <i className="fa-solid fa-server text-xs"></i>
+                <span className="text-[10px] font-bold uppercase">Hosts</span>
+              </button>
+              <button
+                onClick={() => setShowSystemLogs(true)}
+                className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+                title="View System Logs"
+              >
+                <i className="fa-solid fa-file-lines text-xs"></i>
+                <span className="text-[10px] font-bold uppercase">Logs</span>
+              </button>
+            </>
           )}
 
           <button
@@ -280,6 +292,11 @@ const Dashboard: React.FC<DashboardProps> = ({
     <ThemeSelector
       isOpen={showThemeSelector}
       onClose={() => setShowThemeSelector(false)}
+    />
+
+    <SystemLogsModal
+      isOpen={showSystemLogs}
+      onClose={() => setShowSystemLogs(false)}
     />
     </>
   );

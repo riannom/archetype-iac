@@ -1207,17 +1207,21 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
     """Execute a sync job in the background.
 
     Streams the Docker image to the agent and updates job progress.
+    Uses structured error handling for better error messages.
     """
+    import logging
     from app.db import SessionLocal
+    from app.errors import ErrorCategory, StructuredError, categorize_httpx_error
 
-    print(f"Starting sync job {job_id}: {image_id} -> {host.name}")
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting sync job {job_id}: {image_id} -> {host.name}")
 
     session = SessionLocal()
     try:
         # Get fresh job record
         job = session.get(models.ImageSyncJob, job_id)
         if not job:
-            print(f"Sync job {job_id} not found")
+            logger.warning(f"Sync job {job_id} not found")
             return
 
         job.status = "transferring"
@@ -1241,14 +1245,11 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                 job.total_bytes = int(result.stdout.strip())
                 session.commit()
         except Exception as e:
-            print(f"Could not get image size: {e}")
+            logger.warning(f"Could not get image size for {reference}: {e}")
 
         # Stream image to agent
         # Use docker save and pipe to agent
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout)) as client:
-            # Create multipart form with streaming data
-            from urllib.parse import quote
-
             # Build agent URL
             agent_url = f"http://{host.address}/images/receive"
 
@@ -1280,18 +1281,35 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                 "job_id": job_id,
             }
 
-            response = await client.post(
-                agent_url,
-                files=files,
-                params=params,
-            )
+            try:
+                response = await client.post(
+                    agent_url,
+                    files=files,
+                    params=params,
+                )
+                response.raise_for_status()
 
-            if response.status_code != 200:
-                raise ValueError(f"Agent returned {response.status_code}: {response.text}")
+                result = response.json()
+                if not result.get("success"):
+                    raise ValueError(result.get("error", "Agent failed to load image"))
 
-            result = response.json()
-            if not result.get("success"):
-                raise ValueError(result.get("error", "Agent failed to load image"))
+            except httpx.TimeoutException as e:
+                structured_error = categorize_httpx_error(
+                    e, host_name=host.name, agent_id=host.id, job_id=job_id
+                )
+                raise ValueError(structured_error.to_error_message()) from e
+
+            except httpx.ConnectError as e:
+                structured_error = categorize_httpx_error(
+                    e, host_name=host.name, agent_id=host.id, job_id=job_id
+                )
+                raise ValueError(structured_error.to_error_message()) from e
+
+            except httpx.HTTPStatusError as e:
+                structured_error = categorize_httpx_error(
+                    e, host_name=host.name, agent_id=host.id, job_id=job_id
+                )
+                raise ValueError(structured_error.to_error_message()) from e
 
         # Success
         job.status = "completed"
@@ -1311,18 +1329,21 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
             image_host.error_message = None
             session.commit()
 
-        print(f"Sync job {job_id} completed successfully")
+        logger.info(f"Sync job {job_id} completed successfully: {image_id} -> {host.name}")
 
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        print(f"Sync job {job_id} failed: {e}")
+        logger.error(f"Sync job {job_id} failed: {e}")
+        logger.debug(traceback.format_exc())
+
+        # Determine error message - use structured error if available
+        error_message = str(e)
 
         # Update job status
         job = session.get(models.ImageSyncJob, job_id)
         if job:
             job.status = "failed"
-            job.error_message = str(e)
+            job.error_message = error_message
             job.completed_at = datetime.now(timezone.utc)
             session.commit()
 
@@ -1333,7 +1354,7 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
         ).first()
         if image_host:
             image_host.status = "failed"
-            image_host.error_message = str(e)
+            image_host.error_message = error_message
             session.commit()
 
     finally:

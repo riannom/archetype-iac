@@ -326,6 +326,96 @@ async def check_jobs_on_offline_agents():
         session.close()
 
 
+async def check_stuck_image_sync_jobs():
+    """Find and handle ImageSyncJobs that are stuck.
+
+    This function monitors ImageSyncJob records for stuck jobs:
+    1. Jobs in 'pending' state older than image_sync_job_pending_timeout (2 min)
+    2. Jobs in 'transferring' or 'loading' state past image_sync_timeout (10 min)
+    3. Jobs assigned to hosts that have gone offline
+
+    Stuck jobs are marked as failed with detailed error messages.
+    """
+    session = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+
+        # Find all active image sync jobs
+        active_jobs = (
+            session.query(models.ImageSyncJob)
+            .filter(models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]))
+            .all()
+        )
+
+        if not active_jobs:
+            return
+
+        for job in active_jobs:
+            try:
+                # Check host status
+                host = session.get(models.Host, job.host_id)
+                host_offline = host and host.status != "online"
+
+                # Determine if job is stuck
+                is_stuck = False
+                error_reason = ""
+
+                if job.status == "pending":
+                    # Pending jobs should start within pending timeout
+                    pending_cutoff = now - timedelta(seconds=settings.image_sync_job_pending_timeout)
+                    if job.created_at.replace(tzinfo=timezone.utc) < pending_cutoff:
+                        is_stuck = True
+                        error_reason = f"Job stuck in pending state for over {settings.image_sync_job_pending_timeout}s"
+                        if host_offline:
+                            error_reason += f" (target host {host.name if host else job.host_id} is offline)"
+
+                elif job.status in ["transferring", "loading"]:
+                    # Active jobs should complete within image_sync_timeout
+                    if job.started_at:
+                        timeout_cutoff = now - timedelta(seconds=settings.image_sync_timeout)
+                        if job.started_at.replace(tzinfo=timezone.utc) < timeout_cutoff:
+                            is_stuck = True
+                            error_reason = f"Job timed out after {settings.image_sync_timeout}s in {job.status} state"
+
+                    # Also check for offline host
+                    if host_offline:
+                        is_stuck = True
+                        error_reason = f"Target host {host.name if host else job.host_id} went offline during transfer"
+
+                if is_stuck:
+                    logger.warning(
+                        f"Detected stuck ImageSyncJob {job.id}: status={job.status}, "
+                        f"image_id={job.image_id}, host_id={job.host_id}, reason={error_reason}"
+                    )
+
+                    # Mark job as failed
+                    job.status = "failed"
+                    job.error_message = error_reason
+                    job.completed_at = now
+                    session.commit()
+
+                    # Update corresponding ImageHost record
+                    image_host = session.query(models.ImageHost).filter(
+                        models.ImageHost.image_id == job.image_id,
+                        models.ImageHost.host_id == job.host_id
+                    ).first()
+
+                    if image_host:
+                        image_host.status = "failed"
+                        image_host.error_message = error_reason
+                        session.commit()
+
+                    logger.info(f"Marked stuck ImageSyncJob {job.id} as failed: {error_reason}")
+
+            except Exception as e:
+                logger.error(f"Error checking ImageSyncJob {job.id}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error in ImageSyncJob health check: {e}")
+    finally:
+        session.close()
+
+
 async def job_health_monitor():
     """Background task to periodically check job health.
 
@@ -333,6 +423,7 @@ async def job_health_monitor():
     1. Checks for stuck running jobs
     2. Checks for orphaned queued jobs
     3. Checks for jobs on offline agents
+    4. Checks for stuck image sync jobs
     """
     logger.info(
         f"Job health monitor started "
@@ -348,6 +439,7 @@ async def job_health_monitor():
             await check_stuck_jobs()
             await check_orphaned_queued_jobs()
             await check_jobs_on_offline_agents()
+            await check_stuck_image_sync_jobs()
 
         except asyncio.CancelledError:
             logger.info("Job health monitor stopped")

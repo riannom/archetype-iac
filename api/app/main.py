@@ -5,9 +5,12 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -16,11 +19,20 @@ from app.db import SessionLocal
 from app.config import settings
 from app.auth import get_current_user, hash_password
 from app.catalog import list_devices as catalog_devices, list_images as catalog_images
+from app.logging_config import (
+    correlation_id_var,
+    generate_correlation_id,
+    set_correlation_id,
+    setup_logging,
+)
 from app.middleware import CurrentUserMiddleware
 from app.routers import admin, agents, auth, callbacks, console, events, images, jobs, labs, permissions
 from app.tasks.health import agent_health_monitor
 from app.tasks.job_health import job_health_monitor
 from app.tasks.reconciliation import state_reconciliation_monitor
+
+# Configure structured logging at module load
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +112,37 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Netlab GUI API", version="0.1.0", lifespan=lifespan)
 
-# Middleware
+
+# Correlation ID middleware for request tracing
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """Middleware to handle correlation IDs for request tracing.
+
+    Extracts X-Correlation-ID from incoming requests or generates a new one.
+    Sets the correlation ID in context for use by loggers throughout the request.
+    Returns the correlation ID in the response header.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        # Extract correlation ID from header or generate new one
+        correlation_id = request.headers.get("X-Correlation-ID")
+        if not correlation_id:
+            correlation_id = generate_correlation_id()
+
+        # Set in context for logging
+        token = correlation_id_var.set(correlation_id)
+
+        try:
+            response = await call_next(request)
+            # Add correlation ID to response headers
+            response.headers["X-Correlation-ID"] = correlation_id
+            return response
+        finally:
+            # Reset context
+            correlation_id_var.reset(token)
+
+
+# Middleware (order matters - correlation ID should be early)
+app.add_middleware(CorrelationIdMiddleware)
 if settings.session_secret:
     app.add_middleware(SessionMiddleware, secret_key=settings.session_secret, same_site="lax")
 app.add_middleware(

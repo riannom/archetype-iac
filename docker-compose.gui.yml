@@ -43,9 +43,21 @@ services:
       - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-}
       - OIDC_SCOPES=${OIDC_SCOPES:-openid profile email}
       - OIDC_APP_REDIRECT_URL=${OIDC_APP_REDIRECT_URL:-}
+      # Logging
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOKI_URL=${LOKI_URL:-http://loki:3100}
     volumes:
       - netlab_workspaces:/var/lib/netlab-gui
       - /var/run/docker.sock:/var/run/docker.sock
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service"
+    labels:
+      - "service=api"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
@@ -70,9 +82,19 @@ services:
       - NETLAB_WORKSPACE=${NETLAB_WORKSPACE:-/var/lib/netlab-gui}
       - NETLAB_PROVIDER=${NETLAB_PROVIDER:-clab}
       - JWT_SECRET=${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - netlab_workspaces:/var/lib/netlab-gui
       - /var/run/docker.sock:/var/run/docker.sock
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service"
+    labels:
+      - "service=worker"
 
   postgres:
     image: postgres:16
@@ -113,17 +135,68 @@ services:
       - ARCHETYPE_AGENT_ENABLE_CONTAINERLAB=true
       - ARCHETYPE_AGENT_ENABLE_VXLAN=true
       - ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
+      - ARCHETYPE_AGENT_LOG_FORMAT=${LOG_FORMAT:-json}
+      - ARCHETYPE_AGENT_LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       # Use bind mount so containerlab's paths match between agent and cEOS containers
       - /var/lib/archetype-agent:/var/lib/archetype-agent
       - /var/run/docker.sock:/var/run/docker.sock
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service"
+    labels:
+      - "service=agent"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
       interval: 30s
       timeout: 5s
       retries: 3
 
+  # --- Centralized Logging Stack ---
+
+  loki:
+    image: grafana/loki:2.9.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    depends_on:
+      - loki
+
 volumes:
   netlab_workspaces:
   agent_workspaces:
   pg_data:
+  loki_data:
+  grafana_data:

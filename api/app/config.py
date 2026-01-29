@@ -82,9 +82,17 @@ class Settings(BaseSettings):
     feature_multihost_labs: bool = True
     feature_vxlan_overlay: bool = True
 
+    # Logging configuration
+    log_format: str = "json"  # "json" or "text"
+    log_level: str = "INFO"
+    # Loki URL for querying logs (when centralized logging is enabled)
+    loki_url: str = "http://loki:3100"
+
     # Image synchronization settings
     # Enable/disable image sync feature
     image_sync_enabled: bool = True
+    # ImageSyncJob pending timeout (seconds) - jobs in pending state longer than this are considered stuck
+    image_sync_job_pending_timeout: int = 120  # 2 minutes
     # Fallback strategy when agent has no preference: push, pull, on_demand, disabled
     image_sync_fallback_strategy: str = "on_demand"
     # Always check for missing images before deployment

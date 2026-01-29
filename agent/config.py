@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # Concurrency limits
     max_concurrent_jobs: int = 4
 
+    # Logging configuration
+    log_format: str = "json"  # "json" or "text"
+    log_level: str = "INFO"
+
     class Config:
         env_prefix = "ARCHETYPE_AGENT_"
 

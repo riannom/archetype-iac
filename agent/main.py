@@ -75,10 +75,15 @@ from agent.updater import (
     perform_docker_update,
     perform_systemd_update,
 )
-
+from agent.logging_config import setup_agent_logging
 
 # Generate agent ID if not configured
 AGENT_ID = settings.agent_id or str(uuid.uuid4())[:8]
+
+# Configure structured logging
+setup_agent_logging(AGENT_ID)
+import logging
+logger = logging.getLogger(__name__)
 
 # Track registration state
 _registered = False
@@ -146,11 +151,11 @@ async def forward_event_to_controller(event):
                 timeout=5.0,
             )
             if response.status_code == 200:
-                print(f"Forwarded event: {event.event_type.value} for {event.node_name}")
+                logger.debug(f"Forwarded event: {event.event_type.value} for {event.node_name}")
             else:
-                print(f"Failed to forward event: HTTP {response.status_code}")
+                logger.warning(f"Failed to forward event: HTTP {response.status_code}")
     except Exception as e:
-        print(f"Error forwarding event to controller: {e}")
+        logger.error(f"Error forwarding event to controller: {e}")
 
 
 def get_workspace(lab_id: str) -> Path:
@@ -289,7 +294,7 @@ def get_resource_usage() -> dict:
             "container_details": container_details,
         }
     except Exception as e:
-        print(f"Failed to gather resource usage: {e}")
+        logger.warning(f"Failed to gather resource usage: {e}")
         return {}
 
 
@@ -334,21 +339,21 @@ async def register_with_controller() -> bool:
                     # Use the assigned ID from controller (may differ if we're
                     # re-registering an existing agent with a new generated ID)
                     if result.assigned_id and result.assigned_id != AGENT_ID:
-                        print(f"Controller assigned existing ID: {result.assigned_id}")
+                        logger.info(f"Controller assigned existing ID: {result.assigned_id}")
                         AGENT_ID = result.assigned_id
-                    print(f"Registered with controller as {AGENT_ID}")
+                    logger.info(f"Registered with controller as {AGENT_ID}")
                     return True
                 else:
-                    print(f"Registration rejected: {result.message}")
+                    logger.warning(f"Registration rejected: {result.message}")
                     return False
             else:
-                print(f"Registration failed: HTTP {response.status_code}")
+                logger.error(f"Registration failed: HTTP {response.status_code}")
                 return False
     except httpx.ConnectError:
-        print(f"Cannot connect to controller at {settings.controller_url}")
+        logger.warning(f"Cannot connect to controller at {settings.controller_url}")
         return False
     except Exception as e:
-        print(f"Registration error: {e}")
+        logger.error(f"Registration error: {e}")
         return False
 
 
@@ -371,7 +376,7 @@ async def send_heartbeat() -> HeartbeatResponse | None:
             if response.status_code == 200:
                 return HeartbeatResponse(**response.json())
     except Exception as e:
-        print(f"Heartbeat failed: {e}")
+        logger.warning(f"Heartbeat failed: {e}")
     return None
 
 
@@ -391,7 +396,7 @@ async def heartbeat_loop():
         if response is None:
             # Controller unreachable, mark as unregistered to retry
             _registered = False
-            print("Lost connection to controller, will retry registration")
+            logger.warning("Lost connection to controller, will retry registration")
 
 
 @asynccontextmanager
@@ -399,9 +404,9 @@ async def lifespan(app: FastAPI):
     """Application lifespan - register on startup, cleanup on shutdown."""
     global _heartbeat_task, _event_listener_task
 
-    print(f"Agent {AGENT_ID} starting...")
-    print(f"Controller URL: {settings.controller_url}")
-    print(f"Capabilities: {get_capabilities()}")
+    logger.info(f"Agent {AGENT_ID} starting...")
+    logger.info(f"Controller URL: {settings.controller_url}")
+    logger.info(f"Capabilities: {get_capabilities()}")
 
     # Try initial registration
     await register_with_controller()
@@ -416,9 +421,9 @@ async def lifespan(app: FastAPI):
             _event_listener_task = asyncio.create_task(
                 listener.start(forward_event_to_controller)
             )
-            print("Docker event listener started")
+            logger.info("Docker event listener started")
         except Exception as e:
-            print(f"Failed to start Docker event listener: {e}")
+            logger.error(f"Failed to start Docker event listener: {e}")
 
     yield
 
@@ -442,7 +447,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    print(f"Agent {AGENT_ID} shutting down")
+    logger.info(f"Agent {AGENT_ID} shutting down")
 
 
 # Create FastAPI app
@@ -502,11 +507,11 @@ async def trigger_update(request: UpdateRequest) -> UpdateResponse:
 
     The agent reports progress via callbacks to the callback_url.
     """
-    print(f"Update request received: job={request.job_id}, target={request.target_version}")
+    logger.info(f"Update request received: job={request.job_id}, target={request.target_version}")
 
     # Detect deployment mode
     mode = detect_deployment_mode()
-    print(f"Detected deployment mode: {mode.value}")
+    logger.info(f"Detected deployment mode: {mode.value}")
 
     if mode == DeploymentMode.SYSTEMD:
         # Start async update process
@@ -575,9 +580,9 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
     the deploy in the background, POSTing the result to the callback URL when done.
     """
     lab_id = request.lab_id
-    print(f"Deploy request: lab={lab_id}, job={request.job_id}, provider={request.provider.value}")
+    logger.info(f"Deploy request: lab={lab_id}, job={request.job_id}, provider={request.provider.value}")
     if request.callback_url:
-        print(f"  Async mode with callback: {request.callback_url}")
+        logger.debug(f"  Async mode with callback: {request.callback_url}")
 
     # Get or create lock for this lab
     if lab_id not in _deploy_locks:
@@ -607,7 +612,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
     # Synchronous mode (existing behavior)
     # Check if deploy is already in progress
     if lock.locked():
-        print(f"Deploy already in progress for lab {lab_id}, waiting...")
+        logger.info(f"Deploy already in progress for lab {lab_id}, waiting...")
         # Try to acquire lock with timeout
         try:
             async with asyncio.timeout(settings.lock_acquire_timeout):
@@ -616,7 +621,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                     if lab_id in _deploy_results:
                         cached = _deploy_results.get(lab_id)
                         if cached:
-                            print(f"Returning cached deploy result for lab {lab_id}")
+                            logger.debug(f"Returning cached deploy result for lab {lab_id}")
                             # Return the same result but with this job's ID
                             return JobResult(
                                 job_id=request.job_id,
@@ -627,7 +632,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                             )
                     # No cached result, continue with deploy below
         except asyncio.TimeoutError:
-            print(f"Timeout waiting for deploy lock on lab {lab_id}")
+            logger.warning(f"Timeout waiting for deploy lock on lab {lab_id}")
             raise HTTPException(
                 status_code=503,
                 detail=f"Deploy already in progress for lab {lab_id}, try again later"
@@ -640,7 +645,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                 try:
                     provider = get_provider_for_request(request.provider.value)
                     workspace = get_workspace(lab_id)
-                    print(f"Deploy starting: workspace={workspace}")
+                    logger.info(f"Deploy starting: lab={lab_id}, workspace={workspace}")
 
                     result = await provider.deploy(
                         lab_id=lab_id,
@@ -648,7 +653,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                         workspace=workspace,
                     )
 
-                    print(f"Deploy finished: success={result.success}")
+                    logger.info(f"Deploy finished: lab={lab_id}, success={result.success}")
 
                     if result.success:
                         job_result = JobResult(
@@ -674,9 +679,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                     return job_result
 
                 except Exception as e:
-                    print(f"Deploy error: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"Deploy error for lab {lab_id}: {e}", exc_info=True)
                     job_result = JobResult(
                         job_id=request.job_id,
                         status=JobStatus.FAILED,
@@ -686,7 +689,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                     asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
                     return job_result
     except asyncio.TimeoutError:
-        print(f"Timeout waiting for deploy lock on lab {lab_id}")
+        logger.warning(f"Timeout waiting for deploy lock on lab {lab_id}")
         raise HTTPException(
             status_code=503,
             detail=f"Deploy already in progress for lab {lab_id}, try again later"
@@ -720,7 +723,7 @@ async def _execute_deploy_with_callback(
                 try:
                     provider = get_provider_for_request(provider_name)
                     workspace = get_workspace(lab_id)
-                    print(f"Async deploy starting: workspace={workspace}")
+                    logger.info(f"Async deploy starting: lab={lab_id}, workspace={workspace}")
 
                     result = await provider.deploy(
                         lab_id=lab_id,
@@ -728,7 +731,7 @@ async def _execute_deploy_with_callback(
                         workspace=workspace,
                     )
 
-                    print(f"Async deploy finished: success={result.success}")
+                    logger.info(f"Async deploy finished: lab={lab_id}, success={result.success}")
 
                     # Build callback payload
                     payload = CallbackPayload(
@@ -743,9 +746,7 @@ async def _execute_deploy_with_callback(
                     )
 
                 except Exception as e:
-                    print(f"Async deploy error: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"Async deploy error for lab {lab_id}: {e}", exc_info=True)
 
                     payload = CallbackPayload(
                         job_id=job_id,
@@ -756,7 +757,7 @@ async def _execute_deploy_with_callback(
                         completed_at=datetime.now(timezone.utc),
                     )
     except asyncio.TimeoutError:
-        print(f"Async deploy timeout waiting for lock on lab {lab_id}")
+        logger.warning(f"Async deploy timeout waiting for lock on lab {lab_id}")
         payload = CallbackPayload(
             job_id=job_id,
             agent_id=AGENT_ID,
@@ -783,9 +784,9 @@ async def destroy_lab(request: DestroyRequest) -> JobResult:
     If callback_url is provided, returns 202 Accepted immediately and executes
     the destroy in the background, POSTing the result to the callback URL when done.
     """
-    print(f"Destroy request: lab={request.lab_id}, job={request.job_id}")
+    logger.info(f"Destroy request: lab={request.lab_id}, job={request.job_id}")
     if request.callback_url:
-        print(f"  Async mode with callback: {request.callback_url}")
+        logger.debug(f"  Async mode with callback: {request.callback_url}")
 
     # Async callback mode - return immediately and execute in background
     if request.callback_url:
@@ -843,14 +844,14 @@ async def _execute_destroy_with_callback(
     try:
         provider = get_provider_for_request("containerlab")
         workspace = get_workspace(lab_id)
-        print(f"Async destroy starting: workspace={workspace}")
+        logger.info(f"Async destroy starting: lab={lab_id}, workspace={workspace}")
 
         result = await provider.destroy(
             lab_id=lab_id,
             workspace=workspace,
         )
 
-        print(f"Async destroy finished: success={result.success}")
+        logger.info(f"Async destroy finished: lab={lab_id}, success={result.success}")
 
         payload = CallbackPayload(
             job_id=job_id,
@@ -864,9 +865,7 @@ async def _execute_destroy_with_callback(
         )
 
     except Exception as e:
-        print(f"Async destroy error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Async destroy error for lab {lab_id}: {e}", exc_info=True)
 
         payload = CallbackPayload(
             job_id=job_id,
@@ -883,7 +882,7 @@ async def _execute_destroy_with_callback(
 @app.post("/jobs/node-action")
 async def node_action(request: NodeActionRequest) -> JobResult:
     """Start or stop a specific node."""
-    print(f"Node action: lab={request.lab_id}, node={request.node_name}, action={request.action}")
+    logger.info(f"Node action: lab={request.lab_id}, node={request.node_name}, action={request.action}")
 
     # Use default provider for node actions
     provider = get_provider_for_request("containerlab")
@@ -930,7 +929,7 @@ async def node_action(request: NodeActionRequest) -> JobResult:
 @app.post("/labs/status")
 async def lab_status(request: LabStatusRequest) -> LabStatusResponse:
     """Get status of all nodes in a lab."""
-    print(f"Status request: lab={request.lab_id}")
+    logger.debug(f"Status request: lab={request.lab_id}")
 
     # Use default provider for status queries
     provider = get_provider_for_request("containerlab")
@@ -967,7 +966,7 @@ async def extract_configs(lab_id: str) -> ExtractConfigsResponse:
     and saves them to the workspace as startup-config files for persistence.
     Returns both the count and the actual config content for each node.
     """
-    print(f"Extract configs request: lab={lab_id}")
+    logger.info(f"Extract configs request: lab={lab_id}")
 
     try:
         provider = get_provider_for_request("containerlab")
@@ -989,9 +988,7 @@ async def extract_configs(lab_id: str) -> ExtractConfigsResponse:
         )
 
     except Exception as e:
-        print(f"Extract configs error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Extract configs error for lab {lab_id}: {e}", exc_info=True)
         return ExtractConfigsResponse(
             success=False,
             extracted_count=0,
@@ -1007,7 +1004,7 @@ async def start_container(container_name: str) -> dict:
 
     Used by the sync system to start individual nodes without redeploying.
     """
-    print(f"Starting container: {container_name}")
+    logger.info(f"Starting container: {container_name}")
 
     try:
         import docker
@@ -1023,10 +1020,10 @@ async def start_container(container_name: str) -> dict:
     except docker.errors.NotFound:
         raise HTTPException(status_code=404, detail=f"Container '{container_name}' not found")
     except docker.errors.APIError as e:
-        print(f"Docker API error starting {container_name}: {e}")
+        logger.error(f"Docker API error starting {container_name}: {e}")
         return {"success": False, "error": str(e)}
     except Exception as e:
-        print(f"Error starting container {container_name}: {e}")
+        logger.error(f"Error starting container {container_name}: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -1036,7 +1033,7 @@ async def stop_container(container_name: str) -> dict:
 
     Used by the sync system to stop individual nodes without destroying the lab.
     """
-    print(f"Stopping container: {container_name}")
+    logger.info(f"Stopping container: {container_name}")
 
     try:
         import docker
@@ -1052,10 +1049,10 @@ async def stop_container(container_name: str) -> dict:
     except docker.errors.NotFound:
         raise HTTPException(status_code=404, detail=f"Container '{container_name}' not found")
     except docker.errors.APIError as e:
-        print(f"Docker API error stopping {container_name}: {e}")
+        logger.error(f"Docker API error stopping {container_name}: {e}")
         return {"success": False, "error": str(e)}
     except Exception as e:
-        print(f"Error stopping container {container_name}: {e}")
+        logger.error(f"Error stopping container {container_name}: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -1067,7 +1064,7 @@ async def discover_labs() -> DiscoverLabsResponse:
 
     Used by controller to reconcile state after restart.
     """
-    print("Discovering running labs...")
+    logger.info("Discovering running labs...")
 
     # Use default provider for discovery
     provider = get_provider_for_request("containerlab")
@@ -1103,7 +1100,7 @@ async def cleanup_orphans(request: CleanupOrphansRequest) -> CleanupOrphansRespo
     Returns:
         List of removed container names
     """
-    print(f"Cleaning up orphan containers, keeping {len(request.valid_lab_ids)} valid labs")
+    logger.info(f"Cleaning up orphan containers, keeping {len(request.valid_lab_ids)} valid labs")
 
     # Use default provider for cleanup
     provider = get_provider_for_request("containerlab")
@@ -1131,7 +1128,7 @@ async def create_tunnel(request: CreateTunnelRequest) -> CreateTunnelResponse:
             error="VXLAN overlay not enabled on this agent",
         )
 
-    print(f"Creating tunnel: lab={request.lab_id}, link={request.link_id}, remote={request.remote_ip}")
+    logger.info(f"Creating tunnel: lab={request.lab_id}, link={request.link_id}, remote={request.remote_ip}")
 
     try:
         overlay = get_overlay_manager()
@@ -1161,7 +1158,7 @@ async def create_tunnel(request: CreateTunnelRequest) -> CreateTunnelResponse:
         )
 
     except Exception as e:
-        print(f"Tunnel creation failed: {e}")
+        logger.error(f"Tunnel creation failed: {e}")
         return CreateTunnelResponse(
             success=False,
             error=str(e),
@@ -1181,7 +1178,7 @@ async def attach_container(request: AttachContainerRequest) -> AttachContainerRe
             error="VXLAN overlay not enabled on this agent",
         )
 
-    print(f"Attaching container: {request.container_name} to bridge for {request.link_id}")
+    logger.info(f"Attaching container: {request.container_name} to bridge for {request.link_id}")
 
     try:
         overlay = get_overlay_manager()
@@ -1217,7 +1214,7 @@ async def attach_container(request: AttachContainerRequest) -> AttachContainerRe
             )
 
     except Exception as e:
-        print(f"Container attachment failed: {e}")
+        logger.error(f"Container attachment failed: {e}")
         return AttachContainerResponse(
             success=False,
             error=str(e),
@@ -1230,7 +1227,7 @@ async def cleanup_overlay(request: CleanupOverlayRequest) -> CleanupOverlayRespo
     if not settings.enable_vxlan:
         return CleanupOverlayResponse()
 
-    print(f"Cleaning up overlay for lab: {request.lab_id}")
+    logger.info(f"Cleaning up overlay for lab: {request.lab_id}")
 
     try:
         overlay = get_overlay_manager()
@@ -1243,7 +1240,7 @@ async def cleanup_overlay(request: CleanupOverlayRequest) -> CleanupOverlayRespo
         )
 
     except Exception as e:
-        print(f"Overlay cleanup failed: {e}")
+        logger.error(f"Overlay cleanup failed: {e}")
         return CleanupOverlayResponse(errors=[str(e)])
 
 
@@ -1275,7 +1272,7 @@ async def overlay_status() -> OverlayStatusResponse:
         )
 
     except Exception as e:
-        print(f"Overlay status failed: {e}")
+        logger.error(f"Overlay status failed: {e}")
         return OverlayStatusResponse()
 
 
@@ -1388,7 +1385,7 @@ async def list_interfaces() -> dict:
                 })
 
     except Exception as e:
-        print(f"Error listing interfaces: {e}")
+        logger.error(f"Error listing interfaces: {e}")
         return {"interfaces": [], "error": str(e)}
 
     return {"interfaces": interfaces}
@@ -1466,11 +1463,11 @@ async def list_bridges() -> dict:
                     })
 
         except Exception as e:
-            print(f"Error listing bridges: {e}")
+            logger.error(f"Error listing bridges: {e}")
             return {"bridges": [], "error": str(e)}
 
     except Exception as e:
-        print(f"Error listing bridges: {e}")
+        logger.error(f"Error listing bridges: {e}")
         return {"bridges": [], "error": str(e)}
 
     return {"bridges": bridges}
@@ -1505,7 +1502,7 @@ def _get_docker_images() -> list[DockerImageInfo]:
 
         return images
     except Exception as e:
-        print(f"Error listing Docker images: {e}")
+        logger.error(f"Error listing Docker images: {e}")
         return []
 
 
@@ -1550,7 +1547,7 @@ def check_image(reference: str) -> ImageExistsResponse:
             return ImageExistsResponse(exists=False)
 
     except Exception as e:
-        print(f"Error checking image {reference}: {e}")
+        logger.error(f"Error checking image {reference}: {e}")
         return ImageExistsResponse(exists=False)
 
 
@@ -1581,7 +1578,7 @@ async def receive_image(
     import subprocess
     import tempfile
 
-    print(f"Receiving image: {reference} ({total_bytes} bytes)")
+    logger.info(f"Receiving image: {reference} ({total_bytes} bytes)")
 
     # Update progress if job_id provided
     if job_id:
@@ -1619,7 +1616,7 @@ async def receive_image(
 
             tmp_path = tmp_file.name
 
-        print(f"Saved {bytes_written} bytes to {tmp_path}")
+        logger.debug(f"Saved {bytes_written} bytes to {tmp_path}")
 
         # Update status to loading
         if job_id:
@@ -1644,7 +1641,7 @@ async def receive_image(
 
         if result.returncode != 0:
             error_msg = result.stderr or result.stdout or "docker load failed"
-            print(f"Docker load failed: {error_msg}")
+            logger.error(f"Docker load failed for {reference}: {error_msg}")
             if job_id:
                 _image_pull_jobs[job_id] = ImagePullProgress(
                     job_id=job_id,
@@ -1663,7 +1660,7 @@ async def receive_image(
             elif "Loaded image ID:" in line:
                 loaded_images.append(line.split("Loaded image ID:", 1)[-1].strip())
 
-        print(f"Successfully loaded images: {loaded_images}")
+        logger.info(f"Successfully loaded images: {loaded_images}")
 
         # Update final status
         if job_id:
@@ -1679,7 +1676,7 @@ async def receive_image(
 
     except subprocess.TimeoutExpired:
         error_msg = "docker load timed out"
-        print(f"Error: {error_msg}")
+        logger.error(f"Docker load timeout for {reference}")
         if job_id:
             _image_pull_jobs[job_id] = ImagePullProgress(
                 job_id=job_id,
@@ -1689,8 +1686,7 @@ async def receive_image(
         return ImageReceiveResponse(success=False, error=error_msg)
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error receiving image {reference}: {e}", exc_info=True)
         error_msg = str(e)
         if job_id:
             _image_pull_jobs[job_id] = ImagePullProgress(
@@ -1743,7 +1739,7 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
     import subprocess
     import os
 
-    print(f"Starting pull from controller: {reference}")
+    logger.info(f"Starting pull from controller: {reference}")
 
     try:
         _image_pull_jobs[job_id] = ImagePullProgress(
@@ -1757,7 +1753,7 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
         encoded_image_id = quote(image_id, safe='')
         stream_url = f"{settings.controller_url}/images/library/{encoded_image_id}/stream"
 
-        print(f"Fetching from: {stream_url}")
+        logger.debug(f"Fetching from: {stream_url}")
 
         # Stream the image from controller
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
@@ -1796,7 +1792,7 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
 
                     tmp_path = tmp_file.name
 
-        print(f"Downloaded {bytes_written} bytes")
+        logger.debug(f"Downloaded {bytes_written} bytes")
 
         # Update to loading status
         _image_pull_jobs[job_id] = ImagePullProgress(
@@ -1819,7 +1815,7 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
 
         if result.returncode != 0:
             error_msg = result.stderr or result.stdout or "docker load failed"
-            print(f"Docker load failed: {error_msg}")
+            logger.error(f"Docker load failed for {reference}: {error_msg}")
             _image_pull_jobs[job_id] = ImagePullProgress(
                 job_id=job_id,
                 status="failed",
@@ -1827,7 +1823,7 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
             )
             return
 
-        print(f"Successfully loaded image: {reference}")
+        logger.info(f"Successfully loaded image: {reference}")
         _image_pull_jobs[job_id] = ImagePullProgress(
             job_id=job_id,
             status="completed",
@@ -1837,8 +1833,7 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
         )
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error pulling image {reference}: {e}", exc_info=True)
         _image_pull_jobs[job_id] = ImagePullProgress(
             job_id=job_id,
             status="failed",
@@ -1854,10 +1849,21 @@ def get_pull_progress(job_id: str) -> ImagePullProgress:
         job_id: The job ID from the pull request
 
     Returns:
-        Current progress of the pull operation
+        Current progress of the pull operation. If the job is not found,
+        returns a response with status="unknown" instead of 404, as the
+        agent may have restarted and lost in-memory job state.
     """
     if job_id not in _image_pull_jobs:
-        raise HTTPException(status_code=404, detail="Pull job not found")
+        # Return informative response instead of 404
+        # This helps diagnose cases where the agent restarted during a transfer
+        return ImagePullProgress(
+            job_id=job_id,
+            status="unknown",
+            progress_percent=0,
+            bytes_transferred=0,
+            total_bytes=0,
+            error="Job not found - agent may have restarted. Check controller for current job status.",
+        )
     return _image_pull_jobs[job_id]
 
 
