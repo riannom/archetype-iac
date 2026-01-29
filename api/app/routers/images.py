@@ -307,25 +307,50 @@ def _load_image_background(upload_id: str, filename: str, content: bytes):
             _update_progress(upload_id, "importing", f"Importing as {image_tag}...", 60)
 
             try:
-                # Use Popen to avoid potential blocking issues with subprocess.run in threads
+                # Use file-based output capture to avoid pipe deadlocks in daemon threads
+                import sys
                 print(f"[UPLOAD {upload_id}] Starting docker import subprocess", flush=True)
-                proc = subprocess.Popen(
-                    ["docker", "import", load_path, image_tag],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                print(f"[UPLOAD {upload_id}] Waiting for docker import to complete...", flush=True)
-                stdout, stderr = proc.communicate(timeout=600)
-                print(f"[UPLOAD {upload_id}] docker import returned: {proc.returncode}", flush=True)
-                result_returncode = proc.returncode
-                output = (stdout.decode() if stdout else "") + (stderr.decode() if stderr else "")
+                sys.stdout.flush()
+                sys.stderr.flush()
+
+                # Create temp files for output capture (avoids pipe blocking)
+                with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.out') as stdout_file:
+                    with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.err') as stderr_file:
+                        stdout_path = stdout_file.name
+                        stderr_path = stderr_file.name
+
+                try:
+                    with open(stdout_path, 'w') as stdout_f, open(stderr_path, 'w') as stderr_f:
+                        print(f"[UPLOAD {upload_id}] Running: docker import {load_path} {image_tag}", flush=True)
+                        result = subprocess.run(
+                            ["docker", "import", load_path, image_tag],
+                            stdout=stdout_f,
+                            stderr=stderr_f,
+                            timeout=600,
+                        )
+                        result_returncode = result.returncode
+
+                    # Read output from files
+                    with open(stdout_path, 'r') as f:
+                        stdout_content = f.read()
+                    with open(stderr_path, 'r') as f:
+                        stderr_content = f.read()
+                    output = stdout_content + stderr_content
+                    print(f"[UPLOAD {upload_id}] docker import returned: {result_returncode}", flush=True)
+                finally:
+                    # Clean up temp output files
+                    for p in [stdout_path, stderr_path]:
+                        if os.path.exists(p):
+                            os.unlink(p)
+
             except subprocess.TimeoutExpired:
                 print(f"[UPLOAD {upload_id}] docker import timed out after 600 seconds", flush=True)
-                proc.kill()
                 _update_progress(upload_id, "error", "docker import timed out", 0, error=True)
                 return
             except Exception as e:
+                import traceback
                 print(f"[UPLOAD {upload_id}] docker import exception: {e}", flush=True)
+                traceback.print_exc()
                 _update_progress(upload_id, "error", f"docker import failed: {e}", 0, error=True)
                 return
             if result_returncode != 0:
