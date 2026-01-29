@@ -331,3 +331,48 @@ class AgentUpdateJob(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ISOImportJob(Base):
+    """Tracks ISO image import operations.
+
+    Each import job represents an operation to scan and import images
+    from a vendor ISO file (like Cisco RefPlat).
+
+    Status values:
+    - pending: Job created, not started
+    - scanning: Parsing ISO contents
+    - importing: Extracting and importing selected images
+    - completed: Import finished successfully
+    - failed: Import failed
+    - cancelled: User cancelled the import
+    """
+    __tablename__ = "iso_import_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    # User who initiated the import
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    # Path to the ISO file
+    iso_path: Mapped[str] = mapped_column(String(500))
+    # Detected ISO format (virl2, eve-ng, etc.)
+    format: Mapped[str] = mapped_column(String(50), default="unknown")
+    # Parsed manifest as JSON
+    manifest_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Selected image IDs for import (JSON array)
+    selected_images: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Per-image progress as JSON
+    image_progress: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Job status: pending, scanning, importing, completed, failed, cancelled
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    # Overall progress percentage (0-100)
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
+    # Error message if failed
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Count of images imported
+    images_imported: Mapped[int] = mapped_column(Integer, default=0)
+    # Count of images failed
+    images_failed: Mapped[int] = mapped_column(Integer, default=0)
+    # Timestamps
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

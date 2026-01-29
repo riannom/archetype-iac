@@ -1,0 +1,628 @@
+"""ISO image scanning and import endpoints."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import shutil
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import AsyncGenerator
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app import db, models
+from app.auth import get_current_user
+from app.config import settings
+from app.image_store import (
+    add_custom_device,
+    create_image_entry,
+    ensure_image_store,
+    find_custom_device,
+    find_image_by_id,
+    load_manifest,
+    qcow2_path,
+    save_manifest,
+)
+from app.iso import (
+    ISOExtractor,
+    ISOManifest,
+    ISOSession,
+    ImageImportProgress,
+    ParsedImage,
+    ParsedNodeDefinition,
+)
+from app.iso.extractor import check_7z_available
+from app.iso.mapper import get_image_device_mapping
+from app.iso.parser import ParserRegistry
+
+router = APIRouter(prefix="/iso", tags=["iso"])
+logger = logging.getLogger(__name__)
+
+# In-memory session storage (could be Redis for production)
+_sessions: dict[str, ISOSession] = {}
+_session_lock = threading.Lock()
+
+
+def _get_session(session_id: str) -> ISOSession | None:
+    """Get a session by ID."""
+    with _session_lock:
+        return _sessions.get(session_id)
+
+
+def _save_session(session: ISOSession):
+    """Save a session."""
+    with _session_lock:
+        _sessions[session.id] = session
+
+
+def _delete_session(session_id: str):
+    """Delete a session."""
+    with _session_lock:
+        _sessions.pop(session_id, None)
+
+
+# --- Request/Response Models ---
+
+
+class ScanRequest(BaseModel):
+    """Request to scan an ISO file."""
+    iso_path: str = Field(..., description="Filesystem path to ISO file")
+
+
+class ScanResponse(BaseModel):
+    """Response from scanning an ISO."""
+    session_id: str
+    iso_path: str
+    format: str
+    size_bytes: int
+    node_definitions: list[dict]
+    images: list[dict]
+    parse_errors: list[str]
+
+
+class ImportRequest(BaseModel):
+    """Request to import images from an ISO."""
+    image_ids: list[str] = Field(..., description="Image IDs to import")
+    create_devices: bool = Field(default=True, description="Create device types for unknown definitions")
+
+
+class ImportProgressResponse(BaseModel):
+    """Progress response for import operation."""
+    session_id: str
+    status: str
+    progress_percent: int
+    error_message: str | None = None
+    image_progress: dict[str, dict]
+    completed_images: list[str]
+    failed_images: list[str]
+
+
+class SessionInfoResponse(BaseModel):
+    """Information about an ISO session."""
+    session_id: str
+    iso_path: str
+    status: str
+    progress_percent: int
+    error_message: str | None = None
+    selected_images: list[str]
+    manifest: dict | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Endpoints ---
+
+
+@router.post("/scan", response_model=ScanResponse)
+async def scan_iso(
+    request: ScanRequest,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Scan an ISO file at a filesystem path and parse its contents.
+
+    This endpoint is designed for large ISOs (15GB+) that are already
+    on the server. It parses the ISO structure and returns a manifest
+    of available node definitions and images.
+
+    The returned session_id can be used to:
+    - Import selected images via POST /iso/{session_id}/import
+    - Get progress via GET /iso/{session_id}/progress
+    - Clean up via DELETE /iso/{session_id}
+    """
+    iso_path = Path(request.iso_path)
+
+    # Validate path
+    if not iso_path.exists():
+        raise HTTPException(status_code=404, detail=f"ISO file not found: {iso_path}")
+    if not iso_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {iso_path}")
+    if not str(iso_path).lower().endswith(".iso"):
+        raise HTTPException(status_code=400, detail="File must be an ISO image")
+
+    # Check 7z is available
+    if not await check_7z_available():
+        raise HTTPException(
+            status_code=500,
+            detail="7z (p7zip) is not available. Install with: apt install p7zip-full"
+        )
+
+    # Create session
+    session_id = str(uuid4())[:8]
+    session = ISOSession(
+        id=session_id,
+        iso_path=str(iso_path),
+        status="scanning",
+    )
+    _save_session(session)
+
+    try:
+        # Create extractor and list files
+        extractor = ISOExtractor(iso_path)
+        file_list = await extractor.get_file_names()
+
+        # Find appropriate parser
+        parser = ParserRegistry.get_parser(iso_path, file_list)
+        if not parser:
+            raise HTTPException(
+                status_code=400,
+                detail="Unrecognized ISO format. Supported formats: VIRL2/CML2"
+            )
+
+        # Parse ISO
+        manifest = await parser.parse(iso_path, extractor)
+        session.manifest = manifest
+        session.status = "scanned"
+        _save_session(session)
+
+        # Convert to response format
+        return ScanResponse(
+            session_id=session_id,
+            iso_path=str(iso_path),
+            format=manifest.format.value,
+            size_bytes=manifest.size_bytes,
+            node_definitions=[nd.model_dump() for nd in manifest.node_definitions],
+            images=[img.model_dump() for img in manifest.images],
+            parse_errors=manifest.parse_errors,
+        )
+
+    except HTTPException:
+        _delete_session(session_id)
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to scan ISO: {e}")
+        _delete_session(session_id)
+        raise HTTPException(status_code=500, detail=f"Failed to scan ISO: {e}")
+
+
+@router.get("/{session_id}/manifest")
+async def get_manifest(
+    session_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Get the parsed manifest for an ISO session."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not session.manifest:
+        raise HTTPException(status_code=400, detail="ISO has not been scanned yet")
+
+    return {
+        "session_id": session_id,
+        "manifest": session.manifest.model_dump(),
+    }
+
+
+@router.post("/{session_id}/import")
+async def start_import(
+    session_id: str,
+    request: ImportRequest,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Start importing selected images from the ISO.
+
+    This starts a background import job. Use GET /iso/{session_id}/progress
+    or GET /iso/{session_id}/stream to track progress.
+    """
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not session.manifest:
+        raise HTTPException(status_code=400, detail="ISO has not been scanned yet")
+
+    if session.status == "importing":
+        raise HTTPException(status_code=400, detail="Import already in progress")
+
+    # Validate image IDs
+    valid_ids = {img.id for img in session.manifest.images}
+    invalid_ids = [i for i in request.image_ids if i not in valid_ids]
+    if invalid_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid image IDs: {invalid_ids}"
+        )
+
+    # Initialize session for import
+    session.selected_images = request.image_ids
+    session.create_devices = request.create_devices
+    session.status = "importing"
+    session.image_progress = {
+        img_id: ImageImportProgress(image_id=img_id).model_dump()
+        for img_id in request.image_ids
+    }
+    _save_session(session)
+
+    # Start background import task
+    asyncio.create_task(_execute_import(session_id))
+
+    return {
+        "session_id": session_id,
+        "status": "importing",
+        "image_count": len(request.image_ids),
+    }
+
+
+@router.get("/{session_id}/progress", response_model=ImportProgressResponse)
+async def get_import_progress(
+    session_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Poll for import progress."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    completed = [
+        img_id for img_id, prog in session.image_progress.items()
+        if isinstance(prog, dict) and prog.get("status") == "completed"
+    ]
+    failed = [
+        img_id for img_id, prog in session.image_progress.items()
+        if isinstance(prog, dict) and prog.get("status") == "failed"
+    ]
+
+    return ImportProgressResponse(
+        session_id=session_id,
+        status=session.status,
+        progress_percent=session.progress_percent,
+        error_message=session.error_message,
+        image_progress=session.image_progress,
+        completed_images=completed,
+        failed_images=failed,
+    )
+
+
+@router.get("/{session_id}/stream")
+async def stream_import_progress(
+    session_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Stream import progress via Server-Sent Events."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    async def generate() -> AsyncGenerator[str, None]:
+        last_progress = -1
+        last_status = ""
+
+        while True:
+            session = _get_session(session_id)
+            if not session:
+                yield _sse_event("error", {"message": "Session not found"})
+                break
+
+            # Send update if progress changed
+            if session.progress_percent != last_progress or session.status != last_status:
+                last_progress = session.progress_percent
+                last_status = session.status
+
+                yield _sse_event("progress", {
+                    "status": session.status,
+                    "progress_percent": session.progress_percent,
+                    "error_message": session.error_message,
+                    "image_progress": session.image_progress,
+                })
+
+            # Check if done
+            if session.status in ("completed", "failed", "cancelled"):
+                yield _sse_event("complete", {
+                    "status": session.status,
+                    "error_message": session.error_message,
+                })
+                break
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.delete("/{session_id}")
+async def delete_session(
+    session_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Delete an ISO session and clean up any temporary files."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.status == "importing":
+        session.status = "cancelled"
+        _save_session(session)
+
+    _delete_session(session_id)
+    return {"message": "Session deleted"}
+
+
+@router.get("/{session_id}")
+async def get_session_info(
+    session_id: str,
+    current_user: models.User = Depends(get_current_user),
+) -> SessionInfoResponse:
+    """Get information about an ISO session."""
+    session = _get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return SessionInfoResponse(
+        session_id=session.id,
+        iso_path=session.iso_path,
+        status=session.status,
+        progress_percent=session.progress_percent,
+        error_message=session.error_message,
+        selected_images=session.selected_images,
+        manifest=session.manifest.model_dump() if session.manifest else None,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+    )
+
+
+# --- Helper Functions ---
+
+
+def _sse_event(event_type: str, data: dict) -> str:
+    """Format a Server-Sent Event."""
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _execute_import(session_id: str):
+    """Execute the import in the background."""
+    session = _get_session(session_id)
+    if not session or not session.manifest:
+        return
+
+    iso_path = Path(session.iso_path)
+    extractor = ISOExtractor(iso_path)
+    image_store = ensure_image_store()
+
+    try:
+        manifest_data = load_manifest()
+        total_images = len(session.selected_images)
+        completed_count = 0
+
+        for image_id in session.selected_images:
+            # Check for cancellation
+            session = _get_session(session_id)
+            if not session or session.status == "cancelled":
+                logger.info(f"Import cancelled for session {session_id}")
+                return
+
+            # Find the image in manifest
+            image = next(
+                (img for img in session.manifest.images if img.id == image_id),
+                None
+            )
+            if not image:
+                _update_image_progress(session_id, image_id, "failed", 0, f"Image {image_id} not found")
+                continue
+
+            try:
+                await _import_single_image(
+                    session_id,
+                    image,
+                    session.manifest.node_definitions,
+                    extractor,
+                    image_store,
+                    manifest_data,
+                    session.create_devices,
+                )
+                completed_count += 1
+
+            except Exception as e:
+                logger.exception(f"Failed to import image {image_id}: {e}")
+                _update_image_progress(session_id, image_id, "failed", 0, str(e))
+
+            # Update overall progress
+            session = _get_session(session_id)
+            if session:
+                session.progress_percent = int((completed_count / total_images) * 100)
+                _save_session(session)
+
+        # Save final manifest
+        save_manifest(manifest_data)
+
+        # Mark session complete
+        session = _get_session(session_id)
+        if session:
+            session.status = "completed"
+            session.progress_percent = 100
+            session.completed_at = datetime.utcnow()
+            _save_session(session)
+
+    except Exception as e:
+        logger.exception(f"Import failed for session {session_id}: {e}")
+        session = _get_session(session_id)
+        if session:
+            session.status = "failed"
+            session.error_message = str(e)
+            _save_session(session)
+
+    finally:
+        extractor.cleanup()
+
+
+async def _import_single_image(
+    session_id: str,
+    image: ParsedImage,
+    node_definitions: list[ParsedNodeDefinition],
+    extractor: ISOExtractor,
+    image_store: Path,
+    manifest_data: dict,
+    create_devices: bool,
+):
+    """Import a single image from the ISO."""
+    image_id = image.id
+    _update_image_progress(session_id, image_id, "extracting", 5)
+
+    # Determine device mapping
+    device_id, new_device_config = get_image_device_mapping(image, node_definitions)
+
+    # Create device if needed
+    if new_device_config and create_devices:
+        existing = find_custom_device(new_device_config["id"])
+        if not existing:
+            logger.info(f"Creating custom device: {new_device_config['id']}")
+            add_custom_device(new_device_config)
+
+    # Extract the disk image
+    if not image.disk_image_path:
+        raise ValueError(f"No disk image path for {image_id}")
+
+    def progress_callback(p):
+        _update_image_progress(
+            session_id, image_id, "extracting",
+            5 + int(p.percent * 0.85),  # 5% to 90%
+        )
+
+    if image.image_type == "qcow2":
+        # Extract qcow2 to image store
+        dest_path = image_store / image.disk_image_filename
+        await extractor.extract_file(
+            image.disk_image_path,
+            dest_path,
+            progress_callback=progress_callback,
+            timeout_seconds=settings.iso_extraction_timeout,
+        )
+
+        # Create manifest entry
+        entry = create_image_entry(
+            image_id=f"qcow2:{image.disk_image_filename}",
+            kind="qcow2",
+            reference=str(dest_path),
+            filename=image.disk_image_filename,
+            device_id=device_id,
+            version=image.version,
+            size_bytes=dest_path.stat().st_size,
+        )
+
+    elif image.image_type == "docker":
+        # Extract tar.gz and load into Docker
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir) / image.disk_image_filename
+            await extractor.extract_file(
+                image.disk_image_path,
+                temp_path,
+                progress_callback=progress_callback,
+                timeout_seconds=settings.iso_extraction_timeout,
+            )
+
+            _update_image_progress(session_id, image_id, "loading", 92)
+
+            # Load into Docker
+            result = subprocess.run(
+                ["docker", "load", "-i", str(temp_path)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+
+            if result.returncode != 0:
+                raise RuntimeError(f"docker load failed: {result.stderr}")
+
+            # Parse loaded image name
+            docker_ref = None
+            for line in (result.stdout + result.stderr).splitlines():
+                if "Loaded image:" in line:
+                    docker_ref = line.split("Loaded image:", 1)[-1].strip()
+                    break
+                elif "Loaded image ID:" in line:
+                    docker_ref = line.split("Loaded image ID:", 1)[-1].strip()
+                    break
+
+            if not docker_ref:
+                raise RuntimeError("Could not determine loaded image reference")
+
+            # Create manifest entry
+            entry = create_image_entry(
+                image_id=f"docker:{docker_ref}",
+                kind="docker",
+                reference=docker_ref,
+                filename=image.disk_image_filename,
+                device_id=device_id,
+                version=image.version,
+                size_bytes=temp_path.stat().st_size,
+            )
+
+    else:
+        raise ValueError(f"Unsupported image type: {image.image_type}")
+
+    # Check for duplicates
+    if find_image_by_id(manifest_data, entry["id"]):
+        logger.warning(f"Image {entry['id']} already exists, skipping")
+    else:
+        manifest_data["images"].append(entry)
+
+    _update_image_progress(session_id, image_id, "completed", 100)
+
+
+def _update_image_progress(
+    session_id: str,
+    image_id: str,
+    status: str,
+    progress_percent: int,
+    error_message: str | None = None,
+):
+    """Update progress for a specific image."""
+    session = _get_session(session_id)
+    if not session:
+        return
+
+    if image_id not in session.image_progress:
+        session.image_progress[image_id] = {}
+
+    session.image_progress[image_id].update({
+        "image_id": image_id,
+        "status": status,
+        "progress_percent": progress_percent,
+        "error_message": error_message,
+    })
+
+    if status == "extracting" and "started_at" not in session.image_progress[image_id]:
+        session.image_progress[image_id]["started_at"] = datetime.utcnow().isoformat()
+
+    if status in ("completed", "failed"):
+        session.image_progress[image_id]["completed_at"] = datetime.utcnow().isoformat()
+
+    session.updated_at = datetime.utcnow()
+    _save_session(session)

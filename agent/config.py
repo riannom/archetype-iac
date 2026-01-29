@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     enable_containerlab: bool = True
     enable_libvirt: bool = False
 
+    # Libvirt settings
+    libvirt_uri: str = "qemu:///system"
+    qcow2_store_path: str = ""  # Path to qcow2 image store (auto-detect if empty)
+
     # Overlay networking
     enable_vxlan: bool = True  # Enable VXLAN overlay for multi-host
     local_ip: str = ""  # Local IP for VXLAN endpoints (auto-detect if empty)
