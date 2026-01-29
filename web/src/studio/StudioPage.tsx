@@ -212,6 +212,7 @@ const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] =>
       y: 180 + row * 140,
       cpu: 1,
       memory: 1024,
+      host: (node as any).host, // Preserve host from backend for multi-host placement
     };
     return deviceNode;
   });
@@ -527,6 +528,7 @@ const StudioPage: React.FC = () => {
             container_name: deviceNode.container_name,
             device: deviceNode.model,
             version: deviceNode.version,
+            host: deviceNode.host,
           };
         }),
         links: currentLinks.map((link) => ({
@@ -1118,9 +1120,9 @@ const StudioPage: React.FC = () => {
 
   const handleUpdateNode = (id: string, updates: Partial<Node>) => {
     setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, ...updates } as Node : node)));
-    // Auto-save topology if name, model, or version changed (device nodes only)
+    // Auto-save topology if name, model, version, or host changed (device nodes only)
     const deviceUpdates = updates as Partial<DeviceNode>;
-    if (updates.name || deviceUpdates.model || deviceUpdates.version) {
+    if (updates.name || deviceUpdates.model || deviceUpdates.version || deviceUpdates.host) {
       triggerTopologySave();
     }
     // Also save if external network fields change
@@ -1221,6 +1223,7 @@ const StudioPage: React.FC = () => {
           container_name: deviceNode.container_name,
           device: deviceNode.model,
           version: deviceNode.version,
+          host: deviceNode.host,
         };
       }),
       links: links.map((link) => ({
@@ -1343,6 +1346,8 @@ const StudioPage: React.FC = () => {
             studioRequest={studioRequest}
             onOpenConfigViewer={() => handleOpenConfigViewer()}
             onOpenNodeConfig={handleOpenConfigViewer}
+            agents={agents}
+            onUpdateNode={handleUpdateNode}
           />
         );
       default:
