@@ -134,6 +134,25 @@ def _extract_error_summary(log_content: str | None, status: str) -> str | None:
     return "Job failed - check logs for details"
 
 
+def _get_log_content(log_path_or_content: str | None) -> str | None:
+    """Get log content from either a file path or inline content.
+
+    log_path can be either:
+    1. An actual file path (legacy jobs from app/jobs.py)
+    2. The log content directly (jobs from app/tasks/jobs.py)
+    """
+    if not log_path_or_content:
+        return None
+    log_path = Path(log_path_or_content)
+    if log_path.exists() and log_path.is_file():
+        try:
+            return log_path.read_text(encoding="utf-8")
+        except Exception:
+            return None
+    # Content is stored directly
+    return log_path_or_content
+
+
 def _enrich_job_output(job: models.Job) -> schemas.JobOut:
     """Convert a Job model to JobOut schema with computed fields."""
     job_out = schemas.JobOut.model_validate(job)
@@ -150,7 +169,8 @@ def _enrich_job_output(job: models.Job) -> schemas.JobOut:
     )
 
     # Extract error summary for failed jobs
-    job_out.error_summary = _extract_error_summary(job.log_path, job.status)
+    log_content = _get_log_content(job.log_path)
+    job_out.error_summary = _extract_error_summary(log_content, job.status)
 
     return job_out
 
@@ -500,10 +520,17 @@ def get_job_log(
         raise HTTPException(status_code=404, detail="Job not found")
     if not job.log_path:
         raise HTTPException(status_code=404, detail="Log not found")
+
+    # log_path can be either:
+    # 1. An actual file path (legacy jobs from app/jobs.py)
+    # 2. The log content directly (jobs from app/tasks/jobs.py)
     log_path = Path(job.log_path)
-    if not log_path.exists():
-        raise HTTPException(status_code=404, detail="Log not found")
-    content = log_path.read_text(encoding="utf-8")
+    if log_path.exists() and log_path.is_file():
+        content = log_path.read_text(encoding="utf-8")
+    else:
+        # log_path contains the content directly
+        content = job.log_path
+
     if tail:
         lines = content.splitlines()
         content = "\n".join(lines[-tail:])
