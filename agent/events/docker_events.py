@@ -114,25 +114,28 @@ class DockerEventListener(NodeEventListener):
 
         try:
             while self._running and not self._stop_event.is_set():
-                # Check for event with timeout to allow checking stop flag
-                event = await asyncio.wait_for(
-                    loop.run_in_executor(None, self._get_next_event, events),
-                    timeout=1.0,
-                )
+                try:
+                    # Check for event with timeout to allow checking stop flag
+                    event = await asyncio.wait_for(
+                        loop.run_in_executor(None, self._get_next_event, events),
+                        timeout=1.0,
+                    )
 
-                if event is None:
+                    if event is None:
+                        continue
+
+                    # Process the event
+                    node_event = self._parse_event(event)
+                    if node_event:
+                        try:
+                            await callback(node_event)
+                        except Exception as e:
+                            logger.error(f"Error in event callback: {e}")
+
+                except asyncio.TimeoutError:
+                    # Normal timeout, continue loop to check stop flag
                     continue
 
-                # Process the event
-                node_event = self._parse_event(event)
-                if node_event:
-                    try:
-                        await callback(node_event)
-                    except Exception as e:
-                        logger.error(f"Error in event callback: {e}")
-
-        except asyncio.TimeoutError:
-            pass  # Normal timeout, continue loop
         except StopIteration:
             logger.warning("Docker events stream ended")
         finally:
