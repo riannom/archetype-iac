@@ -4,10 +4,14 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./netlab_gui.db"
+    database_url: str = "sqlite:///./archetype.db"
     redis_url: str = "redis://redis:6379/0"
-    netlab_workspace: str = "/var/lib/netlab-gui"
+    # Workspace directory for lab files and images
+    # Legacy name kept for backwards compatibility with existing deployments
+    netlab_workspace: str = "/var/lib/archetype-gui"
     qcow2_store: str | None = None
+    # Directory for ISO uploads (files placed here appear in ISO import browser)
+    iso_upload_dir: str = "/var/lib/archetype-gui/uploads"
     log_forward_url: str | None = None
     netlab_provider: str = "clab"
 

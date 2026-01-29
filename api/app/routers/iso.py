@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import threading
 import time
@@ -72,6 +73,20 @@ def _delete_session(session_id: str):
 # --- Request/Response Models ---
 
 
+class ISOFileInfo(BaseModel):
+    """Information about an ISO file in the upload directory."""
+    name: str
+    path: str
+    size_bytes: int
+    modified_at: datetime
+
+
+class BrowseResponse(BaseModel):
+    """Response from browsing ISO upload directory."""
+    upload_dir: str
+    files: list[ISOFileInfo]
+
+
 class ScanRequest(BaseModel):
     """Request to scan an ISO file."""
     iso_path: str = Field(..., description="Filesystem path to ISO file")
@@ -119,6 +134,50 @@ class SessionInfoResponse(BaseModel):
 
 
 # --- Endpoints ---
+
+
+@router.get("/browse", response_model=BrowseResponse)
+async def browse_iso_files(
+    current_user: models.User = Depends(get_current_user),
+):
+    """List ISO files in the upload directory.
+
+    Returns all .iso files found in the configured upload directory.
+    Users can copy ISOs to this directory via SFTP/SCP for import.
+
+    Upload directory: /var/lib/archetype-gui/uploads/
+    """
+    upload_dir = Path(settings.iso_upload_dir)
+
+    # Create directory if it doesn't exist
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    files: list[ISOFileInfo] = []
+
+    try:
+        for entry in upload_dir.iterdir():
+            if entry.is_file() and entry.suffix.lower() == ".iso":
+                stat = entry.stat()
+                files.append(ISOFileInfo(
+                    name=entry.name,
+                    path=str(entry),
+                    size_bytes=stat.st_size,
+                    modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                ))
+
+        # Sort by modification time, newest first
+        files.sort(key=lambda f: f.modified_at, reverse=True)
+
+    except PermissionError:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cannot read upload directory: {upload_dir}"
+        )
+
+    return BrowseResponse(
+        upload_dir=str(upload_dir),
+        files=files,
+    )
 
 
 @router.post("/scan", response_model=ScanResponse)

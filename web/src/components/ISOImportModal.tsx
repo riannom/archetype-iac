@@ -1,5 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { API_BASE_URL } from '../api';
+
+interface ISOFileInfo {
+  name: string;
+  path: string;
+  size_bytes: number;
+  modified_at: string;
+}
+
+interface BrowseResponse {
+  upload_dir: string;
+  files: ISOFileInfo[];
+}
 
 interface ParsedNodeDefinition {
   id: string;
@@ -69,6 +81,33 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
   const [importStatus, setImportStatus] = useState<string>('pending');
   const eventSourceRef = useRef<EventSource | null>(null);
 
+  // File browser state
+  const [availableISOs, setAvailableISOs] = useState<ISOFileInfo[]>([]);
+  const [uploadDir, setUploadDir] = useState<string>('');
+  const [loadingISOs, setLoadingISOs] = useState(false);
+  const [showCustomPath, setShowCustomPath] = useState(false);
+
+  const fetchAvailableISOs = useCallback(async () => {
+    setLoadingISOs(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/iso/browse`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (response.ok) {
+        const data: BrowseResponse = await response.json();
+        setAvailableISOs(data.files);
+        setUploadDir(data.upload_dir);
+      }
+    } catch (err) {
+      console.error('Failed to fetch ISOs:', err);
+    } finally {
+      setLoadingISOs(false);
+    }
+  }, []);
+
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -81,13 +120,15 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
       setImportProgress({});
       setOverallProgress(0);
       setImportStatus('pending');
+      setShowCustomPath(false);
+      fetchAvailableISOs();
     }
     return () => {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
     };
-  }, [isOpen]);
+  }, [isOpen, fetchAvailableISOs]);
 
   const handleScan = async () => {
     if (!isoPath.trim()) {
@@ -245,21 +286,108 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
           {/* Step 1: Input ISO Path */}
           {step === 'input' && (
             <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-2">
-                  ISO File Path
-                </label>
-                <input
-                  type="text"
-                  value={isoPath}
-                  onChange={(e) => setIsoPath(e.target.value)}
-                  placeholder="/path/to/image.iso"
-                  className="w-full px-4 py-3 bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
-                />
-                <p className="text-[10px] text-stone-400 mt-2">
-                  Enter the path to an ISO file on the server. For large ISOs (15GB+), this avoids upload timeouts.
-                </p>
-              </div>
+              {/* Available ISOs */}
+              {!showCustomPath && (
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider">
+                      Available ISOs
+                    </label>
+                    <button
+                      onClick={fetchAvailableISOs}
+                      className="text-[10px] text-sage-600 dark:text-sage-400 hover:underline font-bold"
+                    >
+                      <i className="fa-solid fa-rotate mr-1" />
+                      Refresh
+                    </button>
+                  </div>
+
+                  {loadingISOs ? (
+                    <div className="flex items-center justify-center py-8">
+                      <i className="fa-solid fa-spinner fa-spin text-stone-400 mr-2" />
+                      <span className="text-xs text-stone-500">Loading...</span>
+                    </div>
+                  ) : availableISOs.length > 0 ? (
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {availableISOs.map((iso) => (
+                        <button
+                          key={iso.path}
+                          onClick={() => setIsoPath(iso.path)}
+                          className={`w-full text-left p-3 rounded-lg border transition-all ${
+                            isoPath === iso.path
+                              ? 'bg-sage-50 dark:bg-sage-900/20 border-sage-300 dark:border-sage-700'
+                              : 'bg-white dark:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <i className="fa-solid fa-compact-disc text-purple-500" />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-bold text-stone-700 dark:text-stone-300 truncate">
+                                {iso.name}
+                              </div>
+                              <div className="text-[10px] text-stone-400">
+                                {formatBytes(iso.size_bytes)} | {new Date(iso.modified_at).toLocaleDateString()}
+                              </div>
+                            </div>
+                            {isoPath === iso.path && (
+                              <i className="fa-solid fa-check text-sage-500" />
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 bg-stone-50 dark:bg-stone-800/50 rounded-lg border border-dashed border-stone-300 dark:border-stone-700">
+                      <i className="fa-solid fa-folder-open text-2xl text-stone-300 dark:text-stone-600 mb-2" />
+                      <p className="text-xs text-stone-500 dark:text-stone-400">No ISOs found in upload directory</p>
+                      <p className="text-[10px] text-stone-400 mt-1">
+                        Copy ISOs to: <code className="bg-stone-200 dark:bg-stone-700 px-1 rounded">{uploadDir}</code>
+                      </p>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => setShowCustomPath(true)}
+                    className="mt-3 text-xs text-sage-600 dark:text-sage-400 hover:underline font-medium"
+                  >
+                    <i className="fa-solid fa-keyboard mr-1" />
+                    Enter custom path instead
+                  </button>
+                </div>
+              )}
+
+              {/* Custom Path Input */}
+              {showCustomPath && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider">
+                      Custom ISO Path
+                    </label>
+                    {availableISOs.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setShowCustomPath(false);
+                          setIsoPath('');
+                        }}
+                        className="text-[10px] text-sage-600 dark:text-sage-400 hover:underline font-bold"
+                      >
+                        <i className="fa-solid fa-list mr-1" />
+                        Show available ISOs
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={isoPath}
+                    onChange={(e) => setIsoPath(e.target.value)}
+                    placeholder="/path/to/image.iso"
+                    className="w-full px-4 py-3 bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                  />
+                  <p className="text-[10px] text-stone-400 mt-2">
+                    Enter the full path to an ISO file on the server.
+                  </p>
+                </div>
+              )}
 
               {error && (
                 <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
