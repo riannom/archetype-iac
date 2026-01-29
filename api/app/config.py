@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # CORS configuration
     cors_allowed_origins: str = "http://localhost:8090,http://127.0.0.1:8090"
 
+    # Internal URL for agent callbacks (how agents reach this controller)
+    internal_url: str = "http://localhost:8000"
+
     # Agent communication timeouts (seconds)
     # Deploy timeout increased to 900s (15 min) for VMs and slow cEOS boots
     agent_deploy_timeout: float = 900.0

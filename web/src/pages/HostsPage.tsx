@@ -31,6 +31,7 @@ interface HostDetailed {
   version: string;
   role: 'agent' | 'controller' | 'agent+controller';
   image_sync_strategy?: string;
+  deployment_mode?: 'systemd' | 'docker' | 'unknown';
   capabilities: {
     providers?: string[];
     features?: string[];
@@ -52,6 +53,16 @@ interface HostDetailed {
   last_heartbeat: string | null;
 }
 
+interface UpdateStatus {
+  job_id: string;
+  agent_id: string;
+  from_version: string;
+  to_version: string;
+  status: string;
+  progress_percent: number;
+  error_message: string | null;
+}
+
 type SyncStrategy = 'push' | 'pull' | 'on_demand' | 'disabled';
 
 const SYNC_STRATEGY_OPTIONS: { value: SyncStrategy; label: string; description: string }[] = [
@@ -70,6 +81,18 @@ const HostsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [expandedLabs, setExpandedLabs] = useState<Set<string>>(new Set());
+  const [latestVersion, setLatestVersion] = useState<string>('');
+  const [updatingAgents, setUpdatingAgents] = useState<Set<string>>(new Set());
+  const [updateStatuses, setUpdateStatuses] = useState<Map<string, UpdateStatus>>(new Map());
+
+  const loadLatestVersion = useCallback(async () => {
+    try {
+      const data = await apiRequest<{ version: string }>('/agents/updates/latest');
+      setLatestVersion(data.version);
+    } catch (err) {
+      console.error('Failed to load latest version:', err);
+    }
+  }, []);
 
   const loadHosts = useCallback(async () => {
     try {
@@ -85,9 +108,44 @@ const HostsPage: React.FC = () => {
 
   useEffect(() => {
     loadHosts();
+    loadLatestVersion();
     const interval = setInterval(loadHosts, 10000);
     return () => clearInterval(interval);
-  }, [loadHosts]);
+  }, [loadHosts, loadLatestVersion]);
+
+  // Poll update status for agents being updated
+  useEffect(() => {
+    if (updatingAgents.size === 0) return;
+
+    const pollInterval = setInterval(async () => {
+      for (const agentId of updatingAgents) {
+        try {
+          const status = await apiRequest<UpdateStatus | null>(`/agents/${agentId}/update-status`);
+          if (status) {
+            setUpdateStatuses(prev => new Map(prev).set(agentId, status));
+
+            // If completed or failed, remove from updating set
+            if (status.status === 'completed' || status.status === 'failed') {
+              setUpdatingAgents(prev => {
+                const next = new Set(prev);
+                next.delete(agentId);
+                return next;
+              });
+
+              // Refresh hosts to get updated version
+              if (status.status === 'completed') {
+                loadHosts();
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to poll update status for ${agentId}:`, err);
+        }
+      }
+    }, 2000);
+
+    return () => clearInterval(pollInterval);
+  }, [updatingAgents, loadHosts]);
 
   // Redirect non-admins
   if (!userLoading && user && !user.is_admin) {
@@ -125,6 +183,96 @@ const HostsPage: React.FC = () => {
       alert(err instanceof Error ? err.message : 'Failed to update sync strategy');
     }
   };
+
+  const triggerUpdate = async (hostId: string) => {
+    try {
+      setUpdatingAgents(prev => new Set(prev).add(hostId));
+      const response = await apiRequest<{ job_id: string; status: string; message: string }>(
+        `/agents/${hostId}/update`,
+        { method: 'POST' }
+      );
+
+      if (response.status === 'failed') {
+        alert(response.message || 'Update failed to start');
+        setUpdatingAgents(prev => {
+          const next = new Set(prev);
+          next.delete(hostId);
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to trigger update:', err);
+      alert(err instanceof Error ? err.message : 'Failed to trigger update');
+      setUpdatingAgents(prev => {
+        const next = new Set(prev);
+        next.delete(hostId);
+        return next;
+      });
+    }
+  };
+
+  const triggerBulkUpdate = async () => {
+    const outdatedAgents = hosts.filter(
+      h => h.status === 'online' && h.version && h.version !== latestVersion
+    );
+
+    if (outdatedAgents.length === 0) {
+      alert('All agents are already up to date');
+      return;
+    }
+
+    if (!confirm(`Update ${outdatedAgents.length} agent(s) to version ${latestVersion}?`)) {
+      return;
+    }
+
+    try {
+      const agentIds = outdatedAgents.map(h => h.id);
+      setUpdatingAgents(prev => {
+        const next = new Set(prev);
+        agentIds.forEach(id => next.add(id));
+        return next;
+      });
+
+      const response = await apiRequest<{
+        success_count: number;
+        failure_count: number;
+        results: Array<{ agent_id: string; success: boolean; error?: string }>;
+      }>('/agents/updates/bulk', {
+        method: 'POST',
+        body: JSON.stringify({ agent_ids: agentIds }),
+      });
+
+      if (response.failure_count > 0) {
+        const failures = response.results
+          .filter(r => !r.success)
+          .map(r => `${r.agent_id}: ${r.error}`)
+          .join('\n');
+        alert(`${response.success_count} updates started, ${response.failure_count} failed:\n${failures}`);
+      }
+
+      // Remove failed agents from updating set
+      response.results.filter(r => !r.success).forEach(r => {
+        setUpdatingAgents(prev => {
+          const next = new Set(prev);
+          next.delete(r.agent_id);
+          return next;
+        });
+      });
+    } catch (err) {
+      console.error('Failed to trigger bulk update:', err);
+      alert(err instanceof Error ? err.message : 'Failed to trigger bulk update');
+      setUpdatingAgents(new Set());
+    }
+  };
+
+  const isUpdateAvailable = (host: HostDetailed): boolean => {
+    if (!latestVersion || !host.version) return false;
+    return host.version !== latestVersion;
+  };
+
+  const outdatedCount = hosts.filter(
+    h => h.status === 'online' && isUpdateAvailable(h)
+  ).length;
 
   return (
     <>
@@ -180,9 +328,19 @@ const HostsPage: React.FC = () => {
                 <h2 className="text-2xl font-bold text-stone-900 dark:text-white">Compute Hosts</h2>
                 <p className="text-stone-500 text-sm mt-1">
                   Monitor and manage infrastructure agents across your environment.
+                  {latestVersion && <span className="ml-2 text-sage-600 dark:text-sage-400">Latest: v{latestVersion}</span>}
                 </p>
               </div>
               <div className="flex items-center gap-4 text-sm text-stone-600 dark:text-stone-400">
+                {outdatedCount > 0 && (
+                  <button
+                    onClick={triggerBulkUpdate}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 rounded-lg transition-all text-xs font-medium"
+                  >
+                    <i className="fa-solid fa-download"></i>
+                    Update {outdatedCount} Agent{outdatedCount !== 1 ? 's' : ''}
+                  </button>
+                )}
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-green-500"></div>
                   <span>{hosts.filter(h => h.status === 'online').length} Online</span>
@@ -241,12 +399,51 @@ const HostsPage: React.FC = () => {
                           <i className="fa-solid fa-circle text-[8px]" style={{ color: host.status === 'online' ? '#22c55e' : '#ef4444' }}></i>
                           {getConnectionStatusText(host.status as ConnectionStatus)}
                         </span>
-                        <span>v{host.version}</span>
+                        <span className={isUpdateAvailable(host) ? 'text-amber-600 dark:text-amber-400' : ''}>
+                          v{host.version}
+                          {isUpdateAvailable(host) && (
+                            <i className="fa-solid fa-arrow-up ml-1 text-[10px]" title={`Update available: v${latestVersion}`}></i>
+                          )}
+                        </span>
                         <span className="text-stone-400">
                           <i className="fa-regular fa-clock mr-1"></i>
                           {formatTimestamp(host.last_heartbeat)}
                         </span>
                       </div>
+
+                      {/* Update Progress or Button */}
+                      {updatingAgents.has(host.id) ? (
+                        <div className="mb-4 p-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                          <div className="flex items-center justify-between text-xs mb-1">
+                            <span className="text-blue-700 dark:text-blue-300 font-medium">
+                              <i className="fa-solid fa-spinner fa-spin mr-1.5"></i>
+                              {updateStatuses.get(host.id)?.status === 'downloading' && 'Downloading...'}
+                              {updateStatuses.get(host.id)?.status === 'installing' && 'Installing...'}
+                              {updateStatuses.get(host.id)?.status === 'restarting' && 'Restarting...'}
+                              {!updateStatuses.get(host.id) && 'Starting update...'}
+                            </span>
+                            <span className="text-blue-600 dark:text-blue-400">
+                              {updateStatuses.get(host.id)?.progress_percent || 0}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 bg-blue-200 dark:bg-blue-800 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 transition-all"
+                              style={{ width: `${updateStatuses.get(host.id)?.progress_percent || 0}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      ) : isUpdateAvailable(host) && host.status === 'online' ? (
+                        <div className="mb-4">
+                          <button
+                            onClick={() => triggerUpdate(host.id)}
+                            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 rounded-lg transition-all text-xs font-medium"
+                          >
+                            <i className="fa-solid fa-download"></i>
+                            Update to v{latestVersion}
+                          </button>
+                        </div>
+                      ) : null}
 
                       {/* Resource Bars */}
                       <div className="space-y-3 mb-4">

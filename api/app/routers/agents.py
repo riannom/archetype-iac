@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -15,6 +17,28 @@ from app.config import settings
 
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+def get_latest_agent_version() -> str:
+    """Get the latest available agent version.
+
+    Reads from the agent/VERSION file in the repository.
+
+    Returns:
+        Version string (e.g., "0.2.0")
+    """
+    # Try to find the VERSION file relative to this file
+    # This file is at api/app/routers/agents.py
+    # Agent VERSION is at agent/VERSION
+    version_file = Path(__file__).parent.parent.parent.parent / "agent" / "VERSION"
+
+    if version_file.exists():
+        try:
+            return version_file.read_text().strip()
+        except Exception:
+            pass
+
+    return "0.0.0"
 
 
 # --- Request/Response Schemas ---
@@ -547,3 +571,303 @@ async def list_agent_bridges(
         raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=f"Agent error: {e}")
+
+
+# --- Agent Updates ---
+
+class LatestVersionResponse(BaseModel):
+    """Response with latest available agent version."""
+    version: str
+
+
+class TriggerUpdateRequest(BaseModel):
+    """Request to trigger an agent update."""
+    target_version: str | None = None  # If not specified, uses latest
+
+
+class BulkUpdateRequest(BaseModel):
+    """Request to update multiple agents."""
+    agent_ids: list[str]
+    target_version: str | None = None
+
+
+class UpdateJobResponse(BaseModel):
+    """Response after triggering an update."""
+    job_id: str
+    agent_id: str
+    from_version: str
+    to_version: str
+    status: str
+    message: str = ""
+
+
+class UpdateStatusResponse(BaseModel):
+    """Status of an update job."""
+    job_id: str
+    agent_id: str
+    from_version: str
+    to_version: str
+    status: str
+    progress_percent: int
+    error_message: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+
+
+@router.get("/updates/latest", response_model=LatestVersionResponse)
+def get_latest_version() -> LatestVersionResponse:
+    """Get the latest available agent version.
+
+    This reads from the agent/VERSION file in the repository.
+    """
+    version = get_latest_agent_version()
+    return LatestVersionResponse(version=version)
+
+
+@router.post("/{agent_id}/update", response_model=UpdateJobResponse)
+async def trigger_agent_update(
+    agent_id: str,
+    request: TriggerUpdateRequest | None = None,
+    database: Session = Depends(db.get_db),
+) -> UpdateJobResponse:
+    """Trigger a software update for a specific agent.
+
+    Creates an update job and sends the update request to the agent.
+    The agent reports progress via callbacks.
+    """
+    import httpx
+
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if host.status != "online":
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+    # Determine target version
+    target_version = (request.target_version if request else None) or get_latest_agent_version()
+
+    # Check if already at target version
+    if host.version == target_version:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent already at version {target_version}"
+        )
+
+    # Create update job
+    job_id = str(uuid4())
+    update_job = models.AgentUpdateJob(
+        id=job_id,
+        host_id=agent_id,
+        from_version=host.version or "unknown",
+        to_version=target_version,
+        status="pending",
+    )
+    database.add(update_job)
+    database.commit()
+
+    # Build callback URL
+    callback_url = f"{settings.internal_url}/callbacks/update/{job_id}"
+
+    # Send update request to agent
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"http://{host.address}/update",
+                json={
+                    "job_id": job_id,
+                    "target_version": target_version,
+                    "callback_url": callback_url,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # Update job status based on agent response
+            if result.get("accepted"):
+                update_job.status = "downloading"
+                update_job.started_at = datetime.now(timezone.utc)
+                message = "Update initiated"
+            else:
+                update_job.status = "failed"
+                update_job.error_message = result.get("message", "Agent rejected update")
+                update_job.completed_at = datetime.now(timezone.utc)
+                message = result.get("message", "Agent rejected update")
+
+            # Store deployment mode if provided
+            if result.get("deployment_mode"):
+                host.deployment_mode = result["deployment_mode"]
+
+            database.commit()
+
+            return UpdateJobResponse(
+                job_id=job_id,
+                agent_id=agent_id,
+                from_version=host.version or "unknown",
+                to_version=target_version,
+                status=update_job.status,
+                message=message,
+            )
+
+    except httpx.RequestError as e:
+        # Update job as failed
+        update_job.status = "failed"
+        update_job.error_message = f"Failed to contact agent: {e}"
+        update_job.completed_at = datetime.now(timezone.utc)
+        database.commit()
+
+        raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
+
+    except httpx.HTTPStatusError as e:
+        update_job.status = "failed"
+        update_job.error_message = f"Agent error: HTTP {e.response.status_code}"
+        update_job.completed_at = datetime.now(timezone.utc)
+        database.commit()
+
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Agent error: {e}"
+        )
+
+
+@router.post("/updates/bulk")
+async def trigger_bulk_update(
+    request: BulkUpdateRequest,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Trigger updates for multiple agents.
+
+    Returns a list of update jobs created or errors for each agent.
+    """
+    target_version = request.target_version or get_latest_agent_version()
+    results = []
+
+    for agent_id in request.agent_ids:
+        host = database.get(models.Host, agent_id)
+        if not host:
+            results.append({
+                "agent_id": agent_id,
+                "success": False,
+                "error": "Agent not found",
+            })
+            continue
+
+        if host.status != "online":
+            results.append({
+                "agent_id": agent_id,
+                "success": False,
+                "error": "Agent is offline",
+            })
+            continue
+
+        if host.version == target_version:
+            results.append({
+                "agent_id": agent_id,
+                "success": False,
+                "error": f"Already at version {target_version}",
+            })
+            continue
+
+        try:
+            # Trigger individual update
+            response = await trigger_agent_update(
+                agent_id,
+                TriggerUpdateRequest(target_version=target_version),
+                database,
+            )
+            results.append({
+                "agent_id": agent_id,
+                "success": True,
+                "job_id": response.job_id,
+            })
+        except HTTPException as e:
+            results.append({
+                "agent_id": agent_id,
+                "success": False,
+                "error": e.detail,
+            })
+
+    return {
+        "target_version": target_version,
+        "results": results,
+        "success_count": sum(1 for r in results if r.get("success")),
+        "failure_count": sum(1 for r in results if not r.get("success")),
+    }
+
+
+@router.get("/{agent_id}/update-status", response_model=UpdateStatusResponse | None)
+def get_update_status(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+) -> UpdateStatusResponse | None:
+    """Get the status of the most recent update job for an agent.
+
+    Returns None if no update jobs exist for this agent.
+    """
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get most recent update job
+    job = (
+        database.query(models.AgentUpdateJob)
+        .filter(models.AgentUpdateJob.host_id == agent_id)
+        .order_by(models.AgentUpdateJob.created_at.desc())
+        .first()
+    )
+
+    if not job:
+        return None
+
+    return UpdateStatusResponse(
+        job_id=job.id,
+        agent_id=agent_id,
+        from_version=job.from_version,
+        to_version=job.to_version,
+        status=job.status,
+        progress_percent=job.progress_percent,
+        error_message=job.error_message,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        created_at=job.created_at,
+    )
+
+
+@router.get("/{agent_id}/update-jobs")
+def list_update_jobs(
+    agent_id: str,
+    limit: int = 10,
+    database: Session = Depends(db.get_db),
+) -> list[UpdateStatusResponse]:
+    """List recent update jobs for an agent.
+
+    Returns up to `limit` most recent update jobs.
+    """
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    jobs = (
+        database.query(models.AgentUpdateJob)
+        .filter(models.AgentUpdateJob.host_id == agent_id)
+        .order_by(models.AgentUpdateJob.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        UpdateStatusResponse(
+            job_id=job.id,
+            agent_id=agent_id,
+            from_version=job.from_version,
+            to_version=job.to_version,
+            status=job.status,
+            progress_percent=job.progress_percent,
+            error_message=job.error_message,
+            started_at=job.started_at,
+            completed_at=job.completed_at,
+            created_at=job.created_at,
+        )
+        for job in jobs
+    ]
