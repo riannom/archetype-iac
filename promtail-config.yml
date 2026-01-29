@@ -9,42 +9,32 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  # Scrape logs from Docker containers
-  - job_name: docker
-    docker_sd_configs:
-      - host: unix:///var/run/docker.sock
-        refresh_interval: 5s
-    relabel_configs:
-      # Only keep containers with a "service" label
-      - source_labels: ['__meta_docker_container_label_service']
-        regex: '.+'
-        action: keep
-      # Use the service label as the job name
-      - source_labels: ['__meta_docker_container_label_service']
-        target_label: service
-      # Use container name for identification
-      - source_labels: ['__meta_docker_container_name']
-        regex: '/(.*)'
-        target_label: container
-      # Add compose project label if available
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
-        target_label: compose_project
+  - job_name: containers
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: containerlogs
+          __path__: /var/lib/docker/containers/*/*-json.log
     pipeline_stages:
-      # Try to parse JSON logs
+      - json:
+          expressions:
+            output: log
+            stream: stream
+            attrs: attrs
+            time: time
       - json:
           expressions:
             level: level
             message: message
-            timestamp: timestamp
             logger: logger
-            correlation_id: correlation_id
             service: service
             agent_id: agent_id
-      # Extract level from JSON if present
+            correlation_id: correlation_id
+          source: output
       - labels:
+          stream:
           level:
-          correlation_id:
-          logger:
-      # If JSON parsing fails, use line as message
+          service:
       - output:
-          source: message
+          source: output

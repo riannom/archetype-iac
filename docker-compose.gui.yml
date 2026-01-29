@@ -158,7 +158,7 @@ services:
   # --- Centralized Logging Stack ---
 
   loki:
-    image: grafana/loki:2.9.0
+    image: grafana/loki:3.0.0
     ports:
       - "3100:3100"
     command: -config.file=/etc/loki/local-config.yaml
@@ -171,7 +171,9 @@ services:
       retries: 3
 
   promtail:
-    image: grafana/promtail:2.9.0
+    image: grafana/promtail:3.0.0
+    ports:
+      - "9080:9080"
     volumes:
       - ./promtail-config.yml:/etc/promtail/config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
