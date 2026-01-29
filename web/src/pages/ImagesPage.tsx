@@ -4,9 +4,12 @@ import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { apiRequest } from '../api';
 import DeviceManager from '../studio/components/DeviceManager';
+import ImageSyncProgress from '../components/ImageSyncProgress';
 import { DeviceModel, ImageLibraryEntry } from '../studio/types';
 import { DeviceCategory } from '../studio/constants';
 import { ArchetypeIcon } from '../components/icons';
+
+type TabId = 'images' | 'sync';
 
 interface CustomDevice {
   id: string;
@@ -102,6 +105,7 @@ const ImagesPage: React.FC = () => {
   const { user, loading: userLoading } = useUser();
   const navigate = useNavigate();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>('images');
 
   const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
   const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
@@ -198,13 +202,41 @@ const ImagesPage: React.FC = () => {
           </div>
         </header>
 
+        {/* Tab Bar */}
+        <div className="border-b border-stone-200 dark:border-stone-800 bg-white/50 dark:bg-stone-900/50 px-6">
+          <nav className="flex gap-1" aria-label="Tabs">
+            <button
+              onClick={() => setActiveTab('images')}
+              className={`px-4 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${
+                activeTab === 'images'
+                  ? 'border-sage-500 text-sage-600 dark:text-sage-400'
+                  : 'border-transparent text-stone-500 hover:text-stone-700 dark:hover:text-stone-300'
+              }`}
+            >
+              <i className="fa-solid fa-images mr-2" />
+              Images
+            </button>
+            <button
+              onClick={() => setActiveTab('sync')}
+              className={`px-4 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${
+                activeTab === 'sync'
+                  ? 'border-sage-500 text-sage-600 dark:text-sage-400'
+                  : 'border-transparent text-stone-500 hover:text-stone-700 dark:hover:text-stone-300'
+              }`}
+            >
+              <i className="fa-solid fa-sync mr-2" />
+              Sync Jobs
+            </button>
+          </nav>
+        </div>
+
         <main className="flex-1 overflow-hidden">
           {loading ? (
             <div className="flex items-center justify-center h-full">
               <i className="fa-solid fa-spinner fa-spin text-stone-400 text-2xl"></i>
               <span className="ml-3 text-stone-500">Loading...</span>
             </div>
-          ) : (
+          ) : activeTab === 'images' ? (
             <DeviceManager
               deviceModels={deviceModels}
               imageCatalog={imageCatalog}
@@ -216,6 +248,22 @@ const ImagesPage: React.FC = () => {
               onUploadQcow2={loadDevices}
               onRefresh={loadDevices}
             />
+          ) : (
+            <div className="h-full overflow-auto p-6">
+              <div className="max-w-4xl mx-auto">
+                <div className="mb-6">
+                  <h2 className="text-lg font-bold text-stone-900 dark:text-white">Image Sync Jobs</h2>
+                  <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
+                    Track image synchronization progress across agents
+                  </p>
+                </div>
+                <ImageSyncProgress
+                  showCompleted={true}
+                  maxJobs={20}
+                  onJobComplete={loadDevices}
+                />
+              </div>
+            </div>
           )}
         </main>
       </div>
