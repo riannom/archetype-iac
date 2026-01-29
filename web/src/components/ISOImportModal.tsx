@@ -13,6 +13,31 @@ interface BrowseResponse {
   files: ISOFileInfo[];
 }
 
+interface UploadInitResponse {
+  upload_id: string;
+  filename: string;
+  total_size: number;
+  chunk_size: number;
+  total_chunks: number;
+  upload_path: string;
+}
+
+interface UploadChunkResponse {
+  upload_id: string;
+  chunk_index: number;
+  bytes_received: number;
+  total_received: number;
+  progress_percent: number;
+  is_complete: boolean;
+}
+
+interface UploadCompleteResponse {
+  upload_id: string;
+  filename: string;
+  iso_path: string;
+  total_size: number;
+}
+
 interface ParsedNodeDefinition {
   id: string;
   label: string;
@@ -59,7 +84,10 @@ interface ISOImportModalProps {
   onImportComplete: () => void;
 }
 
-type Step = 'input' | 'scanning' | 'review' | 'importing' | 'complete';
+type Step = 'input' | 'uploading' | 'scanning' | 'review' | 'importing' | 'complete';
+type InputMode = 'browse' | 'upload' | 'custom';
+
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks
 
 const formatBytes = (bytes: number): string => {
   if (bytes === 0) return '0 B';
@@ -85,7 +113,15 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
   const [availableISOs, setAvailableISOs] = useState<ISOFileInfo[]>([]);
   const [uploadDir, setUploadDir] = useState<string>('');
   const [loadingISOs, setLoadingISOs] = useState(false);
-  const [showCustomPath, setShowCustomPath] = useState(false);
+  const [inputMode, setInputMode] = useState<InputMode>('browse');
+
+  // Chunked upload state
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState<string>('');
+  const [uploadId, setUploadId] = useState<string | null>(null);
+  const uploadAbortRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAvailableISOs = useCallback(async () => {
     setLoadingISOs(true);
@@ -120,13 +156,19 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
       setImportProgress({});
       setOverallProgress(0);
       setImportStatus('pending');
-      setShowCustomPath(false);
+      setInputMode('browse');
+      setSelectedFile(null);
+      setUploadProgress(0);
+      setUploadStatus('');
+      setUploadId(null);
+      uploadAbortRef.current = false;
       fetchAvailableISOs();
     }
     return () => {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
+      uploadAbortRef.current = true;
     };
   }, [isOpen, fetchAvailableISOs]);
 
@@ -236,6 +278,170 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
     poll();
   };
 
+  const handleFileSelect = (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.iso')) {
+      setError('Please select an ISO file');
+      return;
+    }
+    setSelectedFile(file);
+    setError(null);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      handleFileSelect(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile) return;
+
+    setStep('uploading');
+    setError(null);
+    setUploadProgress(0);
+    uploadAbortRef.current = false;
+
+    const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    try {
+      // Initialize upload
+      setUploadStatus('Initializing upload...');
+      const initResponse = await fetch(`${API_BASE_URL}/iso/upload/init`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          filename: selectedFile.name,
+          total_size: selectedFile.size,
+          chunk_size: CHUNK_SIZE,
+        }),
+      });
+
+      if (!initResponse.ok) {
+        const data = await initResponse.json().catch(() => ({}));
+        throw new Error(data.detail || `Upload init failed: ${initResponse.status}`);
+      }
+
+      const initData: UploadInitResponse = await initResponse.json();
+      setUploadId(initData.upload_id);
+
+      // Upload chunks
+      const totalChunks = initData.total_chunks;
+      let uploadedChunks = 0;
+
+      for (let i = 0; i < totalChunks; i++) {
+        if (uploadAbortRef.current) {
+          throw new Error('Upload cancelled');
+        }
+
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, selectedFile.size);
+        const chunk = selectedFile.slice(start, end);
+
+        setUploadStatus(`Uploading chunk ${i + 1} of ${totalChunks}...`);
+
+        const formData = new FormData();
+        formData.append('chunk', chunk);
+
+        const chunkResponse = await fetch(
+          `${API_BASE_URL}/iso/upload/${initData.upload_id}/chunk?index=${i}`,
+          {
+            method: 'POST',
+            headers,
+            body: formData,
+          }
+        );
+
+        if (!chunkResponse.ok) {
+          const data = await chunkResponse.json().catch(() => ({}));
+          throw new Error(data.detail || `Chunk ${i} upload failed`);
+        }
+
+        const chunkData: UploadChunkResponse = await chunkResponse.json();
+        uploadedChunks++;
+        setUploadProgress(chunkData.progress_percent);
+      }
+
+      // Complete upload
+      setUploadStatus('Finalizing upload...');
+      const completeResponse = await fetch(
+        `${API_BASE_URL}/iso/upload/${initData.upload_id}/complete`,
+        {
+          method: 'POST',
+          headers,
+        }
+      );
+
+      if (!completeResponse.ok) {
+        const data = await completeResponse.json().catch(() => ({}));
+        throw new Error(data.detail || 'Upload completion failed');
+      }
+
+      const completeData: UploadCompleteResponse = await completeResponse.json();
+
+      // Auto-scan the uploaded ISO
+      setIsoPath(completeData.iso_path);
+      setUploadStatus('Upload complete! Scanning ISO...');
+      setStep('scanning');
+
+      // Now scan the ISO
+      const scanResponse = await fetch(`${API_BASE_URL}/iso/scan`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ iso_path: completeData.iso_path }),
+      });
+
+      if (!scanResponse.ok) {
+        const data = await scanResponse.json().catch(() => ({}));
+        throw new Error(data.detail || `Scan failed: ${scanResponse.status}`);
+      }
+
+      const scanData: ScanResponse = await scanResponse.json();
+      setScanResult(scanData);
+      setSelectedImages(new Set(scanData.images.map((img) => img.id)));
+      setStep('review');
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+      setStep('input');
+      setInputMode('upload');
+    }
+  };
+
+  const cancelUpload = async () => {
+    uploadAbortRef.current = true;
+    if (uploadId) {
+      const token = localStorage.getItem('token');
+      try {
+        await fetch(`${API_BASE_URL}/iso/upload/${uploadId}`, {
+          method: 'DELETE',
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+      } catch (err) {
+        console.error('Failed to cancel upload:', err);
+      }
+    }
+    setStep('input');
+    setInputMode('upload');
+  };
+
   const toggleImage = (imageId: string) => {
     const next = new Set(selectedImages);
     if (next.has(imageId)) {
@@ -286,8 +492,45 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
           {/* Step 1: Input ISO Path */}
           {step === 'input' && (
             <div className="space-y-4">
-              {/* Available ISOs */}
-              {!showCustomPath && (
+              {/* Mode tabs */}
+              <div className="flex gap-1 p-1 bg-stone-100 dark:bg-stone-800 rounded-lg">
+                <button
+                  onClick={() => setInputMode('browse')}
+                  className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
+                    inputMode === 'browse'
+                      ? 'bg-white dark:bg-stone-700 text-stone-800 dark:text-white shadow-sm'
+                      : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300'
+                  }`}
+                >
+                  <i className="fa-solid fa-folder-open mr-2" />
+                  Browse Server
+                </button>
+                <button
+                  onClick={() => setInputMode('upload')}
+                  className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
+                    inputMode === 'upload'
+                      ? 'bg-white dark:bg-stone-700 text-stone-800 dark:text-white shadow-sm'
+                      : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300'
+                  }`}
+                >
+                  <i className="fa-solid fa-upload mr-2" />
+                  Upload ISO
+                </button>
+                <button
+                  onClick={() => setInputMode('custom')}
+                  className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
+                    inputMode === 'custom'
+                      ? 'bg-white dark:bg-stone-700 text-stone-800 dark:text-white shadow-sm'
+                      : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300'
+                  }`}
+                >
+                  <i className="fa-solid fa-keyboard mr-2" />
+                  Custom Path
+                </button>
+              </div>
+
+              {/* Browse Server Mode */}
+              {inputMode === 'browse' && (
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <label className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider">
@@ -345,37 +588,72 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
                       </p>
                     </div>
                   )}
+                </div>
+              )}
 
-                  <button
-                    onClick={() => setShowCustomPath(true)}
-                    className="mt-3 text-xs text-sage-600 dark:text-sage-400 hover:underline font-medium"
+              {/* Upload Mode */}
+              {inputMode === 'upload' && (
+                <div>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    accept=".iso"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleFileSelect(file);
+                    }}
+                  />
+
+                  <div
+                    onDrop={handleDrop}
+                    onDragOver={handleDragOver}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`cursor-pointer border-2 border-dashed rounded-lg p-8 text-center transition-all ${
+                      selectedFile
+                        ? 'border-sage-400 bg-sage-50 dark:bg-sage-900/20'
+                        : 'border-stone-300 dark:border-stone-600 hover:border-sage-400 hover:bg-stone-50 dark:hover:bg-stone-800'
+                    }`}
                   >
-                    <i className="fa-solid fa-keyboard mr-1" />
-                    Enter custom path instead
-                  </button>
+                    {selectedFile ? (
+                      <div>
+                        <i className="fa-solid fa-compact-disc text-3xl text-purple-500 mb-3" />
+                        <p className="text-sm font-bold text-stone-700 dark:text-stone-300">
+                          {selectedFile.name}
+                        </p>
+                        <p className="text-xs text-stone-500 mt-1">{formatBytes(selectedFile.size)}</p>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedFile(null);
+                          }}
+                          className="mt-3 text-xs text-red-500 hover:text-red-600 font-bold"
+                        >
+                          <i className="fa-solid fa-xmark mr-1" />
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <div>
+                        <i className="fa-solid fa-cloud-arrow-up text-3xl text-stone-300 dark:text-stone-600 mb-3" />
+                        <p className="text-sm font-bold text-stone-600 dark:text-stone-400">
+                          Drop ISO file here or click to browse
+                        </p>
+                        <p className="text-xs text-stone-400 mt-1">
+                          Supports resumable chunked uploads for large files
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
               {/* Custom Path Input */}
-              {showCustomPath && (
+              {inputMode === 'custom' && (
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider">
-                      Custom ISO Path
-                    </label>
-                    {availableISOs.length > 0 && (
-                      <button
-                        onClick={() => {
-                          setShowCustomPath(false);
-                          setIsoPath('');
-                        }}
-                        className="text-[10px] text-sage-600 dark:text-sage-400 hover:underline font-bold"
-                      >
-                        <i className="fa-solid fa-list mr-1" />
-                        Show available ISOs
-                      </button>
-                    )}
-                  </div>
+                  <label className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider block mb-2">
+                    Server ISO Path
+                  </label>
                   <input
                     type="text"
                     value={isoPath}
@@ -384,7 +662,7 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
                     className="w-full px-4 py-3 bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
                   />
                   <p className="text-[10px] text-stone-400 mt-2">
-                    Enter the full path to an ISO file on the server.
+                    Enter the full path to an ISO file already on the server.
                   </p>
                 </div>
               )}
@@ -406,6 +684,48 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
                     Cisco VIRL2/CML2 (RefPlat ISOs)
                   </li>
                 </ul>
+              </div>
+            </div>
+          )}
+
+          {/* Step 1b: Uploading */}
+          {step === 'uploading' && (
+            <div className="space-y-6">
+              <div className="text-center py-4">
+                <i className="fa-solid fa-cloud-arrow-up fa-bounce text-3xl text-sage-500 mb-3" />
+                <h3 className="text-sm font-bold text-stone-700 dark:text-stone-300">Uploading ISO...</h3>
+                <p className="text-xs text-stone-500 mt-1">
+                  {uploadStatus || 'Preparing upload...'}
+                </p>
+              </div>
+
+              {/* Upload progress */}
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="font-bold text-stone-600 dark:text-stone-400">Upload Progress</span>
+                  <span className="text-stone-500">{uploadProgress}%</span>
+                </div>
+                <div className="h-3 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-sage-500 transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+                {selectedFile && (
+                  <p className="text-[10px] text-stone-400 mt-2 text-center">
+                    {formatBytes((uploadProgress / 100) * selectedFile.size)} / {formatBytes(selectedFile.size)}
+                  </p>
+                )}
+              </div>
+
+              <div className="text-center">
+                <button
+                  onClick={cancelUpload}
+                  className="px-4 py-2 text-xs font-bold text-red-600 hover:text-red-700 transition-all"
+                >
+                  <i className="fa-solid fa-xmark mr-2" />
+                  Cancel Upload
+                </button>
               </div>
             </div>
           )}
@@ -676,7 +996,7 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
           </button>
 
           <div className="flex gap-2">
-            {step === 'input' && (
+            {step === 'input' && inputMode !== 'upload' && (
               <button
                 onClick={handleScan}
                 disabled={!isoPath.trim()}
@@ -684,6 +1004,17 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
               >
                 <i className="fa-solid fa-magnifying-glass mr-2" />
                 Scan ISO
+              </button>
+            )}
+
+            {step === 'input' && inputMode === 'upload' && (
+              <button
+                onClick={handleUpload}
+                disabled={!selectedFile}
+                className="px-6 py-2 bg-sage-600 hover:bg-sage-500 disabled:bg-stone-300 dark:disabled:bg-stone-700 text-white rounded-lg text-xs font-bold transition-all"
+              >
+                <i className="fa-solid fa-upload mr-2" />
+                Upload & Scan
               </button>
             )}
 

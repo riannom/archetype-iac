@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -50,6 +50,13 @@ logger = logging.getLogger(__name__)
 # In-memory session storage (could be Redis for production)
 _sessions: dict[str, ISOSession] = {}
 _session_lock = threading.Lock()
+
+# Chunked upload session storage
+_upload_sessions: dict[str, dict] = {}
+_upload_lock = threading.Lock()
+
+# Default chunk size: 10MB
+DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024
 
 
 def _get_session(session_id: str) -> ISOSession | None:
@@ -133,6 +140,59 @@ class SessionInfoResponse(BaseModel):
     updated_at: datetime
 
 
+# --- Upload Models ---
+
+
+class UploadInitRequest(BaseModel):
+    """Request to initialize a chunked upload."""
+    filename: str = Field(..., description="Name of the ISO file")
+    total_size: int = Field(..., description="Total file size in bytes")
+    chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, description="Size of each chunk")
+
+
+class UploadInitResponse(BaseModel):
+    """Response from initializing an upload."""
+    upload_id: str
+    filename: str
+    total_size: int
+    chunk_size: int
+    total_chunks: int
+    upload_path: str
+
+
+class UploadChunkResponse(BaseModel):
+    """Response from uploading a chunk."""
+    upload_id: str
+    chunk_index: int
+    bytes_received: int
+    total_received: int
+    progress_percent: int
+    is_complete: bool
+
+
+class UploadStatusResponse(BaseModel):
+    """Status of an upload session."""
+    upload_id: str
+    filename: str
+    total_size: int
+    bytes_received: int
+    progress_percent: int
+    chunks_received: list[int]
+    status: str
+    error_message: str | None = None
+    iso_path: str | None = None
+    created_at: datetime
+
+
+class UploadCompleteResponse(BaseModel):
+    """Response from completing an upload."""
+    upload_id: str
+    filename: str
+    iso_path: str
+    total_size: int
+    md5_hash: str | None = None
+
+
 # --- Endpoints ---
 
 
@@ -178,6 +238,307 @@ async def browse_iso_files(
         upload_dir=str(upload_dir),
         files=files,
     )
+
+
+# --- Chunked Upload Endpoints ---
+
+
+@router.post("/upload/init", response_model=UploadInitResponse)
+async def init_upload(
+    request: UploadInitRequest,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Initialize a chunked upload session.
+
+    For large ISO files (15GB+), use chunked upload to avoid timeouts.
+    This returns an upload_id that should be used for subsequent chunk uploads.
+
+    Typical workflow:
+    1. POST /iso/upload/init - get upload_id
+    2. POST /iso/upload/{upload_id}/chunk?index=0 - upload first chunk
+    3. POST /iso/upload/{upload_id}/chunk?index=1 - upload second chunk
+    4. ...continue for all chunks...
+    5. POST /iso/upload/{upload_id}/complete - finalize upload
+    6. POST /iso/scan - scan the completed ISO
+    """
+    # Validate filename
+    if not request.filename.lower().endswith(".iso"):
+        raise HTTPException(status_code=400, detail="Filename must end with .iso")
+
+    # Sanitize filename
+    safe_filename = "".join(
+        c for c in request.filename
+        if c.isalnum() or c in "._-"
+    )
+    if not safe_filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    upload_dir = Path(settings.iso_upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    upload_id = str(uuid4())[:12]
+    dest_path = upload_dir / safe_filename
+
+    # Check if file already exists
+    if dest_path.exists():
+        # Add timestamp suffix to avoid collision
+        stem = dest_path.stem
+        suffix = dest_path.suffix
+        timestamp = int(time.time())
+        safe_filename = f"{stem}_{timestamp}{suffix}"
+        dest_path = upload_dir / safe_filename
+
+    # Calculate chunks
+    chunk_size = request.chunk_size or DEFAULT_CHUNK_SIZE
+    total_chunks = (request.total_size + chunk_size - 1) // chunk_size
+
+    # Create upload session
+    temp_path = upload_dir / f".upload_{upload_id}.partial"
+
+    with _upload_lock:
+        _upload_sessions[upload_id] = {
+            "upload_id": upload_id,
+            "filename": safe_filename,
+            "total_size": request.total_size,
+            "chunk_size": chunk_size,
+            "total_chunks": total_chunks,
+            "bytes_received": 0,
+            "chunks_received": [],
+            "temp_path": str(temp_path),
+            "final_path": str(dest_path),
+            "status": "uploading",
+            "error_message": None,
+            "user_id": str(current_user.id),
+            "created_at": datetime.utcnow(),
+        }
+
+    # Pre-allocate file (sparse)
+    with open(temp_path, "wb") as f:
+        f.seek(request.total_size - 1)
+        f.write(b"\0")
+
+    logger.info(f"Upload session {upload_id} initialized for {safe_filename} ({request.total_size} bytes)")
+
+    return UploadInitResponse(
+        upload_id=upload_id,
+        filename=safe_filename,
+        total_size=request.total_size,
+        chunk_size=chunk_size,
+        total_chunks=total_chunks,
+        upload_path=str(dest_path),
+    )
+
+
+@router.post("/upload/{upload_id}/chunk", response_model=UploadChunkResponse)
+async def upload_chunk(
+    upload_id: str,
+    index: int = Query(..., description="Chunk index (0-based)"),
+    chunk: UploadFile = File(..., description="Chunk data"),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Upload a single chunk of the ISO file.
+
+    Chunks can be uploaded in any order and can be retried on failure.
+    Each chunk is written to the correct offset in the destination file.
+    """
+    with _upload_lock:
+        session = _upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Upload session not found")
+        if session["status"] != "uploading":
+            raise HTTPException(status_code=400, detail=f"Upload is {session['status']}")
+        # Make a copy to avoid holding lock during I/O
+        session = dict(session)
+
+    # Validate chunk index
+    if index < 0 or index >= session["total_chunks"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid chunk index {index}. Valid range: 0-{session['total_chunks']-1}"
+        )
+
+    # Calculate offset and expected size
+    chunk_size = session["chunk_size"]
+    offset = index * chunk_size
+    expected_size = min(chunk_size, session["total_size"] - offset)
+
+    # Read chunk data
+    chunk_data = await chunk.read()
+    actual_size = len(chunk_data)
+
+    if actual_size != expected_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chunk size mismatch. Expected {expected_size}, got {actual_size}"
+        )
+
+    # Write chunk to file at correct offset
+    temp_path = Path(session["temp_path"])
+    try:
+        with open(temp_path, "r+b") as f:
+            f.seek(offset)
+            f.write(chunk_data)
+    except IOError as e:
+        logger.error(f"Failed to write chunk {index} for upload {upload_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to write chunk: {e}")
+
+    # Update session
+    with _upload_lock:
+        if upload_id not in _upload_sessions:
+            raise HTTPException(status_code=404, detail="Upload session expired")
+
+        if index not in _upload_sessions[upload_id]["chunks_received"]:
+            _upload_sessions[upload_id]["chunks_received"].append(index)
+            _upload_sessions[upload_id]["bytes_received"] += actual_size
+
+        total_received = _upload_sessions[upload_id]["bytes_received"]
+        chunks_received = len(_upload_sessions[upload_id]["chunks_received"])
+        is_complete = chunks_received == session["total_chunks"]
+
+    progress_percent = int((total_received / session["total_size"]) * 100)
+
+    logger.debug(f"Upload {upload_id}: chunk {index} received ({actual_size} bytes, {progress_percent}% complete)")
+
+    return UploadChunkResponse(
+        upload_id=upload_id,
+        chunk_index=index,
+        bytes_received=actual_size,
+        total_received=total_received,
+        progress_percent=progress_percent,
+        is_complete=is_complete,
+    )
+
+
+@router.get("/upload/{upload_id}", response_model=UploadStatusResponse)
+async def get_upload_status(
+    upload_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Get the current status of an upload session.
+
+    Use this to check progress or resume an interrupted upload.
+    The chunks_received list shows which chunks have been successfully uploaded.
+    """
+    with _upload_lock:
+        session = _upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Upload session not found")
+
+        return UploadStatusResponse(
+            upload_id=session["upload_id"],
+            filename=session["filename"],
+            total_size=session["total_size"],
+            bytes_received=session["bytes_received"],
+            progress_percent=int((session["bytes_received"] / session["total_size"]) * 100),
+            chunks_received=sorted(session["chunks_received"]),
+            status=session["status"],
+            error_message=session.get("error_message"),
+            iso_path=session["final_path"] if session["status"] == "completed" else None,
+            created_at=session["created_at"],
+        )
+
+
+@router.post("/upload/{upload_id}/complete", response_model=UploadCompleteResponse)
+async def complete_upload(
+    upload_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Finalize a chunked upload.
+
+    This verifies all chunks have been received and moves the file
+    to its final location in the upload directory.
+
+    After completion, use POST /iso/scan with the returned iso_path
+    to parse the ISO contents.
+    """
+    with _upload_lock:
+        session = _upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Upload session not found")
+        if session["status"] != "uploading":
+            raise HTTPException(status_code=400, detail=f"Upload is {session['status']}")
+        session = dict(session)
+
+    # Verify all chunks received
+    received = set(session["chunks_received"])
+    expected = set(range(session["total_chunks"]))
+    missing = expected - received
+
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing chunks: {sorted(missing)[:10]}{'...' if len(missing) > 10 else ''}"
+        )
+
+    # Move temp file to final location
+    temp_path = Path(session["temp_path"])
+    final_path = Path(session["final_path"])
+
+    try:
+        # Verify file size
+        actual_size = temp_path.stat().st_size
+        if actual_size != session["total_size"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File size mismatch. Expected {session['total_size']}, got {actual_size}"
+            )
+
+        # Move to final location
+        shutil.move(str(temp_path), str(final_path))
+
+        logger.info(f"Upload {upload_id} completed: {final_path}")
+
+    except IOError as e:
+        logger.error(f"Failed to finalize upload {upload_id}: {e}")
+        with _upload_lock:
+            if upload_id in _upload_sessions:
+                _upload_sessions[upload_id]["status"] = "failed"
+                _upload_sessions[upload_id]["error_message"] = str(e)
+        raise HTTPException(status_code=500, detail=f"Failed to finalize upload: {e}")
+
+    # Update session status
+    with _upload_lock:
+        if upload_id in _upload_sessions:
+            _upload_sessions[upload_id]["status"] = "completed"
+            _upload_sessions[upload_id]["final_path"] = str(final_path)
+
+    return UploadCompleteResponse(
+        upload_id=upload_id,
+        filename=session["filename"],
+        iso_path=str(final_path),
+        total_size=session["total_size"],
+        md5_hash=None,  # Could calculate if needed
+    )
+
+
+@router.delete("/upload/{upload_id}")
+async def cancel_upload(
+    upload_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Cancel and clean up an upload session.
+
+    This removes any partially uploaded data.
+    """
+    with _upload_lock:
+        session = _upload_sessions.pop(upload_id, None)
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    # Clean up temp file
+    temp_path = Path(session["temp_path"])
+    if temp_path.exists():
+        try:
+            temp_path.unlink()
+            logger.info(f"Upload {upload_id} cancelled, temp file removed")
+        except IOError as e:
+            logger.warning(f"Failed to remove temp file for upload {upload_id}: {e}")
+
+    return {"message": "Upload cancelled"}
+
+
+# --- Scan Endpoints ---
 
 
 @router.post("/scan", response_model=ScanResponse)
