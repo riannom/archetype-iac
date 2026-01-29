@@ -231,3 +231,64 @@ async def dead_letter_callback(
         success=True,
         message="Dead letter recorded",
     )
+
+
+# --- Agent Update Callbacks ---
+
+class UpdateProgressPayload(schemas.BaseModel):
+    """Payload for agent update progress callbacks."""
+    job_id: str
+    agent_id: str
+    status: str  # downloading, installing, restarting, completed, failed
+    progress_percent: int = 0
+    error_message: str | None = None
+
+
+@router.post("/update/{job_id}")
+async def update_progress_callback(
+    job_id: str,
+    payload: UpdateProgressPayload,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Receive update progress from an agent.
+
+    Updates the AgentUpdateJob record with progress information.
+    When status is "completed", verifies the agent version after re-registration.
+    """
+    logger.info(
+        f"Update callback: job={job_id}, status={payload.status}, "
+        f"progress={payload.progress_percent}%"
+    )
+
+    # Find the update job
+    update_job = database.get(models.AgentUpdateJob, job_id)
+    if not update_job:
+        logger.warning(f"Update callback for unknown job: {job_id}")
+        return {"success": False, "message": "Job not found"}
+
+    # Validate agent_id matches
+    if payload.agent_id != update_job.host_id:
+        # Check if agent_id was reassigned (can happen on re-registration)
+        host = database.get(models.Host, update_job.host_id)
+        if not host:
+            logger.warning(f"Update callback from unknown agent: {payload.agent_id}")
+            return {"success": False, "message": "Agent mismatch"}
+
+    # Update job status
+    update_job.status = payload.status
+    update_job.progress_percent = payload.progress_percent
+
+    if payload.error_message:
+        update_job.error_message = payload.error_message
+
+    # Set timestamps based on status
+    if payload.status == "downloading" and not update_job.started_at:
+        update_job.started_at = datetime.now(timezone.utc)
+
+    if payload.status in ("completed", "failed"):
+        update_job.completed_at = datetime.now(timezone.utc)
+
+    database.commit()
+
+    logger.info(f"Update job {job_id} updated: {payload.status}")
+    return {"success": True, "message": f"Job updated to {payload.status}"}

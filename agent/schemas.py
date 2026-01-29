@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from agent.version import __version__
+
 
 class AgentStatus(str, Enum):
     """Agent health status."""
@@ -60,7 +62,7 @@ class AgentInfo(BaseModel):
     name: str
     address: str  # host:port for controller to reach agent
     capabilities: AgentCapabilities
-    version: str = "0.1.0"
+    version: str = __version__
 
 
 class RegistrationRequest(BaseModel):
@@ -335,3 +337,28 @@ class ImagePullProgress(BaseModel):
     bytes_transferred: int = 0
     total_bytes: int = 0
     error: str | None = None
+
+
+# --- Agent Updates ---
+
+class UpdateRequest(BaseModel):
+    """Controller -> Agent: Update to a new version."""
+    job_id: str
+    target_version: str
+    callback_url: str
+
+
+class UpdateProgressCallback(BaseModel):
+    """Agent -> Controller: Update progress report."""
+    job_id: str
+    agent_id: str
+    status: str  # downloading, installing, restarting, completed, failed
+    progress_percent: int = 0
+    error_message: str | None = None
+
+
+class UpdateResponse(BaseModel):
+    """Agent -> Controller: Immediate response to update request."""
+    accepted: bool
+    message: str = ""
+    deployment_mode: str = "unknown"  # systemd, docker, unknown

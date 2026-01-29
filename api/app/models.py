@@ -109,6 +109,8 @@ class Host(Base):
     # - on_demand: Sync only when deployment requires an image
     # - disabled: No automatic sync, manual only
     image_sync_strategy: Mapped[str] = mapped_column(String(50), default="on_demand")
+    # Deployment mode: how the agent was installed (systemd, docker, unknown)
+    deployment_mode: Mapped[str] = mapped_column(String(50), default="unknown")
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -285,6 +287,40 @@ class ImageSyncJob(Base):
     progress_percent: Mapped[int] = mapped_column(Integer, default=0)
     bytes_transferred: Mapped[int] = mapped_column(BigInteger, default=0)
     total_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    # Error message if failed
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Timestamps
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentUpdateJob(Base):
+    """Tracks agent software update operations.
+
+    Each update job represents a software update for a specific agent.
+    Progress is tracked through status transitions as the update proceeds.
+
+    Status values:
+    - pending: Job created, waiting to send to agent
+    - downloading: Agent is downloading new version
+    - installing: Agent is installing dependencies
+    - restarting: Agent is restarting with new version
+    - completed: Update finished successfully
+    - failed: Update failed
+    """
+    __tablename__ = "agent_update_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    # Target agent
+    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    # Version transition
+    from_version: Mapped[str] = mapped_column(String(50))
+    to_version: Mapped[str] = mapped_column(String(50))
+    # Job status: pending, downloading, installing, restarting, completed, failed
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    # Progress percentage (0-100)
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
     # Error message if failed
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Timestamps

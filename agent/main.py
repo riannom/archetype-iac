@@ -65,6 +65,15 @@ from agent.schemas import (
     RegistrationRequest,
     RegistrationResponse,
     TunnelInfo,
+    UpdateRequest,
+    UpdateResponse,
+)
+from agent.version import __version__
+from agent.updater import (
+    DeploymentMode,
+    detect_deployment_mode,
+    perform_docker_update,
+    perform_systemd_update,
 )
 
 
@@ -439,7 +448,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="Archetype Agent",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -479,6 +488,78 @@ def get_dead_letters():
     """
     from agent.callbacks import get_dead_letters as fetch_dead_letters
     return {"dead_letters": fetch_dead_letters()}
+
+
+# --- Agent Update Endpoint ---
+
+@app.post("/update")
+async def trigger_update(request: UpdateRequest) -> UpdateResponse:
+    """Receive update command from controller.
+
+    Detects deployment mode and initiates appropriate update procedure:
+    - Systemd mode: git pull + pip install + systemctl restart
+    - Docker mode: Reports back - controller handles container restart
+
+    The agent reports progress via callbacks to the callback_url.
+    """
+    print(f"Update request received: job={request.job_id}, target={request.target_version}")
+
+    # Detect deployment mode
+    mode = detect_deployment_mode()
+    print(f"Detected deployment mode: {mode.value}")
+
+    if mode == DeploymentMode.SYSTEMD:
+        # Start async update process
+        asyncio.create_task(
+            perform_systemd_update(
+                job_id=request.job_id,
+                agent_id=AGENT_ID,
+                target_version=request.target_version,
+                callback_url=request.callback_url,
+            )
+        )
+        return UpdateResponse(
+            accepted=True,
+            message="Update initiated",
+            deployment_mode=mode.value,
+        )
+
+    elif mode == DeploymentMode.DOCKER:
+        # Docker update needs external handling
+        asyncio.create_task(
+            perform_docker_update(
+                job_id=request.job_id,
+                agent_id=AGENT_ID,
+                target_version=request.target_version,
+                callback_url=request.callback_url,
+            )
+        )
+        return UpdateResponse(
+            accepted=False,
+            message="Docker deployment detected. Update must be performed externally.",
+            deployment_mode=mode.value,
+        )
+
+    else:
+        # Unknown deployment mode
+        return UpdateResponse(
+            accepted=False,
+            message="Unknown deployment mode. Cannot perform automatic update.",
+            deployment_mode=mode.value,
+        )
+
+
+@app.get("/deployment-mode")
+def get_deployment_mode() -> dict:
+    """Get the agent's deployment mode.
+
+    Used by controller to determine update strategy.
+    """
+    mode = detect_deployment_mode()
+    return {
+        "mode": mode.value,
+        "version": __version__,
+    }
 
 
 # --- Job Execution Endpoints (called by controller) ---
