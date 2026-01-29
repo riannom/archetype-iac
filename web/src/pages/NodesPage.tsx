@@ -272,6 +272,9 @@ const NodesPage: React.FC = () => {
           ) : activeTab === 'devices' ? (
             <DeviceConfigManager
               deviceModels={deviceModels}
+              customDevices={customDevices}
+              onAddCustomDevice={(device) => updateCustomDevices([...customDevices, device])}
+              onRemoveCustomDevice={(deviceId) => updateCustomDevices(customDevices.filter((item) => item.id !== deviceId))}
               onRefresh={loadDevices}
             />
           ) : activeTab === 'images' ? (
@@ -279,9 +282,6 @@ const NodesPage: React.FC = () => {
               deviceModels={deviceModels}
               imageCatalog={imageCatalog}
               imageLibrary={imageLibrary}
-              customDevices={customDevices}
-              onAddCustomDevice={(device) => updateCustomDevices([...customDevices, device])}
-              onRemoveCustomDevice={(deviceId) => updateCustomDevices(customDevices.filter((item) => item.id !== deviceId))}
               onUploadImage={loadDevices}
               onUploadQcow2={loadDevices}
               onRefresh={loadDevices}

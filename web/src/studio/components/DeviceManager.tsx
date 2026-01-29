@@ -19,9 +19,6 @@ interface DeviceManagerProps {
   deviceModels: DeviceModel[];
   imageCatalog: Record<string, ImageCatalogEntry>;
   imageLibrary: ImageLibraryEntry[];
-  customDevices: { id: string; label: string }[];
-  onAddCustomDevice: (device: { id: string; label: string }) => void;
-  onRemoveCustomDevice: (deviceId: string) => void;
   onUploadImage: () => void;
   onUploadQcow2: () => void;
   onRefresh: () => void;
@@ -31,9 +28,6 @@ interface DeviceManagerProps {
 const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   deviceModels,
   imageLibrary,
-  customDevices,
-  onAddCustomDevice,
-  onRemoveCustomDevice,
   onUploadImage,
   onUploadQcow2,
   onRefresh,
@@ -43,8 +37,6 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [qcow2Progress, setQcow2Progress] = useState<number | null>(null);
-  const [customDeviceId, setCustomDeviceId] = useState('');
-  const [customDeviceLabel, setCustomDeviceLabel] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const qcow2InputRef = useRef<HTMLInputElement | null>(null);
   const [showISOModal, setShowISOModal] = useState(false);
@@ -565,59 +557,6 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                   </button>
                 )}
               </div>
-            </div>
-
-            {/* Custom device form */}
-            <div className="p-4 border-b border-stone-200 dark:border-stone-800 bg-white/50 dark:bg-stone-900/30">
-              <div className="text-[10px] font-bold text-stone-500 uppercase tracking-widest mb-2">
-                Custom Device
-              </div>
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 bg-stone-100 dark:bg-stone-950 border border-stone-300 dark:border-stone-700 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200"
-                  placeholder="device-id"
-                  value={customDeviceId}
-                  onChange={(e) => setCustomDeviceId(e.target.value)}
-                />
-                <input
-                  className="flex-1 bg-stone-100 dark:bg-stone-950 border border-stone-300 dark:border-stone-700 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200"
-                  placeholder="label"
-                  value={customDeviceLabel}
-                  onChange={(e) => setCustomDeviceLabel(e.target.value)}
-                />
-                <button
-                  onClick={() => {
-                    if (!customDeviceId.trim()) return;
-                    onAddCustomDevice({
-                      id: customDeviceId.trim(),
-                      label: customDeviceLabel.trim() || customDeviceId.trim(),
-                    });
-                    setCustomDeviceId('');
-                    setCustomDeviceLabel('');
-                  }}
-                  className="px-3 bg-sage-600 hover:bg-sage-500 text-white text-xs font-bold rounded"
-                >
-                  Add
-                </button>
-              </div>
-              {customDevices.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {customDevices.map((device) => (
-                    <span
-                      key={device.id}
-                      className="inline-flex items-center gap-1 px-2 py-1 bg-stone-100 dark:bg-stone-800 rounded text-[10px] text-stone-600 dark:text-stone-400"
-                    >
-                      <span className="font-mono">{device.id}</span>
-                      <button
-                        onClick={() => onRemoveCustomDevice(device.id)}
-                        className="text-red-500 hover:text-red-600"
-                      >
-                        <i className="fa-solid fa-xmark" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* Device list */}

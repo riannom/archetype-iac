@@ -5,12 +5,14 @@ interface DeviceConfigCardProps {
   device: DeviceModel;
   isSelected: boolean;
   onSelect: () => void;
+  isCustom?: boolean;
 }
 
 const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
   device,
   isSelected,
   onSelect,
+  isCustom = false,
 }) => {
   // Format memory display
   const formatMemory = (mb?: number): string => {
@@ -19,22 +21,36 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
     return `${mb}MB`;
   };
 
+  // Determine styling based on custom and selected state
+  const getCardClasses = () => {
+    if (isSelected) {
+      if (isCustom) {
+        return 'bg-rose-50 dark:bg-rose-900/30 border-rose-500 dark:border-rose-600 shadow-sm';
+      }
+      return 'bg-sage-50 dark:bg-sage-800 border-sage-500 dark:border-sage-600 shadow-sm';
+    }
+    if (isCustom) {
+      return 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/50 hover:border-rose-300 dark:hover:border-rose-700';
+    }
+    return 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700';
+  };
+
   return (
     <div
       onClick={onSelect}
-      className={`p-3 rounded-lg border cursor-pointer transition-all ${
-        isSelected
-          ? 'bg-sage-50 dark:bg-sage-800 border-sage-500 dark:border-sage-600 shadow-sm'
-          : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700'
-      }`}
+      className={`p-3 rounded-lg border cursor-pointer transition-all ${getCardClasses()}`}
     >
       <div className="flex items-start gap-3">
         {/* Device icon */}
         <div
           className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
             isSelected
-              ? 'bg-sage-600 text-white'
-              : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
+              ? isCustom
+                ? 'bg-rose-600 text-white'
+                : 'bg-sage-600 text-white'
+              : isCustom
+                ? 'bg-rose-100 dark:bg-rose-900/50 text-rose-600 dark:text-rose-400'
+                : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
           }`}
         >
           <i className={`fa-solid ${device.icon || 'fa-microchip'} text-sm`}></i>
@@ -45,13 +61,17 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
           <div className="flex items-center gap-2">
             <h3 className={`text-sm font-bold truncate ${
               isSelected
-                ? 'text-sage-700 dark:text-sage-400'
-                : 'text-stone-900 dark:text-white'
+                ? isCustom
+                  ? 'text-rose-700 dark:text-rose-400'
+                  : 'text-sage-700 dark:text-sage-400'
+                : isCustom
+                  ? 'text-rose-800 dark:text-rose-300'
+                  : 'text-stone-900 dark:text-white'
             }`}>
               {device.name}
             </h3>
-            {device.isCustom && (
-              <span className="px-1.5 py-0.5 text-[8px] font-bold uppercase bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded">
+            {(device.isCustom || isCustom) && (
+              <span className="px-1.5 py-0.5 text-[8px] font-bold uppercase bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 rounded">
                 Custom
               </span>
             )}
