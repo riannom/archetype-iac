@@ -144,7 +144,10 @@ class DockerEventListener(NodeEventListener):
             while self._running and not self._stop_event.is_set():
                 try:
                     # Check queue with timeout to allow checking stop flag
-                    event = self._event_queue.get(timeout=1.0)
+                    # Use to_thread to avoid blocking the event loop
+                    event = await asyncio.to_thread(
+                        self._event_queue.get, timeout=1.0
+                    )
 
                     # Check for end of stream or error
                     if event is None:
