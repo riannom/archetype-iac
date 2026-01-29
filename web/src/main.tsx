@@ -14,7 +14,7 @@ const router = createBrowserRouter([
   { path: "/nodes", element: <NodesPage /> },
   { path: "/nodes/devices", element: <NodesPage /> },
   { path: "/nodes/images", element: <NodesPage /> },
-  { path: "/images", element: <Navigate to="/nodes/images" replace /> },
+  { path: "/nodes/sync", element: <NodesPage /> },
   { path: "/labs", element: <Navigate to="/" replace /> },
   { path: "/labs/:labId", element: <Navigate to="/" replace /> },
   { path: "/studio", element: <Navigate to="/" replace /> },

@@ -5,6 +5,7 @@ import { useUser } from '../contexts/UserContext';
 import { apiRequest } from '../api';
 import DeviceManager from '../studio/components/DeviceManager';
 import DeviceConfigManager from '../studio/components/DeviceConfigManager';
+import ImageSyncProgress from '../components/ImageSyncProgress';
 import { DeviceModel, ImageLibraryEntry } from '../studio/types';
 import { DeviceCategory } from '../studio/constants';
 import { ArchetypeIcon } from '../components/icons';
@@ -99,7 +100,7 @@ const buildDeviceModels = (
   return result;
 };
 
-type TabType = 'devices' | 'images';
+type TabType = 'devices' | 'images' | 'sync';
 
 const NodesPage: React.FC = () => {
   const { effectiveMode, toggleMode } = useTheme();
@@ -112,6 +113,7 @@ const NodesPage: React.FC = () => {
   const getActiveTab = (): TabType => {
     if (location.pathname === '/nodes/images') return 'images';
     if (location.pathname === '/nodes/devices') return 'devices';
+    if (location.pathname === '/nodes/sync') return 'sync';
     return 'devices'; // Default to devices tab
   };
 
@@ -247,6 +249,17 @@ const NodesPage: React.FC = () => {
               <i className="fa-solid fa-hard-drive mr-2"></i>
               Image Management
             </button>
+            <button
+              onClick={() => handleTabChange('sync')}
+              className={`px-6 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2 -mb-px ${
+                activeTab === 'sync'
+                  ? 'text-sage-600 dark:text-sage-400 border-sage-600 dark:border-sage-400'
+                  : 'text-stone-500 dark:text-stone-400 border-transparent hover:text-stone-700 dark:hover:text-stone-300'
+              }`}
+            >
+              <i className="fa-solid fa-sync mr-2"></i>
+              Sync Jobs
+            </button>
           </div>
         </div>
 
@@ -261,7 +274,7 @@ const NodesPage: React.FC = () => {
               deviceModels={deviceModels}
               onRefresh={loadDevices}
             />
-          ) : (
+          ) : activeTab === 'images' ? (
             <DeviceManager
               deviceModels={deviceModels}
               imageCatalog={imageCatalog}
@@ -273,6 +286,22 @@ const NodesPage: React.FC = () => {
               onUploadQcow2={loadDevices}
               onRefresh={loadDevices}
             />
+          ) : (
+            <div className="h-full overflow-auto p-6">
+              <div className="max-w-4xl mx-auto">
+                <div className="mb-6">
+                  <h2 className="text-lg font-bold text-stone-900 dark:text-white">Image Sync Jobs</h2>
+                  <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
+                    Track image synchronization progress across agents
+                  </p>
+                </div>
+                <ImageSyncProgress
+                  showCompleted={true}
+                  maxJobs={20}
+                  onJobComplete={loadDevices}
+                />
+              </div>
+            </div>
           )}
         </main>
       </div>
