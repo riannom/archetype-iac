@@ -34,9 +34,10 @@ RUN curl -sL https://get.containerlab.dev | bash -s -- --no-sudo
 
 COPY api/ ./
 
-# Copy agent vendors module for unified vendor registry
+# Copy agent modules needed by API
 RUN mkdir -p agent
 COPY agent/vendors.py ./agent/vendors.py
+COPY agent/VERSION ./agent/VERSION
 RUN touch agent/__init__.py
 
 ENV PYTHONUNBUFFERED=1
