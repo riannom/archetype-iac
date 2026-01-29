@@ -24,6 +24,80 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["jobs"])
 
 
+def _extract_error_summary(log_content: str | None, status: str) -> str | None:
+    """Extract a one-liner error summary from job log content.
+
+    Looks for common error patterns and returns a concise message.
+    """
+    if status != "failed" or not log_content:
+        return None
+
+    # Look for specific error patterns in order of priority
+    lines = log_content.strip().split("\n")
+
+    # Pattern 1: "Error: <message>" line
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Error:"):
+            return line[6:].strip()[:200]  # Cap at 200 chars
+        if line.startswith("ERROR:"):
+            # Skip the "ERROR:" prefix and get the actual message
+            msg = line[6:].strip()
+            # Skip generic headers like "Job execution failed on agent."
+            if msg and not msg.endswith("on agent."):
+                return msg[:200]
+
+    # Pattern 2: "Details: <message>" line
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Details:"):
+            return line[8:].strip()[:200]
+
+    # Pattern 3: Look for common containerlab/docker errors
+    error_patterns = [
+        "missing image",
+        "image not found",
+        "no such image",
+        "pull access denied",
+        "connection refused",
+        "permission denied",
+        "network not found",
+        "container already exists",
+        "port is already allocated",
+        "cannot connect",
+        "failed to create",
+        "failed to start",
+        "timed out",
+        "timeout",
+    ]
+
+    for line in lines:
+        line_lower = line.lower()
+        for pattern in error_patterns:
+            if pattern in line_lower:
+                # Return this line as it likely contains the error
+                return line.strip()[:200]
+
+    # Pattern 4: First non-empty line after "STDERR" section
+    in_stderr = False
+    for line in lines:
+        if "STDERR" in line or "stderr" in line.lower():
+            in_stderr = True
+            continue
+        if in_stderr and line.strip():
+            return line.strip()[:200]
+
+    # Fallback: First line that looks like an error
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("=") and not line.startswith("-"):
+            if "fail" in line.lower() or "error" in line.lower():
+                return line[:200]
+
+    # Last resort: "Job failed" generic
+    return "Job failed - check logs for details"
+
+
 def _enrich_job_output(job: models.Job) -> schemas.JobOut:
     """Convert a Job model to JobOut schema with computed fields."""
     job_out = schemas.JobOut.model_validate(job)
@@ -38,6 +112,9 @@ def _enrich_job_output(job: models.Job) -> schemas.JobOut:
         job.started_at,
         job.created_at,
     )
+
+    # Extract error summary for failed jobs
+    job_out.error_summary = _extract_error_summary(job.log_path, job.status)
 
     return job_out
 

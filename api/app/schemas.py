@@ -152,6 +152,7 @@ class JobOut(BaseModel):
     # Derived fields for UI - computed in endpoint
     timeout_at: datetime | None = None  # When job will/did timeout
     is_stuck: bool = False  # True if past expected runtime
+    error_summary: str | None = None  # One-liner error message for failed jobs
 
     class Config:
         from_attributes = True

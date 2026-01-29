@@ -847,7 +847,8 @@ const StudioPage: React.FC = () => {
         } else if (job.status === 'completed') {
           addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
         } else if (job.status === 'failed') {
-          addTaskLogEntry('error', `Job failed: ${actionLabel}`, job.id);
+          const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
+          addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
         }
       } else if (!prevStatus) {
         // New job - log based on its initial status
@@ -862,7 +863,8 @@ const StudioPage: React.FC = () => {
         } else if (job.status === 'completed') {
           addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
         } else if (job.status === 'failed') {
-          addTaskLogEntry('error', `Job failed: ${actionLabel}`, job.id);
+          const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
+          addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
         }
       }
     }
