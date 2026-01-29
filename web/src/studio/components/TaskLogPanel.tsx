@@ -13,9 +13,10 @@ interface TaskLogPanelProps {
   isVisible: boolean;
   onToggle: () => void;
   onClear: () => void;
+  onEntryClick?: (entry: TaskLogEntry) => void;
 }
 
-const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggle, onClear }) => {
+const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggle, onClear, onEntryClick }) => {
   const errorCount = entries.filter((e) => e.level === 'error').length;
 
   const levelColors = {
@@ -68,20 +69,31 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggl
           {entries.length === 0 ? (
             <div className="px-4 py-6 text-center text-stone-400 dark:text-stone-600">No task activity yet</div>
           ) : (
-            entries.map((entry) => (
-              <div
-                key={entry.id}
-                className={`flex gap-3 px-4 py-1.5 border-l-2 ${levelBorders[entry.level]}`}
-              >
-                <span className="text-stone-400 dark:text-stone-600 min-w-[70px]">
-                  {entry.timestamp.toLocaleTimeString()}
-                </span>
-                <span className={`min-w-[50px] font-bold uppercase ${levelColors[entry.level]}`}>
-                  {entry.level}
-                </span>
-                <span className="text-stone-700 dark:text-stone-300">{entry.message}</span>
-              </div>
-            ))
+            entries.map((entry) => {
+              const isClickable = entry.jobId && onEntryClick;
+              return (
+                <div
+                  key={entry.id}
+                  onClick={isClickable ? () => onEntryClick(entry) : undefined}
+                  className={`flex gap-3 px-4 py-1.5 border-l-2 ${levelBorders[entry.level]} ${
+                    isClickable ? 'cursor-pointer hover:bg-stone-100 dark:hover:bg-stone-800/50' : ''
+                  }`}
+                >
+                  <span className="text-stone-400 dark:text-stone-600 min-w-[70px]">
+                    {entry.timestamp.toLocaleTimeString()}
+                  </span>
+                  <span className={`min-w-[50px] font-bold uppercase ${levelColors[entry.level]}`}>
+                    {entry.level}
+                  </span>
+                  <span className="text-stone-700 dark:text-stone-300 flex-1">{entry.message}</span>
+                  {isClickable && (
+                    <span className="text-stone-400 dark:text-stone-600 text-[10px] self-center">
+                      <i className="fa-solid fa-chevron-right" />
+                    </span>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       )}

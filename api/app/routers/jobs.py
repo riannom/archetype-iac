@@ -26,35 +26,50 @@ router = APIRouter(tags=["jobs"])
 
 
 def _extract_error_summary(log_content: str | None, status: str) -> str | None:
-    """Extract a one-liner error summary from job log content.
+    """Extract an informative error summary from job log content.
 
     Looks for common error patterns and returns a concise message.
+    For multiline errors (like EOS startup errors), combines relevant context.
     """
+    import re
+
     if status != "failed" or not log_content:
         return None
 
     # Look for specific error patterns in order of priority
     lines = log_content.strip().split("\n")
 
-    # Pattern 1: "Error: <message>" line
+    # Pattern 1: containerlab level=error format
+    # Example: level=error msg="failed to create container"
     for line in lines:
-        line = line.strip()
-        if line.startswith("Error:"):
-            return line[6:].strip()[:200]  # Cap at 200 chars
-        if line.startswith("ERROR:"):
-            # Skip the "ERROR:" prefix and get the actual message
-            msg = line[6:].strip()
-            # Skip generic headers like "Job execution failed on agent."
+        match = re.search(r'level=error\s+msg="([^"]+)"', line)
+        if match:
+            return match.group(1)[:200]
+
+    # Pattern 2: "Error: <message>" line (possibly multiline)
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        if line_stripped.startswith("Error:"):
+            error_msg = line_stripped[6:].strip()
+            # Check if the next line continues the error (not a separator or section header)
+            if i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if next_line and not next_line.startswith(("=", "-", "Exit", "STDOUT", "STDERR")):
+                    error_msg = f"{error_msg} - {next_line}"
+            return error_msg[:200]
+        if line_stripped.startswith("ERROR:"):
+            msg = line_stripped[6:].strip()
+            # Skip generic headers
             if msg and not msg.endswith("on agent."):
                 return msg[:200]
 
-    # Pattern 2: "Details: <message>" line
+    # Pattern 3: "Details: <message>" line
     for line in lines:
         line = line.strip()
         if line.startswith("Details:"):
             return line[8:].strip()[:200]
 
-    # Pattern 3: Look for common containerlab/docker errors
+    # Pattern 4: Look for common containerlab/docker errors
     error_patterns = [
         "missing image",
         "image not found",
@@ -70,23 +85,43 @@ def _extract_error_summary(log_content: str | None, status: str) -> str | None:
         "failed to start",
         "timed out",
         "timeout",
+        "unhealthy",
+        "not healthy",
+        "exit code",
+        "exited with",
     ]
 
     for line in lines:
         line_lower = line.lower()
         for pattern in error_patterns:
             if pattern in line_lower:
-                # Return this line as it likely contains the error
                 return line.strip()[:200]
 
-    # Pattern 4: First non-empty line after "STDERR" section
+    # Pattern 5: First non-empty, meaningful line after "STDERR" section
     in_stderr = False
+    stderr_lines = []
     for line in lines:
         if "STDERR" in line or "stderr" in line.lower():
             in_stderr = True
             continue
-        if in_stderr and line.strip():
-            return line.strip()[:200]
+        if in_stderr:
+            stripped = line.strip()
+            # Skip empty lines and separators
+            if stripped and not stripped.startswith(("=", "-")):
+                stderr_lines.append(stripped)
+                # Get first meaningful error line from stderr
+                if len(stderr_lines) == 1:
+                    # Check for containerlab format in stderr
+                    match = re.search(r'level=error\s+msg="([^"]+)"', stripped)
+                    if match:
+                        return match.group(1)[:200]
+                    # Return this line if it looks like an error
+                    if any(p in stripped.lower() for p in ["error", "fail", "cannot", "unable"]):
+                        return stripped[:200]
+
+    # If we collected stderr lines, return the first one
+    if stderr_lines:
+        return stderr_lines[0][:200]
 
     # Fallback: First line that looks like an error
     for line in lines:
