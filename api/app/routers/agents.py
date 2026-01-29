@@ -334,6 +334,7 @@ def list_agents_detailed(
             "labs": host_labs,
             "lab_count": len(host_labs),
             "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
+            "image_sync_strategy": host.image_sync_strategy or "on_demand",
         })
 
     return result
