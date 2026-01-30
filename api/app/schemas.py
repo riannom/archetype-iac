@@ -252,6 +252,9 @@ class NodeStateOut(BaseModel):
     image_sync_status: str | None = None
     # Image sync progress/error message
     image_sync_message: str | None = None
+    # Management IP address(es) for IaC integration
+    management_ip: str | None = None
+    all_ips: list[str] = []
     # Host/agent info for multi-host visibility
     host_id: str | None = None
     host_name: str | None = None
@@ -457,3 +460,166 @@ class ConfigDiffResponse(BaseModel):
     diff_lines: list[ConfigDiffLine]
     additions: int = 0
     deletions: int = 0
+
+
+# =============================================================================
+# Node Readiness Schemas (IaC Workflow Support)
+# =============================================================================
+
+
+class NodeReadinessOut(BaseModel):
+    """Readiness status for a single node."""
+
+    node_id: str
+    node_name: str
+    is_ready: bool
+    actual_state: str  # "running", "stopped", etc.
+    progress_percent: int | None = None
+    message: str | None = None
+    boot_started_at: datetime | None = None
+    management_ip: str | None = None
+
+
+class LabReadinessResponse(BaseModel):
+    """Response schema for lab-wide readiness check."""
+
+    lab_id: str
+    all_ready: bool
+    ready_count: int
+    total_count: int
+    running_count: int
+    nodes: list[NodeReadinessOut]
+
+
+# =============================================================================
+# Inventory Export Schemas (IaC Workflow Support)
+# =============================================================================
+
+
+class NodeInventoryEntry(BaseModel):
+    """A single node entry for inventory export."""
+
+    node_name: str
+    management_ip: str | None = None
+    all_ips: list[str] = []
+    device_type: str | None = None  # e.g., "ceos", "vr-veos"
+    kind: str | None = None  # containerlab kind
+    host_id: str | None = None  # For multi-host deployments
+    host_name: str | None = None
+
+
+class LabInventoryResponse(BaseModel):
+    """Response schema for inventory export."""
+
+    lab_id: str
+    lab_name: str
+    format: str  # "json", "ansible", "terraform"
+    nodes: list[NodeInventoryEntry]
+    content: str | None = None  # Formatted content for non-JSON formats
+
+
+# =============================================================================
+# Webhook Schemas (IaC Workflow Support)
+# =============================================================================
+
+
+class WebhookCreate(BaseModel):
+    """Input schema for creating a webhook."""
+
+    name: str
+    url: str
+    events: list[str]  # e.g., ["lab.deploy_complete", "lab.deploy_failed"]
+    lab_id: str | None = None  # None = global for all user's labs
+    secret: str | None = None  # For HMAC signing
+    headers: dict[str, str] | None = None  # Custom headers
+    enabled: bool = True
+
+
+class WebhookUpdate(BaseModel):
+    """Input schema for updating a webhook."""
+
+    name: str | None = None
+    url: str | None = None
+    events: list[str] | None = None
+    secret: str | None = None
+    headers: dict[str, str] | None = None
+    enabled: bool | None = None
+
+
+class WebhookOut(BaseModel):
+    """Output schema for a webhook."""
+
+    id: str
+    owner_id: str
+    lab_id: str | None
+    name: str
+    url: str
+    events: list[str]
+    has_secret: bool = False  # Don't expose actual secret
+    headers: dict[str, str] | None = None
+    enabled: bool
+    last_delivery_at: datetime | None = None
+    last_delivery_status: str | None = None
+    last_delivery_error: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WebhooksResponse(BaseModel):
+    """Response schema for listing webhooks."""
+
+    webhooks: list[WebhookOut]
+
+
+class WebhookDeliveryOut(BaseModel):
+    """Output schema for a webhook delivery."""
+
+    id: str
+    webhook_id: str
+    event_type: str
+    lab_id: str | None
+    job_id: str | None
+    status_code: int | None
+    success: bool
+    error: str | None
+    duration_ms: int | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WebhookDeliveriesResponse(BaseModel):
+    """Response schema for listing webhook deliveries."""
+
+    deliveries: list[WebhookDeliveryOut]
+
+
+class WebhookTestRequest(BaseModel):
+    """Input schema for testing a webhook."""
+
+    event_type: str = "test"
+
+
+class WebhookTestResponse(BaseModel):
+    """Response schema for webhook test."""
+
+    success: bool
+    status_code: int | None = None
+    response_preview: str | None = None
+    error: str | None = None
+    duration_ms: int | None = None
+
+
+# Webhook event types enum for documentation
+WEBHOOK_EVENTS = [
+    "lab.deploy_started",
+    "lab.deploy_complete",
+    "lab.deploy_failed",
+    "lab.destroy_complete",
+    "node.ready",
+    "job.completed",
+    "job.failed",
+]

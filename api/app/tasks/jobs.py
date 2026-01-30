@@ -2,17 +2,104 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime
 
-from app import agent_client, models
+from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.db import SessionLocal
 from app.topology import analyze_topology, graph_to_containerlab_yaml, split_topology_by_host, yaml_to_graph
 from app.utils.lab import update_lab_state
 
 logger = logging.getLogger(__name__)
+
+
+def _get_node_info_for_webhook(session, lab_id: str) -> list[dict]:
+    """Get node info for webhook payload."""
+    nodes = (
+        session.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab_id)
+        .all()
+    )
+    return [
+        {
+            "name": n.node_name,
+            "state": n.actual_state,
+            "ready": n.is_ready,
+            "management_ip": n.management_ip,
+        }
+        for n in nodes
+    ]
+
+
+async def _dispatch_webhook(
+    event_type: str,
+    lab: models.Lab,
+    job: models.Job,
+    session,
+) -> None:
+    """Dispatch a webhook event (fire and forget)."""
+    try:
+        nodes = _get_node_info_for_webhook(session, lab.id)
+        await webhooks.dispatch_webhook_event(
+            event_type=event_type,
+            lab_id=lab.id,
+            lab=lab,
+            job=job,
+            nodes=nodes,
+        )
+    except Exception as e:
+        # Don't fail the job if webhook dispatch fails
+        logger.warning(f"Webhook dispatch failed for {event_type}: {e}")
+
+
+async def _capture_node_ips(session, lab_id: str, agent: models.Host) -> None:
+    """Capture management IPs from agent and persist to NodeState records.
+
+    This is called after a successful deploy to capture the container IPs
+    assigned by containerlab/docker for use in IaC workflows.
+    """
+    try:
+        status = await agent_client.get_lab_status_from_agent(agent, lab_id)
+        nodes = status.get("nodes", [])
+
+        if not nodes:
+            logger.debug(f"No nodes returned in status for lab {lab_id}")
+            return
+
+        # Update NodeState records with IP addresses
+        for node_info in nodes:
+            node_name = node_info.get("name")
+            ip_addresses = node_info.get("ip_addresses", [])
+
+            if not node_name:
+                continue
+
+            # Find the NodeState record
+            node_state = (
+                session.query(models.NodeState)
+                .filter(
+                    models.NodeState.lab_id == lab_id,
+                    models.NodeState.node_name == node_name,
+                )
+                .first()
+            )
+
+            if node_state and ip_addresses:
+                # Set primary IP (first in list)
+                node_state.management_ip = ip_addresses[0] if ip_addresses else None
+                # Store all IPs as JSON
+                node_state.management_ips_json = json.dumps(ip_addresses)
+                logger.debug(f"Captured IPs for {node_name}: {ip_addresses}")
+
+        session.commit()
+        logger.info(f"Captured management IPs for {len(nodes)} nodes in lab {lab_id}")
+
+    except Exception as e:
+        logger.warning(f"Failed to capture node IPs for lab {lab_id}: {e}")
+        # Don't fail the job - IP capture is best-effort
 
 
 async def run_agent_job(
@@ -85,6 +172,8 @@ async def run_agent_job(
         # Update lab state based on action
         if action == "up":
             update_lab_state(session, lab_id, "starting", agent_id=agent.id)
+            # Dispatch webhook for deploy started
+            await _dispatch_webhook("lab.deploy_started", lab, job, session)
         elif action == "down":
             update_lab_state(session, lab_id, "stopping", agent_id=agent.id)
 
@@ -114,8 +203,14 @@ async def run_agent_job(
                 # Update lab state based on completed action
                 if action == "up":
                     update_lab_state(session, lab_id, "running", agent_id=agent.id)
+                    # Capture management IPs for IaC workflows
+                    await _capture_node_ips(session, lab_id, agent)
+                    # Dispatch webhook for successful deploy
+                    await _dispatch_webhook("lab.deploy_complete", lab, job, session)
                 elif action == "down":
                     update_lab_state(session, lab_id, "stopped")
+                    # Dispatch webhook for destroy complete
+                    await _dispatch_webhook("lab.destroy_complete", lab, job, session)
 
             else:
                 job.status = "failed"
@@ -124,6 +219,12 @@ async def run_agent_job(
 
                 # Update lab state to error
                 update_lab_state(session, lab_id, "error", error=error_msg)
+
+                # Dispatch webhook for failed job
+                if action == "up":
+                    await _dispatch_webhook("lab.deploy_failed", lab, job, session)
+                else:
+                    await _dispatch_webhook("job.failed", lab, job, session)
 
             # Append stdout/stderr if present
             stdout = result.get("stdout", "").strip()
@@ -248,6 +349,9 @@ async def run_multihost_deploy(
         session.commit()
 
         update_lab_state(session, lab_id, "starting")
+
+        # Dispatch webhook for deploy started
+        await _dispatch_webhook("lab.deploy_started", lab, job, session)
 
         # Map host names to agents
         host_to_agent: dict[str, models.Host] = {}
@@ -379,7 +483,15 @@ async def run_multihost_deploy(
             session, lab_id, "running",
             agent_id=first_agent.id if first_agent else None
         )
+
+        # Capture management IPs from all agents for IaC workflows
+        for agent in host_to_agent.values():
+            await _capture_node_ips(session, lab_id, agent)
+
         session.commit()
+
+        # Dispatch webhook for successful deploy
+        await _dispatch_webhook("lab.deploy_complete", lab, job, session)
 
         logger.info(f"Job {job_id} completed: multi-host deployment successful")
 
@@ -387,12 +499,16 @@ async def run_multihost_deploy(
         logger.exception(f"Job {job_id} failed with unexpected error: {e}")
         try:
             job = session.get(models.Job, job_id)
+            lab = session.get(models.Lab, lab_id)
             if job:
                 job.status = "failed"
                 job.completed_at = datetime.utcnow()
                 job.log_path = f"ERROR: Unexpected error: {e}"
                 update_lab_state(session, lab_id, "error", error=str(e))
                 session.commit()
+                # Dispatch webhook for failed deploy
+                if lab:
+                    await _dispatch_webhook("lab.deploy_failed", lab, job, session)
         except Exception:
             pass
     finally:
@@ -526,6 +642,9 @@ async def run_multihost_destroy(
         job.completed_at = datetime.utcnow()
         job.log_path = "\n".join(log_parts)
         session.commit()
+
+        # Dispatch webhook for destroy complete
+        await _dispatch_webhook("lab.destroy_complete", lab, job, session)
 
         logger.info(f"Job {job_id} completed: multi-host destroy {'successful' if all_success else 'with warnings'}")
 
@@ -696,6 +815,9 @@ async def run_node_sync(
                 if result.get("status") == "completed":
                     log_parts.append("Deploy completed successfully")
 
+                    # Capture management IPs for IaC workflows
+                    await _capture_node_ips(session, lab_id, agent)
+
                     # Get all node states for this lab to update them
                     all_states = (
                         session.query(models.NodeState)
@@ -790,6 +912,9 @@ async def run_node_sync(
 
                     if result.get("status") == "completed":
                         log_parts.append("Redeploy completed successfully")
+
+                        # Capture management IPs for IaC workflows
+                        await _capture_node_ips(session, lab_id, agent)
 
                         # After redeploy, all nodes are running
                         # Get all node states for this lab to update them

@@ -1,10 +1,12 @@
 """Lab CRUD and topology management endpoints."""
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from typing import Literal
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -26,6 +28,17 @@ from app.utils.lab import get_lab_or_404, get_lab_provider
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["labs"])
+
+
+def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
+    """Convert a NodeState model to schema with all_ips parsed from JSON."""
+    node_data = schemas.NodeStateOut.model_validate(state)
+    if state.management_ips_json:
+        try:
+            node_data.all_ips = json.loads(state.management_ips_json)
+        except (json.JSONDecodeError, TypeError):
+            node_data.all_ips = []
+    return node_data
 
 
 def _upsert_node_states(
@@ -495,7 +508,7 @@ async def list_node_states(
     # 4. Build enriched response
     enriched_nodes = []
     for s in states:
-        node_data = schemas.NodeStateOut.model_validate(s)
+        node_data = _enrich_node_state(s)
         # Try placement first, then fall back to lab's agent
         host_id = placement_by_node.get(s.node_name) or lab.agent_id
         if host_id:
@@ -536,7 +549,7 @@ def get_node_state(
         database.add(state)
         database.commit()
         database.refresh(state)
-    return schemas.NodeStateOut.model_validate(state)
+    return _enrich_node_state(state)
 
 
 @router.put("/labs/{lab_id}/nodes/{node_id}/desired-state")
@@ -575,12 +588,12 @@ def set_node_desired_state(
         database.add(state)
         database.commit()
         database.refresh(state)
-        return schemas.NodeStateOut.model_validate(state)
+        return _enrich_node_state(state)
 
     state.desired_state = payload.state
     database.commit()
     database.refresh(state)
-    return schemas.NodeStateOut.model_validate(state)
+    return _enrich_node_state(state)
 
 
 @router.put("/labs/{lab_id}/nodes/desired-state")
@@ -613,7 +626,7 @@ def set_all_nodes_desired_state(
         .all()
     )
     return schemas.NodeStatesResponse(
-        nodes=[schemas.NodeStateOut.model_validate(s) for s in states]
+        nodes=[_enrich_node_state(s) for s in states]
     )
 
 
@@ -677,7 +690,7 @@ async def refresh_node_states(
         .all()
     )
     return schemas.NodeStatesResponse(
-        nodes=[schemas.NodeStateOut.model_validate(s) for s in states]
+        nodes=[_enrich_node_state(s) for s in states]
     )
 
 
@@ -860,6 +873,430 @@ async def sync_lab(
         job_id=job.id,
         message=f"Sync job queued for {len(node_ids)} node(s)",
         nodes_to_sync=node_ids,
+    )
+
+
+# ============================================================================
+# Node Readiness Endpoints (IaC Workflow Support)
+# ============================================================================
+
+
+@router.get("/labs/{lab_id}/nodes/ready")
+async def check_nodes_ready(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LabReadinessResponse:
+    """Check readiness status for all nodes in a lab.
+
+    Returns the readiness state of each node, including boot progress
+    and management IPs. Useful for CI/CD to poll until lab is ready.
+
+    A node is considered "ready" when:
+    - actual_state is "running"
+    - is_ready flag is True (boot sequence complete)
+    """
+    from app.utils.lab import get_lab_provider
+
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
+
+    # Get all node states
+    states = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab_id)
+        .order_by(models.NodeState.node_name)
+        .all()
+    )
+
+    # Get agent for readiness checks
+    lab_provider = get_lab_provider(lab)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+
+    nodes_out = []
+    ready_count = 0
+    running_count = 0
+
+    for state in states:
+        # Check readiness from agent if node is running
+        progress_percent = None
+        message = None
+
+        if state.actual_state == "running":
+            running_count += 1
+            if agent:
+                try:
+                    readiness = await agent_client.check_node_readiness(
+                        agent, lab.id, state.node_name
+                    )
+                    # Update is_ready from agent response
+                    if readiness.get("is_ready") and not state.is_ready:
+                        state.is_ready = True
+                        database.commit()
+                    progress_percent = readiness.get("progress_percent")
+                    message = readiness.get("message")
+                except Exception as e:
+                    message = f"Readiness check failed: {e}"
+
+        if state.is_ready and state.actual_state == "running":
+            ready_count += 1
+
+        nodes_out.append(schemas.NodeReadinessOut(
+            node_id=state.node_id,
+            node_name=state.node_name,
+            is_ready=state.is_ready and state.actual_state == "running",
+            actual_state=state.actual_state,
+            progress_percent=progress_percent,
+            message=message,
+            boot_started_at=state.boot_started_at,
+            management_ip=state.management_ip,
+        ))
+
+    return schemas.LabReadinessResponse(
+        lab_id=lab_id,
+        all_ready=ready_count == len(states) and len(states) > 0,
+        ready_count=ready_count,
+        total_count=len(states),
+        running_count=running_count,
+        nodes=nodes_out,
+    )
+
+
+@router.get("/labs/{lab_id}/nodes/ready/poll")
+async def poll_nodes_ready(
+    lab_id: str,
+    timeout: int = 300,
+    interval: int = 10,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LabReadinessResponse:
+    """Long-poll until all running nodes are ready or timeout.
+
+    This endpoint blocks until either:
+    - All nodes with desired_state=running are ready
+    - The timeout is reached
+
+    Args:
+        timeout: Maximum seconds to wait (default: 300, max: 600)
+        interval: Seconds between checks (default: 10, min: 5)
+
+    Returns:
+        LabReadinessResponse with final readiness state
+
+    Response Headers:
+        X-Readiness-Status: "complete" if all ready, "timeout" if timed out
+    """
+    import asyncio
+    from fastapi.responses import JSONResponse
+    from app.utils.lab import get_lab_provider
+
+    # Validate parameters
+    timeout = min(max(timeout, 10), 600)  # 10s to 10min
+    interval = min(max(interval, 5), 60)  # 5s to 60s
+
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
+
+    lab_provider = get_lab_provider(lab)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+
+    start_time = asyncio.get_event_loop().time()
+    end_time = start_time + timeout
+
+    while asyncio.get_event_loop().time() < end_time:
+        # Refresh session to get latest state
+        database.expire_all()
+
+        states = (
+            database.query(models.NodeState)
+            .filter(models.NodeState.lab_id == lab_id)
+            .order_by(models.NodeState.node_name)
+            .all()
+        )
+
+        # Count nodes that should be running
+        nodes_should_run = [s for s in states if s.desired_state == "running"]
+
+        if not nodes_should_run:
+            # No nodes expected to run - return immediately
+            return schemas.LabReadinessResponse(
+                lab_id=lab_id,
+                all_ready=True,
+                ready_count=0,
+                total_count=len(states),
+                running_count=0,
+                nodes=[],
+            )
+
+        # Check readiness for running nodes
+        nodes_out = []
+        ready_count = 0
+        running_count = 0
+
+        for state in states:
+            progress_percent = None
+            message = None
+
+            if state.actual_state == "running":
+                running_count += 1
+                if agent and not state.is_ready:
+                    try:
+                        readiness = await agent_client.check_node_readiness(
+                            agent, lab.id, state.node_name
+                        )
+                        if readiness.get("is_ready"):
+                            state.is_ready = True
+                            database.commit()
+                        progress_percent = readiness.get("progress_percent")
+                        message = readiness.get("message")
+                    except Exception as e:
+                        message = f"Readiness check failed: {e}"
+
+            if state.is_ready and state.actual_state == "running":
+                ready_count += 1
+
+            if state in nodes_should_run:
+                nodes_out.append(schemas.NodeReadinessOut(
+                    node_id=state.node_id,
+                    node_name=state.node_name,
+                    is_ready=state.is_ready and state.actual_state == "running",
+                    actual_state=state.actual_state,
+                    progress_percent=progress_percent,
+                    message=message,
+                    boot_started_at=state.boot_started_at,
+                    management_ip=state.management_ip,
+                ))
+
+        # Check if all nodes that should run are ready
+        all_ready = all(
+            s.is_ready and s.actual_state == "running"
+            for s in nodes_should_run
+        )
+
+        if all_ready:
+            response = schemas.LabReadinessResponse(
+                lab_id=lab_id,
+                all_ready=True,
+                ready_count=ready_count,
+                total_count=len(states),
+                running_count=running_count,
+                nodes=nodes_out,
+            )
+            return JSONResponse(
+                content=response.model_dump(mode="json"),
+                headers={"X-Readiness-Status": "complete"},
+            )
+
+        # Wait before next check
+        await asyncio.sleep(interval)
+
+    # Timeout reached - return current state
+    states = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab_id)
+        .order_by(models.NodeState.node_name)
+        .all()
+    )
+
+    nodes_out = []
+    ready_count = 0
+    running_count = 0
+
+    for state in states:
+        if state.actual_state == "running":
+            running_count += 1
+        if state.is_ready and state.actual_state == "running":
+            ready_count += 1
+
+        nodes_out.append(schemas.NodeReadinessOut(
+            node_id=state.node_id,
+            node_name=state.node_name,
+            is_ready=state.is_ready and state.actual_state == "running",
+            actual_state=state.actual_state,
+            progress_percent=None,
+            message="Timeout waiting for readiness",
+            boot_started_at=state.boot_started_at,
+            management_ip=state.management_ip,
+        ))
+
+    response = schemas.LabReadinessResponse(
+        lab_id=lab_id,
+        all_ready=False,
+        ready_count=ready_count,
+        total_count=len(states),
+        running_count=running_count,
+        nodes=nodes_out,
+    )
+    return JSONResponse(
+        content=response.model_dump(mode="json"),
+        headers={"X-Readiness-Status": "timeout"},
+    )
+
+
+# ============================================================================
+# Inventory Export Endpoint (IaC Workflow Support)
+# ============================================================================
+
+
+@router.get("/labs/{lab_id}/inventory")
+async def export_inventory(
+    lab_id: str,
+    format: Literal["json", "ansible", "terraform"] = "json",
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LabInventoryResponse:
+    """Export lab node inventory for IaC tools.
+
+    Generates an inventory of all nodes with their management IPs
+    in a format suitable for automation tools.
+
+    Formats:
+    - json: Structured JSON with all node details
+    - ansible: Ansible inventory YAML format
+    - terraform: Terraform tfvars JSON format
+
+    Example usage:
+        curl -H "Authorization: Bearer $TOKEN" \\
+            "$API_URL/labs/{id}/inventory?format=ansible" > inventory.yml
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_node_states_exist(database, lab.id)
+
+    # Get node states with IPs
+    states = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab_id)
+        .order_by(models.NodeState.node_name)
+        .all()
+    )
+
+    # Get topology for device info
+    topo_path = topology_path(lab.id)
+    device_info = {}
+    if topo_path.exists():
+        try:
+            graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+            for node in graph.nodes:
+                node_name = node.container_name or node.name
+                device_info[node_name] = {
+                    "device": node.device,
+                    "kind": node.device,  # In clab, device maps to kind
+                }
+        except Exception:
+            pass
+
+    # Get host placements for multi-host
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id)
+        .all()
+    )
+    placement_by_node = {p.node_name: p.host_id for p in placements}
+
+    # Get host names
+    host_ids = set(placement_by_node.values())
+    if lab.agent_id:
+        host_ids.add(lab.agent_id)
+    hosts = {}
+    if host_ids:
+        host_records = (
+            database.query(models.Host)
+            .filter(models.Host.id.in_(host_ids))
+            .all()
+        )
+        hosts = {h.id: h.name for h in host_records}
+
+    # Build inventory entries
+    nodes = []
+    for state in states:
+        all_ips = []
+        if state.management_ips_json:
+            try:
+                all_ips = json.loads(state.management_ips_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        info = device_info.get(state.node_name, {})
+        host_id = placement_by_node.get(state.node_name) or lab.agent_id
+
+        nodes.append(schemas.NodeInventoryEntry(
+            node_name=state.node_name,
+            management_ip=state.management_ip,
+            all_ips=all_ips,
+            device_type=info.get("device"),
+            kind=info.get("kind"),
+            host_id=host_id,
+            host_name=hosts.get(host_id) if host_id else None,
+        ))
+
+    # Generate formatted content based on requested format
+    content = None
+
+    if format == "ansible":
+        # Ansible inventory YAML format
+        ansible_hosts = {}
+        for node in nodes:
+            host_vars = {}
+            if node.management_ip:
+                host_vars["ansible_host"] = node.management_ip
+            if node.device_type:
+                # Map common device types to ansible_network_os
+                device_os_map = {
+                    "ceos": "arista.eos.eos",
+                    "vr-veos": "arista.eos.eos",
+                    "srl": "nokia.srlinux.srlinux",
+                    "vr-sros": "nokia.sros.sros",
+                    "crpd": "juniper.device",
+                    "vr-vmx": "juniper.device",
+                    "vr-xrv": "cisco.iosxr.iosxr",
+                    "vr-csr": "cisco.ios.ios",
+                    "vr-n9kv": "cisco.nxos.nxos",
+                }
+                if node.device_type in device_os_map:
+                    host_vars["ansible_network_os"] = device_os_map[node.device_type]
+                host_vars["device_type"] = node.device_type
+            if node.host_name:
+                host_vars["lab_host"] = node.host_name
+            ansible_hosts[node.node_name] = host_vars
+
+        inventory = {
+            "all": {
+                "hosts": ansible_hosts,
+                "vars": {
+                    "ansible_connection": "network_cli",
+                    "lab_id": lab_id,
+                    "lab_name": lab.name,
+                },
+            }
+        }
+        content = yaml.dump(inventory, default_flow_style=False, sort_keys=False)
+
+    elif format == "terraform":
+        # Terraform tfvars JSON format
+        tf_nodes = {}
+        for node in nodes:
+            tf_nodes[node.node_name] = {
+                "ip": node.management_ip,
+                "all_ips": node.all_ips,
+                "device_type": node.device_type,
+                "kind": node.kind,
+            }
+            if node.host_name:
+                tf_nodes[node.node_name]["host"] = node.host_name
+
+        terraform_vars = {
+            "lab_id": lab_id,
+            "lab_name": lab.name,
+            "lab_nodes": tf_nodes,
+        }
+        content = json.dumps(terraform_vars, indent=2)
+
+    return schemas.LabInventoryResponse(
+        lab_id=lab_id,
+        lab_name=lab.name,
+        format=format,
+        nodes=nodes,
+        content=content,
     )
 
 
