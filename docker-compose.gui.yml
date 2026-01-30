@@ -48,6 +48,8 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOKI_URL=${LOKI_URL:-http://loki:3100}
+      # Agent updates (callback URL for external agents)
+      - INTERNAL_URL=${INTERNAL_URL:-http://localhost:8000}
     volumes:
       - archetype_workspaces:/var/lib/archetype
       - /var/run/docker.sock:/var/run/docker.sock
