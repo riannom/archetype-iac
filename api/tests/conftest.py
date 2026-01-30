@@ -248,3 +248,154 @@ def multiple_hosts(test_db: Session) -> list[models.Host]:
     for host in hosts:
         test_db.refresh(host)
     return hosts
+
+
+@pytest.fixture(scope="function")
+def offline_host(test_db: Session) -> models.Host:
+    """Create an offline agent host for testing."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    host = models.Host(
+        id="offline-agent",
+        name="Offline Agent",
+        address="offline.local:8080",
+        status="offline",
+        capabilities=json.dumps({"providers": ["containerlab"]}),
+        version="1.0.0",
+        resource_usage=json.dumps({}),
+        last_heartbeat=datetime.now(timezone.utc) - timedelta(minutes=10),
+    )
+    test_db.add(host)
+    test_db.commit()
+    test_db.refresh(host)
+    return host
+
+
+@pytest.fixture(scope="function")
+def sample_job(test_db: Session, sample_lab: models.Lab, test_user: models.User) -> models.Job:
+    """Create a sample queued job for testing."""
+    job = models.Job(
+        id="test-job-1",
+        lab_id=sample_lab.id,
+        user_id=test_user.id,
+        action="up",
+        status="queued",
+    )
+    test_db.add(job)
+    test_db.commit()
+    test_db.refresh(job)
+    return job
+
+
+@pytest.fixture(scope="function")
+def running_job(test_db: Session, sample_lab: models.Lab, test_user: models.User, sample_host: models.Host) -> models.Job:
+    """Create a running job for testing."""
+    from datetime import datetime, timezone
+
+    job = models.Job(
+        id="running-job-1",
+        lab_id=sample_lab.id,
+        user_id=test_user.id,
+        action="up",
+        status="running",
+        agent_id=sample_host.id,
+        started_at=datetime.now(timezone.utc),
+    )
+    test_db.add(job)
+    test_db.commit()
+    test_db.refresh(job)
+    return job
+
+
+@pytest.fixture(scope="function")
+def stuck_queued_job(test_db: Session, sample_lab: models.Lab, test_user: models.User) -> models.Job:
+    """Create a job that's been queued for too long (stuck)."""
+    from datetime import datetime, timedelta, timezone
+
+    job = models.Job(
+        id="stuck-queued-job",
+        lab_id=sample_lab.id,
+        user_id=test_user.id,
+        action="up",
+        status="queued",
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+    )
+    test_db.add(job)
+    test_db.commit()
+    test_db.refresh(job)
+    return job
+
+
+@pytest.fixture(scope="function")
+def stuck_running_job(test_db: Session, sample_lab: models.Lab, test_user: models.User, sample_host: models.Host) -> models.Job:
+    """Create a job that's been running too long (stuck/timed out)."""
+    from datetime import datetime, timedelta, timezone
+
+    job = models.Job(
+        id="stuck-running-job",
+        lab_id=sample_lab.id,
+        user_id=test_user.id,
+        action="up",
+        status="running",
+        agent_id=sample_host.id,
+        started_at=datetime.now(timezone.utc) - timedelta(minutes=60),
+    )
+    test_db.add(job)
+    test_db.commit()
+    test_db.refresh(job)
+    return job
+
+
+@pytest.fixture(scope="function")
+def sample_image_host(test_db: Session, sample_host: models.Host) -> models.ImageHost:
+    """Create a sample ImageHost record for testing."""
+    from datetime import datetime, timezone
+
+    image_host = models.ImageHost(
+        id="test-image-host-1",
+        image_id="docker:ceos:4.28.0F",
+        host_id=sample_host.id,
+        reference="ceos:4.28.0F",
+        status="synced",
+        synced_at=datetime.now(timezone.utc),
+    )
+    test_db.add(image_host)
+    test_db.commit()
+    test_db.refresh(image_host)
+    return image_host
+
+
+@pytest.fixture(scope="function")
+def sample_image_sync_job(test_db: Session, sample_host: models.Host) -> models.ImageSyncJob:
+    """Create a sample ImageSyncJob for testing."""
+    job = models.ImageSyncJob(
+        id="test-sync-job-1",
+        image_id="docker:ceos:4.28.0F",
+        host_id=sample_host.id,
+        status="pending",
+    )
+    test_db.add(job)
+    test_db.commit()
+    test_db.refresh(job)
+    return job
+
+
+@pytest.fixture(scope="function")
+def sample_link_state(test_db: Session, sample_lab: models.Lab) -> models.LinkState:
+    """Create a sample LinkState for testing."""
+    link = models.LinkState(
+        id="test-link-1",
+        lab_id=sample_lab.id,
+        link_name="R1:eth1-R2:eth1",
+        source_node="R1",
+        source_interface="eth1",
+        target_node="R2",
+        target_interface="eth1",
+        desired_state="up",
+        actual_state="unknown",
+    )
+    test_db.add(link)
+    test_db.commit()
+    test_db.refresh(link)
+    return link
