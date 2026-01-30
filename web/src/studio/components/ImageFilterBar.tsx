@@ -3,6 +3,7 @@ import FilterChip from './FilterChip';
 import { DeviceModel, ImageLibraryEntry } from '../types';
 
 export type ImageAssignmentFilter = 'all' | 'unassigned' | 'assigned';
+export type ImageSortOption = 'name' | 'vendor' | 'kind' | 'date';
 
 interface ImageFilterBarProps {
   images: ImageLibraryEntry[];
@@ -15,6 +16,8 @@ interface ImageFilterBarProps {
   onKindToggle: (kind: string) => void;
   assignmentFilter: ImageAssignmentFilter;
   onAssignmentFilterChange: (filter: ImageAssignmentFilter) => void;
+  sortOption: ImageSortOption;
+  onSortChange: (sort: ImageSortOption) => void;
   onClearAll: () => void;
 }
 
@@ -28,6 +31,8 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
   onKindToggle,
   assignmentFilter,
   onAssignmentFilterChange,
+  sortOption,
+  onSortChange,
   onClearAll,
 }) => {
   // Extract unique values from images
@@ -67,24 +72,36 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
 
   return (
     <div className="bg-stone-50 dark:bg-stone-900/50 border-b border-stone-200 dark:border-stone-800 p-4 space-y-4">
-      {/* Search bar */}
-      <div className="relative">
-        <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm" />
-        <input
-          type="text"
-          placeholder="Search images by name, version, or vendor..."
-          value={searchQuery}
-          onChange={(e) => onSearchChange(e.target.value)}
-          className="w-full pl-10 pr-10 py-2.5 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
-        />
-        {searchQuery && (
-          <button
-            onClick={() => onSearchChange('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
-          >
-            <i className="fa-solid fa-xmark" />
-          </button>
-        )}
+      {/* Search bar and sort */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm" />
+          <input
+            type="text"
+            placeholder="Search images by name, version, or vendor..."
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="w-full pl-10 pr-10 py-2.5 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => onSearchChange('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
+            >
+              <i className="fa-solid fa-xmark" />
+            </button>
+          )}
+        </div>
+        <select
+          value={sortOption}
+          onChange={(e) => onSortChange(e.target.value as ImageSortOption)}
+          className="px-3 py-2.5 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+        >
+          <option value="vendor">Sort: Vendor</option>
+          <option value="name">Sort: Name</option>
+          <option value="kind">Sort: Type</option>
+          <option value="date">Sort: Date</option>
+        </select>
       </div>
 
       {/* Filter chips row */}
@@ -139,7 +156,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
         {vendors.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[10px] font-bold text-stone-400 uppercase mr-1">Vendor:</span>
-            {vendors.slice(0, 5).map((vendor) => (
+            {vendors.map((vendor) => (
               <FilterChip
                 key={vendor}
                 label={vendor}
@@ -147,9 +164,6 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
                 onClick={() => onVendorToggle(vendor)}
               />
             ))}
-            {vendors.length > 5 && (
-              <span className="text-[10px] text-stone-400">+{vendors.length - 5}</span>
-            )}
           </div>
         )}
 

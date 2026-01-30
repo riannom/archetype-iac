@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ImageFilterBar, { ImageAssignmentFilter } from "./ImageFilterBar";
+import ImageFilterBar, { ImageAssignmentFilter, ImageSortOption } from "./ImageFilterBar";
 import { ImageLibraryEntry, DeviceModel, DeviceType } from "../types";
 
 describe("ImageFilterBar", () => {
@@ -59,6 +59,7 @@ describe("ImageFilterBar", () => {
   const mockOnVendorToggle = vi.fn();
   const mockOnKindToggle = vi.fn();
   const mockOnAssignmentFilterChange = vi.fn();
+  const mockOnSortChange = vi.fn();
   const mockOnClearAll = vi.fn();
 
   const defaultProps = {
@@ -72,6 +73,8 @@ describe("ImageFilterBar", () => {
     onKindToggle: mockOnKindToggle,
     assignmentFilter: "all" as ImageAssignmentFilter,
     onAssignmentFilterChange: mockOnAssignmentFilterChange,
+    sortOption: "vendor" as ImageSortOption,
+    onSortChange: mockOnSortChange,
     onClearAll: mockOnClearAll,
   };
 
@@ -268,7 +271,7 @@ describe("ImageFilterBar", () => {
       expect(mockOnVendorToggle).toHaveBeenCalledWith("Arista");
     });
 
-    it("limits vendors to 5 and shows overflow count", () => {
+    it("shows all vendors without limit", () => {
       const imagesWithManyVendors: ImageLibraryEntry[] = [
         { id: "1", kind: "docker", reference: "a", vendor: "Vendor1", device_id: null },
         { id: "2", kind: "docker", reference: "b", vendor: "Vendor2", device_id: null },
@@ -282,13 +285,10 @@ describe("ImageFilterBar", () => {
         <ImageFilterBar {...defaultProps} images={imagesWithManyVendors} />
       );
 
-      // Should show +2 for the overflow
-      expect(screen.getByText("+2")).toBeInTheDocument();
-    });
-
-    it("does not show overflow count when 5 or fewer vendors", () => {
-      render(<ImageFilterBar {...defaultProps} />);
-      // Only 3 vendors in default images
+      // All vendors should be shown
+      expect(screen.getByText("Vendor1")).toBeInTheDocument();
+      expect(screen.getByText("Vendor7")).toBeInTheDocument();
+      // No overflow indicator
       expect(screen.queryByText(/^\+\d+$/)).not.toBeInTheDocument();
     });
   });

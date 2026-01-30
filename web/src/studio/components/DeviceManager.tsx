@@ -4,7 +4,7 @@ import { DeviceModel, ImageLibraryEntry } from '../types';
 import { DragProvider, useDragContext } from '../contexts/DragContext';
 import DeviceCard from './DeviceCard';
 import ImageCard from './ImageCard';
-import ImageFilterBar, { ImageAssignmentFilter } from './ImageFilterBar';
+import ImageFilterBar, { ImageAssignmentFilter, ImageSortOption } from './ImageFilterBar';
 import FilterChip from './FilterChip';
 import ISOImportModal from '../../components/ISOImportModal';
 
@@ -45,12 +45,14 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   const [deviceSearch, setDeviceSearch] = useState('');
   const [selectedDeviceVendors, setSelectedDeviceVendors] = useState<Set<string>>(new Set());
   const [deviceImageStatus, setDeviceImageStatus] = useState<'all' | 'has_image' | 'no_image'>('all');
+  const [deviceSort, setDeviceSort] = useState<'name' | 'vendor' | 'type'>('vendor');
 
   // Image filters
   const [imageSearch, setImageSearch] = useState('');
   const [selectedImageVendors, setSelectedImageVendors] = useState<Set<string>>(new Set());
   const [selectedImageKinds, setSelectedImageKinds] = useState<Set<string>>(new Set());
   const [imageAssignmentFilter, setImageAssignmentFilter] = useState<ImageAssignmentFilter>('all');
+  const [imageSort, setImageSort] = useState<ImageSortOption>('vendor');
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
 
@@ -75,9 +77,9 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     return Array.from(vendors).sort();
   }, [deviceModels]);
 
-  // Filter devices
+  // Filter and sort devices
   const filteredDevices = useMemo(() => {
-    return deviceModels.filter((device) => {
+    const filtered = deviceModels.filter((device) => {
       // Search filter
       if (deviceSearch) {
         const query = deviceSearch.toLowerCase();
@@ -102,11 +104,25 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
       return true;
     });
-  }, [deviceModels, deviceSearch, selectedDeviceVendors, deviceImageStatus, imagesByDevice]);
 
-  // Filter images
+    // Sort devices
+    return filtered.sort((a, b) => {
+      switch (deviceSort) {
+        case 'name':
+          return a.name.localeCompare(b.name);
+        case 'vendor':
+          return (a.vendor || '').localeCompare(b.vendor || '') || a.name.localeCompare(b.name);
+        case 'type':
+          return (a.type || '').localeCompare(b.type || '') || a.name.localeCompare(b.name);
+        default:
+          return 0;
+      }
+    });
+  }, [deviceModels, deviceSearch, selectedDeviceVendors, deviceImageStatus, imagesByDevice, deviceSort]);
+
+  // Filter and sort images
   const filteredImages = useMemo(() => {
-    return imageLibrary.filter((img) => {
+    const filtered = imageLibrary.filter((img) => {
       // Search filter
       if (imageSearch) {
         const query = imageSearch.toLowerCase();
@@ -135,7 +151,23 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
       return true;
     });
-  }, [imageLibrary, imageSearch, selectedImageVendors, selectedImageKinds, imageAssignmentFilter]);
+
+    // Sort images
+    return filtered.sort((a, b) => {
+      switch (imageSort) {
+        case 'name':
+          return (a.reference || a.filename || '').localeCompare(b.reference || b.filename || '');
+        case 'vendor':
+          return (a.vendor || '').localeCompare(b.vendor || '') || (a.reference || '').localeCompare(b.reference || '');
+        case 'kind':
+          return a.kind.localeCompare(b.kind) || (a.reference || '').localeCompare(b.reference || '');
+        case 'date':
+          return (b.uploaded_at || '').localeCompare(a.uploaded_at || '');
+        default:
+          return 0;
+      }
+    });
+  }, [imageLibrary, imageSearch, selectedImageVendors, selectedImageKinds, imageAssignmentFilter, imageSort]);
 
   // Group images for display
   const { unassignedImages, assignedImagesByDevice } = useMemo(() => {
@@ -492,24 +524,35 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           <div className="w-2/5 border-r border-stone-200 dark:border-stone-800 flex flex-col overflow-hidden">
             {/* Device filters */}
             <div className="p-4 border-b border-stone-200 dark:border-stone-800 bg-stone-100/50 dark:bg-stone-900/30 space-y-3">
-              {/* Search */}
-              <div className="relative">
-                <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xs" />
-                <input
-                  type="text"
-                  placeholder="Search devices..."
-                  value={deviceSearch}
-                  onChange={(e) => setDeviceSearch(e.target.value)}
-                  className="w-full pl-9 pr-8 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
-                />
-                {deviceSearch && (
-                  <button
-                    onClick={() => setDeviceSearch('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
-                  >
-                    <i className="fa-solid fa-xmark text-xs" />
-                  </button>
-                )}
+              {/* Search and sort row */}
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xs" />
+                  <input
+                    type="text"
+                    placeholder="Search devices..."
+                    value={deviceSearch}
+                    onChange={(e) => setDeviceSearch(e.target.value)}
+                    className="w-full pl-9 pr-8 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                  />
+                  {deviceSearch && (
+                    <button
+                      onClick={() => setDeviceSearch('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
+                    >
+                      <i className="fa-solid fa-xmark text-xs" />
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={deviceSort}
+                  onChange={(e) => setDeviceSort(e.target.value as 'name' | 'vendor' | 'type')}
+                  className="px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                >
+                  <option value="vendor">Sort: Vendor</option>
+                  <option value="name">Sort: Name</option>
+                  <option value="type">Sort: Type</option>
+                </select>
               </div>
 
               {/* Filter chips */}
@@ -532,7 +575,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                   variant="status"
                   statusColor="amber"
                 />
-                {deviceVendors.slice(0, 4).map((vendor) => (
+                {deviceVendors.map((vendor) => (
                   <FilterChip
                     key={vendor}
                     label={vendor}
@@ -611,6 +654,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
               }}
               assignmentFilter={imageAssignmentFilter}
               onAssignmentFilterChange={setImageAssignmentFilter}
+              sortOption={imageSort}
+              onSortChange={setImageSort}
               onClearAll={clearImageFilters}
             />
 
