@@ -18,6 +18,7 @@ import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
 import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
+import { useNotifications } from '../contexts/NotificationContext';
 import { ArchetypeIcon } from '../components/icons';
 import './studio.css';
 import 'xterm/css/xterm.css';
@@ -291,6 +292,7 @@ const resolveNodeStatus = (action: string, status: string): RuntimeStatus | unde
 const StudioPage: React.FC = () => {
   const { effectiveMode } = useTheme();
   const { user, refreshUser } = useUser();
+  const { addNotification, preferences } = useNotifications();
   const isAdmin = user?.is_admin ?? false;
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
@@ -832,10 +834,11 @@ const StudioPage: React.FC = () => {
     };
   }, []);
 
-  // Track job status changes and log them
+  // Track job status changes, log them, and trigger notifications
   useEffect(() => {
     const prevStatuses = prevJobsRef.current;
     const newStatuses = new Map<string, string>();
+    const toastSettings = preferences?.notification_settings.toasts;
 
     // On initial load, just populate the ref without logging
     // This prevents re-logging all existing jobs on page refresh
@@ -860,11 +863,26 @@ const StudioPage: React.FC = () => {
 
         if (job.status === 'running') {
           addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
+          // Trigger notification if enabled
+          if (toastSettings?.showJobStart) {
+            addNotification('info', `${actionLabel} started`, undefined, { jobId: job.id, labId: job.lab_id });
+          }
         } else if (job.status === 'completed') {
           addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
+          // Trigger notification if enabled
+          if (toastSettings?.showJobComplete) {
+            addNotification('success', `${actionLabel} completed`, undefined, { jobId: job.id, labId: job.lab_id });
+          }
         } else if (job.status === 'failed') {
           const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
           addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
+          // Trigger notification if enabled
+          if (toastSettings?.showJobFailed) {
+            addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
+              jobId: job.id,
+              labId: job.lab_id,
+            });
+          }
         }
       } else if (!prevStatus) {
         // New job - log based on its initial status
@@ -876,17 +894,29 @@ const StudioPage: React.FC = () => {
           addTaskLogEntry('info', `Job queued: ${actionLabel}`, job.id);
         } else if (job.status === 'running') {
           addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
+          if (toastSettings?.showJobStart) {
+            addNotification('info', `${actionLabel} started`, undefined, { jobId: job.id, labId: job.lab_id });
+          }
         } else if (job.status === 'completed') {
           addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
+          if (toastSettings?.showJobComplete) {
+            addNotification('success', `${actionLabel} completed`, undefined, { jobId: job.id, labId: job.lab_id });
+          }
         } else if (job.status === 'failed') {
           const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
           addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
+          if (toastSettings?.showJobFailed) {
+            addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
+              jobId: job.id,
+              labId: job.lab_id,
+            });
+          }
         }
       }
     }
 
     prevJobsRef.current = newStatuses;
-  }, [jobs, addTaskLogEntry]);
+  }, [jobs, addTaskLogEntry, addNotification, preferences]);
 
   const handleCreateLab = async () => {
     const name = `Project_${labs.length + 1}`;

@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useTheme, ThemeSelector } from '../../theme/index';
 import { ArchetypeIcon } from '../../components/icons';
+import { NotificationCenter } from '../../components/NotificationCenter';
+import { NotificationSettingsPanel } from '../../components/NotificationSettingsPanel';
 
 interface TopBarProps {
   labName: string;
@@ -14,6 +16,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
   const { effectiveMode, toggleMode } = useTheme();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
+  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(labName);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
@@ -117,6 +120,16 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
         </div>
 
         <div className="flex items-center gap-4">
+          <NotificationCenter />
+
+          <button
+            onClick={() => setShowNotificationSettings(true)}
+            className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all border border-stone-200 dark:border-stone-700"
+            title="Notification Settings"
+          >
+            <i className="fa-solid fa-gear"></i>
+          </button>
+
           <button
             onClick={() => setShowThemeSelector(true)}
             className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all border border-stone-200 dark:border-stone-700"
@@ -188,6 +201,11 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
       <ThemeSelector
         isOpen={showThemeSelector}
         onClose={() => setShowThemeSelector(false)}
+      />
+
+      <NotificationSettingsPanel
+        isOpen={showNotificationSettings}
+        onClose={() => setShowNotificationSettings(false)}
       />
     </>
   );

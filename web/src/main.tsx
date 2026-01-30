@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider, Navigate } from "react-router-dom";
 import { ThemeProvider } from "./theme/index";
 import { UserProvider } from "./contexts/UserContext";
+import { NotificationProvider } from "./contexts/NotificationContext";
+import { ToastContainer } from "./components/ui/ToastContainer";
 import StudioConsolePage from "./pages/StudioConsolePage";
 import HostsPage from "./pages/HostsPage";
 import NodesPage from "./pages/NodesPage";
@@ -27,7 +29,10 @@ root.render(
   <React.StrictMode>
     <ThemeProvider>
       <UserProvider>
-        <RouterProvider router={router} />
+        <NotificationProvider>
+          <RouterProvider router={router} />
+          <ToastContainer />
+        </NotificationProvider>
       </UserProvider>
     </ThemeProvider>
   </React.StrictMode>

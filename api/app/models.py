@@ -22,6 +22,19 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class UserPreferences(Base):
+    """User-specific preferences stored in database."""
+    __tablename__ = "user_preferences"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    # Notification preferences as JSON
+    notification_settings: Mapped[str] = mapped_column(Text, default="{}")
+    # Canvas display preferences as JSON
+    canvas_settings: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Lab(Base):
     __tablename__ = "labs"
 

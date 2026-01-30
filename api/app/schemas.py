@@ -623,3 +623,58 @@ WEBHOOK_EVENTS = [
     "job.completed",
     "job.failed",
 ]
+
+
+# =============================================================================
+# User Preferences Schemas (Notification System)
+# =============================================================================
+
+
+class NotificationToastSettings(BaseModel):
+    """Settings for toast notifications."""
+    enabled: bool = True
+    position: str = "bottom-right"  # bottom-right, bottom-left, top-right, top-left
+    duration: int = 5000  # milliseconds
+    showJobStart: bool = True
+    showJobComplete: bool = True
+    showJobFailed: bool = True
+    showJobRetry: bool = True
+    showImageSync: bool = True
+
+
+class NotificationBellSettings(BaseModel):
+    """Settings for notification center (bell icon)."""
+    enabled: bool = True
+    maxHistory: int = 50
+    soundEnabled: bool = False
+
+
+class NotificationSettings(BaseModel):
+    """Combined notification settings."""
+    toasts: NotificationToastSettings = NotificationToastSettings()
+    bell: NotificationBellSettings = NotificationBellSettings()
+
+
+class CanvasErrorIndicatorSettings(BaseModel):
+    """Settings for canvas error indicators on nodes."""
+    showIcon: bool = True
+    showBorder: bool = True
+    pulseAnimation: bool = True
+
+
+class CanvasSettings(BaseModel):
+    """Canvas display preferences."""
+    errorIndicator: CanvasErrorIndicatorSettings = CanvasErrorIndicatorSettings()
+    showAgentIndicators: bool = True
+
+
+class UserPreferencesOut(BaseModel):
+    """Output schema for user preferences."""
+    notification_settings: NotificationSettings = NotificationSettings()
+    canvas_settings: CanvasSettings = CanvasSettings()
+
+
+class UserPreferencesUpdate(BaseModel):
+    """Input schema for updating user preferences."""
+    notification_settings: NotificationSettings | None = None
+    canvas_settings: CanvasSettings | None = None
