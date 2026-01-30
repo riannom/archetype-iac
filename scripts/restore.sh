@@ -13,11 +13,11 @@ if [[ -z "$DB_DUMP" || -z "$WORKSPACE_TAR" ]]; then
 fi
 
 echo "Restoring Postgres..."
-docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U netlab -d netlab_gui < "$DB_DUMP"
+docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype < "$DB_DUMP"
 
 echo "Restoring workspaces..."
 docker run --rm \
-  -v netlab_workspaces:/data \
+  -v archetype_workspaces:/data \
   -v "$ROOT_DIR":/backup \
   alpine:3.20 \
   tar -xzf "/backup/$WORKSPACE_TAR" -C /data

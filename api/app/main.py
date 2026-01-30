@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="Netlab GUI API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Archetype API", version="0.1.0", lifespan=lifespan)
 
 
 # Correlation ID middleware for request tracing

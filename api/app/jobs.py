@@ -15,14 +15,14 @@ from app.providers import ProviderActionError, node_action_command
 from app.storage import lab_workspace
 
 redis_conn = Redis.from_url(settings.redis_url)
-queue = Queue("netlab", connection=redis_conn)
+queue = Queue("archetype", connection=redis_conn)
 
 
 def _build_command(lab_id: str, action: str) -> list[list[str]]:
     if action.startswith("node:"):
         _, subaction, node = action.split(":", 2)
         try:
-            return node_action_command(settings.netlab_provider, lab_id, subaction, node)
+            return node_action_command(settings.provider, lab_id, subaction, node)
         except ProviderActionError as exc:
             raise ValueError(str(exc)) from exc
     return [["netlab", action]]

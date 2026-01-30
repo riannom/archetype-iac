@@ -1,4 +1,4 @@
-# Netlab GUI Detailed Implementation Plan
+# Archetype Detailed Implementation Plan
 
 ## Phase A — Repo & Foundations
 - Create `api/` + `web/` directories if missing.
@@ -17,7 +17,7 @@
 - Add user middleware to inject current user.
 
 ## Phase C — Backend: Lab Storage
-- Add workspace root config `NETLAB_WORKSPACE`.
+- Add workspace root config `WORKSPACE`.
 - Add lab workspace creation on `POST /labs`.
 - Persist `topology.yml` on lab create with minimal stub.
 - Add `GET /labs` with pagination.

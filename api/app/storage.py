@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 def workspace_root() -> Path:
-    return Path(settings.netlab_workspace)
+    return Path(settings.workspace)
 
 
 def lab_workspace(lab_id: str) -> Path:

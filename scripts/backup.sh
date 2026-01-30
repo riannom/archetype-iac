@@ -9,11 +9,11 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.gui.yml"
 mkdir -p "$BACKUP_DIR"
 
 echo "Backing up Postgres..."
-docker compose -f "$COMPOSE_FILE" exec -T postgres pg_dump -U netlab netlab_gui > "$BACKUP_DIR/db-$TIMESTAMP.sql"
+docker compose -f "$COMPOSE_FILE" exec -T postgres pg_dump -U archetype archetype > "$BACKUP_DIR/db-$TIMESTAMP.sql"
 
 echo "Backing up lab workspaces..."
 docker run --rm \
-  -v netlab_workspaces:/data \
+  -v archetype_workspaces:/data \
   -v "$BACKUP_DIR":/backup \
   alpine:3.20 \
   tar -czf "/backup/workspaces-$TIMESTAMP.tar.gz" -C /data .

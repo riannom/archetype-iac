@@ -699,7 +699,7 @@ def test_containerlab_yaml_ceos_has_binds_for_persistence():
     flash_bind = binds[0]
     assert ":/mnt/flash" in flash_bind, "Bind should mount to /mnt/flash"
     assert "/configs/R1/flash" in flash_bind, "Bind should include node-specific flash dir"
-    assert settings.netlab_workspace in flash_bind, "Bind should use workspace path"
+    assert settings.workspace in flash_bind, "Bind should use workspace path"
 
 
 def test_containerlab_yaml_linux_has_no_binds():

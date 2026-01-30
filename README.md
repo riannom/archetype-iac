@@ -230,7 +230,7 @@ npm run dev
 ```bash
 cd api
 source venv/bin/activate
-rq worker netlab
+rq worker archetype
 ```
 
 ### Running Tests
@@ -261,10 +261,10 @@ alembic revision --autogenerate -m "description"  # Create migration
 |----------|-------------|---------|
 | `WEB_PORT` | Web UI port | `8080` |
 | `API_PORT` | API server port | `8000` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql+psycopg://netlab:netlab@postgres:5432/netlab_gui` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql+psycopg://archetype:archetype@postgres:5432/archetype` |
 | `REDIS_URL` | Redis connection string | `redis://redis:6379/0` |
-| `NETLAB_WORKSPACE` | Lab workspace directory | `/var/lib/netlab-gui` |
-| `NETLAB_PROVIDER` | Lab provider (`clab`) | `clab` |
+| `WORKSPACE` | Lab workspace directory | `/var/lib/archetype` |
+| `PROVIDER` | Lab provider (`clab`) | `clab` |
 | `JWT_SECRET` | JWT signing secret | (required) |
 | `SESSION_SECRET` | Session encryption secret | (required) |
 | `ADMIN_EMAIL` | Initial admin email | - |

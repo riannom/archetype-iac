@@ -157,10 +157,10 @@ API_BASE_URL=http://localhost:$API_PORT
 
 # API
 API_PORT=$API_PORT
-DATABASE_URL=postgresql+psycopg://netlab:netlab@postgres:5432/netlab_gui
+DATABASE_URL=postgresql+psycopg://archetype:archetype@postgres:5432/archetype
 REDIS_URL=redis://redis:6379/0
-NETLAB_WORKSPACE=/var/lib/netlab-gui
-NETLAB_PROVIDER=clab
+WORKSPACE=/var/lib/archetype
+PROVIDER=clab
 LOCAL_AUTH_ENABLED=true
 MAX_CONCURRENT_JOBS_PER_USER=2
 

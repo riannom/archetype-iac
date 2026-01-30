@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# System deps for netlab/containerlab tooling if needed
+# System deps for containerlab tooling
 RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   bash \
@@ -43,6 +43,6 @@ COPY agent/VERSION ./agent/VERSION
 RUN touch agent/__init__.py
 
 ENV PYTHONUNBUFFERED=1
-ENV NETLAB_WORKSPACE=/var/lib/netlab-gui
+ENV WORKSPACE=/var/lib/archetype
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
