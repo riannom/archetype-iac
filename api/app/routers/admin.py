@@ -207,9 +207,12 @@ async def refresh_lab_status(
                 if container_status == "running":
                     ns.actual_state = "running"
                     ns.error_message = None
+                    if not ns.boot_started_at:
+                        ns.boot_started_at = datetime.now(timezone)
                 elif container_status in ("stopped", "exited"):
                     ns.actual_state = "stopped"
                     ns.error_message = None
+                    ns.boot_started_at = None
                 else:
                     # Unknown status, leave as-is but clear error
                     ns.error_message = None

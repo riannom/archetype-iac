@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from datetime import datetime, timezone
 from typing import Literal
 
 import yaml
@@ -470,9 +471,12 @@ async def list_node_states(
                             if container_status == "running":
                                 ns.actual_state = "running"
                                 ns.error_message = None
+                                if not ns.boot_started_at:
+                                    ns.boot_started_at = datetime.now(timezone.utc)
                             elif container_status in ("stopped", "exited"):
                                 ns.actual_state = "stopped"
                                 ns.error_message = None
+                                ns.boot_started_at = None
                             elif not container_status:
                                 # Container doesn't exist - mark as undeployed
                                 ns.actual_state = "undeployed"
@@ -673,9 +677,12 @@ async def refresh_node_states(
                 if container_status == "running":
                     ns.actual_state = "running"
                     ns.error_message = None
+                    if not ns.boot_started_at:
+                        ns.boot_started_at = datetime.now(timezone.utc)
                 elif container_status in ("stopped", "exited"):
                     ns.actual_state = "stopped"
                     ns.error_message = None
+                    ns.boot_started_at = None
 
         database.commit()
 

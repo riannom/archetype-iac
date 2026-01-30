@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
@@ -836,6 +836,8 @@ async def run_node_sync(
                     for ns in all_states:
                         ns.actual_state = "running"
                         ns.error_message = None
+                        if not ns.boot_started_at:
+                            ns.boot_started_at = datetime.now(timezone.utc)
 
                     session.commit()
 
@@ -850,10 +852,12 @@ async def run_node_sync(
                             )
                             if stop_result.get("success"):
                                 ns.actual_state = "stopped"
+                                ns.boot_started_at = None
                                 log_parts.append(f"  {ns.node_name}: stopped")
                             else:
                                 ns.actual_state = "error"
                                 ns.error_message = stop_result.get("error", "Stop failed")
+                                ns.boot_started_at = None
                                 log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
 
                         session.commit()
@@ -928,6 +932,8 @@ async def run_node_sync(
                         for ns in all_states:
                             ns.actual_state = "running"
                             ns.error_message = None
+                            if not ns.boot_started_at:
+                                ns.boot_started_at = datetime.now(timezone.utc)
 
                         # Now stop nodes that should be stopped
                         nodes_to_stop_after = [
@@ -946,10 +952,12 @@ async def run_node_sync(
                                 )
                                 if stop_result.get("success"):
                                     ns.actual_state = "stopped"
+                                    ns.boot_started_at = None
                                     log_parts.append(f"  {ns.node_name}: stopped")
                                 else:
                                     ns.actual_state = "error"
                                     ns.error_message = stop_result.get("error", "Stop failed")
+                                    ns.boot_started_at = None
                                     log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
                     else:
                         error_msg = result.get("error_message", "Redeploy failed")
@@ -989,14 +997,17 @@ async def run_node_sync(
                     if result.get("success"):
                         ns.actual_state = "stopped"
                         ns.error_message = None
+                        ns.boot_started_at = None
                         log_parts.append(f"  {ns.node_name}: stopped")
                     else:
                         ns.actual_state = "error"
                         ns.error_message = result.get("error", "Stop failed")
+                        ns.boot_started_at = None
                         log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
                 except Exception as e:
                     ns.actual_state = "error"
                     ns.error_message = str(e)
+                    ns.boot_started_at = None
                     log_parts.append(f"  {ns.node_name}: FAILED - {e}")
 
             session.commit()
