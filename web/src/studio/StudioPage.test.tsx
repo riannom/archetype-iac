@@ -78,6 +78,16 @@ vi.mock("../theme/index", async () => {
   };
 });
 
+// Mock useNotifications to avoid needing NotificationProvider
+vi.mock("../contexts/NotificationContext", () => ({
+  useNotifications: () => ({
+    notifications: [],
+    addNotification: vi.fn(),
+    dismissNotification: vi.fn(),
+    dismissAllNotifications: vi.fn(),
+  }),
+}));
+
 // Mock getBoundingClientRect for canvas
 const mockGetBoundingClientRect = vi.fn(() => ({
   left: 0,

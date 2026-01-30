@@ -938,16 +938,19 @@ async def rebuild_docker_agent(
         )
 
     try:
-        # Find docker-compose file
-        compose_file = Path("/app/docker-compose.gui.yml")
+        # Find docker-compose file in mounted project directory
+        compose_file = Path("/app/project/docker-compose.gui.yml")
         if not compose_file.exists():
-            # Try relative to working directory
-            compose_file = Path("docker-compose.gui.yml")
+            # Try alternate locations
+            for alt_path in ["/app/docker-compose.gui.yml", "docker-compose.gui.yml"]:
+                if Path(alt_path).exists():
+                    compose_file = Path(alt_path)
+                    break
 
         if not compose_file.exists():
             return RebuildResponse(
                 success=False,
-                message="docker-compose.gui.yml not found",
+                message="docker-compose.gui.yml not found. Ensure project directory is mounted.",
             )
 
         # Run docker compose rebuild

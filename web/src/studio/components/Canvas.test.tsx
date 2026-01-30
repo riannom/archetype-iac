@@ -40,6 +40,16 @@ vi.mock("../../utils/agentColors", () => ({
   getAgentInitials: (name: string) => name.substring(0, 2).toUpperCase(),
 }));
 
+// Mock useNotifications to avoid needing NotificationProvider
+vi.mock("../../contexts/NotificationContext", () => ({
+  useNotifications: () => ({
+    notifications: [],
+    addNotification: vi.fn(),
+    dismissNotification: vi.fn(),
+    dismissAllNotifications: vi.fn(),
+  }),
+}));
+
 // Helper to render with ThemeProvider
 const renderWithTheme = (ui: React.ReactElement) => {
   return render(<ThemeProvider>{ui}</ThemeProvider>);
