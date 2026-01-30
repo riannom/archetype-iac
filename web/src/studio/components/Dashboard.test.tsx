@@ -159,7 +159,8 @@ describe("Dashboard", () => {
       </TestWrapper>
     );
 
-    expect(screen.getByTitle(/refresh/i)).toBeInTheDocument();
+    // Find by text since FontAwesome is mocked
+    expect(screen.getByText("Refresh")).toBeInTheDocument();
   });
 
   it("calls onRefresh when Refresh is clicked", async () => {
@@ -186,7 +187,8 @@ describe("Dashboard", () => {
       </TestWrapper>
     );
 
-    expect(screen.getByText(/no labs yet/i)).toBeInTheDocument();
+    // Empty state shows "Empty Workspace" heading
+    expect(screen.getByText("Empty Workspace")).toBeInTheDocument();
   });
 
   describe("Lab status display", () => {
@@ -197,8 +199,9 @@ describe("Dashboard", () => {
         </TestWrapper>
       );
 
-      // Lab 1 has running containers (3/5)
-      expect(screen.getByText("3/5")).toBeInTheDocument();
+      // Lab 1 has running containers - status shows count with /total format
+      expect(screen.getByText("3")).toBeInTheDocument();
+      expect(screen.getByText("/5")).toBeInTheDocument();
     });
 
     it("shows stopped indicator for labs with no running containers", () => {
@@ -208,8 +211,9 @@ describe("Dashboard", () => {
         </TestWrapper>
       );
 
-      // Lab 2 has no running containers (0/2)
-      expect(screen.getByText("0/2")).toBeInTheDocument();
+      // Lab 2 has no running containers - status shows count with /total format
+      expect(screen.getByText("0")).toBeInTheDocument();
+      expect(screen.getByText("/2")).toBeInTheDocument();
     });
   });
 
@@ -263,11 +267,9 @@ describe("Dashboard", () => {
         </TestWrapper>
       );
 
-      // Look for action icons (edit, delete, etc.)
-      const actionIcons = document.querySelectorAll(
-        ".fa-pen-to-square, .fa-trash, .fa-copy"
-      );
-      expect(actionIcons.length).toBeGreaterThan(0);
+      // Look for Open Designer button on lab cards
+      const openDesignerButtons = screen.getAllByText("Open Designer");
+      expect(openDesignerButtons.length).toBeGreaterThan(0);
     });
   });
 });
