@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 
 export interface TaskLogEntry {
   id: string;
@@ -16,8 +16,57 @@ interface TaskLogPanelProps {
   onEntryClick?: (entry: TaskLogEntry) => void;
 }
 
+const MIN_HEIGHT = 100;
+const MAX_HEIGHT = 600;
+const DEFAULT_HEIGHT = 200;
+const STORAGE_KEY = 'archetype-tasklog-height';
+
 const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggle, onClear, onEntryClick }) => {
   const errorCount = entries.filter((e) => e.level === 'error').length;
+
+  const [height, setHeight] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? Math.min(Math.max(parseInt(saved, 10), MIN_HEIGHT), MAX_HEIGHT) : DEFAULT_HEIGHT;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const startY = useRef(0);
+  const startHeight = useRef(0);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    startY.current = e.clientY;
+    startHeight.current = height;
+  }, [height]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = startY.current - e.clientY;
+      const newHeight = Math.min(Math.max(startHeight.current + delta, MIN_HEIGHT), MAX_HEIGHT);
+      setHeight(newHeight);
+      localStorage.setItem(STORAGE_KEY, newHeight.toString());
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    // Prevent text selection while resizing
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ns-resize';
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
 
   const levelColors = {
     info: 'text-cyan-700 dark:text-cyan-400',
@@ -35,6 +84,15 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggl
 
   return (
     <div className="shrink-0 bg-white/95 dark:bg-stone-950/95 border-t border-stone-200 dark:border-stone-800 backdrop-blur-md">
+      {/* Resize handle - only show when panel is visible */}
+      {isVisible && (
+        <div
+          onMouseDown={handleMouseDown}
+          className={`h-1 cursor-ns-resize hover:bg-cyan-500/50 transition-colors ${
+            isResizing ? 'bg-cyan-500' : 'bg-transparent'
+          }`}
+        />
+      )}
       <div
         onClick={onToggle}
         className="flex justify-between items-center px-4 py-2 cursor-pointer hover:bg-stone-100/50 dark:hover:bg-stone-900/50 select-none"
@@ -65,7 +123,10 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggl
         </div>
       </div>
       {isVisible && (
-        <div className="max-h-[200px] overflow-y-auto font-mono text-[11px]">
+        <div
+          className="overflow-y-auto font-mono text-[11px]"
+          style={{ maxHeight: `${height}px` }}
+        >
           {entries.length === 0 ? (
             <div className="px-4 py-6 text-center text-stone-400 dark:text-stone-600">No task activity yet</div>
           ) : (
