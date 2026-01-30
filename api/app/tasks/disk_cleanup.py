@@ -337,6 +337,432 @@ async def cleanup_old_webhook_deliveries() -> dict:
         session.close()
 
 
+async def cleanup_old_config_snapshots() -> dict:
+    """Delete orphaned and old configuration snapshots.
+
+    Two types of cleanup:
+    1. Orphaned: Snapshots for labs that no longer exist (deleted immediately)
+    2. Old: Snapshots older than retention period (configurable)
+
+    Returns:
+        Dict with 'deleted_count', 'orphaned_count', and 'errors' keys
+    """
+    session = SessionLocal()
+    try:
+        orphaned_count = 0
+        aged_count = 0
+        errors = []
+
+        # Get valid lab IDs
+        valid_lab_ids = {lab.id for lab in session.query(models.Lab).all()}
+
+        # Delete orphaned snapshots (lab no longer exists)
+        all_snapshots = session.query(models.ConfigSnapshot).all()
+        for snapshot in all_snapshots:
+            if snapshot.lab_id not in valid_lab_ids:
+                try:
+                    session.delete(snapshot)
+                    orphaned_count += 1
+                except Exception as e:
+                    errors.append(f"Failed to delete orphaned snapshot {snapshot.id}: {e}")
+
+        # Delete old snapshots if retention is configured
+        if settings.cleanup_config_snapshot_retention_days > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=settings.cleanup_config_snapshot_retention_days)
+            aged_count = (
+                session.query(models.ConfigSnapshot)
+                .filter(models.ConfigSnapshot.created_at < cutoff)
+                .delete(synchronize_session=False)
+            )
+
+        session.commit()
+
+        total = orphaned_count + aged_count
+        if total > 0:
+            logger.info(f"Deleted {total} config snapshots (orphaned={orphaned_count}, aged={aged_count})")
+
+        return {"deleted_count": total, "orphaned_count": orphaned_count, "aged_count": aged_count, "errors": errors}
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error cleaning up config snapshots: {e}")
+        return {"deleted_count": 0, "orphaned_count": 0, "aged_count": 0, "errors": [str(e)]}
+
+    finally:
+        session.close()
+
+
+async def cleanup_old_image_sync_jobs() -> dict:
+    """Delete orphaned and old ImageSyncJob records.
+
+    Two types of cleanup:
+    1. Orphaned: Jobs for hosts that no longer exist (deleted immediately)
+    2. Old: Terminal-state jobs older than retention period
+
+    Returns:
+        Dict with 'deleted_count', 'orphaned_count', 'aged_count', and 'errors' keys
+    """
+    session = SessionLocal()
+    try:
+        orphaned_count = 0
+        aged_count = 0
+        errors = []
+
+        # Get valid host IDs
+        valid_host_ids = {host.id for host in session.query(models.Host).all()}
+
+        # Delete orphaned jobs (host no longer exists)
+        all_jobs = session.query(models.ImageSyncJob).all()
+        for job in all_jobs:
+            if job.host_id not in valid_host_ids:
+                try:
+                    session.delete(job)
+                    orphaned_count += 1
+                except Exception as e:
+                    errors.append(f"Failed to delete orphaned sync job {job.id}: {e}")
+
+        # Delete old jobs in terminal states
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.cleanup_image_sync_job_retention_days)
+        aged_count = (
+            session.query(models.ImageSyncJob)
+            .filter(
+                models.ImageSyncJob.status.in_(["completed", "failed", "cancelled"]),
+                models.ImageSyncJob.created_at < cutoff,
+            )
+            .delete(synchronize_session=False)
+        )
+
+        session.commit()
+
+        total = orphaned_count + aged_count
+        if total > 0:
+            logger.info(f"Deleted {total} image sync jobs (orphaned={orphaned_count}, aged={aged_count})")
+
+        return {"deleted_count": total, "orphaned_count": orphaned_count, "aged_count": aged_count, "errors": errors}
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error cleaning up image sync jobs: {e}")
+        return {"deleted_count": 0, "orphaned_count": 0, "aged_count": 0, "errors": [str(e)]}
+
+    finally:
+        session.close()
+
+
+async def cleanup_old_iso_import_jobs() -> dict:
+    """Delete orphaned and old ISOImportJob records.
+
+    Two types of cleanup:
+    1. Orphaned: Jobs for users that no longer exist (deleted immediately)
+    2. Old: Terminal-state jobs older than retention period
+
+    These records can have large TEXT fields (manifest_json, image_progress).
+
+    Returns:
+        Dict with 'deleted_count', 'orphaned_count', 'aged_count', and 'errors' keys
+    """
+    session = SessionLocal()
+    try:
+        orphaned_count = 0
+        aged_count = 0
+        errors = []
+
+        # Get valid user IDs
+        valid_user_ids = {user.id for user in session.query(models.User).all()}
+
+        # Delete orphaned jobs (user no longer exists, but not null)
+        all_jobs = session.query(models.ISOImportJob).filter(
+            models.ISOImportJob.user_id.isnot(None)
+        ).all()
+        for job in all_jobs:
+            if job.user_id not in valid_user_ids:
+                try:
+                    session.delete(job)
+                    orphaned_count += 1
+                except Exception as e:
+                    errors.append(f"Failed to delete orphaned ISO job {job.id}: {e}")
+
+        # Delete old jobs in terminal states
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.cleanup_iso_import_job_retention_days)
+        aged_count = (
+            session.query(models.ISOImportJob)
+            .filter(
+                models.ISOImportJob.status.in_(["completed", "failed", "cancelled"]),
+                models.ISOImportJob.created_at < cutoff,
+            )
+            .delete(synchronize_session=False)
+        )
+
+        session.commit()
+
+        total = orphaned_count + aged_count
+        if total > 0:
+            logger.info(f"Deleted {total} ISO import jobs (orphaned={orphaned_count}, aged={aged_count})")
+
+        return {"deleted_count": total, "orphaned_count": orphaned_count, "aged_count": aged_count, "errors": errors}
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error cleaning up ISO import jobs: {e}")
+        return {"deleted_count": 0, "orphaned_count": 0, "aged_count": 0, "errors": [str(e)]}
+
+    finally:
+        session.close()
+
+
+async def cleanup_old_agent_update_jobs() -> dict:
+    """Delete orphaned and old AgentUpdateJob records.
+
+    Two types of cleanup:
+    1. Orphaned: Jobs for hosts that no longer exist (deleted immediately)
+    2. Old: Terminal-state jobs older than retention period
+
+    Returns:
+        Dict with 'deleted_count', 'orphaned_count', 'aged_count', and 'errors' keys
+    """
+    session = SessionLocal()
+    try:
+        orphaned_count = 0
+        aged_count = 0
+        errors = []
+
+        # Get valid host IDs
+        valid_host_ids = {host.id for host in session.query(models.Host).all()}
+
+        # Delete orphaned jobs (host no longer exists)
+        all_jobs = session.query(models.AgentUpdateJob).all()
+        for job in all_jobs:
+            if job.host_id not in valid_host_ids:
+                try:
+                    session.delete(job)
+                    orphaned_count += 1
+                except Exception as e:
+                    errors.append(f"Failed to delete orphaned update job {job.id}: {e}")
+
+        # Delete old jobs in terminal states
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.cleanup_agent_update_job_retention_days)
+        aged_count = (
+            session.query(models.AgentUpdateJob)
+            .filter(
+                models.AgentUpdateJob.status.in_(["completed", "failed"]),
+                models.AgentUpdateJob.created_at < cutoff,
+            )
+            .delete(synchronize_session=False)
+        )
+
+        session.commit()
+
+        total = orphaned_count + aged_count
+        if total > 0:
+            logger.info(f"Deleted {total} agent update jobs (orphaned={orphaned_count}, aged={aged_count})")
+
+        return {"deleted_count": total, "orphaned_count": orphaned_count, "aged_count": aged_count, "errors": errors}
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error cleaning up agent update jobs: {e}")
+        return {"deleted_count": 0, "orphaned_count": 0, "aged_count": 0, "errors": [str(e)]}
+
+    finally:
+        session.close()
+
+
+async def cleanup_orphaned_image_host_records() -> dict:
+    """Delete orphaned ImageHost records.
+
+    ImageHost records track which images exist on which agents. This cleans up
+    records where either the host or the image reference no longer exists.
+
+    Returns:
+        Dict with 'deleted_count' and 'errors' keys
+    """
+    from app.image_store import load_manifest
+
+    session = SessionLocal()
+    try:
+        deleted_count = 0
+        errors = []
+
+        # Get valid host IDs
+        valid_host_ids = {host.id for host in session.query(models.Host).all()}
+
+        # Get valid image IDs from manifest
+        manifest = load_manifest()
+        valid_image_ids = {img.get("id") for img in manifest.get("images", []) if img.get("id")}
+
+        # Check all ImageHost records
+        all_records = session.query(models.ImageHost).all()
+        for record in all_records:
+            is_orphaned = False
+
+            # Check if host still exists
+            if record.host_id not in valid_host_ids:
+                is_orphaned = True
+
+            # Check if image still exists in manifest
+            if record.image_id not in valid_image_ids:
+                is_orphaned = True
+
+            if is_orphaned:
+                try:
+                    session.delete(record)
+                    deleted_count += 1
+                except Exception as e:
+                    errors.append(f"Failed to delete orphaned ImageHost {record.id}: {e}")
+
+        session.commit()
+
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} orphaned ImageHost records")
+
+        return {"deleted_count": deleted_count, "errors": errors}
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error cleaning up orphaned ImageHost records: {e}")
+        return {"deleted_count": 0, "errors": [str(e)]}
+
+    finally:
+        session.close()
+
+
+async def cleanup_orphaned_lab_workspaces() -> dict:
+    """Delete lab workspace directories that don't belong to any lab.
+
+    When labs are deleted, their workspace directories may remain. This
+    function identifies and removes directories that don't correspond to
+    any lab in the database.
+
+    Returns:
+        Dict with 'deleted_count', 'deleted_bytes', and 'errors' keys
+    """
+    if not settings.cleanup_orphaned_workspaces:
+        return {"deleted_count": 0, "deleted_bytes": 0, "errors": [], "skipped": "disabled"}
+
+    from app.storage import workspace_root
+
+    workspace_dir = workspace_root()
+    if not workspace_dir.exists():
+        return {"deleted_count": 0, "deleted_bytes": 0, "errors": []}
+
+    session = SessionLocal()
+    try:
+        # Get all valid lab IDs from database
+        valid_lab_ids = {lab.id for lab in session.query(models.Lab).all()}
+
+        deleted_count = 0
+        deleted_bytes = 0
+        errors = []
+
+        # Scan workspace directory for subdirectories
+        for entry in workspace_dir.iterdir():
+            if not entry.is_dir():
+                continue
+
+            # Skip special directories (images, uploads, etc.)
+            if entry.name in ("images", "uploads", ".tmp"):
+                continue
+
+            # Check if this directory corresponds to a valid lab
+            if entry.name not in valid_lab_ids:
+                try:
+                    # Calculate directory size before deletion
+                    dir_size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+
+                    # Remove the orphaned workspace
+                    shutil.rmtree(entry)
+                    deleted_count += 1
+                    deleted_bytes += dir_size
+                    logger.info(f"Deleted orphaned lab workspace: {entry.name} ({dir_size} bytes)")
+
+                except Exception as e:
+                    errors.append(f"Failed to delete {entry.name}: {e}")
+                    logger.warning(f"Failed to delete orphaned workspace {entry.name}: {e}")
+
+        return {
+            "deleted_count": deleted_count,
+            "deleted_bytes": deleted_bytes,
+            "errors": errors,
+        }
+
+    except Exception as e:
+        logger.error(f"Error cleaning up orphaned workspaces: {e}")
+        return {"deleted_count": 0, "deleted_bytes": 0, "errors": [str(e)]}
+
+    finally:
+        session.close()
+
+
+async def cleanup_orphaned_qcow2_images() -> dict:
+    """Delete QCOW2 image files that aren't referenced in the manifest.
+
+    When images are removed from the manifest, the actual files may remain.
+    This function identifies and removes QCOW2 files not in the manifest.
+
+    Returns:
+        Dict with 'deleted_count', 'deleted_bytes', and 'errors' keys
+    """
+    if not settings.cleanup_orphaned_qcow2:
+        return {"deleted_count": 0, "deleted_bytes": 0, "errors": [], "skipped": "disabled"}
+
+    from app.image_store import image_store_root, load_manifest
+
+    image_dir = image_store_root()
+    if not image_dir.exists():
+        return {"deleted_count": 0, "deleted_bytes": 0, "errors": []}
+
+    try:
+        # Get all QCOW2 references from manifest
+        manifest = load_manifest()
+        referenced_files = set()
+
+        for image in manifest.get("images", []):
+            if image.get("kind") == "qcow2":
+                # Reference could be full path or just filename
+                reference = image.get("reference", "")
+                filename = image.get("filename", "")
+
+                # Extract just the filename from reference if it's a path
+                if reference:
+                    referenced_files.add(Path(reference).name)
+                if filename:
+                    referenced_files.add(filename)
+
+        deleted_count = 0
+        deleted_bytes = 0
+        errors = []
+
+        # Scan for QCOW2 files not in manifest
+        for entry in image_dir.iterdir():
+            if not entry.is_file():
+                continue
+            if not entry.name.lower().endswith(".qcow2"):
+                continue
+
+            # Check if this file is referenced
+            if entry.name not in referenced_files:
+                try:
+                    file_size = entry.stat().st_size
+                    entry.unlink()
+                    deleted_count += 1
+                    deleted_bytes += file_size
+                    logger.info(f"Deleted orphaned QCOW2 image: {entry.name} ({file_size} bytes)")
+
+                except Exception as e:
+                    errors.append(f"Failed to delete {entry.name}: {e}")
+                    logger.warning(f"Failed to delete orphaned QCOW2 {entry.name}: {e}")
+
+        return {
+            "deleted_count": deleted_count,
+            "deleted_bytes": deleted_bytes,
+            "errors": errors,
+        }
+
+    except Exception as e:
+        logger.error(f"Error cleaning up orphaned QCOW2 images: {e}")
+        return {"deleted_count": 0, "deleted_bytes": 0, "errors": [str(e)]}
+
+
 def get_disk_usage(path: str | Path) -> dict:
     """Get disk usage statistics for a path.
 
@@ -413,6 +839,50 @@ async def run_disk_cleanup() -> dict:
         logger.error(f"Error in cleanup_old_webhook_deliveries: {e}")
         results["webhooks"] = {"error": str(e)}
 
+    # Database record cleanup (orphaned + aged)
+    try:
+        results["config_snapshots"] = await cleanup_old_config_snapshots()
+    except Exception as e:
+        logger.error(f"Error in cleanup_old_config_snapshots: {e}")
+        results["config_snapshots"] = {"error": str(e)}
+
+    try:
+        results["image_sync_jobs"] = await cleanup_old_image_sync_jobs()
+    except Exception as e:
+        logger.error(f"Error in cleanup_old_image_sync_jobs: {e}")
+        results["image_sync_jobs"] = {"error": str(e)}
+
+    try:
+        results["iso_import_jobs"] = await cleanup_old_iso_import_jobs()
+    except Exception as e:
+        logger.error(f"Error in cleanup_old_iso_import_jobs: {e}")
+        results["iso_import_jobs"] = {"error": str(e)}
+
+    try:
+        results["agent_update_jobs"] = await cleanup_old_agent_update_jobs()
+    except Exception as e:
+        logger.error(f"Error in cleanup_old_agent_update_jobs: {e}")
+        results["agent_update_jobs"] = {"error": str(e)}
+
+    try:
+        results["image_host_records"] = await cleanup_orphaned_image_host_records()
+    except Exception as e:
+        logger.error(f"Error in cleanup_orphaned_image_host_records: {e}")
+        results["image_host_records"] = {"error": str(e)}
+
+    # Filesystem cleanup (orphaned workspaces and images)
+    try:
+        results["orphaned_workspaces"] = await cleanup_orphaned_lab_workspaces()
+    except Exception as e:
+        logger.error(f"Error in cleanup_orphaned_lab_workspaces: {e}")
+        results["orphaned_workspaces"] = {"error": str(e)}
+
+    try:
+        results["orphaned_qcow2"] = await cleanup_orphaned_qcow2_images()
+    except Exception as e:
+        logger.error(f"Error in cleanup_orphaned_qcow2_images: {e}")
+        results["orphaned_qcow2"] = {"error": str(e)}
+
     # Get disk usage after cleanup
     after_workspace = get_disk_usage(workspace_path)
     after_upload = get_disk_usage(upload_path)
@@ -439,14 +909,36 @@ async def run_disk_cleanup() -> dict:
     jobs_deleted = results.get("jobs", {}).get("deleted_count", 0)
     webhooks_deleted = results.get("webhooks", {}).get("deleted_count", 0)
 
+    # New cleanup results
+    config_snapshots = results.get("config_snapshots", {}).get("deleted_count", 0)
+    image_sync_jobs = results.get("image_sync_jobs", {}).get("deleted_count", 0)
+    iso_import_jobs = results.get("iso_import_jobs", {}).get("deleted_count", 0)
+    agent_update_jobs = results.get("agent_update_jobs", {}).get("deleted_count", 0)
+    image_host_records = results.get("image_host_records", {}).get("deleted_count", 0)
+    orphaned_workspaces = results.get("orphaned_workspaces", {}).get("deleted_count", 0)
+    orphaned_workspace_bytes = results.get("orphaned_workspaces", {}).get("deleted_bytes", 0)
+    orphaned_qcow2 = results.get("orphaned_qcow2", {}).get("deleted_count", 0)
+    orphaned_qcow2_bytes = results.get("orphaned_qcow2", {}).get("deleted_bytes", 0)
+
+    # Calculate total database records cleaned
+    db_records_deleted = (
+        jobs_deleted + webhooks_deleted + config_snapshots +
+        image_sync_jobs + iso_import_jobs + agent_update_jobs + image_host_records
+    )
+
+    # Calculate total filesystem space reclaimed
+    fs_bytes_reclaimed = (
+        results.get("upload_files", {}).get("deleted_bytes", 0) +
+        orphaned_workspace_bytes + orphaned_qcow2_bytes + docker_space
+    )
+
     logger.info(
         f"Disk cleanup completed: "
-        f"files={upload_files_deleted}, "
-        f"upload_sessions={upload_sessions_expired}, "
-        f"iso_sessions={iso_sessions_expired}, "
-        f"docker_agents={docker_agents} ({docker_space} bytes), "
-        f"jobs={jobs_deleted}, "
-        f"webhooks={webhooks_deleted}"
+        f"db_records={db_records_deleted}, "
+        f"fs_reclaimed={fs_bytes_reclaimed} bytes, "
+        f"workspaces={orphaned_workspaces}, "
+        f"qcow2={orphaned_qcow2}, "
+        f"docker_agents={docker_agents}"
     )
 
     return results

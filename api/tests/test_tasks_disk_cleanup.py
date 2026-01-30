@@ -16,6 +16,13 @@ from app.tasks.disk_cleanup import (
     cleanup_stale_iso_sessions,
     cleanup_old_job_records,
     cleanup_old_webhook_deliveries,
+    cleanup_old_config_snapshots,
+    cleanup_old_image_sync_jobs,
+    cleanup_old_iso_import_jobs,
+    cleanup_old_agent_update_jobs,
+    cleanup_orphaned_image_host_records,
+    cleanup_orphaned_lab_workspaces,
+    cleanup_orphaned_qcow2_images,
     cleanup_docker_on_agents,
     get_disk_usage,
     run_disk_cleanup,
@@ -348,6 +355,235 @@ class TestCleanupDockerOnAgents:
             assert result["agents_cleaned"] == 1
             assert result["space_reclaimed"] == 1000000
             mock_prune.assert_called_once()
+
+
+class TestCleanupOldConfigSnapshots:
+    """Tests for cleanup_old_config_snapshots function."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_orphaned_snapshots(self):
+        """Test that snapshots for deleted labs are removed."""
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings:
+            mock_settings.cleanup_config_snapshot_retention_days = 90
+
+            # Mock valid lab IDs (none - all snapshots are orphaned)
+            mock_lab_query = MagicMock()
+            mock_lab_query.all.return_value = []
+
+            # Mock orphaned snapshot
+            mock_snapshot = MagicMock()
+            mock_snapshot.lab_id = "deleted-lab-id"
+
+            mock_snapshot_query = MagicMock()
+            mock_snapshot_query.all.return_value = [mock_snapshot]
+            mock_snapshot_query.filter.return_value = mock_snapshot_query
+            mock_snapshot_query.delete.return_value = 0
+
+            mock_session = MagicMock()
+            def query_side_effect(model):
+                if model.__name__ == "Lab":
+                    return mock_lab_query
+                elif model.__name__ == "ConfigSnapshot":
+                    return mock_snapshot_query
+                return MagicMock()
+
+            mock_session.query.side_effect = query_side_effect
+
+            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session):
+                result = await cleanup_old_config_snapshots()
+
+            assert result["orphaned_count"] == 1
+            mock_session.delete.assert_called_once_with(mock_snapshot)
+
+
+class TestCleanupOldImageSyncJobs:
+    """Tests for cleanup_old_image_sync_jobs function."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_orphaned_and_old_jobs(self):
+        """Test that orphaned and old jobs are deleted."""
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings:
+            mock_settings.cleanup_image_sync_job_retention_days = 30
+
+            mock_host_query = MagicMock()
+            mock_host_query.all.return_value = []  # No valid hosts
+
+            mock_job = MagicMock()
+            mock_job.host_id = "deleted-host-id"
+
+            mock_job_query = MagicMock()
+            mock_job_query.all.return_value = [mock_job]
+            mock_job_query.filter.return_value = mock_job_query
+            mock_job_query.delete.return_value = 2  # 2 aged jobs
+
+            mock_session = MagicMock()
+            def query_side_effect(model):
+                if model.__name__ == "Host":
+                    return mock_host_query
+                elif model.__name__ == "ImageSyncJob":
+                    return mock_job_query
+                return MagicMock()
+
+            mock_session.query.side_effect = query_side_effect
+
+            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session):
+                result = await cleanup_old_image_sync_jobs()
+
+            assert result["orphaned_count"] == 1
+            assert result["aged_count"] == 2
+            assert result["deleted_count"] == 3
+
+
+class TestCleanupOrphanedLabWorkspaces:
+    """Tests for cleanup_orphaned_lab_workspaces function."""
+
+    @pytest.fixture
+    def temp_workspace(self, tmp_path):
+        """Create a temporary workspace directory."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        return workspace
+
+    @pytest.mark.asyncio
+    async def test_deletes_orphaned_workspace(self, temp_workspace):
+        """Test that workspace for deleted lab is removed."""
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings:
+            mock_settings.cleanup_orphaned_workspaces = True
+
+            # Create an orphaned workspace
+            orphan_dir = temp_workspace / "deleted-lab-id"
+            orphan_dir.mkdir()
+            (orphan_dir / "topology.yml").write_text("test")
+
+            # Mock database query returning no labs
+            mock_lab_query = MagicMock()
+            mock_lab_query.all.return_value = []
+
+            mock_session = MagicMock()
+            mock_session.query.return_value = mock_lab_query
+
+            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session), \
+                 patch("app.storage.workspace_root", return_value=temp_workspace):
+                result = await cleanup_orphaned_lab_workspaces()
+
+            assert result["deleted_count"] == 1
+            assert not orphan_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_keeps_valid_workspaces(self, temp_workspace):
+        """Test that workspace for existing lab is kept."""
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings:
+            mock_settings.cleanup_orphaned_workspaces = True
+
+            # Create a valid workspace
+            valid_lab_id = "valid-lab-id"
+            valid_dir = temp_workspace / valid_lab_id
+            valid_dir.mkdir()
+            (valid_dir / "topology.yml").write_text("test")
+
+            # Mock database query returning the lab
+            mock_lab = MagicMock()
+            mock_lab.id = valid_lab_id
+
+            mock_lab_query = MagicMock()
+            mock_lab_query.all.return_value = [mock_lab]
+
+            mock_session = MagicMock()
+            mock_session.query.return_value = mock_lab_query
+
+            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session), \
+                 patch("app.storage.workspace_root", return_value=temp_workspace):
+                result = await cleanup_orphaned_lab_workspaces()
+
+            assert result["deleted_count"] == 0
+            assert valid_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_skips_special_directories(self, temp_workspace):
+        """Test that special directories (images, uploads) are not deleted."""
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings:
+            mock_settings.cleanup_orphaned_workspaces = True
+
+            # Create special directories
+            (temp_workspace / "images").mkdir()
+            (temp_workspace / "uploads").mkdir()
+
+            mock_lab_query = MagicMock()
+            mock_lab_query.all.return_value = []
+
+            mock_session = MagicMock()
+            mock_session.query.return_value = mock_lab_query
+
+            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session), \
+                 patch("app.storage.workspace_root", return_value=temp_workspace):
+                result = await cleanup_orphaned_lab_workspaces()
+
+            assert result["deleted_count"] == 0
+            assert (temp_workspace / "images").exists()
+            assert (temp_workspace / "uploads").exists()
+
+
+class TestCleanupOrphanedQcow2Images:
+    """Tests for cleanup_orphaned_qcow2_images function."""
+
+    @pytest.fixture
+    def temp_image_store(self, tmp_path):
+        """Create a temporary image store directory."""
+        store = tmp_path / "images"
+        store.mkdir()
+        return store
+
+    @pytest.mark.asyncio
+    async def test_deletes_orphaned_qcow2(self, temp_image_store):
+        """Test that QCOW2 not in manifest is deleted."""
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings:
+            mock_settings.cleanup_orphaned_qcow2 = True
+
+            # Create an orphaned QCOW2 file
+            orphan_file = temp_image_store / "orphan-image.qcow2"
+            orphan_file.write_bytes(b"x" * 1000)
+
+            # Mock manifest with no images
+            mock_manifest = {"images": []}
+
+            with patch("app.image_store.image_store_root", return_value=temp_image_store), \
+                 patch("app.image_store.load_manifest", return_value=mock_manifest):
+                result = await cleanup_orphaned_qcow2_images()
+
+            assert result["deleted_count"] == 1
+            assert not orphan_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_keeps_referenced_qcow2(self, temp_image_store):
+        """Test that QCOW2 in manifest is kept."""
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings:
+            mock_settings.cleanup_orphaned_qcow2 = True
+
+            # Create a referenced QCOW2 file
+            valid_file = temp_image_store / "valid-image.qcow2"
+            valid_file.write_bytes(b"x" * 1000)
+
+            # Mock manifest referencing the file
+            mock_manifest = {"images": [
+                {"kind": "qcow2", "filename": "valid-image.qcow2", "reference": str(valid_file)}
+            ]}
+
+            with patch("app.image_store.image_store_root", return_value=temp_image_store), \
+                 patch("app.image_store.load_manifest", return_value=mock_manifest):
+                result = await cleanup_orphaned_qcow2_images()
+
+            assert result["deleted_count"] == 0
+            assert valid_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_disabled_returns_skipped(self, temp_image_store):
+        """Test that disabled cleanup returns skipped."""
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings:
+            mock_settings.cleanup_orphaned_qcow2 = False
+
+            result = await cleanup_orphaned_qcow2_images()
+
+            assert result["skipped"] == "disabled"
 
 
 class TestGetDiskUsage:

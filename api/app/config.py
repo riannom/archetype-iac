@@ -136,6 +136,18 @@ class Settings(BaseSettings):
     cleanup_job_retention_days: int = 30
     # Old webhook deliveries older than this are deleted (days)
     cleanup_webhook_retention_days: int = 7
+    # Old config snapshots older than this are deleted (days), 0 to disable
+    cleanup_config_snapshot_retention_days: int = 90
+    # Old ImageSyncJob records older than this are deleted (days)
+    cleanup_image_sync_job_retention_days: int = 30
+    # Old ISOImportJob records older than this are deleted (days)
+    cleanup_iso_import_job_retention_days: int = 30
+    # Old AgentUpdateJob records older than this are deleted (days)
+    cleanup_agent_update_job_retention_days: int = 30
+    # Enable orphaned lab workspace cleanup
+    cleanup_orphaned_workspaces: bool = True
+    # Enable orphaned QCOW2 image cleanup
+    cleanup_orphaned_qcow2: bool = True
 
     # Docker cleanup (on agents)
     cleanup_docker_enabled: bool = True
