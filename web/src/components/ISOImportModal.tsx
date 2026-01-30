@@ -611,7 +611,7 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
                     onClick={() => fileInputRef.current?.click()}
                     className={`cursor-pointer border-2 border-dashed rounded-lg p-8 text-center transition-all ${
                       selectedFile
-                        ? 'border-sage-400 bg-sage-50 dark:bg-sage-900/20'
+                        ? 'border-sage-400 dark:border-sage-600 bg-sage-50 dark:bg-stone-800'
                         : 'border-stone-300 dark:border-stone-600 hover:border-sage-400 hover:bg-stone-50 dark:hover:bg-stone-800'
                     }`}
                   >
@@ -831,7 +831,7 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
                         key={img.id}
                         className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
                           selectedImages.has(img.id)
-                            ? 'bg-sage-50 dark:bg-sage-900/40 border-sage-300 dark:border-sage-700'
+                            ? 'bg-sage-50 dark:bg-stone-800 border-sage-300 dark:border-sage-600'
                             : 'bg-white dark:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
                         }`}
                       >
