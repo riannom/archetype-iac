@@ -949,7 +949,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
 
 # Build alias lookup table at module load time
 _ALIAS_TO_KIND: dict[str, str] = {}
-for config in VENDOR_CONFIGS.values():
+for _key, config in VENDOR_CONFIGS.items():
+    # The vendor config key maps to kind (e.g., "cisco_iosv" -> "linux")
+    _ALIAS_TO_KIND[_key.lower()] = config.kind
     # The kind itself is a valid lookup
     _ALIAS_TO_KIND[config.kind] = config.kind
     # All aliases map to this kind
@@ -1058,8 +1060,8 @@ def get_vendors_for_ui() -> list[dict]:
         if subcat not in categories[cat]:
             categories[cat][subcat] = []
 
-        # Use the first alias as ID if available, otherwise use key
-        device_id = config.aliases[0] if config.aliases else key
+        # Use the vendor config key as ID (matches ISO import mapping)
+        device_id = key
 
         categories[cat][subcat].append({
             "id": device_id,
