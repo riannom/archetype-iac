@@ -123,5 +123,25 @@ class Settings(BaseSettings):
     # Auto-trigger vrnetlab builds on qcow2 upload
     vrnetlab_auto_build: bool = True
 
+    # Disk cleanup settings
+    # How often the cleanup task runs (seconds)
+    cleanup_interval: int = 3600  # 1 hour
+    # Orphaned .partial files older than this are deleted (seconds)
+    cleanup_upload_file_age: int = 86400  # 24 hours
+    # Stale upload sessions older than this are expired (seconds)
+    cleanup_upload_session_age: int = 14400  # 4 hours
+    # Stale ISO sessions older than this are expired (seconds)
+    cleanup_iso_session_age: int = 86400  # 24 hours
+    # Old completed/failed jobs older than this are deleted (days)
+    cleanup_job_retention_days: int = 30
+    # Old webhook deliveries older than this are deleted (days)
+    cleanup_webhook_retention_days: int = 7
+
+    # Docker cleanup (on agents)
+    cleanup_docker_enabled: bool = True
+    cleanup_docker_dangling_images: bool = True
+    cleanup_docker_build_cache: bool = True
+    cleanup_docker_unused_volumes: bool = False  # Conservative - may have data
+
 
 settings = Settings()
