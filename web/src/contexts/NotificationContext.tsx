@@ -175,6 +175,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         },
         showAgentIndicators:
           settings.showAgentIndicators ?? preferences.canvas_settings.showAgentIndicators,
+        sidebarFilters: {
+          ...preferences.canvas_settings.sidebarFilters,
+          ...settings.sidebarFilters,
+        },
       };
 
       try {

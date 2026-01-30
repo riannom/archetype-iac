@@ -662,10 +662,19 @@ class CanvasErrorIndicatorSettings(BaseModel):
     pulseAnimation: bool = True
 
 
+class SidebarFilterSettings(BaseModel):
+    """Sidebar device library filter preferences."""
+    searchQuery: str = ""
+    selectedVendors: list[str] = []
+    selectedTypes: list[str] = []
+    imageStatus: str = "all"  # 'all' | 'has_image' | 'has_default' | 'no_image'
+
+
 class CanvasSettings(BaseModel):
     """Canvas display preferences."""
     errorIndicator: CanvasErrorIndicatorSettings = CanvasErrorIndicatorSettings()
     showAgentIndicators: bool = True
+    sidebarFilters: SidebarFilterSettings = SidebarFilterSettings()
 
 
 class UserPreferencesOut(BaseModel):

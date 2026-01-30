@@ -1,7 +1,8 @@
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { DeviceModel, AnnotationType, ImageLibraryEntry } from '../types';
 import SidebarFilters, { ImageStatus } from './SidebarFilters';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 interface SidebarProps {
   categories: { name: string; models?: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
@@ -12,6 +13,7 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotation, onAddExternalNetwork, imageLibrary = [] }) => {
+  const { preferences, updateCanvasSettings } = useNotifications();
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(categories.map(c => c.name))
   );
@@ -19,11 +21,71 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     new Set(categories.flatMap(c => c.subCategories?.map(s => `${c.name}:${s.name}`) || []))
   );
 
-  // Filter state
+  // Filter state - initialize from defaults, will be populated from preferences
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedVendors, setSelectedVendors] = useState<Set<string>>(new Set());
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [imageStatus, setImageStatus] = useState<ImageStatus>('all');
+
+  // Track whether we've loaded initial values from preferences
+  const hasLoadedFromPrefs = useRef(false);
+
+  // Load filter settings from preferences on mount
+  useEffect(() => {
+    if (hasLoadedFromPrefs.current) return;
+
+    const savedFilters = preferences?.canvas_settings?.sidebarFilters;
+    if (savedFilters) {
+      setSearchQuery(savedFilters.searchQuery || '');
+      setSelectedVendors(new Set(savedFilters.selectedVendors || []));
+      setSelectedTypes(new Set(savedFilters.selectedTypes || []));
+      setImageStatus((savedFilters.imageStatus as ImageStatus) || 'all');
+      hasLoadedFromPrefs.current = true;
+    }
+  }, [preferences]);
+
+  // Debounced persist function
+  const persistFiltersTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const persistFilters = useCallback((filters: {
+    searchQuery: string;
+    selectedVendors: string[];
+    selectedTypes: string[];
+    imageStatus: ImageStatus;
+  }) => {
+    // Clear any pending timeout
+    if (persistFiltersTimeoutRef.current) {
+      clearTimeout(persistFiltersTimeoutRef.current);
+    }
+
+    // Debounce the persistence to avoid too many API calls
+    persistFiltersTimeoutRef.current = setTimeout(() => {
+      updateCanvasSettings({
+        sidebarFilters: filters,
+      });
+    }, 500);
+  }, [updateCanvasSettings]);
+
+  // Persist filters when they change (after initial load)
+  useEffect(() => {
+    if (!hasLoadedFromPrefs.current) return;
+
+    persistFilters({
+      searchQuery,
+      selectedVendors: Array.from(selectedVendors),
+      selectedTypes: Array.from(selectedTypes),
+      imageStatus,
+    });
+  }, [searchQuery, selectedVendors, selectedTypes, imageStatus, persistFilters]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (persistFiltersTimeoutRef.current) {
+        clearTimeout(persistFiltersTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Flatten all devices for filtering
   const allDevices = useMemo(() => {

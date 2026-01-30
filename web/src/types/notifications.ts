@@ -41,9 +41,17 @@ export interface CanvasErrorIndicatorSettings {
   pulseAnimation: boolean;
 }
 
+export interface SidebarFilterSettings {
+  searchQuery: string;
+  selectedVendors: string[];
+  selectedTypes: string[];
+  imageStatus: 'all' | 'has_image' | 'has_default' | 'no_image';
+}
+
 export interface CanvasSettings {
   errorIndicator: CanvasErrorIndicatorSettings;
   showAgentIndicators: boolean;
+  sidebarFilters: SidebarFilterSettings;
 }
 
 export interface UserPreferences {
@@ -79,9 +87,17 @@ export const DEFAULT_CANVAS_ERROR_SETTINGS: CanvasErrorIndicatorSettings = {
   pulseAnimation: true,
 };
 
+export const DEFAULT_SIDEBAR_FILTER_SETTINGS: SidebarFilterSettings = {
+  searchQuery: '',
+  selectedVendors: [],
+  selectedTypes: [],
+  imageStatus: 'all',
+};
+
 export const DEFAULT_CANVAS_SETTINGS: CanvasSettings = {
   errorIndicator: DEFAULT_CANVAS_ERROR_SETTINGS,
   showAgentIndicators: true,
+  sidebarFilters: DEFAULT_SIDEBAR_FILTER_SETTINGS,
 };
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
