@@ -28,6 +28,7 @@ export interface Annotation {
   fontSize?: number;
   targetX?: number; // For arrows
   targetY?: number; // For arrows
+  zIndex?: number; // Layer ordering (lower = behind, higher = front)
 }
 
 export interface DeviceImage {
@@ -211,6 +212,7 @@ export interface AnnotationLayout {
   fontSize?: number;
   targetX?: number; // For arrows
   targetY?: number; // For arrows
+  zIndex?: number; // Layer ordering (lower = behind, higher = front)
   metadata?: Record<string, unknown>;
 }
 

@@ -34,6 +34,20 @@ interface CanvasProps {
   onOpenConsole: (nodeId: string) => void;
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
   onDelete: (id: string) => void;
+  onUpdateAnnotation?: (id: string, updates: Partial<Annotation>) => void;
+}
+
+type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+
+interface ResizeState {
+  id: string;
+  handle: ResizeHandle;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startHeight: number;
+  startAnnX: number;
+  startAnnY: number;
 }
 
 interface ContextMenu {
@@ -44,7 +58,7 @@ interface ContextMenu {
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete
+  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete, onUpdateAnnotation
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -60,6 +74,7 @@ const Canvas: React.FC<CanvasProps> = ({
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [resizing, setResizing] = useState<ResizeState | null>(null);
 
   // Memoized node map for O(1) lookups instead of O(n) .find() calls
   const nodeMap = useMemo(() => {
@@ -99,12 +114,52 @@ const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
+    if (resizing && onUpdateAnnotation) {
+      const dx = x - resizing.startX;
+      const dy = y - resizing.startY;
+      const ann = annotations.find(a => a.id === resizing.id);
+      if (!ann) return;
+
+      let newWidth = resizing.startWidth;
+      let newHeight = resizing.startHeight;
+      let newX = resizing.startAnnX;
+      let newY = resizing.startAnnY;
+
+      if (ann.type === 'circle') {
+        // For circles, resize uniformly based on drag distance
+        const delta = Math.max(Math.abs(dx), Math.abs(dy));
+        const sign = (resizing.handle.includes('e') || resizing.handle.includes('s')) ? 1 : -1;
+        newWidth = Math.max(20, resizing.startWidth + delta * sign * 2);
+      } else if (ann.type === 'rect') {
+        // For rects, resize based on which handle is being dragged
+        const handle = resizing.handle;
+
+        if (handle.includes('e')) {
+          newWidth = Math.max(20, resizing.startWidth + dx);
+        }
+        if (handle.includes('w')) {
+          newWidth = Math.max(20, resizing.startWidth - dx);
+          newX = resizing.startAnnX + dx;
+        }
+        if (handle.includes('s')) {
+          newHeight = Math.max(20, resizing.startHeight + dy);
+        }
+        if (handle.includes('n')) {
+          newHeight = Math.max(20, resizing.startHeight - dy);
+          newY = resizing.startAnnY + dy;
+        }
+      }
+
+      onUpdateAnnotation(resizing.id, { width: newWidth, height: newHeight, x: newX, y: newY });
+      return;
+    }
+
     if (draggingNode) {
       onNodeMove(draggingNode, x, y);
     } else if (draggingAnnotation) {
       onAnnotationMove(draggingAnnotation, x, y);
     }
-  }, [offset, zoom, isPanning, draggingNode, draggingAnnotation, onNodeMove, onAnnotationMove]);
+  }, [offset, zoom, isPanning, draggingNode, draggingAnnotation, resizing, annotations, onNodeMove, onAnnotationMove, onUpdateAnnotation]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -137,6 +192,7 @@ const Canvas: React.FC<CanvasProps> = ({
     setDraggingAnnotation(null);
     setIsPanning(false);
     setLinkingNode(null);
+    setResizing(null);
   }, []);
 
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
@@ -155,6 +211,38 @@ const Canvas: React.FC<CanvasProps> = ({
     e.stopPropagation();
     setDraggingAnnotation(id);
     onSelect(id);
+  };
+
+  const handleResizeMouseDown = (e: React.MouseEvent, ann: Annotation, handle: ResizeHandle) => {
+    e.stopPropagation();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left - offset.x) / zoom;
+    const y = (e.clientY - rect.top - offset.y) / zoom;
+    setResizing({
+      id: ann.id,
+      handle,
+      startX: x,
+      startY: y,
+      startWidth: ann.width || (ann.type === 'rect' ? 100 : 80),
+      startHeight: ann.height || 60,
+      startAnnX: ann.x,
+      startAnnY: ann.y,
+    });
+  };
+
+  const getResizeCursor = (handle: ResizeHandle): string => {
+    const cursors: Record<ResizeHandle, string> = {
+      'nw': 'nwse-resize',
+      'n': 'ns-resize',
+      'ne': 'nesw-resize',
+      'e': 'ew-resize',
+      'se': 'nwse-resize',
+      's': 'ns-resize',
+      'sw': 'nesw-resize',
+      'w': 'ew-resize',
+    };
+    return cursors[handle];
   };
 
   const handleNodeContextMenu = (e: React.MouseEvent, id: string) => {
@@ -239,14 +327,76 @@ const Canvas: React.FC<CanvasProps> = ({
         style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
       >
         <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none">
-          {annotations.map(ann => {
+          {[...annotations].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0)).map(ann => {
             const isSelected = selectedId === ann.id;
             const stroke = isSelected ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F') : (ann.color || (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
+            const handleSize = 8;
+            const handleFill = effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F';
+
+            // Render resize handles for rect
+            const renderRectHandles = () => {
+              if (!isSelected || ann.type !== 'rect') return null;
+              const w = ann.width || 100;
+              const h = ann.height || 60;
+              const handles: { handle: ResizeHandle; cx: number; cy: number }[] = [
+                { handle: 'nw', cx: ann.x, cy: ann.y },
+                { handle: 'n', cx: ann.x + w / 2, cy: ann.y },
+                { handle: 'ne', cx: ann.x + w, cy: ann.y },
+                { handle: 'e', cx: ann.x + w, cy: ann.y + h / 2 },
+                { handle: 'se', cx: ann.x + w, cy: ann.y + h },
+                { handle: 's', cx: ann.x + w / 2, cy: ann.y + h },
+                { handle: 'sw', cx: ann.x, cy: ann.y + h },
+                { handle: 'w', cx: ann.x, cy: ann.y + h / 2 },
+              ];
+              return handles.map(({ handle, cx, cy }) => (
+                <rect
+                  key={handle}
+                  x={cx - handleSize / 2}
+                  y={cy - handleSize / 2}
+                  width={handleSize}
+                  height={handleSize}
+                  fill={handleFill}
+                  stroke={effectiveMode === 'dark' ? '#1C1917' : 'white'}
+                  strokeWidth="1"
+                  style={{ cursor: getResizeCursor(handle) }}
+                  onMouseDown={(e) => handleResizeMouseDown(e, ann, handle)}
+                />
+              ));
+            };
+
+            // Render resize handles for circle (4 cardinal points)
+            const renderCircleHandles = () => {
+              if (!isSelected || ann.type !== 'circle') return null;
+              const r = ann.width ? ann.width / 2 : 40;
+              const handles: { handle: ResizeHandle; cx: number; cy: number }[] = [
+                { handle: 'n', cx: ann.x, cy: ann.y - r },
+                { handle: 'e', cx: ann.x + r, cy: ann.y },
+                { handle: 's', cx: ann.x, cy: ann.y + r },
+                { handle: 'w', cx: ann.x - r, cy: ann.y },
+              ];
+              return handles.map(({ handle, cx, cy }) => (
+                <rect
+                  key={handle}
+                  x={cx - handleSize / 2}
+                  y={cy - handleSize / 2}
+                  width={handleSize}
+                  height={handleSize}
+                  fill={handleFill}
+                  stroke={effectiveMode === 'dark' ? '#1C1917' : 'white'}
+                  strokeWidth="1"
+                  style={{ cursor: getResizeCursor(handle) }}
+                  onMouseDown={(e) => handleResizeMouseDown(e, ann, handle)}
+                />
+              ));
+            };
+
             return (
               <g key={ann.id} className="pointer-events-auto cursor-move" onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)}>
                 {ann.type === 'rect' && <rect x={ann.x} y={ann.y} width={ann.width || 100} height={ann.height || 60} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} rx="4" />}
                 {ann.type === 'circle' && <circle cx={ann.x} cy={ann.y} r={ann.width ? ann.width / 2 : 40} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} />}
                 {ann.type === 'text' && <text x={ann.x} y={ann.y} fill={ann.color || (effectiveMode === 'dark' ? 'white' : '#1C1917')} fontSize={ann.fontSize || 14} className="font-black tracking-tight select-none">{ann.text || 'New Text'}</text>}
+                {renderRectHandles()}
+                {renderCircleHandles()}
               </g>
             );
           })}

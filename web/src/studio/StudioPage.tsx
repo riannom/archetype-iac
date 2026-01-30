@@ -353,6 +353,7 @@ const StudioPage: React.FC = () => {
   // Refs to track current state for debounced saves (avoids stale closure issues)
   const nodesRef = useRef<Node[]>([]);
   const linksRef = useRef<Link[]>([]);
+  const annotationsRef = useRef<Annotation[]>([]);
   const [systemMetrics, setSystemMetrics] = useState<{
     agents: { online: number; total: number };
     containers: { running: number; total: number };
@@ -391,6 +392,7 @@ const StudioPage: React.FC = () => {
   // Keep refs in sync with state for debounced saves (avoids stale closure issues)
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { linksRef.current = links; }, [links]);
+  useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
 
   const addTaskLogEntry = useCallback((level: TaskLogEntry['level'], message: string, jobId?: string) => {
     const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -466,6 +468,7 @@ const StudioPage: React.FC = () => {
           fontSize: ann.fontSize,
           targetX: ann.targetX,
           targetY: ann.targetY,
+          zIndex: ann.zIndex,
         })),
       };
     },
@@ -491,18 +494,21 @@ const StudioPage: React.FC = () => {
   );
 
   // Trigger debounced layout save
+  // Uses refs to read current state at save time, avoiding stale closure issues
   const triggerLayoutSave = useCallback(() => {
     if (!activeLab) return;
     layoutDirtyRef.current = true;
     if (saveLayoutTimeoutRef.current) {
       window.clearTimeout(saveLayoutTimeoutRef.current);
     }
+    const labId = activeLab.id;
     saveLayoutTimeoutRef.current = window.setTimeout(() => {
-      if (activeLab && layoutDirtyRef.current) {
-        saveLayout(activeLab.id, nodes, annotations);
+      if (layoutDirtyRef.current) {
+        // Read current state from refs to get latest values
+        saveLayout(labId, nodesRef.current, annotationsRef.current);
       }
     }, 500);
-  }, [activeLab, nodes, annotations, saveLayout]);
+  }, [activeLab, saveLayout]);
 
   // Save topology to backend (auto-save on changes)
   const saveTopology = useCallback(
@@ -695,6 +701,7 @@ const StudioPage: React.FC = () => {
             fontSize: ann.fontSize,
             targetX: ann.targetX,
             targetY: ann.targetY,
+            zIndex: ann.zIndex,
           }))
         );
       } else {
@@ -1413,6 +1420,7 @@ const StudioPage: React.FC = () => {
               onOpenConsole={handleOpenConsole}
               onUpdateStatus={handleUpdateStatus}
               onDelete={handleDelete}
+              onUpdateAnnotation={handleUpdateAnnotation}
             />
             <div
               className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${
@@ -1428,6 +1436,7 @@ const StudioPage: React.FC = () => {
                   onDelete={handleDelete}
                   nodes={nodes}
                   links={links}
+                  annotations={annotations}
                   onOpenConsole={handleOpenConsole}
                   runtimeStates={runtimeStates}
                   deviceModels={deviceModels}

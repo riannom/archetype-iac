@@ -33,6 +33,7 @@ interface PropertiesPanelProps {
   onDelete: (id: string) => void;
   nodes: Node[];
   links: Link[];
+  annotations?: Annotation[];
   onOpenConsole: (nodeId: string) => void;
   runtimeStates: Record<string, RuntimeStatus>;
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
@@ -44,7 +45,7 @@ interface PropertiesPanelProps {
 }
 
 const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
-  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, agents = [], nodeStates = {}
+  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, annotations = [], onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, agents = [], nodeStates = {}
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'hardware' | 'connectivity' | 'config'>('general');
 
@@ -73,6 +74,25 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
   if (isAnnotation) {
     const ann = selectedItem as Annotation;
+
+    // Z-order helper functions
+    const getZIndexes = () => annotations.map(a => a.zIndex ?? 0);
+    const getMaxZIndex = () => Math.max(...getZIndexes(), 0);
+    const getMinZIndex = () => Math.min(...getZIndexes(), 0);
+
+    const handleBringToFront = () => {
+      onUpdateAnnotation(ann.id, { zIndex: getMaxZIndex() + 1 });
+    };
+    const handleBringForward = () => {
+      onUpdateAnnotation(ann.id, { zIndex: (ann.zIndex ?? 0) + 1 });
+    };
+    const handleSendBackward = () => {
+      onUpdateAnnotation(ann.id, { zIndex: (ann.zIndex ?? 0) - 1 });
+    };
+    const handleSendToBack = () => {
+      onUpdateAnnotation(ann.id, { zIndex: getMinZIndex() - 1 });
+    };
+
     return (
       <div className="w-80 bg-white dark:bg-stone-900 border-l border-stone-200 dark:border-stone-700 overflow-y-auto">
         <div className="p-4 border-b border-stone-200 dark:border-stone-700 flex justify-between items-center bg-stone-100/50 dark:bg-stone-800/50">
@@ -103,6 +123,72 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 <input type="number" value={ann.fontSize || 14} onChange={(e) => onUpdateAnnotation(ann.id, { fontSize: parseInt(e.target.value) })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
               </div>
             )}
+          </div>
+
+          {/* Dimensions for rect and circle */}
+          {(ann.type === 'rect' || ann.type === 'circle') && (
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-stone-500 uppercase tracking-tighter">Dimensions</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-stone-400 uppercase">{ann.type === 'circle' ? 'Diameter' : 'Width'}</label>
+                  <input
+                    type="number"
+                    value={ann.width || (ann.type === 'rect' ? 100 : 80)}
+                    onChange={(e) => onUpdateAnnotation(ann.id, { width: Math.max(20, parseInt(e.target.value) || 20) })}
+                    className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500"
+                    min="20"
+                  />
+                </div>
+                {ann.type === 'rect' && (
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-stone-400 uppercase">Height</label>
+                    <input
+                      type="number"
+                      value={ann.height || 60}
+                      onChange={(e) => onUpdateAnnotation(ann.id, { height: Math.max(20, parseInt(e.target.value) || 20) })}
+                      className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500"
+                      min="20"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Layer (Z-Order) Controls */}
+          <div className="space-y-2">
+            <label className="text-[11px] font-bold text-stone-500 uppercase tracking-tighter">Layer</label>
+            <div className="grid grid-cols-4 gap-1">
+              <button
+                onClick={handleBringToFront}
+                className="flex items-center justify-center gap-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+                title="Bring to Front"
+              >
+                <i className="fa-solid fa-angles-up"></i>
+              </button>
+              <button
+                onClick={handleBringForward}
+                className="flex items-center justify-center gap-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+                title="Bring Forward"
+              >
+                <i className="fa-solid fa-angle-up"></i>
+              </button>
+              <button
+                onClick={handleSendBackward}
+                className="flex items-center justify-center gap-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+                title="Send Backward"
+              >
+                <i className="fa-solid fa-angle-down"></i>
+              </button>
+              <button
+                onClick={handleSendToBack}
+                className="flex items-center justify-center gap-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+                title="Send to Back"
+              >
+                <i className="fa-solid fa-angles-down"></i>
+              </button>
+            </div>
           </div>
         </div>
       </div>
