@@ -29,6 +29,7 @@ from app.image_store import (
     create_image_entry,
     delete_image_entry,
     detect_device_from_filename,
+    detect_qcow2_device_type,
     ensure_image_store,
     find_image_by_id,
     load_manifest,
@@ -36,6 +37,7 @@ from app.image_store import (
     save_manifest,
     update_image_entry,
 )
+from app.jobs import queue
 
 router = APIRouter(prefix="/images", tags=["images"])
 
@@ -796,6 +798,7 @@ def _load_image_sync(file: UploadFile) -> dict:
 def upload_qcow2(
     file: UploadFile = File(...),
     current_user: models.User = Depends(get_current_user),
+    auto_build: bool = Query(default=True, description="Auto-trigger vrnetlab Docker build"),
 ) -> dict[str, str]:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
@@ -821,8 +824,9 @@ def upload_qcow2(
     file_size = destination.stat().st_size if destination.exists() else None
 
     device_id, version = detect_device_from_filename(destination.name)
+    image_id = f"qcow2:{destination.name}"
     entry = create_image_entry(
-        image_id=f"qcow2:{destination.name}",
+        image_id=image_id,
         kind="qcow2",
         reference=str(destination),
         filename=destination.name,
@@ -832,7 +836,138 @@ def upload_qcow2(
     )
     manifest["images"].append(entry)
     save_manifest(manifest)
-    return {"path": str(destination), "filename": destination.name}
+
+    result = {"path": str(destination), "filename": destination.name}
+
+    # Auto-trigger vrnetlab build if device type is recognized
+    if auto_build:
+        vrnetlab_device_id, vrnetlab_path = detect_qcow2_device_type(destination.name)
+        if vrnetlab_path:
+            from app.tasks.vrnetlab_build import build_vrnetlab_image
+            job = queue.enqueue(
+                build_vrnetlab_image,
+                qcow2_path=str(destination),
+                device_id=vrnetlab_device_id or device_id,
+                vrnetlab_subdir=vrnetlab_path,
+                version=version,
+                qcow2_image_id=image_id,
+                job_timeout=3600,  # 60 minutes
+            )
+            result["build_job_id"] = job.id
+            result["build_status"] = "queued"
+            result["message"] = f"Building Docker image for {vrnetlab_device_id or device_id}"
+
+    return result
+
+
+@router.post("/library/{image_id}/build-docker")
+def trigger_docker_build(
+    image_id: str,
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Trigger vrnetlab Docker image build for a qcow2 image.
+
+    This queues a background job to build the Docker image using vrnetlab.
+    Only works for qcow2 images with recognized device types.
+
+    Returns:
+        Dict with job_id and status
+    """
+    from urllib.parse import unquote
+    image_id = unquote(image_id)
+
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    if image.get("kind") != "qcow2":
+        raise HTTPException(
+            status_code=400,
+            detail="Only qcow2 images can be built into Docker images"
+        )
+
+    # Get the qcow2 file path
+    qcow2_file = image.get("reference")
+    if not qcow2_file or not Path(qcow2_file).exists():
+        raise HTTPException(
+            status_code=400,
+            detail="qcow2 file not found on disk"
+        )
+
+    # Detect device type and vrnetlab path
+    filename = image.get("filename", Path(qcow2_file).name)
+    vrnetlab_device_id, vrnetlab_path = detect_qcow2_device_type(filename)
+
+    if not vrnetlab_path:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot determine vrnetlab build path for '{filename}'. "
+                   "Device type not recognized for automatic building."
+        )
+
+    # Queue the build job
+    from app.tasks.vrnetlab_build import build_vrnetlab_image
+    job = queue.enqueue(
+        build_vrnetlab_image,
+        qcow2_path=qcow2_file,
+        device_id=vrnetlab_device_id or image.get("device_id"),
+        vrnetlab_subdir=vrnetlab_path,
+        version=image.get("version"),
+        qcow2_image_id=image_id,
+        job_timeout=3600,  # 60 minutes
+    )
+
+    return {
+        "job_id": job.id,
+        "status": "queued",
+        "message": f"Building Docker image for {vrnetlab_device_id}",
+        "device_id": vrnetlab_device_id,
+        "vrnetlab_path": vrnetlab_path,
+    }
+
+
+@router.get("/library/{image_id}/build-status")
+def get_docker_build_status(
+    image_id: str,
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Check if a Docker image has been built from a qcow2 image.
+
+    Returns build status and the Docker image reference if built.
+    """
+    from urllib.parse import unquote
+    from app.tasks.vrnetlab_build import get_build_status
+
+    image_id = unquote(image_id)
+
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    if image.get("kind") != "qcow2":
+        raise HTTPException(
+            status_code=400,
+            detail="Build status only available for qcow2 images"
+        )
+
+    status = get_build_status(image_id)
+    if status:
+        return status
+
+    # Check if device is buildable
+    filename = image.get("filename", "")
+    vrnetlab_device_id, vrnetlab_path = detect_qcow2_device_type(filename)
+
+    return {
+        "built": False,
+        "buildable": vrnetlab_path is not None,
+        "device_id": vrnetlab_device_id,
+        "vrnetlab_path": vrnetlab_path,
+    }
 
 
 @router.get("/qcow2")

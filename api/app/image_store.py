@@ -9,6 +9,77 @@ from typing import Optional
 from app.config import settings
 
 
+# =============================================================================
+# QCOW2 DEVICE DETECTION FOR VRNETLAB BUILDS
+# =============================================================================
+
+# Mapping of filename patterns to (device_id, vrnetlab_subdir)
+# Used to detect device type from qcow2 filename and determine vrnetlab build path
+QCOW2_DEVICE_PATTERNS: dict[str, tuple[str, str]] = {
+    # Cisco IOS-XE / Catalyst
+    r"c8000v[_-]?[\d\.]+.*\.qcow2": ("c8000v", "cisco/c8000v"),
+    r"cat9kv[_-]?[\d\.]+.*\.qcow2": ("cat9kv", "cisco/cat9kv"),
+    r"cat8000v[_-]?[\d\.]+.*\.qcow2": ("c8000v", "cisco/c8000v"),
+    r"csr1000v[_-]?[\d\.]+.*\.qcow2": ("csr1000v", "cisco/csr"),
+    # Cisco Firewall / FTD
+    r"ftdv[_-]?[\d\.]+.*\.qcow2": ("ftdv", "cisco/ftdv"),
+    r"cisco[_-]?secure[_-]?firewall[_-]?threat[_-]?defense.*\.qcow2": ("ftdv", "cisco/ftdv"),
+    r"asav[_-]?[\d\.]+.*\.qcow2": ("asav", "cisco/asav"),
+    # Cisco IOS-XR
+    r"xrv9k[_-]?[\d\.]+.*\.qcow2": ("xrv9k", "cisco/xrv9k"),
+    r"iosxrv9000[_-]?[\d\.]+.*\.qcow2": ("xrv9k", "cisco/xrv9k"),
+    r"xrd[_-]?[\d\.]+.*\.qcow2": ("xrd", "cisco/xrd"),
+    # Cisco NX-OS
+    r"n9kv[_-]?[\d\.]+.*\.qcow2": ("n9kv", "cisco/n9kv"),
+    r"nexus9[_-]?[\d\.]+.*\.qcow2": ("n9kv", "cisco/n9kv"),
+    r"nxosv[_-]?[\d\.]+.*\.qcow2": ("n9kv", "cisco/n9kv"),
+    # Cisco IOSv / IOS
+    r"vios[_-]?[\d\.]+.*\.qcow2": ("iosv", "cisco/iosv"),
+    r"iosv[_-]?[\d\.]+.*\.qcow2": ("iosv", "cisco/iosv"),
+    r"iosvl2[_-]?[\d\.]+.*\.qcow2": ("iosvl2", "cisco/iosvl2"),
+    # Cisco SD-WAN components
+    r"viptela[_-]?smart.*\.qcow2": ("cat-sdwan-controller", "cisco/sdwan"),
+    r"viptela[_-]?vmanage.*\.qcow2": ("cat-sdwan-manager", "cisco/sdwan"),
+    r"viptela[_-]?bond.*\.qcow2": ("cat-sdwan-validator", "cisco/sdwan"),
+    r"viptela[_-]?edge.*\.qcow2": ("cat-sdwan-vedge", "cisco/sdwan"),
+    r"vedge[_-]?[\d\.]+.*\.qcow2": ("cat-sdwan-vedge", "cisco/sdwan"),
+    r"c8000v[_-]?sdwan.*\.qcow2": ("cat-sdwan-cedge", "cisco/sdwan"),
+    # Juniper
+    r"vsrx[_-]?[\d\.]+.*\.qcow2": ("vsrx", "juniper/vsrx"),
+    r"vjunos[_-]?[\d\.]+.*\.qcow2": ("vjunos-switch", "juniper/vjunos-switch"),
+    r"vmx[_-]?[\d\.]+.*\.qcow2": ("vmx", "juniper/vmx"),
+    r"vqfx[_-]?[\d\.]+.*\.qcow2": ("vqfx", "juniper/vqfx"),
+    # Arista
+    r"veos[_-]?[\d\.]+.*\.qcow2": ("veos", "arista/veos"),
+    # Nokia
+    r"sros[_-]?[\d\.]+.*\.qcow2": ("sros", "nokia/sros"),
+    # Palo Alto
+    r"pa[_-]?vm[_-]?[\d\.]+.*\.qcow2": ("panos", "paloalto/panos"),
+    # Generic / Catch-all for common formats
+    r".*\.qcow2": (None, None),  # Unknown device
+}
+
+
+def detect_qcow2_device_type(filename: str) -> tuple[str | None, str | None]:
+    """Detect device type and vrnetlab path from qcow2 filename.
+
+    Args:
+        filename: The qcow2 filename (e.g., "c8000v-17.16.01a.qcow2")
+
+    Returns:
+        Tuple of (device_id, vrnetlab_path) or (None, None) if unknown.
+        device_id: The device type identifier (e.g., "c8000v")
+        vrnetlab_path: The vrnetlab subdirectory to use (e.g., "cisco/c8000v")
+    """
+    filename_lower = filename.lower()
+    for pattern, (device_id, vrnetlab_path) in QCOW2_DEVICE_PATTERNS.items():
+        if device_id is None:  # Skip the catch-all pattern
+            continue
+        if re.search(pattern, filename_lower, re.IGNORECASE):
+            return device_id, vrnetlab_path
+    return None, None
+
+
 # Vendor mapping for detected devices
 DEVICE_VENDOR_MAP = {
     "eos": "Arista",

@@ -318,10 +318,30 @@ install_agent_deps() {
         log_info "Installing containerlab..."
         curl -sL https://containerlab.dev/setup | bash -s "all"
     fi
+
+    # vrnetlab for building VM images from qcow2
+    VRNETLAB_DIR="/opt/vrnetlab"
+    if [ ! -d "$VRNETLAB_DIR" ]; then
+        log_info "Cloning vrnetlab for VM image building..."
+        git clone --depth 1 https://github.com/hellt/vrnetlab.git $VRNETLAB_DIR
+    else
+        log_info "Updating vrnetlab..."
+        cd $VRNETLAB_DIR && git pull
+    fi
 }
 
 install_base_deps
 install_docker
+
+# Clone vrnetlab for VM image building (needed by worker container)
+VRNETLAB_DIR="/opt/vrnetlab"
+if [ ! -d "$VRNETLAB_DIR" ]; then
+    log_info "Cloning vrnetlab for VM image building..."
+    git clone --depth 1 https://github.com/hellt/vrnetlab.git $VRNETLAB_DIR
+else
+    log_info "Updating vrnetlab..."
+    cd $VRNETLAB_DIR && git pull
+fi
 
 # Install Controller
 if [ "$INSTALL_CONTROLLER" = true ]; then

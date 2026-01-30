@@ -28,6 +28,7 @@ services:
       # Workspace
       - NETLAB_WORKSPACE=${NETLAB_WORKSPACE:-/var/lib/netlab-gui}
       - NETLAB_PROVIDER=${NETLAB_PROVIDER:-clab}
+      - QCOW2_STORE=${QCOW2_STORE:-/var/lib/netlab-gui/images}
       # Auth
       - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
       - JWT_SECRET=${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION}
@@ -84,9 +85,12 @@ services:
       - JWT_SECRET=${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - VRNETLAB_PATH=${VRNETLAB_PATH:-/opt/vrnetlab}
+      - QCOW2_STORE=${QCOW2_STORE:-/var/lib/netlab-gui/images}
     volumes:
       - netlab_workspaces:/var/lib/netlab-gui
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${VRNETLAB_PATH:-/opt/vrnetlab}:/opt/vrnetlab
     logging:
       driver: "json-file"
       options:

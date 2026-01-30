@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     qcow2_store: str | None = None
     # Directory for ISO uploads (files placed here appear in ISO import browser)
     iso_upload_dir: str = "/var/lib/archetype-gui/uploads"
+    # vrnetlab repository path for building VM images
+    vrnetlab_path: str = "/opt/vrnetlab"
     log_forward_url: str | None = None
     netlab_provider: str = "clab"
 
@@ -115,6 +117,12 @@ class Settings(BaseSettings):
     iso_import_timeout: int = 14400  # 4 hours
     # Docker load timeout for container images (seconds)
     iso_docker_load_timeout: int = 600  # 10 minutes
+
+    # vrnetlab build settings
+    # Build timeout (seconds) - VM images with install phases can take a while
+    vrnetlab_build_timeout: int = 3600  # 60 minutes
+    # Auto-trigger vrnetlab builds on qcow2 upload
+    vrnetlab_auto_build: bool = True
 
 
 settings = Settings()
