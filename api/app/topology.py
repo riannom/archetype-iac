@@ -178,25 +178,42 @@ def graph_to_yaml(graph: TopologyGraph) -> str:
         # Store original display name if it differs from safe name (YAML key)
         if node.name != safe_name:
             node_data["_display_name"] = node.name
-        if node.device:
-            node_data["device"] = node.device
-        if node.image:
-            node_data["image"] = node.image
-        if node.version:
-            node_data["version"] = node.version
-        if node.role:
-            node_data["role"] = node.role
-        if node.mgmt:
-            node_data["mgmt"] = node.mgmt
-        if node.network_mode:
-            node_data["network-mode"] = node.network_mode
-        if node.host:
-            node_data["host"] = node.host
-        if node.vars:
-            vars_copy = dict(node.vars)
-            if "label" in vars_copy and "name" not in vars_copy:
-                vars_copy["name"] = vars_copy.pop("label")
-            node_data.update(vars_copy)
+
+        # Handle external network nodes differently
+        if node.node_type == "external":
+            node_data["node_type"] = "external"
+            if node.connection_type:
+                node_data["connection_type"] = node.connection_type
+            if node.parent_interface:
+                node_data["parent_interface"] = node.parent_interface
+            if node.vlan_id is not None:
+                node_data["vlan_id"] = node.vlan_id
+            if node.bridge_name:
+                node_data["bridge_name"] = node.bridge_name
+            if node.host:
+                node_data["host"] = node.host
+        else:
+            # Regular device node
+            if node.device:
+                node_data["device"] = node.device
+            if node.image:
+                node_data["image"] = node.image
+            if node.version:
+                node_data["version"] = node.version
+            if node.role:
+                node_data["role"] = node.role
+            if node.mgmt:
+                node_data["mgmt"] = node.mgmt
+            if node.network_mode:
+                node_data["network-mode"] = node.network_mode
+            if node.host:
+                node_data["host"] = node.host
+            if node.vars:
+                vars_copy = dict(node.vars)
+                if "label" in vars_copy and "name" not in vars_copy:
+                    vars_copy["name"] = vars_copy.pop("label")
+                node_data.update(vars_copy)
+
         nodes[safe_name] = node_data or None
 
     links = []
@@ -299,7 +316,12 @@ def yaml_to_graph(content: str) -> TopologyGraph:
     links_data = data.get("links", [])
 
     # Fields that are parsed as explicit GraphNode attributes (not stored in vars)
-    node_explicit_fields = {"device", "image", "version", "role", "mgmt", "network-mode", "host", "_gui_id", "_display_name"}
+    node_explicit_fields = {
+        "device", "image", "version", "role", "mgmt", "network-mode", "host",
+        "_gui_id", "_display_name",
+        # External network fields
+        "node_type", "connection_type", "parent_interface", "vlan_id", "bridge_name",
+    }
 
     nodes: list[GraphNode] = []
     # Build reverse mapping: container_name -> gui_id for link translation
@@ -323,6 +345,9 @@ def yaml_to_graph(content: str) -> TopologyGraph:
                     id=str(node_id),
                     name=str(display_name),
                     container_name=yaml_key,
+                    # Node type (device or external)
+                    node_type=attrs.get("node_type", "device"),
+                    # Device node fields
                     device=attrs.get("device"),
                     image=attrs.get("image"),
                     version=attrs.get("version"),
@@ -330,6 +355,11 @@ def yaml_to_graph(content: str) -> TopologyGraph:
                     mgmt=attrs.get("mgmt"),
                     network_mode=attrs.get("network-mode"),
                     host=attrs.get("host"),
+                    # External network fields
+                    connection_type=attrs.get("connection_type"),
+                    parent_interface=attrs.get("parent_interface"),
+                    vlan_id=attrs.get("vlan_id"),
+                    bridge_name=attrs.get("bridge_name"),
                     vars={k: v for k, v in attrs.items() if k not in node_explicit_fields},
                 )
             )
