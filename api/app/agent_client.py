@@ -815,6 +815,55 @@ async def extract_configs_on_agent(
         return {"success": False, "extracted_count": 0, "error": str(e)}
 
 
+async def prune_docker_on_agent(
+    agent: models.Host,
+    valid_lab_ids: list[str],
+    prune_dangling_images: bool = True,
+    prune_build_cache: bool = True,
+    prune_unused_volumes: bool = False,
+) -> dict:
+    """Request an agent to prune Docker resources.
+
+    Args:
+        agent: The agent to clean up
+        valid_lab_ids: List of lab IDs whose resources should be protected
+        prune_dangling_images: Whether to prune dangling images
+        prune_build_cache: Whether to prune build cache
+        prune_unused_volumes: Whether to prune unused volumes (conservative)
+
+    Returns:
+        Dict with 'success', 'images_removed', 'build_cache_removed',
+        'volumes_removed', 'space_reclaimed', and 'errors' keys
+    """
+    url = f"{get_agent_url(agent)}/prune-docker"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={
+                    "valid_lab_ids": valid_lab_ids,
+                    "prune_dangling_images": prune_dangling_images,
+                    "prune_build_cache": prune_build_cache,
+                    "prune_unused_volumes": prune_unused_volumes,
+                },
+                timeout=120.0,  # Docker prune can take a while
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result
+    except Exception as e:
+        logger.error(f"Failed to prune Docker on agent {agent.id}: {e}")
+        return {
+            "success": False,
+            "images_removed": 0,
+            "build_cache_removed": 0,
+            "volumes_removed": 0,
+            "space_reclaimed": 0,
+            "errors": [str(e)],
+        }
+
+
 async def setup_cross_host_link(
     database: Session,
     lab_id: str,

@@ -362,3 +362,23 @@ class UpdateResponse(BaseModel):
     accepted: bool
     message: str = ""
     deployment_mode: str = "unknown"  # systemd, docker, unknown
+
+
+# --- Docker Pruning ---
+
+class DockerPruneRequest(BaseModel):
+    """Controller -> Agent: Request to prune Docker resources."""
+    valid_lab_ids: list[str] = Field(default_factory=list)
+    prune_dangling_images: bool = True
+    prune_build_cache: bool = True
+    prune_unused_volumes: bool = False
+
+
+class DockerPruneResponse(BaseModel):
+    """Agent -> Controller: Result of Docker prune operation."""
+    success: bool = True
+    images_removed: int = 0
+    build_cache_removed: int = 0
+    volumes_removed: int = 0
+    space_reclaimed: int = 0
+    errors: list[str] = Field(default_factory=list)
