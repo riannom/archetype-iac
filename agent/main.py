@@ -1869,24 +1869,46 @@ def get_pull_progress(job_id: str) -> ImagePullProgress:
 
 # --- Console Endpoint ---
 
-# Import console shell configuration from central vendor registry
-from agent.vendors import get_console_shell
+# Import console configuration from central vendor registry
+from agent.vendors import get_console_shell, get_console_method, get_console_credentials
 
 
-def _get_shell_for_container(container_name: str) -> str:
-    """Get the appropriate shell command based on container's node kind.
+def _get_console_config(container_name: str) -> tuple[str, str, str, str]:
+    """Get console configuration based on container's node kind.
 
-    Uses the centralized vendor registry (agent/vendors.py) to determine
-    the correct shell command for each containerlab node kind.
+    Returns:
+        Tuple of (method, shell, username, password)
+        method: "docker_exec" or "ssh"
+        shell: Shell command for docker_exec
+        username/password: Credentials for SSH
     """
     try:
         import docker
         client = docker.from_env()
         container = client.containers.get(container_name)
         kind = container.labels.get("clab-node-kind", "")
-        return get_console_shell(kind)
+        method = get_console_method(kind)
+        shell = get_console_shell(kind)
+        username, password = get_console_credentials(kind)
+        return (method, shell, username, password)
     except Exception:
-        return "/bin/sh"
+        return ("docker_exec", "/bin/sh", "admin", "admin")
+
+
+def _get_container_ip(container_name: str) -> str | None:
+    """Get the container's IP address for SSH access."""
+    try:
+        import docker
+        client = docker.from_env()
+        container = client.containers.get(container_name)
+        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+        for net_name, net_config in networks.items():
+            ip = net_config.get("IPAddress")
+            if ip:
+                return ip
+        return None
+    except Exception:
+        return None
 
 
 @app.websocket("/console/{lab_id}/{node_name}")
@@ -1903,10 +1925,139 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
 
     container_name = provider.get_container_name(lab_id, node_name)
 
-    # Determine shell based on node kind
-    shell_cmd = _get_shell_for_container(container_name)
+    # Get console configuration based on node kind
+    method, shell_cmd, username, password = _get_console_config(container_name)
 
-    # Import console module
+    if method == "ssh":
+        # SSH-based console for vrnetlab/VM containers
+        await _console_websocket_ssh(
+            websocket, container_name, node_name, username, password
+        )
+    else:
+        # Docker exec-based console for native containers
+        await _console_websocket_docker(websocket, container_name, node_name, shell_cmd)
+
+
+async def _console_websocket_ssh(
+    websocket: WebSocket,
+    container_name: str,
+    node_name: str,
+    username: str,
+    password: str,
+):
+    """Handle console via SSH to container IP (for vrnetlab containers)."""
+    from agent.console.ssh_console import SSHConsole
+
+    # Get container IP
+    container_ip = _get_container_ip(container_name)
+    if not container_ip:
+        await websocket.send_text(f"\r\nError: Could not get IP for {node_name}\r\n")
+        await websocket.send_text(f"Container '{container_name}' may not be running.\r\n")
+        await websocket.close(code=1011)
+        return
+
+    console = SSHConsole(container_ip, username, password)
+
+    # Try to start SSH console session
+    if not await console.start():
+        await websocket.send_text(f"\r\nError: Could not SSH to {node_name}\r\n")
+        await websocket.send_text(f"Device may still be booting or credentials may be incorrect.\r\n")
+        await websocket.close(code=1011)
+        return
+
+    # Set initial terminal size
+    await console.resize(rows=24, cols=80)
+
+    # Input buffer for data from WebSocket
+    input_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+    async def read_websocket():
+        """Read from WebSocket and queue input."""
+        try:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    await input_queue.put(None)
+                    break
+                elif message["type"] == "websocket.receive":
+                    if "text" in message:
+                        text = message["text"]
+                        # Check for control messages (JSON)
+                        if text.startswith("{"):
+                            try:
+                                ctrl = json.loads(text)
+                                if ctrl.get("type") == "resize":
+                                    rows = ctrl.get("rows", 24)
+                                    cols = ctrl.get("cols", 80)
+                                    await console.resize(rows=rows, cols=cols)
+                                    continue  # Don't queue resize messages
+                            except json.JSONDecodeError:
+                                pass  # Not JSON, treat as terminal input
+                        await input_queue.put(text.encode())
+                    elif "bytes" in message:
+                        await input_queue.put(message["bytes"])
+        except WebSocketDisconnect:
+            await input_queue.put(None)
+        except Exception:
+            await input_queue.put(None)
+
+    async def read_ssh():
+        """Read from SSH and send to WebSocket."""
+        try:
+            while console.is_running:
+                data = await console.read()
+                if data is None:
+                    break
+                if data:
+                    await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    async def write_ssh():
+        """Read from input queue and write to SSH."""
+        try:
+            while console.is_running:
+                try:
+                    data = await asyncio.wait_for(
+                        input_queue.get(), timeout=settings.console_input_timeout
+                    )
+                    if data is None:
+                        break
+                    if data:
+                        await console.write(data)
+                except asyncio.TimeoutError:
+                    continue
+        except Exception:
+            pass
+
+    # Run all tasks concurrently
+    ws_task = asyncio.create_task(read_websocket())
+    read_task = asyncio.create_task(read_ssh())
+    write_task = asyncio.create_task(write_ssh())
+
+    try:
+        done, pending = await asyncio.wait(
+            [ws_task, read_task, write_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    finally:
+        await console.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+async def _console_websocket_docker(
+    websocket: WebSocket, container_name: str, node_name: str, shell_cmd: str
+):
+    """Handle console via docker exec (for native containers)."""
     from agent.console.docker_exec import DockerConsole
 
     console = DockerConsole(container_name)
@@ -1955,16 +2106,11 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
             await input_queue.put(None)
 
     async def read_container():
-        """Read from container and send to WebSocket using event-driven I/O.
-
-        Uses asyncio event loop's add_reader for immediate notification when
-        data is available, eliminating polling latency.
-        """
+        """Read from container and send to WebSocket using event-driven I/O."""
         loop = asyncio.get_event_loop()
         data_available = asyncio.Event()
 
         def on_readable():
-            """Callback when socket has data available."""
             data_available.set()
 
         fd = console.get_socket_fileno()
@@ -1972,33 +2118,27 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
             return
 
         try:
-            # Register for read events on the socket
             loop.add_reader(fd, on_readable)
 
             while console.is_running:
-                # Wait for data to become available (event-driven, no polling)
                 try:
                     await asyncio.wait_for(
-                        data_available.wait(),
-                        timeout=settings.console_read_timeout
+                        data_available.wait(), timeout=settings.console_read_timeout
                     )
                 except asyncio.TimeoutError:
-                    # Fallback timeout - check if still running
                     continue
 
                 data_available.clear()
 
-                # Read all available data without blocking
                 data = console.read_nonblocking()
                 if data is None:
-                    break  # Connection closed
+                    break
                 if data:
                     await websocket.send_bytes(data)
 
         except Exception:
             pass
         finally:
-            # Always remove the reader when done
             try:
                 loop.remove_reader(fd)
             except Exception:
@@ -2009,7 +2149,9 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
         try:
             while console.is_running:
                 try:
-                    data = await asyncio.wait_for(input_queue.get(), timeout=settings.console_input_timeout)
+                    data = await asyncio.wait_for(
+                        input_queue.get(), timeout=settings.console_input_timeout
+                    )
                     if data is None:
                         break
                     if data:
@@ -2025,20 +2167,16 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
     write_task = asyncio.create_task(write_container())
 
     try:
-        # Wait for any task to complete (usually disconnect)
         done, pending = await asyncio.wait(
             [ws_task, read_task, write_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
-
-        # Cancel remaining tasks
         for task in pending:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-
     finally:
         console.close()
         try:
