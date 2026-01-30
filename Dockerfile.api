@@ -36,6 +36,9 @@ RUN curl -sL https://get.containerlab.dev | bash -s -- --no-sudo
 
 COPY api/ ./
 
+# Copy VERSION file for version endpoint
+COPY VERSION ./VERSION
+
 # Copy agent modules needed by API
 RUN mkdir -p agent
 COPY agent/vendors.py ./agent/vendors.py
