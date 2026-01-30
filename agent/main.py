@@ -336,7 +336,7 @@ async def register_with_controller() -> bool:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{settings.controller_url}/agents/register",
-                json=request.model_dump(),
+                json=request.model_dump(mode='json'),
                 timeout=settings.registration_timeout,
             )
             if response.status_code == 200:
