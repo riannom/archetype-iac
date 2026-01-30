@@ -678,3 +678,25 @@ class UserPreferencesUpdate(BaseModel):
     """Input schema for updating user preferences."""
     notification_settings: NotificationSettings | None = None
     canvas_settings: CanvasSettings | None = None
+
+
+# =============================================================================
+# Version and Update Schemas
+# =============================================================================
+
+
+class VersionInfo(BaseModel):
+    """Current version information."""
+    version: str
+    build_time: str | None = None
+
+
+class UpdateInfo(BaseModel):
+    """Update check results."""
+    current_version: str
+    latest_version: str | None = None
+    update_available: bool = False
+    release_url: str | None = None
+    release_notes: str | None = None
+    published_at: str | None = None
+    error: str | None = None

@@ -67,3 +67,29 @@ export async function getSystemLogs(params: LogQueryParams = {}): Promise<LogQue
 
   return apiRequest<LogQueryResponse>(path);
 }
+
+
+// --- Version and Update Types and Functions ---
+
+export interface VersionInfo {
+  version: string;
+  build_time?: string | null;
+}
+
+export interface UpdateInfo {
+  current_version: string;
+  latest_version?: string | null;
+  update_available: boolean;
+  release_url?: string | null;
+  release_notes?: string | null;
+  published_at?: string | null;
+  error?: string | null;
+}
+
+export async function getVersionInfo(): Promise<VersionInfo> {
+  return apiRequest<VersionInfo>("/system/version");
+}
+
+export async function checkForUpdates(): Promise<UpdateInfo> {
+  return apiRequest<UpdateInfo>("/system/updates");
+}

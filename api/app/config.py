@@ -155,5 +155,9 @@ class Settings(BaseSettings):
     cleanup_docker_build_cache: bool = True
     cleanup_docker_unused_volumes: bool = False  # Conservative - may have data
 
+    # Version checking
+    github_repo: str = "riannom/archetype-iac"
+    version_check_cache_ttl: int = 3600  # 1 hour cache
+
 
 settings = Settings()

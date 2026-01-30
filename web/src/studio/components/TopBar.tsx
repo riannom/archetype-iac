@@ -3,6 +3,7 @@ import { useTheme, ThemeSelector } from '../../theme/index';
 import { ArchetypeIcon } from '../../components/icons';
 import { NotificationCenter } from '../../components/NotificationCenter';
 import { NotificationSettingsPanel } from '../../components/NotificationSettingsPanel';
+import { VersionBadge } from '../../components/VersionBadge';
 
 interface TopBarProps {
   labName: string;
@@ -89,6 +90,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
                 Network Studio
               </span>
             </div>
+            <VersionBadge />
           </div>
 
           <div className="h-8 w-px bg-stone-200 dark:bg-stone-800 mx-2"></div>

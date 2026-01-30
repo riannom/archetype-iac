@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArchetypeIcon } from '../icons';
 import { Button } from '../ui/Button';
+import { VersionBadge } from '../VersionBadge';
 
 export interface PageHeaderProps {
   title?: string;
@@ -45,6 +46,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
             </p>
           )}
         </div>
+        <VersionBadge />
       </div>
 
       {/* Right side - Actions */}
