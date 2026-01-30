@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import DetailPopup from './DetailPopup';
-import { formatTimestamp } from '../../utils/format';
+import { formatTimestamp, formatUptimeFromBoot } from '../../utils/format';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
 
 interface AgentDetail {
@@ -25,6 +25,7 @@ interface AgentDetail {
     containers_running: number;
     containers_total: number;
   };
+  started_at: string | null;
   last_heartbeat: string | null;
 }
 
@@ -46,6 +47,7 @@ interface AgentsPopupProps {
 const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
   const [agents, setAgents] = useState<AgentDetail[]>([]);
   const [loading, setLoading] = useState(true);
+  const [, setTick] = useState(0); // Force re-render for live uptime
 
   useEffect(() => {
     if (isOpen) {
@@ -57,6 +59,13 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
         .finally(() => setLoading(false));
     }
   }, [isOpen]);
+
+  // Update uptime every second while popup is open
+  useEffect(() => {
+    if (!isOpen || loading) return;
+    const interval = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [isOpen, loading]);
 
   return (
     <DetailPopup isOpen={isOpen} onClose={onClose} title="Agents" width="max-w-2xl">
@@ -94,6 +103,12 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
                   <p className="text-xs text-stone-400 mt-1">
                     v{agent.version} · {formatTimestamp(agent.last_heartbeat)}
                   </p>
+                  {agent.started_at && (
+                    <p className="text-xs text-stone-400">
+                      <i className="fa-solid fa-clock text-[10px] mr-1" />
+                      Uptime: {formatUptimeFromBoot(agent.started_at)}
+                    </p>
+                  )}
                 </div>
               </div>
 

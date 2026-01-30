@@ -82,6 +82,10 @@ from agent.logging_config import setup_agent_logging
 # Generate agent ID if not configured
 AGENT_ID = settings.agent_id or str(uuid.uuid4())[:8]
 
+# Capture agent start time (used for uptime tracking)
+from datetime import timezone
+AGENT_STARTED_AT = datetime.now(timezone.utc)
+
 # Configure structured logging
 setup_agent_logging(AGENT_ID)
 import logging
@@ -315,6 +319,7 @@ def get_agent_info() -> AgentInfo:
         name=settings.agent_name,
         address=address,
         capabilities=get_capabilities(),
+        started_at=AGENT_STARTED_AT,
     )
 
 

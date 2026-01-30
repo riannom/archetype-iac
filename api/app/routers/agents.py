@@ -61,6 +61,7 @@ class AgentInfo(BaseModel):
     address: str
     capabilities: AgentCapabilities
     version: str = "0.1.0"
+    started_at: datetime | None = None  # When the agent process started
 
 
 class RegistrationRequest(BaseModel):
@@ -146,6 +147,7 @@ async def register_agent(
         existing.status = "online"
         existing.capabilities = json.dumps(agent.capabilities.model_dump())
         existing.version = agent.version
+        existing.started_at = agent.started_at
         existing.last_heartbeat = datetime.now(timezone.utc)
         database.commit()
         host_id = agent.agent_id
@@ -179,6 +181,7 @@ async def register_agent(
             existing_duplicate.status = "online"
             existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
             existing_duplicate.version = agent.version
+            existing_duplicate.started_at = agent.started_at
             existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
             database.commit()
             host_id = existing_duplicate.id
@@ -198,6 +201,7 @@ async def register_agent(
                 status="online",
                 capabilities=json.dumps(agent.capabilities.model_dump()),
                 version=agent.version,
+                started_at=agent.started_at,
                 last_heartbeat=datetime.now(timezone.utc),
             )
             database.add(host)
@@ -361,6 +365,7 @@ def list_agents_detailed(
             },
             "labs": host_labs,
             "lab_count": len(host_labs),
+            "started_at": host.started_at.isoformat() if host.started_at else None,
             "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
             "image_sync_strategy": host.image_sync_strategy or "on_demand",
         })

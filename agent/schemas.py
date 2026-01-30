@@ -63,6 +63,7 @@ class AgentInfo(BaseModel):
     address: str  # host:port for controller to reach agent
     capabilities: AgentCapabilities
     version: str = __version__
+    started_at: datetime | None = None  # When the agent process started
 
 
 class RegistrationRequest(BaseModel):
