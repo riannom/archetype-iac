@@ -269,7 +269,7 @@ describe("DeviceConfigCard", () => {
       expect(card).toHaveClass("border-sage-500");
     });
 
-    it("applies rose styling when selected and custom", () => {
+    it("applies sage styling when selected and custom", () => {
       render(
         <DeviceConfigCard
           {...defaultProps}
@@ -278,9 +278,10 @@ describe("DeviceConfigCard", () => {
         />
       );
 
+      // Custom devices when selected use the same sage styling as non-custom
       const card = screen.getByText("Arista cEOS").closest("div[class*='rounded-lg']");
-      expect(card).toHaveClass("bg-rose-50");
-      expect(card).toHaveClass("border-rose-500");
+      expect(card).toHaveClass("bg-sage-50");
+      expect(card).toHaveClass("border-sage-500");
     });
 
     it("applies default styling when not selected (non-custom)", () => {
@@ -291,7 +292,7 @@ describe("DeviceConfigCard", () => {
       expect(card).toHaveClass("border-stone-200");
     });
 
-    it("applies rose styling when not selected but custom", () => {
+    it("applies subtle stone styling when not selected but custom", () => {
       render(
         <DeviceConfigCard
           {...defaultProps}
@@ -300,9 +301,10 @@ describe("DeviceConfigCard", () => {
         />
       );
 
+      // Custom devices when not selected use subtle stone styling
       const card = screen.getByText("Arista cEOS").closest("div[class*='rounded-lg']");
-      expect(card).toHaveClass("bg-rose-50/50");
-      expect(card).toHaveClass("border-rose-200");
+      expect(card).toHaveClass("bg-stone-50");
+      expect(card).toHaveClass("border-stone-300");
     });
   });
 
@@ -317,7 +319,7 @@ describe("DeviceConfigCard", () => {
       expect(iconContainer).toHaveClass("text-white");
     });
 
-    it("applies rose icon styling when selected and custom", () => {
+    it("applies sage icon styling when selected and custom", () => {
       render(
         <DeviceConfigCard
           {...defaultProps}
@@ -326,10 +328,11 @@ describe("DeviceConfigCard", () => {
         />
       );
 
+      // Custom devices when selected use the same sage icon styling as non-custom
       const iconContainer = document
         .querySelector(".fa-microchip")
         ?.closest("div[class*='w-10']");
-      expect(iconContainer).toHaveClass("bg-rose-600");
+      expect(iconContainer).toHaveClass("bg-sage-600");
       expect(iconContainer).toHaveClass("text-white");
     });
 
@@ -343,7 +346,7 @@ describe("DeviceConfigCard", () => {
       expect(iconContainer).toHaveClass("text-stone-500");
     });
 
-    it("applies rose icon styling when not selected but custom", () => {
+    it("applies stone icon styling when not selected but custom", () => {
       render(
         <DeviceConfigCard
           {...defaultProps}
@@ -352,11 +355,12 @@ describe("DeviceConfigCard", () => {
         />
       );
 
+      // Custom devices when not selected use stone icon styling
       const iconContainer = document
         .querySelector(".fa-microchip")
         ?.closest("div[class*='w-10']");
-      expect(iconContainer).toHaveClass("bg-rose-100");
-      expect(iconContainer).toHaveClass("text-rose-600");
+      expect(iconContainer).toHaveClass("bg-stone-200");
+      expect(iconContainer).toHaveClass("text-stone-600");
     });
   });
 
@@ -368,7 +372,7 @@ describe("DeviceConfigCard", () => {
       expect(heading).toHaveClass("text-sage-700");
     });
 
-    it("applies rose text styling when selected and custom", () => {
+    it("applies sage text styling when selected and custom", () => {
       render(
         <DeviceConfigCard
           {...defaultProps}
@@ -377,8 +381,9 @@ describe("DeviceConfigCard", () => {
         />
       );
 
+      // Custom devices when selected use the same sage text styling as non-custom
       const heading = screen.getByText("Arista cEOS");
-      expect(heading).toHaveClass("text-rose-700");
+      expect(heading).toHaveClass("text-sage-700");
     });
 
     it("applies stone text styling when not selected (non-custom)", () => {
@@ -388,7 +393,7 @@ describe("DeviceConfigCard", () => {
       expect(heading).toHaveClass("text-stone-900");
     });
 
-    it("applies rose text styling when not selected but custom", () => {
+    it("applies stone text styling when not selected but custom", () => {
       render(
         <DeviceConfigCard
           {...defaultProps}
@@ -397,8 +402,9 @@ describe("DeviceConfigCard", () => {
         />
       );
 
+      // Custom devices when not selected use stone text styling
       const heading = screen.getByText("Arista cEOS");
-      expect(heading).toHaveClass("text-rose-800");
+      expect(heading).toHaveClass("text-stone-900");
     });
   });
 
