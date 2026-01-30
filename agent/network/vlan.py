@@ -206,8 +206,8 @@ def get_vlan_manager() -> VlanManager:
 def parse_external_networks_from_topology(topology_yaml: str) -> list[dict]:
     """Parse external network configurations from a topology YAML.
 
-    Looks for nodes with node_type='external' and extracts their
-    VLAN/bridge configuration.
+    Looks for the _external_networks section (added by graph_to_containerlab_yaml)
+    which contains external network configurations for VLAN setup.
 
     Args:
         topology_yaml: The topology YAML content
@@ -223,43 +223,21 @@ def parse_external_networks_from_topology(topology_yaml: str) -> list[dict]:
     """
     import yaml
 
-    external_networks = []
-
     try:
         data = yaml.safe_load(topology_yaml)
         if not data:
             return []
 
-        # Handle both wrapped and flat topology formats
-        nodes = data.get("topology", {}).get("nodes", {})
-        if not nodes:
-            nodes = data.get("nodes", {})
+        # Look for the _external_networks section added by the API
+        external_networks = data.get("_external_networks", [])
+        if isinstance(external_networks, list):
+            return external_networks
 
-        if not isinstance(nodes, dict):
-            return []
-
-        for node_name, node_config in nodes.items():
-            if not isinstance(node_config, dict):
-                continue
-
-            node_type = node_config.get("node_type", "device")
-            if node_type != "external":
-                continue
-
-            ext_config = {
-                "name": node_name,
-                "connection_type": node_config.get("connection_type", "bridge"),
-                "parent_interface": node_config.get("parent_interface"),
-                "vlan_id": node_config.get("vlan_id"),
-                "bridge_name": node_config.get("bridge_name"),
-                "host": node_config.get("host"),
-            }
-            external_networks.append(ext_config)
+        return []
 
     except Exception as e:
         logger.warning(f"Failed to parse external networks from topology: {e}")
-
-    return external_networks
+        return []
 
 
 async def setup_external_networks(

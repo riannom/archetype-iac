@@ -489,10 +489,27 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
     node_kinds: dict[str, str] = {}  # Track kind per node for interface provisioning
 
     # Build a map of external network nodes for link processing
+    # Also collect external network configs for VLAN setup by the agent
     external_networks: dict[str, GraphNode] = {}
+    external_network_configs: list[dict[str, Any]] = []
     for node in graph.nodes:
         if getattr(node, 'node_type', 'device') == 'external':
             external_networks[node.id] = node
+            # Store config for agent's VLAN setup
+            ext_config: dict[str, Any] = {
+                "name": node.name,
+                "node_type": "external",
+                "connection_type": getattr(node, 'connection_type', None) or 'bridge',
+            }
+            if node.parent_interface:
+                ext_config["parent_interface"] = node.parent_interface
+            if node.vlan_id is not None:
+                ext_config["vlan_id"] = node.vlan_id
+            if node.bridge_name:
+                ext_config["bridge_name"] = node.bridge_name
+            if node.host:
+                ext_config["host"] = node.host
+            external_network_configs.append(ext_config)
 
     for node in graph.nodes:
         # Skip external network nodes - they don't become containerlab nodes
@@ -720,6 +737,11 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
 
     if links:
         topology["topology"]["links"] = links
+
+    # Add external network configurations for agent's VLAN setup
+    # This is a custom section that containerlab ignores but the agent uses
+    if external_network_configs:
+        topology["_external_networks"] = external_network_configs
 
     # Use custom dumper for proper block scalar style on multi-line strings
     return yaml.dump(topology, Dumper=_BlockScalarDumper, sort_keys=False)

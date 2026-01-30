@@ -334,7 +334,10 @@ class ContainerlabProvider(Provider):
 
             # Check if already in containerlab format
             if "topology" in topo:
-                # Already wrapped - just strip host fields and rewrite binds
+                # Already wrapped - strip custom fields and rewrite binds
+                # Remove _external_networks (used by agent for VLAN setup, not valid for clab)
+                if "_external_networks" in topo:
+                    del topo["_external_networks"]
                 nodes = topo.get("topology", {}).get("nodes", {})
                 if isinstance(nodes, dict):
                     for node_name, node_config in nodes.items():
