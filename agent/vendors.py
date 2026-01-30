@@ -104,6 +104,13 @@ class VendorConfig:
     readiness_pattern: Optional[str] = None  # Regex pattern for log/cli detection
     readiness_timeout: int = 120  # Max seconds to wait for ready state
 
+    # Console access method
+    # - "docker_exec": Use docker exec with console_shell (default for native containers)
+    # - "ssh": Use SSH to container IP (for vrnetlab/VM-based devices)
+    console_method: str = "docker_exec"
+    console_user: str = "admin"  # Username for SSH console access
+    console_password: str = "admin"  # Password for SSH console access
+
 
 # =============================================================================
 # VENDOR CONFIGURATIONS - Single Source of Truth
@@ -446,6 +453,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
         license_required=True,
         tags=["switching", "vxlan", "evpn", "datacenter", "aci"],
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
 
     # =========================================================================
@@ -711,7 +721,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     "c8000v": VendorConfig(
         kind="cisco_c8000v",
         vendor="Cisco",
-        console_shell="/bin/sh",
+        console_shell="/bin/sh",  # Fallback, not used with SSH method
         default_image=None,
         aliases=["cat-sdwan-edge", "sdwan-edge", "cedge", "c8000v"],
         device_type=DeviceType.ROUTER,
@@ -735,6 +745,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=250,
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
     "cat-sdwan-controller": VendorConfig(
         kind="cat-sdwan-controller",
@@ -763,6 +776,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
     "cat-sdwan-manager": VendorConfig(
         kind="cat-sdwan-manager",
@@ -791,6 +807,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=600,  # vManage takes longer to boot
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
     "cat-sdwan-validator": VendorConfig(
         kind="cat-sdwan-validator",
@@ -819,6 +838,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
     "cat-sdwan-vedge": VendorConfig(
         kind="cat-sdwan-vedge",
@@ -847,6 +869,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
 
     # =========================================================================
@@ -879,6 +904,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
     "fmcv": VendorConfig(
         kind="fmcv",
@@ -907,6 +935,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=600,  # FMC takes longer to boot
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
 
     # =========================================================================
@@ -939,6 +970,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=300,
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
     ),
 }
 
@@ -958,6 +992,23 @@ for _key, config in VENDOR_CONFIGS.items():
     for alias in config.aliases:
         _ALIAS_TO_KIND[alias.lower()] = config.kind
 
+# Build kind-to-config lookup table (maps containerlab kind -> VendorConfig)
+_KIND_TO_CONFIG: dict[str, VendorConfig] = {}
+for _key, config in VENDOR_CONFIGS.items():
+    # Map the containerlab kind to this config
+    _KIND_TO_CONFIG[config.kind] = config
+    # Also map the config key itself
+    _KIND_TO_CONFIG[_key] = config
+
+
+def _get_config_by_kind(kind: str) -> VendorConfig | None:
+    """Look up VendorConfig by containerlab node kind.
+
+    This handles the mapping from containerlab kinds (e.g., 'cisco_c8000v')
+    to VendorConfig entries (keyed by 'c8000v').
+    """
+    return _KIND_TO_CONFIG.get(kind)
+
 
 def get_console_shell(kind: str) -> str:
     """Get the console shell command for a containerlab node kind.
@@ -968,15 +1019,45 @@ def get_console_shell(kind: str) -> str:
     Returns:
         Shell command to use for console access
     """
-    config = VENDOR_CONFIGS.get(kind)
+    config = _get_config_by_kind(kind)
     if config:
         return config.console_shell
     return "/bin/sh"  # Safe default
 
 
+def get_console_method(kind: str) -> str:
+    """Get the console access method for a containerlab node kind.
+
+    Args:
+        kind: The containerlab node kind (from clab-node-kind label)
+
+    Returns:
+        Console method: "docker_exec" or "ssh"
+    """
+    config = _get_config_by_kind(kind)
+    if config:
+        return config.console_method
+    return "docker_exec"  # Default
+
+
+def get_console_credentials(kind: str) -> tuple[str, str]:
+    """Get the console credentials for SSH-based console access.
+
+    Args:
+        kind: The containerlab node kind (from clab-node-kind label)
+
+    Returns:
+        Tuple of (username, password)
+    """
+    config = _get_config_by_kind(kind)
+    if config:
+        return (config.console_user, config.console_password)
+    return ("admin", "admin")  # Default
+
+
 def get_default_image(kind: str) -> Optional[str]:
     """Get the default Docker image for a containerlab node kind."""
-    config = VENDOR_CONFIGS.get(kind)
+    config = _get_config_by_kind(kind)
     if config:
         return config.default_image
     return None
