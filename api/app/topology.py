@@ -581,15 +581,15 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
 
         Returns format like 'macvlan:eth0.100' for VLAN or 'bridge:br-prod' for bridge.
         """
-        conn_type = getattr(ext_node, 'connection_type', 'bridge')
+        conn_type = getattr(ext_node, 'connection_type', None) or 'bridge'
         if conn_type == 'vlan':
-            parent = getattr(ext_node, 'parent_interface', 'eth0')
-            vlan_id = getattr(ext_node, 'vlan_id', 100)
+            parent = getattr(ext_node, 'parent_interface', None) or 'eth0'
+            vlan_id = getattr(ext_node, 'vlan_id', None) or 100
             # VLAN sub-interface name (e.g., eth0.100)
             return f"macvlan:{parent}.{vlan_id}"
         else:
             # Bridge connection
-            bridge = getattr(ext_node, 'bridge_name', 'br-ext')
+            bridge = getattr(ext_node, 'bridge_name', None) or 'br-ext'
             return f"bridge:{bridge}"
 
     for link in graph.links:

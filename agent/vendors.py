@@ -709,11 +709,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     # CISCO SD-WAN (VM-based, requires libvirt provider)
     # =========================================================================
     "c8000v": VendorConfig(
-        kind="c8000v",
+        kind="cisco_c8000v",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,
-        aliases=["cat-sdwan-edge", "sdwan-edge", "cedge"],
+        aliases=["cat-sdwan-edge", "sdwan-edge", "cedge", "c8000v"],
         device_type=DeviceType.ROUTER,
         category="Network",
         subcategory="Routers",
@@ -853,7 +853,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     # CISCO SECURITY (VM-based)
     # =========================================================================
     "ftdv": VendorConfig(
-        kind="ftdv",
+        kind="cisco_ftdv",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,
@@ -913,7 +913,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     # CISCO WIRELESS (VM-based)
     # =========================================================================
     "cat9800": VendorConfig(
-        kind="cat9800",
+        kind="cisco_cat9kv",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,
