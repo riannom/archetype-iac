@@ -1,32 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UserProvider, useUser } from "./UserContext";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
-global.fetch = mockFetch;
+(globalThis as any).fetch = mockFetch;
 
 // Test component to access context
 function TestConsumer() {
-  const { user, isLoading, isAuthenticated, login, logout, error } = useUser();
+  const { user, loading, error, refreshUser, clearUser } = useUser();
 
   return (
     <div>
-      <span data-testid="loading">{isLoading ? "loading" : "not-loading"}</span>
+      <span data-testid="loading">{loading ? "loading" : "not-loading"}</span>
       <span data-testid="authenticated">
-        {isAuthenticated ? "authenticated" : "not-authenticated"}
+        {user ? "authenticated" : "not-authenticated"}
       </span>
       <span data-testid="user-email">{user?.email || "no-user"}</span>
       <span data-testid="error">{error || "no-error"}</span>
-      <button
-        data-testid="login-btn"
-        onClick={() => login("test@example.com", "password123")}
-      >
-        Login
+      <button data-testid="refresh-btn" onClick={refreshUser}>
+        Refresh
       </button>
-      <button data-testid="logout-btn" onClick={logout}>
-        Logout
+      <button data-testid="clear-btn" onClick={clearUser}>
+        Clear
       </button>
     </div>
   );
@@ -36,7 +33,6 @@ describe("UserContext", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    // Reset fetch mock
     mockFetch.mockReset();
   });
 
@@ -62,6 +58,7 @@ describe("UserContext", () => {
     });
 
     it("checks for existing session on mount", async () => {
+      localStorage.setItem("token", "test-token");
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () =>
@@ -89,25 +86,11 @@ describe("UserContext", () => {
     });
   });
 
-  describe("login", () => {
-    it("logs in successfully", async () => {
-      // Initial auth check
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-      });
+  describe("refresh user", () => {
+    it("refreshes user data", async () => {
+      localStorage.setItem("token", "test-token");
 
-      // Login request
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            access_token: "jwt-token",
-            token_type: "bearer",
-          }),
-      });
-
-      // Get user info after login
+      // Initial load
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () =>
@@ -126,64 +109,37 @@ describe("UserContext", () => {
         </UserProvider>
       );
 
-      // Wait for initial auth check
-      await waitFor(() => {
-        expect(screen.getByTestId("loading")).toHaveTextContent("not-loading");
-      });
-
-      // Click login
-      await user.click(screen.getByTestId("login-btn"));
-
       await waitFor(() => {
         expect(screen.getByTestId("authenticated")).toHaveTextContent(
           "authenticated"
         );
       });
-    });
 
-    it("handles login failure", async () => {
-      // Initial auth check
+      // Refresh
       mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-      });
-
-      // Failed login
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
+        ok: true,
         json: () =>
           Promise.resolve({
-            detail: "Invalid credentials",
+            id: "user-1",
+            email: "updated@example.com",
+            is_admin: true,
           }),
       });
 
-      const user = userEvent.setup();
-
-      render(
-        <UserProvider>
-          <TestConsumer />
-        </UserProvider>
-      );
+      await user.click(screen.getByTestId("refresh-btn"));
 
       await waitFor(() => {
-        expect(screen.getByTestId("loading")).toHaveTextContent("not-loading");
-      });
-
-      await user.click(screen.getByTestId("login-btn"));
-
-      await waitFor(() => {
-        expect(screen.getByTestId("error")).toHaveTextContent("Invalid credentials");
-        expect(screen.getByTestId("authenticated")).toHaveTextContent(
-          "not-authenticated"
+        expect(screen.getByTestId("user-email")).toHaveTextContent(
+          "updated@example.com"
         );
       });
     });
   });
 
-  describe("logout", () => {
-    it("logs out successfully", async () => {
-      // Initial auth check - already logged in
+  describe("clear user", () => {
+    it("clears user data", async () => {
+      localStorage.setItem("token", "test-token");
+
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () =>
@@ -192,50 +148,6 @@ describe("UserContext", () => {
             email: "test@example.com",
             is_admin: false,
           }),
-      });
-
-      // Logout request
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-      });
-
-      const user = userEvent.setup();
-
-      render(
-        <UserProvider>
-          <TestConsumer />
-        </UserProvider>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByTestId("authenticated")).toHaveTextContent(
-          "authenticated"
-        );
-      });
-
-      await user.click(screen.getByTestId("logout-btn"));
-
-      await waitFor(() => {
-        expect(screen.getByTestId("authenticated")).toHaveTextContent(
-          "not-authenticated"
-        );
-        expect(screen.getByTestId("user-email")).toHaveTextContent("no-user");
-      });
-    });
-
-    it("clears user state on logout", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            id: "user-1",
-            email: "test@example.com",
-            is_admin: true,
-          }),
-      });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
       });
 
       const user = userEvent.setup();
@@ -252,7 +164,7 @@ describe("UserContext", () => {
         );
       });
 
-      await user.click(screen.getByTestId("logout-btn"));
+      await user.click(screen.getByTestId("clear-btn"));
 
       await waitFor(() => {
         expect(screen.getByTestId("user-email")).toHaveTextContent("no-user");
@@ -261,31 +173,13 @@ describe("UserContext", () => {
   });
 
   describe("token management", () => {
-    it("stores token in localStorage after login", async () => {
+    it("clears user when token is invalid", async () => {
+      localStorage.setItem("token", "invalid-token");
+
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 401,
       });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            access_token: "test-jwt-token",
-            token_type: "bearer",
-          }),
-      });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            id: "user-1",
-            email: "test@example.com",
-          }),
-      });
-
-      const user = userEvent.setup();
 
       render(
         <UserProvider>
@@ -294,18 +188,15 @@ describe("UserContext", () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByTestId("loading")).toHaveTextContent("not-loading");
-      });
-
-      await user.click(screen.getByTestId("login-btn"));
-
-      await waitFor(() => {
-        expect(localStorage.getItem("token")).toBe("test-jwt-token");
+        expect(screen.getByTestId("authenticated")).toHaveTextContent(
+          "not-authenticated"
+        );
+        expect(localStorage.getItem("token")).toBeNull();
       });
     });
 
-    it("clears token from localStorage on logout", async () => {
-      localStorage.setItem("token", "existing-token");
+    it("loads user when valid token exists", async () => {
+      localStorage.setItem("token", "valid-token");
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -313,14 +204,9 @@ describe("UserContext", () => {
           Promise.resolve({
             id: "user-1",
             email: "test@example.com",
+            is_admin: false,
           }),
       });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-      });
-
-      const user = userEvent.setup();
 
       render(
         <UserProvider>
@@ -332,12 +218,6 @@ describe("UserContext", () => {
         expect(screen.getByTestId("authenticated")).toHaveTextContent(
           "authenticated"
         );
-      });
-
-      await user.click(screen.getByTestId("logout-btn"));
-
-      await waitFor(() => {
-        expect(localStorage.getItem("token")).toBeNull();
       });
     });
   });

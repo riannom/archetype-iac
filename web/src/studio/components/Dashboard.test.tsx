@@ -4,12 +4,16 @@ import userEvent from "@testing-library/user-event";
 import Dashboard from "./Dashboard";
 import { BrowserRouter } from "react-router-dom";
 import { UserProvider } from "../../contexts/UserContext";
-import { ThemeProvider } from "../../theme";
+import { ThemeProvider } from "../../theme/ThemeProvider";
 
 // Mock FontAwesome
 vi.mock("@fortawesome/react-fontawesome", () => ({
   FontAwesomeIcon: () => null,
 }));
+
+// Mock fetch for UserProvider
+const mockFetch = vi.fn();
+(globalThis as any).fetch = mockFetch;
 
 // Mock useNavigate
 const mockNavigate = vi.fn();
@@ -77,6 +81,11 @@ describe("Dashboard", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Mock initial auth check
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+    });
   });
 
   it("renders the dashboard header", () => {
@@ -141,25 +150,6 @@ describe("Dashboard", () => {
     await user.click(screen.getByRole("button", { name: /create new lab/i }));
 
     expect(mockOnCreate).toHaveBeenCalledTimes(1);
-  });
-
-  it("calls onSelect when a lab card is clicked", async () => {
-    const user = userEvent.setup();
-
-    render(
-      <TestWrapper>
-        <Dashboard {...defaultProps} />
-      </TestWrapper>
-    );
-
-    // Click on the lab card (the card container)
-    const labCard = screen.getByText("Test Lab 1").closest("div");
-    if (labCard) {
-      await user.click(labCard);
-    }
-
-    // onSelect may or may not be called depending on where the click lands
-    // The important thing is the component renders correctly
   });
 
   it("shows Refresh button", () => {
@@ -265,67 +255,7 @@ describe("Dashboard", () => {
     });
   });
 
-  describe("Lab rename functionality", () => {
-    it("allows editing lab name when onRename is provided", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TestWrapper>
-          <Dashboard {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // Find and click the edit button for first lab
-      const editButtons = document.querySelectorAll(".fa-pen-to-square");
-      if (editButtons.length > 0) {
-        const editButton = editButtons[0].closest("button");
-        if (editButton) {
-          await user.click(editButton);
-        }
-      }
-      // The edit mode should be activated if the click was registered
-    });
-  });
-
-  describe("Delete functionality", () => {
-    it("calls onDelete when delete is confirmed", async () => {
-      // Mock window.confirm
-      const confirmMock = vi.spyOn(window, "confirm");
-      confirmMock.mockReturnValue(true);
-
-      const user = userEvent.setup();
-
-      render(
-        <TestWrapper>
-          <Dashboard {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // Find and click delete button
-      const deleteButtons = document.querySelectorAll(".fa-trash");
-      if (deleteButtons.length > 0) {
-        const deleteButton = deleteButtons[0].closest("button");
-        if (deleteButton) {
-          await user.click(deleteButton);
-        }
-      }
-
-      confirmMock.mockRestore();
-    });
-  });
-
   describe("Lab card interactions", () => {
-    it("renders lab creation date", () => {
-      render(
-        <TestWrapper>
-          <Dashboard {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // Should show formatted date somewhere in the cards
-      // The exact format depends on implementation
-    });
-
     it("shows action buttons on lab cards", () => {
       render(
         <TestWrapper>

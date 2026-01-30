@@ -5,6 +5,7 @@ import { RuntimeStatus } from './RuntimeControl';
 import InterfaceSelect from './InterfaceSelect';
 import { PortManager } from '../hooks/usePortManager';
 import ExternalNetworkConfig from './ExternalNetworkConfig';
+import { getAgentColor } from '../../utils/agentColors';
 
 interface NodeStateEntry {
   id: string;
@@ -18,6 +19,8 @@ interface NodeStateEntry {
   boot_started_at?: string | null;
   image_sync_status?: string | null;
   image_sync_message?: string | null;
+  host_id?: string | null;
+  host_name?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -262,6 +265,20 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                     ? 'Stop node to change agent placement'
                     : 'Select which agent runs this node'}
                 </p>
+              </div>
+            )}
+
+            {/* Running On - show when multiple agents and node is running/booting with a host assigned */}
+            {agents.length > 1 && (status === 'running' || status === 'booting') && nodeState?.host_name && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Running On</label>
+                <div className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg">
+                  <div
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: getAgentColor(nodeState.host_id || '') }}
+                  />
+                  <span className="text-sm text-stone-700 dark:text-stone-300">{nodeState.host_name}</span>
+                </div>
               </div>
             )}
 

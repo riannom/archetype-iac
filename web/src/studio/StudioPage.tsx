@@ -320,6 +320,9 @@ const StudioPage: React.FC = () => {
   const [agents, setAgents] = useState<{ id: string; name: string }[]>(() => {
     return [];
   });
+  const [showAgentIndicators, setShowAgentIndicators] = useState<boolean>(() => {
+    return localStorage.getItem('archetype_show_agent_indicators') !== 'false';
+  });
   const [authRequired, setAuthRequired] = useState(false);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -1067,6 +1070,14 @@ const StudioPage: React.FC = () => {
     setConfigViewerOpen(true);
   }, []);
 
+  const handleToggleAgentIndicators = useCallback(() => {
+    setShowAgentIndicators(prev => {
+      const next = !prev;
+      localStorage.setItem('archetype_show_agent_indicators', next ? 'true' : 'false');
+      return next;
+    });
+  }, []);
+
   const handleCloseConfigViewer = useCallback(() => {
     setConfigViewerOpen(false);
     setConfigViewerNode(null);
@@ -1359,7 +1370,11 @@ const StudioPage: React.FC = () => {
               links={links}
               annotations={annotations}
               runtimeStates={runtimeStates}
+              nodeStates={nodeStates}
               deviceModels={deviceModels}
+              agents={agents}
+              showAgentIndicators={showAgentIndicators}
+              onToggleAgentIndicators={handleToggleAgentIndicators}
               onNodeMove={handleNodeMove}
               onAnnotationMove={handleAnnotationMove}
               onConnect={handleConnect}

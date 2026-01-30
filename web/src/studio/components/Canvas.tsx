@@ -3,13 +3,26 @@ import React, { useRef, useState, useEffect, useCallback, useMemo, memo } from '
 import { Node, Link, DeviceType, Annotation, DeviceModel, isExternalNetworkNode, isDeviceNode } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
 import { useTheme } from '../../theme/index';
+import { getAgentColor, getAgentInitials } from '../../utils/agentColors';
+
+interface NodeStateEntry {
+  id: string;
+  node_id: string;
+  node_name: string;
+  host_id?: string | null;
+  host_name?: string | null;
+}
 
 interface CanvasProps {
   nodes: Node[];
   links: Link[];
   annotations: Annotation[];
   runtimeStates: Record<string, RuntimeStatus>;
+  nodeStates?: Record<string, NodeStateEntry>;
   deviceModels: DeviceModel[];
+  agents?: { id: string; name: string }[];
+  showAgentIndicators?: boolean;
+  onToggleAgentIndicators?: () => void;
   onNodeMove: (id: string, x: number, y: number) => void;
   onAnnotationMove: (id: string, x: number, y: number) => void;
   onConnect: (sourceId: string, targetId: string) => void;
@@ -28,7 +41,7 @@ interface ContextMenu {
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, deviceModels, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete
+  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete
 }) => {
   const { effectiveMode } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -403,6 +416,25 @@ const Canvas: React.FC<CanvasProps> = ({
             );
           };
 
+          // Agent indicator: shows which agent the node is running on
+          const getAgentIndicator = () => {
+            // Only show when enabled, multiple agents exist, and node has a host assigned
+            if (!showAgentIndicators || agents.length <= 1) return null;
+            const nodeState = nodeStates[node.id];
+            if (!nodeState?.host_id || !nodeState?.host_name) return null;
+            const color = getAgentColor(nodeState.host_id);
+            const initials = getAgentInitials(nodeState.host_name);
+            return (
+              <div
+                className="absolute -bottom-1 -left-1 w-4 h-4 rounded-full border-2 border-white dark:border-stone-800 shadow-sm flex items-center justify-center text-[7px] font-bold text-white"
+                style={{ backgroundColor: color }}
+                title={`Running on: ${nodeState.host_name}`}
+              >
+                {initials}
+              </div>
+            );
+          };
+
           return (
             <div
               key={node.id}
@@ -418,6 +450,7 @@ const Canvas: React.FC<CanvasProps> = ({
             >
               <i className={`fa-solid ${getNodeIcon(deviceNode.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
               {getStatusDot()}
+              {getAgentIndicator()}
               <div className="absolute top-full mt-1 text-[10px] font-bold text-stone-700 dark:text-stone-300 bg-white/90 dark:bg-stone-900/80 px-1 rounded shadow-sm border border-stone-200 dark:border-stone-700 whitespace-nowrap pointer-events-none">
                 {node.name}
               </div>
@@ -435,6 +468,18 @@ const Canvas: React.FC<CanvasProps> = ({
           <button onClick={centerCanvas} className="p-3 text-stone-500 dark:text-stone-400 hover:text-sage-600 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors border-b border-stone-200 dark:border-stone-700"><i className="fa-solid fa-crosshairs"></i></button>
           <button onClick={fitToScreen} className="p-3 text-stone-500 dark:text-stone-400 hover:text-sage-600 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"><i className="fa-solid fa-maximize"></i></button>
         </div>
+        {/* Agent indicator toggle - only show when multiple agents */}
+        {agents.length > 1 && onToggleAgentIndicators && (
+          <div className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-md border border-stone-200 dark:border-stone-700 rounded-lg flex flex-col overflow-hidden shadow-lg">
+            <button
+              onClick={onToggleAgentIndicators}
+              className={`p-3 transition-colors ${showAgentIndicators ? 'text-sage-600 dark:text-sage-400 bg-sage-500/10' : 'text-stone-500 dark:text-stone-400 hover:text-sage-600 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800'}`}
+              title={showAgentIndicators ? 'Hide agent indicators' : 'Show agent indicators'}
+            >
+              <i className="fa-solid fa-server"></i>
+            </button>
+          </div>
+        )}
       </div>
 
       {contextMenu && (

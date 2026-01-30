@@ -85,7 +85,7 @@ const mockImageCatalog = {
 
 // Wrapper with DragProvider
 const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <DragProvider imageLibrary={mockImageLibrary} onRefresh={() => {}}>
+  <DragProvider onImageAssigned={() => {}}>
     {children}
   </DragProvider>
 );
@@ -163,36 +163,6 @@ describe("DeviceManager", () => {
       // Nokia should be filtered out
       expect(screen.queryByText("Nokia SR Linux")).not.toBeInTheDocument();
     });
-
-    it("filters devices by vendor", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TestWrapper>
-          <DeviceManager {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // Find and click vendor filter
-      const vendorButtons = document.querySelectorAll(
-        '[data-vendor], [role="checkbox"]'
-      );
-      // If vendor filters exist, clicking one should filter
-    });
-
-    it("filters devices by image status", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TestWrapper>
-          <DeviceManager {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // Look for filter that shows devices with/without images
-      const filterButtons = screen.queryAllByRole("button");
-      // There should be buttons for filtering by image status
-    });
   });
 
   describe("Image filtering", () => {
@@ -215,23 +185,6 @@ describe("DeviceManager", () => {
         expect(screen.getByText(/alpine/i)).toBeInTheDocument();
       }
     });
-
-    it("filters images by assignment status", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TestWrapper>
-          <DeviceManager {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // Look for unassigned filter button
-      const unassignedButton = screen.queryByText(/unassigned/i);
-      if (unassignedButton) {
-        await user.click(unassignedButton);
-        // Should show unassigned images only
-      }
-    });
   });
 
   describe("Image upload", () => {
@@ -248,30 +201,6 @@ describe("DeviceManager", () => {
     });
   });
 
-  describe("Device cards", () => {
-    it("shows image count for devices with assigned images", () => {
-      render(
-        <TestWrapper>
-          <DeviceManager {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // cEOS has one assigned image
-      // Look for indicators showing image count
-    });
-
-    it("shows indicator for devices without images", () => {
-      render(
-        <TestWrapper>
-          <DeviceManager {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // Nokia SR Linux has no assigned images
-      // Should show some indicator
-    });
-  });
-
   describe("Image cards", () => {
     it("displays image kind badges", () => {
       render(
@@ -282,16 +211,6 @@ describe("DeviceManager", () => {
 
       // Should show docker and qcow2 badges
       expect(screen.getAllByText(/docker/i).length).toBeGreaterThan(0);
-    });
-
-    it("shows default image indicator", () => {
-      render(
-        <TestWrapper>
-          <DeviceManager {...defaultProps} />
-        </TestWrapper>
-      );
-
-      // Default images should have some indicator
     });
   });
 

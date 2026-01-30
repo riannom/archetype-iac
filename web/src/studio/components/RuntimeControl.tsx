@@ -1,6 +1,7 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
 import { DeviceModel, Node, isDeviceNode, DeviceNode } from '../types';
+import { getAgentColor } from '../../utils/agentColors';
 
 export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'error';
 
@@ -200,28 +201,40 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      {agents.length > 1 ? (
-                        <select
-                          value={node.host || ''}
-                          onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
-                          disabled={status === 'running' || status === 'booting'}
-                          className="bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <option value="">Auto</option>
-                          {agents.map((agent) => (
-                            <option key={agent.id} value={agent.id}>
-                              {agent.name}
-                            </option>
-                          ))}
-                        </select>
-                      ) : hostName ? (
-                        <div className="flex items-center gap-1.5">
-                          <i className="fa-solid fa-server text-stone-400 dark:text-stone-500 text-[10px]"></i>
-                          <span className="text-xs text-stone-600 dark:text-stone-400">{hostName}</span>
-                        </div>
-                      ) : (
-                        <span className="text-stone-400 dark:text-stone-600 text-xs">Auto</span>
-                      )}
+                      <div className="space-y-1.5">
+                        {agents.length > 1 ? (
+                          <select
+                            value={node.host || ''}
+                            onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
+                            disabled={status === 'running' || status === 'booting'}
+                            className="bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <option value="">Auto</option>
+                            {agents.map((agent) => (
+                              <option key={agent.id} value={agent.id}>
+                                {agent.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : hostName ? (
+                          <div className="flex items-center gap-1.5">
+                            <i className="fa-solid fa-server text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                            <span className="text-xs text-stone-600 dark:text-stone-400">{hostName}</span>
+                          </div>
+                        ) : (
+                          <span className="text-stone-400 dark:text-stone-600 text-xs">Auto</span>
+                        )}
+                        {/* Show running host indicator when multi-agent and node is running */}
+                        {agents.length > 1 && (status === 'running' || status === 'booting') && hostName && (
+                          <div className="flex items-center gap-1.5 text-[10px] text-stone-500 dark:text-stone-400">
+                            <div
+                              className="w-2 h-2 rounded-full flex-shrink-0"
+                              style={{ backgroundColor: getAgentColor(nodeState?.host_id || '') }}
+                            />
+                            <span>Running on: {hostName}</span>
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       <span className="text-stone-400 dark:text-stone-700 text-[10px] font-bold italic">

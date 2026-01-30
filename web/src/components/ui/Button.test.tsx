@@ -34,15 +34,14 @@ describe("Button", () => {
   });
 
   describe("variants", () => {
-    it("renders primary variant by default", () => {
-      render(<Button>Primary</Button>);
+    it("renders primary variant", () => {
+      render(<Button variant="primary">Primary</Button>);
       const button = screen.getByRole("button");
-      // Primary has specific styling classes
       expect(button).toBeInTheDocument();
     });
 
-    it("renders secondary variant", () => {
-      render(<Button variant="secondary">Secondary</Button>);
+    it("renders secondary variant by default", () => {
+      render(<Button>Secondary</Button>);
       const button = screen.getByRole("button");
       expect(button).toBeInTheDocument();
     });
@@ -75,6 +74,11 @@ describe("Button", () => {
       render(<Button size="lg">Large</Button>);
       expect(screen.getByRole("button")).toBeInTheDocument();
     });
+
+    it("renders icon size", () => {
+      render(<Button size="icon">I</Button>);
+      expect(screen.getByRole("button")).toBeInTheDocument();
+    });
   });
 
   describe("states", () => {
@@ -82,44 +86,27 @@ describe("Button", () => {
       render(<Button loading>Loading</Button>);
       const button = screen.getByRole("button");
       expect(button).toBeDisabled();
-      // Loading spinner should be visible
-      expect(button.querySelector("svg")).toBeInTheDocument();
+      // Loading spinner should be visible (fa-spinner icon)
+      expect(button.querySelector("i.fa-spinner")).toBeInTheDocument();
     });
 
     it("applies disabled attribute", () => {
       render(<Button disabled>Disabled</Button>);
       expect(screen.getByRole("button")).toBeDisabled();
     });
-
-    it("applies full width class", () => {
-      render(<Button fullWidth>Full Width</Button>);
-      const button = screen.getByRole("button");
-      expect(button).toHaveClass("w-full");
-    });
-  });
-
-  describe("as link", () => {
-    it("renders as anchor when href is provided", () => {
-      render(<Button href="/test">Link</Button>);
-      const link = screen.getByRole("link");
-      expect(link).toHaveAttribute("href", "/test");
-    });
   });
 
   describe("icons", () => {
     it("renders with left icon", () => {
-      render(<Button leftIcon={<span data-testid="icon">🔍</span>}>Search</Button>);
-      expect(screen.getByTestId("icon")).toBeInTheDocument();
+      render(<Button leftIcon="fa-solid fa-search">Search</Button>);
+      const button = screen.getByRole("button");
+      expect(button.querySelector("i.fa-search")).toBeInTheDocument();
     });
 
     it("renders with right icon", () => {
-      render(<Button rightIcon={<span data-testid="icon">→</span>}>Next</Button>);
-      expect(screen.getByTestId("icon")).toBeInTheDocument();
-    });
-
-    it("renders icon-only button", () => {
-      render(<Button iconOnly aria-label="Settings"><span>⚙️</span></Button>);
-      expect(screen.getByRole("button")).toBeInTheDocument();
+      render(<Button rightIcon="fa-solid fa-arrow-right">Next</Button>);
+      const button = screen.getByRole("button");
+      expect(button.querySelector("i.fa-arrow-right")).toBeInTheDocument();
     });
   });
 
