@@ -25,6 +25,21 @@ vi.mock("../../components/icons", () => ({
   ),
 }));
 
+// Mock NotificationCenter to avoid needing NotificationProvider
+vi.mock("../../components/NotificationCenter", () => ({
+  NotificationCenter: () => <div data-testid="notification-center" />,
+}));
+
+// Mock NotificationSettingsPanel
+vi.mock("../../components/NotificationSettingsPanel", () => ({
+  NotificationSettingsPanel: () => null,
+}));
+
+// Mock VersionBadge
+vi.mock("../../components/VersionBadge", () => ({
+  VersionBadge: () => <span data-testid="version-badge" />,
+}));
+
 describe("TopBar", () => {
   const defaultProps = {
     labName: "Test Lab",

@@ -951,8 +951,18 @@ async def rebuild_docker_agent(
             )
 
         # Run docker compose rebuild
+        # Try docker compose (new) first, fall back to docker-compose (legacy)
+        compose_cmd = ["docker", "compose"]
         result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "up", "-d", "--build", "agent"],
+            compose_cmd + ["version"],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            compose_cmd = ["docker-compose"]
+
+        result = subprocess.run(
+            compose_cmd + ["-f", str(compose_file), "up", "-d", "--build", "agent"],
             capture_output=True,
             text=True,
             timeout=300,  # 5 minute timeout for build

@@ -9,6 +9,16 @@ vi.mock("@fortawesome/react-fontawesome", () => ({
   FontAwesomeIcon: () => null,
 }));
 
+// Mock useNotifications to avoid needing NotificationProvider
+vi.mock("../../contexts/NotificationContext", () => ({
+  useNotifications: () => ({
+    notifications: [],
+    addNotification: vi.fn(),
+    dismissNotification: vi.fn(),
+    dismissAllNotifications: vi.fn(),
+  }),
+}));
+
 const mockDeviceModels: DeviceModel[] = [
   {
     id: "ceos",
