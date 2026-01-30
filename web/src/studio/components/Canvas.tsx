@@ -4,6 +4,7 @@ import { Node, Link, DeviceType, Annotation, DeviceModel, isExternalNetworkNode,
 import { RuntimeStatus } from './RuntimeControl';
 import { useTheme } from '../../theme/index';
 import { getAgentColor, getAgentInitials } from '../../utils/agentColors';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 interface NodeStateEntry {
   id: string;
@@ -11,6 +12,8 @@ interface NodeStateEntry {
   node_name: string;
   host_id?: string | null;
   host_name?: string | null;
+  actual_state?: string;
+  error_message?: string | null;
 }
 
 interface CanvasProps {
@@ -44,6 +47,8 @@ const Canvas: React.FC<CanvasProps> = ({
   nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete
 }) => {
   const { effectiveMode } = useTheme();
+  const { preferences } = useNotifications();
+  const errorIndicatorSettings = preferences?.canvas_settings.errorIndicator;
   const containerRef = useRef<HTMLDivElement>(null);
   const [draggingNode, setDraggingNode] = useState<string | null>(null);
   const [draggingAnnotation, setDraggingAnnotation] = useState<string | null>(null);
@@ -435,6 +440,27 @@ const Canvas: React.FC<CanvasProps> = ({
             );
           };
 
+          // Error indicator icon overlay
+          const getErrorIndicator = () => {
+            if (status !== 'error') return null;
+            if (!errorIndicatorSettings?.showIcon) return null;
+            const nodeState = nodeStates[node.id];
+            const errorMessage = nodeState?.error_message || 'Node error';
+            return (
+              <div
+                className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center shadow-md cursor-pointer z-20"
+                title={errorMessage}
+              >
+                <i className="fa-solid fa-exclamation text-white text-[10px]" />
+              </div>
+            );
+          };
+
+          // Error border class
+          const errorBorderClass = status === 'error' && errorIndicatorSettings?.showBorder
+            ? `ring-2 ring-red-500 ${errorIndicatorSettings?.pulseAnimation ? 'node-error-pulse' : ''}`
+            : '';
+
           return (
             <div
               key={node.id}
@@ -446,11 +472,13 @@ const Canvas: React.FC<CanvasProps> = ({
                 ${selectedId === node.id ? 'ring-2 ring-sage-500 bg-sage-500/10 dark:bg-sage-900/40 shadow-lg shadow-sage-500/20' : 'bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600'}
                 ${status === 'running' ? 'border-green-500/50 shadow-md shadow-green-500/10' : ''}
                 ${linkingNode === node.id ? 'ring-2 ring-sage-400 scale-110' : ''}
+                ${errorBorderClass}
                 hover:border-sage-400 z-10 select-none group`}
             >
-              <i className={`fa-solid ${getNodeIcon(deviceNode.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
+              <i className={`fa-solid ${getNodeIcon(deviceNode.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : status === 'error' ? 'text-red-500 dark:text-red-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
               {getStatusDot()}
               {getAgentIndicator()}
+              {getErrorIndicator()}
               <div className="absolute top-full mt-1 text-[10px] font-bold text-stone-700 dark:text-stone-300 bg-white/90 dark:bg-stone-900/80 px-1 rounded shadow-sm border border-stone-200 dark:border-stone-700 whitespace-nowrap pointer-events-none">
                 {node.name}
               </div>

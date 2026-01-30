@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import secrets
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
@@ -92,3 +93,94 @@ async def oidc_callback(request: Request, database: Session = Depends(db.get_db)
     if settings.oidc_app_redirect_url:
         return RedirectResponse(f"{settings.oidc_app_redirect_url}?token={access_token}")
     return schemas.TokenOut(access_token=access_token)
+
+
+@router.get("/preferences", response_model=schemas.UserPreferencesOut)
+def get_preferences(
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.UserPreferencesOut:
+    """Get current user's notification and canvas preferences."""
+    prefs = database.query(models.UserPreferences).filter(
+        models.UserPreferences.user_id == current_user.id
+    ).first()
+
+    if not prefs:
+        # Return defaults
+        return schemas.UserPreferencesOut()
+
+    # Parse JSON fields
+    try:
+        notification_settings = json.loads(prefs.notification_settings) if prefs.notification_settings else {}
+        canvas_settings = json.loads(prefs.canvas_settings) if prefs.canvas_settings else {}
+    except json.JSONDecodeError:
+        notification_settings = {}
+        canvas_settings = {}
+
+    return schemas.UserPreferencesOut(
+        notification_settings=schemas.NotificationSettings(**notification_settings) if notification_settings else schemas.NotificationSettings(),
+        canvas_settings=schemas.CanvasSettings(**canvas_settings) if canvas_settings else schemas.CanvasSettings(),
+    )
+
+
+@router.patch("/preferences", response_model=schemas.UserPreferencesOut)
+def update_preferences(
+    update: schemas.UserPreferencesUpdate,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.UserPreferencesOut:
+    """Update current user's notification and canvas preferences."""
+    prefs = database.query(models.UserPreferences).filter(
+        models.UserPreferences.user_id == current_user.id
+    ).first()
+
+    if not prefs:
+        prefs = models.UserPreferences(user_id=current_user.id)
+        database.add(prefs)
+
+    # Merge existing settings with updates
+    if update.notification_settings:
+        existing = {}
+        try:
+            existing = json.loads(prefs.notification_settings) if prefs.notification_settings else {}
+        except json.JSONDecodeError:
+            pass
+        # Deep merge the settings
+        new_settings = update.notification_settings.model_dump()
+        for key, value in new_settings.items():
+            if isinstance(value, dict) and key in existing and isinstance(existing[key], dict):
+                existing[key].update(value)
+            else:
+                existing[key] = value
+        prefs.notification_settings = json.dumps(existing)
+
+    if update.canvas_settings:
+        existing = {}
+        try:
+            existing = json.loads(prefs.canvas_settings) if prefs.canvas_settings else {}
+        except json.JSONDecodeError:
+            pass
+        # Deep merge the settings
+        new_settings = update.canvas_settings.model_dump()
+        for key, value in new_settings.items():
+            if isinstance(value, dict) and key in existing and isinstance(existing[key], dict):
+                existing[key].update(value)
+            else:
+                existing[key] = value
+        prefs.canvas_settings = json.dumps(existing)
+
+    database.commit()
+    database.refresh(prefs)
+
+    # Parse and return
+    try:
+        notification_settings = json.loads(prefs.notification_settings) if prefs.notification_settings else {}
+        canvas_settings = json.loads(prefs.canvas_settings) if prefs.canvas_settings else {}
+    except json.JSONDecodeError:
+        notification_settings = {}
+        canvas_settings = {}
+
+    return schemas.UserPreferencesOut(
+        notification_settings=schemas.NotificationSettings(**notification_settings) if notification_settings else schemas.NotificationSettings(),
+        canvas_settings=schemas.CanvasSettings(**canvas_settings) if canvas_settings else schemas.CanvasSettings(),
+    )

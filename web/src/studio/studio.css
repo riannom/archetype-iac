@@ -305,3 +305,17 @@
     border-width: 3px;
   }
 }
+
+/* Node error pulse animation */
+@keyframes errorPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+}
+
+.node-error-pulse {
+  animation: errorPulse 2s ease-in-out infinite;
+}
