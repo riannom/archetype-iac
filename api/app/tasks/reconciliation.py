@@ -350,12 +350,12 @@ async def _reconcile_single_lab(session, lab_id: str):
                     ns.error_message = None
                     running_count += 1
 
+                    # Set boot_started_at if not already set (backfill for existing nodes)
+                    if not ns.boot_started_at:
+                        ns.boot_started_at = datetime.now(timezone.utc)
+
                     # Check boot readiness for nodes that are running but not yet ready
                     if not ns.is_ready:
-                        # Set boot_started_at if not already set
-                        if not ns.boot_started_at:
-                            ns.boot_started_at = datetime.now(timezone.utc)
-
                         # Poll agent for readiness status
                         try:
                             readiness = await agent_client.check_node_readiness(
