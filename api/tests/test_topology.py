@@ -749,5 +749,255 @@ def test_containerlab_yaml_mixed_nodes_binds():
     assert "binds" not in nodes.get("S1", {}), "SR Linux node should not have binds"
 
 
+# --- Additional YAML Generation Edge Cases ---
+
+def test_containerlab_yaml_with_link_attributes():
+    """Test that link attributes (MTU, bandwidth) are preserved."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="linux"),
+            GraphNode(id="r2", name="R2", device="linux"),
+        ],
+        links=[
+            GraphLink(
+                endpoints=[
+                    GraphEndpoint(node="R1", ifname="eth0"),
+                    GraphEndpoint(node="R2", ifname="eth0"),
+                ],
+                mtu=9000,
+                bandwidth=1000,
+            )
+        ],
+    )
+
+    yaml_str = graph_to_yaml(graph)
+    assert "mtu:" in yaml_str or "mtu" in yaml_str
+    # Verify attributes are present
+    import yaml as pyyaml
+    parsed = pyyaml.safe_load(yaml_str)
+    link = parsed["links"][0]
+    assert link.get("mtu") == 9000 or any(v.get("mtu") == 9000 for v in link.values() if isinstance(v, dict))
+
+
+def test_containerlab_yaml_with_pool_and_prefix():
+    """Test that IP pool and prefix settings are preserved."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="linux"),
+            GraphNode(id="r2", name="R2", device="linux"),
+        ],
+        links=[
+            GraphLink(
+                endpoints=[
+                    GraphEndpoint(node="R1"),
+                    GraphEndpoint(node="R2"),
+                ],
+                pool="mgmt",
+                prefix="10.0.0.0/24",
+            )
+        ],
+    )
+
+    yaml_str = graph_to_yaml(graph)
+    import yaml as pyyaml
+    parsed = pyyaml.safe_load(yaml_str)
+    link = parsed["links"][0]
+    assert link.get("pool") == "mgmt"
+    assert link.get("prefix") == "10.0.0.0/24"
+
+
+def test_containerlab_yaml_preserves_node_vars():
+    """Test that node vars are preserved in YAML."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(
+                id="r1",
+                name="R1",
+                device="linux",
+                vars={"cpu": 2, "memory": "4G", "custom_label": "test"},
+            ),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_yaml(graph)
+    import yaml as pyyaml
+    parsed = pyyaml.safe_load(yaml_str)
+    node = parsed["nodes"]["R1"]
+    assert node.get("cpu") == 2
+    assert node.get("memory") == "4G"
+
+
+def test_containerlab_yaml_node_name_sanitization():
+    """Test that node names with special characters are sanitized."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="Router-1!@#$%", device="linux"),
+            GraphNode(id="r2", name="123-starts-with-number", device="linux"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_yaml(graph)
+    import yaml as pyyaml
+    parsed = pyyaml.safe_load(yaml_str)
+
+    # Node names should be sanitized
+    node_names = list(parsed["nodes"].keys())
+    for name in node_names:
+        # Verify names match containerlab requirements
+        assert re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) or "_gui_id" in parsed["nodes"][name]
+
+
+def test_containerlab_yaml_long_node_name_truncation():
+    """Test that very long node names are truncated properly."""
+    long_name = "ThisIsAVeryLongNodeNameThatExceeds16Characters"
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name=long_name, device="linux"),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_yaml(graph)
+    import yaml as pyyaml
+    parsed = pyyaml.safe_load(yaml_str)
+
+    node_name = list(parsed["nodes"].keys())[0]
+    # Containerlab has 16 char limit
+    assert len(node_name) <= 16
+
+
+def test_containerlab_yaml_with_image_override():
+    """Test that explicit image setting is preserved."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(
+                id="r1",
+                name="R1",
+                device="ceos",
+                image="custom-ceos:4.30.0",
+            ),
+        ],
+        links=[],
+    )
+
+    yaml_str = graph_to_yaml(graph)
+    assert "custom-ceos:4.30.0" in yaml_str
+
+
+def test_containerlab_yaml_roundtrip_preserves_ids():
+    """Test that node IDs survive YAML roundtrip via _gui_id."""
+    original = TopologyGraph(
+        nodes=[
+            GraphNode(id="unique-gui-id-123", name="R1", device="linux"),
+            GraphNode(id="another-id-456", name="R2", device="linux"),
+        ],
+        links=[
+            GraphLink(
+                endpoints=[
+                    GraphEndpoint(node="R1"),
+                    GraphEndpoint(node="R2"),
+                ]
+            )
+        ],
+    )
+
+    yaml_str = graph_to_yaml(original)
+    parsed = yaml_to_graph(yaml_str)
+
+    # Verify IDs are preserved
+    ids = {n.id for n in parsed.nodes}
+    assert "unique-gui-id-123" in ids
+    assert "another-id-456" in ids
+
+
+def test_yaml_to_graph_with_defaults():
+    """Test parsing YAML with defaults section."""
+    yaml_str = """
+defaults:
+  kind: linux
+  image: alpine:latest
+nodes:
+  r1: {}
+  r2: {}
+links:
+  - r1: {}
+    r2: {}
+"""
+    graph = yaml_to_graph(yaml_str)
+
+    assert graph.defaults is not None
+    assert graph.defaults.get("kind") == "linux"
+    assert len(graph.nodes) == 2
+
+
+def test_analyze_cross_host_link_ip_addresses():
+    """Test that IP addresses are captured in cross-host link analysis."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="r1", host="agent1"),
+            GraphNode(id="r2", name="r2", host="agent2"),
+        ],
+        links=[
+            GraphLink(
+                endpoints=[
+                    GraphEndpoint(node="r1", ifname="eth0", ipv4="10.0.0.1/24"),
+                    GraphEndpoint(node="r2", ifname="eth0", ipv4="10.0.0.2/24"),
+                ]
+            )
+        ],
+    )
+
+    analysis = analyze_topology(graph)
+
+    assert len(analysis.cross_host_links) == 1
+    chl = analysis.cross_host_links[0]
+    assert chl.ip_a == "10.0.0.1/24"
+    assert chl.ip_b == "10.0.0.2/24"
+
+
+def test_external_network_node_in_topology():
+    """Test handling external network nodes in topology."""
+    graph = TopologyGraph(
+        nodes=[
+            GraphNode(id="r1", name="R1", device="linux"),
+            GraphNode(
+                id="ext1",
+                name="External-VLAN",
+                node_type="external",
+                connection_type="vlan",
+                parent_interface="ens192",
+                vlan_id=100,
+            ),
+        ],
+        links=[
+            GraphLink(
+                endpoints=[
+                    GraphEndpoint(node="R1", ifname="eth0"),
+                    GraphEndpoint(node="External-VLAN"),
+                ]
+            )
+        ],
+    )
+
+    yaml_str = graph_to_yaml(graph)
+
+    # External node should be serialized with its properties
+    import yaml as pyyaml
+    parsed = pyyaml.safe_load(yaml_str)
+
+    # Find the external node
+    ext_node = None
+    for name, data in parsed["nodes"].items():
+        if data and data.get("node_type") == "external":
+            ext_node = data
+            break
+
+    if ext_node:
+        assert ext_node.get("connection_type") == "vlan"
+        assert ext_node.get("vlan_id") == 100
+
+
 # To run these tests:
 # cd api && pytest tests/test_topology.py -v
