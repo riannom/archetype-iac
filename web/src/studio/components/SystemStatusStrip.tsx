@@ -240,16 +240,6 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                   </span>
                 </div>
 
-                {/* Uptime */}
-                {host.started_at && (
-                  <div className="flex items-center gap-1.5 min-w-[80px]">
-                    <i className="fa-solid fa-clock text-stone-400 dark:text-stone-500 text-[10px]"></i>
-                    <span className="text-[10px] text-stone-500 dark:text-stone-500 font-mono">
-                      {formatUptimeFromBoot(host.started_at)}
-                    </span>
-                  </div>
-                )}
-
                 {/* Containers for this host */}
                 <button
                   onClick={() => handleOpenHostContainers(host.name)}
@@ -319,6 +309,19 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                     </span>
                   )}
                 </div>
+
+                {/* Spacer to push uptime to far right */}
+                <div className="flex-1"></div>
+
+                {/* Uptime */}
+                {host.started_at && (
+                  <div className="flex items-center gap-1.5">
+                    <i className="fa-solid fa-clock text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                    <span className="text-[10px] text-stone-500 dark:text-stone-500 font-mono">
+                      {formatUptimeFromBoot(host.started_at)}
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
