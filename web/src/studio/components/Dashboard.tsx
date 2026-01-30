@@ -6,6 +6,7 @@ import { useUser } from '../../contexts/UserContext';
 import SystemStatusStrip from './SystemStatusStrip';
 import SystemLogsModal from './SystemLogsModal';
 import { ArchetypeIcon } from '../../components/icons';
+import { VersionBadge } from '../../components/VersionBadge';
 
 interface LabSummary {
   id: string;
@@ -117,6 +118,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
             <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Network Studio</p>
           </div>
+          <VersionBadge />
         </div>
 
         <div className="flex items-center gap-3">
