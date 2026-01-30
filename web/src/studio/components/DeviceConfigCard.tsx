@@ -6,6 +6,7 @@ interface DeviceConfigCardProps {
   isSelected: boolean;
   onSelect: () => void;
   isCustom?: boolean;
+  isRecentlyAdded?: boolean;
 }
 
 const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
@@ -13,6 +14,7 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
   isSelected,
   onSelect,
   isCustom = false,
+  isRecentlyAdded = false,
 }) => {
   // Format memory display
   const formatMemory = (mb?: number): string => {
@@ -21,18 +23,46 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
     return `${mb}MB`;
   };
 
-  // Determine styling based on custom and selected state
+  // Determine styling based on custom, selected, and recently added state
   const getCardClasses = () => {
+    // Recently added - temporary rose highlight with animation
+    if (isRecentlyAdded) {
+      return 'bg-rose-50 dark:bg-rose-900/30 border-rose-400 dark:border-rose-600 shadow-md animate-pulse';
+    }
     if (isSelected) {
-      if (isCustom) {
-        return 'bg-rose-50 dark:bg-rose-900/30 border-rose-500 dark:border-rose-600 shadow-sm';
-      }
+      // Selected devices (both custom and vendor) use sage
       return 'bg-sage-50 dark:bg-sage-800 border-sage-500 dark:border-sage-600 shadow-sm';
     }
     if (isCustom) {
-      return 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/50 hover:border-rose-300 dark:hover:border-rose-700';
+      // Subtle differentiation for persistent custom devices
+      return 'bg-stone-50 dark:bg-stone-900 border-stone-300 dark:border-stone-700 hover:border-stone-400 dark:hover:border-stone-600';
     }
     return 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700';
+  };
+
+  // Determine icon background styling
+  const getIconClasses = () => {
+    if (isRecentlyAdded) {
+      return 'bg-rose-600 text-white';
+    }
+    if (isSelected) {
+      return 'bg-sage-600 text-white';
+    }
+    if (isCustom) {
+      return 'bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-300';
+    }
+    return 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400';
+  };
+
+  // Determine title color
+  const getTitleClasses = () => {
+    if (isRecentlyAdded) {
+      return 'text-rose-700 dark:text-rose-400';
+    }
+    if (isSelected) {
+      return 'text-sage-700 dark:text-sage-400';
+    }
+    return 'text-stone-900 dark:text-white';
   };
 
   return (
@@ -43,15 +73,7 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
       <div className="flex items-start gap-3">
         {/* Device icon */}
         <div
-          className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
-            isSelected
-              ? isCustom
-                ? 'bg-rose-600 text-white'
-                : 'bg-sage-600 text-white'
-              : isCustom
-                ? 'bg-rose-100 dark:bg-rose-900/50 text-rose-600 dark:text-rose-400'
-                : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
-          }`}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${getIconClasses()}`}
         >
           <i className={`fa-solid ${device.icon || 'fa-microchip'} text-sm`}></i>
         </div>
@@ -59,19 +81,11 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
         {/* Device info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className={`text-sm font-bold truncate ${
-              isSelected
-                ? isCustom
-                  ? 'text-rose-700 dark:text-rose-400'
-                  : 'text-sage-700 dark:text-sage-400'
-                : isCustom
-                  ? 'text-rose-800 dark:text-rose-300'
-                  : 'text-stone-900 dark:text-white'
-            }`}>
+            <h3 className={`text-sm font-bold truncate ${getTitleClasses()}`}>
               {device.name}
             </h3>
             {(device.isCustom || isCustom) && (
-              <span className="px-1.5 py-0.5 text-[8px] font-bold uppercase bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 rounded">
+              <span className="px-1.5 py-0.5 text-[8px] font-bold uppercase bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-400 rounded">
                 Custom
               </span>
             )}

@@ -36,6 +36,9 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
   const [customDeviceId, setCustomDeviceId] = useState('');
   const [customDeviceLabel, setCustomDeviceLabel] = useState('');
 
+  // Track recently added devices for highlight animation
+  const [recentlyAddedIds, setRecentlyAddedIds] = useState<Set<string>>(new Set());
+
   // Delete confirmation dialog
   const [deleteConfirmDevice, setDeleteConfirmDevice] = useState<CustomDevice | null>(null);
 
@@ -98,12 +101,23 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
   // Handle adding a custom device
   const handleAddCustomDevice = () => {
     if (!customDeviceId.trim()) return;
+    const newId = customDeviceId.trim();
     onAddCustomDevice({
-      id: customDeviceId.trim(),
-      label: customDeviceLabel.trim() || customDeviceId.trim(),
+      id: newId,
+      label: customDeviceLabel.trim() || newId,
     });
     setCustomDeviceId('');
     setCustomDeviceLabel('');
+
+    // Add temporary highlight for newly added device
+    setRecentlyAddedIds(prev => new Set(prev).add(newId));
+    setTimeout(() => {
+      setRecentlyAddedIds(prev => {
+        const next = new Set(prev);
+        next.delete(newId);
+        return next;
+      });
+    }, 3000);
   };
 
   // Handle confirming delete
@@ -156,22 +170,22 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
           </div>
 
           {/* Custom device form */}
-          <div className="mt-4 p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 rounded-lg">
-            <div className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-widest mb-2">
+          <div className="mt-4 p-3 bg-stone-100 dark:bg-stone-900/50 border border-stone-300 dark:border-stone-700 rounded-lg">
+            <div className="text-[10px] font-bold text-stone-600 dark:text-stone-400 uppercase tracking-widest mb-2">
               <i className="fa-solid fa-plus-circle mr-1"></i>
               Add Custom Device
             </div>
             <div className="flex gap-2">
               <input
-                className="flex-1 bg-white dark:bg-stone-900 border border-rose-200 dark:border-rose-800 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
-                placeholder="device-id (e.g., my-router)"
+                className="flex-1 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                placeholder="Device ID (e.g., my-router)"
                 value={customDeviceId}
                 onChange={(e) => setCustomDeviceId(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleAddCustomDevice()}
               />
               <input
-                className="flex-1 bg-white dark:bg-stone-900 border border-rose-200 dark:border-rose-800 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
-                placeholder="Display Label (optional)"
+                className="flex-1 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                placeholder="Display Name (optional)"
                 value={customDeviceLabel}
                 onChange={(e) => setCustomDeviceLabel(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleAddCustomDevice()}
@@ -179,13 +193,13 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
               <button
                 onClick={handleAddCustomDevice}
                 disabled={!customDeviceId.trim()}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:bg-stone-300 dark:disabled:bg-stone-700 text-white text-xs font-bold rounded transition-all disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-sage-600 hover:bg-sage-500 disabled:bg-stone-300 dark:disabled:bg-stone-700 text-white text-xs font-bold rounded transition-all disabled:cursor-not-allowed"
               >
                 <i className="fa-solid fa-plus mr-1"></i>
                 Add
               </button>
             </div>
-            <p className="text-[10px] text-rose-500 dark:text-rose-400/70 mt-2">
+            <p className="text-[10px] text-stone-500 dark:text-stone-400 mt-2">
               Custom devices appear at the top of the list and can be used to assign images in Image Management.
             </p>
           </div>
@@ -270,11 +284,11 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
               {filteredCustomDevices.length > 0 && (
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2 px-1">
-                    <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                    <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-widest">
+                    <span className="w-2 h-2 rounded-full bg-stone-500"></span>
+                    <span className="text-[10px] font-bold text-stone-600 dark:text-stone-400 uppercase tracking-widest">
                       Custom Devices
                     </span>
-                    <span className="text-[10px] text-rose-400 dark:text-rose-500">
+                    <span className="text-[10px] text-stone-400 dark:text-stone-500">
                       ({filteredCustomDevices.length})
                     </span>
                   </div>
@@ -283,12 +297,13 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
                       const customDevice = customDevices.find(c => c.id === device.id);
                       return (
                         <div key={device.id} className="relative group">
-                          <div className="absolute -left-1 top-0 bottom-0 w-1 bg-rose-500 rounded-full"></div>
+                          <div className="absolute -left-1 top-0 bottom-0 w-1 bg-stone-400 rounded-full"></div>
                           <DeviceConfigCard
                             device={device}
                             isSelected={selectedDeviceId === device.id}
                             onSelect={() => setSelectedDeviceId(device.id)}
                             isCustom={true}
+                            isRecentlyAdded={recentlyAddedIds.has(device.id)}
                           />
                           {/* Delete button */}
                           <button
@@ -298,7 +313,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
                                 setDeleteConfirmDevice(customDevice);
                               }
                             }}
-                            className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center bg-rose-100 dark:bg-rose-900/50 hover:bg-rose-200 dark:hover:bg-rose-800 text-rose-600 dark:text-rose-400 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                            className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                             title="Delete custom device"
                           >
                             <i className="fa-solid fa-trash text-xs"></i>
