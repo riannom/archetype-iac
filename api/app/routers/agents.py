@@ -965,7 +965,7 @@ async def rebuild_docker_agent(
             compose_cmd = ["docker-compose"]
 
         result = subprocess.run(
-            compose_cmd + ["-f", str(compose_file), "up", "-d", "--build", "agent"],
+            compose_cmd + ["-p", "archetype-iac", "-f", str(compose_file), "up", "-d", "--build", "--no-deps", "agent"],
             capture_output=True,
             text=True,
             timeout=300,  # 5 minute timeout for build
