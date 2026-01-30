@@ -31,7 +31,7 @@ _NODE_ACTIONS: dict[str, Callable[[str, str, str], list[str]]] = {
 
 # To add a provider:
 # - Implement a <provider>_node_command(lab_id, action, node) builder.
-# - Register it in _NODE_ACTIONS with the provider key (matching NETLAB_PROVIDER).
+# - Register it in _NODE_ACTIONS with the provider key (matching PROVIDER setting).
 # - Update supports_node_actions if the provider supports per-node actions.
 
 

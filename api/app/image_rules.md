@@ -1,6 +1,6 @@
 # Image Rules
 
-Place a JSON file at `NETLAB_WORKSPACE/images/rules.json` to add regex-based device detection.
+Place a JSON file at `WORKSPACE/images/rules.json` to add regex-based device detection.
 
 Example:
 

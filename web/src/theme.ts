@@ -1,6 +1,6 @@
 export type ThemeMode = "light" | "dark";
 
-const STORAGE_KEY = "netlab-theme";
+const STORAGE_KEY = "archetype-theme";
 
 export function getStoredTheme(): ThemeMode | null {
   const value = localStorage.getItem(STORAGE_KEY);

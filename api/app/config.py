@@ -7,15 +7,14 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./archetype.db"
     redis_url: str = "redis://redis:6379/0"
     # Workspace directory for lab files and images
-    # Legacy name kept for backwards compatibility with existing deployments
-    netlab_workspace: str = "/var/lib/archetype-gui"
+    workspace: str = "/var/lib/archetype"
     qcow2_store: str | None = None
     # Directory for ISO uploads (files placed here appear in ISO import browser)
-    iso_upload_dir: str = "/var/lib/archetype-gui/uploads"
+    iso_upload_dir: str = "/var/lib/archetype/uploads"
     # vrnetlab repository path for building VM images
     vrnetlab_path: str = "/opt/vrnetlab"
     log_forward_url: str | None = None
-    netlab_provider: str = "clab"
+    provider: str = "clab"
 
     local_auth_enabled: bool = True
     oidc_issuer_url: str | None = None

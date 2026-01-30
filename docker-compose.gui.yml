@@ -23,12 +23,12 @@ services:
       - "local-agent:host-gateway"
     environment:
       # Database
-      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://netlab:netlab@postgres:5432/netlab_gui}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://archetype:archetype@postgres:5432/archetype}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       # Workspace
-      - NETLAB_WORKSPACE=${NETLAB_WORKSPACE:-/var/lib/netlab-gui}
-      - NETLAB_PROVIDER=${NETLAB_PROVIDER:-clab}
-      - QCOW2_STORE=${QCOW2_STORE:-/var/lib/netlab-gui/images}
+      - WORKSPACE=${WORKSPACE:-/var/lib/archetype}
+      - PROVIDER=${PROVIDER:-clab}
+      - QCOW2_STORE=${QCOW2_STORE:-/var/lib/archetype/images}
       # Auth
       - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
       - JWT_SECRET=${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION}
@@ -49,7 +49,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOKI_URL=${LOKI_URL:-http://loki:3100}
     volumes:
-      - netlab_workspaces:/var/lib/netlab-gui
+      - archetype_workspaces:/var/lib/archetype
       - /var/run/docker.sock:/var/run/docker.sock
     logging:
       driver: "json-file"
@@ -71,24 +71,24 @@ services:
       dockerfile: Dockerfile.api
       args:
         NETLAB_REF: ${NETLAB_REF:-release_26.01.01}
-    command: ["rq", "worker", "netlab"]
+    command: ["rq", "worker", "archetype"]
     network_mode: host
     privileged: true
     depends_on:
       - redis
       - postgres
     environment:
-      - DATABASE_URL=postgresql+psycopg://netlab:netlab@localhost:15432/netlab_gui
+      - DATABASE_URL=postgresql+psycopg://archetype:archetype@localhost:15432/archetype
       - REDIS_URL=redis://localhost:16379/0
-      - NETLAB_WORKSPACE=${NETLAB_WORKSPACE:-/var/lib/netlab-gui}
-      - NETLAB_PROVIDER=${NETLAB_PROVIDER:-clab}
+      - WORKSPACE=${WORKSPACE:-/var/lib/archetype}
+      - PROVIDER=${PROVIDER:-clab}
       - JWT_SECRET=${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - VRNETLAB_PATH=${VRNETLAB_PATH:-/opt/vrnetlab}
-      - QCOW2_STORE=${QCOW2_STORE:-/var/lib/netlab-gui/images}
+      - QCOW2_STORE=${QCOW2_STORE:-/var/lib/archetype/images}
     volumes:
-      - netlab_workspaces:/var/lib/netlab-gui
+      - archetype_workspaces:/var/lib/archetype
       - /var/run/docker.sock:/var/run/docker.sock
       - ${VRNETLAB_PATH:-/opt/vrnetlab}:/opt/vrnetlab
     logging:
@@ -103,15 +103,15 @@ services:
   postgres:
     image: postgres:16
     environment:
-      - POSTGRES_USER=netlab
-      - POSTGRES_PASSWORD=netlab
-      - POSTGRES_DB=netlab_gui
+      - POSTGRES_USER=archetype
+      - POSTGRES_PASSWORD=archetype
+      - POSTGRES_DB=archetype
     ports:
       - "15432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U netlab"]
+      test: ["CMD-SHELL", "pg_isready -U archetype"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -201,7 +201,7 @@ services:
       - loki
 
 volumes:
-  netlab_workspaces:
+  archetype_workspaces:
   agent_workspaces:
   pg_data:
   loki_data:

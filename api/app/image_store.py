@@ -109,7 +109,7 @@ DEVICE_VENDOR_MAP = {
 def image_store_root() -> Path:
     if settings.qcow2_store:
         return Path(settings.qcow2_store)
-    return Path(settings.netlab_workspace) / "images"
+    return Path(settings.workspace) / "images"
 
 
 def ensure_image_store() -> Path:

@@ -1,8 +1,8 @@
-# Netlab GUI Plan (CML-like + IaC)
+# Archetype Plan (CML-like + IaC)
 
 ## Scope
-- CML-like GUI for netlab: drag/drop devices, link creation, labels, console access, external network connectivity, container images, multi-lab workspaces.
-- IaC enhancement: generate netlab YAML from GUI and import YAML into GUI.
+- CML-like GUI for containerlab: drag/drop devices, link creation, labels, console access, external network connectivity, container images, multi-lab workspaces.
+- IaC enhancement: generate containerlab YAML from GUI and import YAML into GUI.
 - Deployment: containerized GUI on same host as netlab + containerlab, multi-user.
 
 ## Recommended Stack
