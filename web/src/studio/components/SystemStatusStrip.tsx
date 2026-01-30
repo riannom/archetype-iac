@@ -5,6 +5,7 @@ import ContainersPopup from './ContainersPopup';
 import ResourcesPopup from './ResourcesPopup';
 import StoragePopup from './StoragePopup';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
+import { formatUptimeFromBoot } from '../../utils/format';
 
 interface PerHostMetrics {
   id: string;
@@ -17,6 +18,7 @@ interface PerHostMetrics {
   storage_used_gb: number;
   storage_total_gb: number;
   containers_running: number;
+  started_at: string | null;
 }
 
 interface SystemMetrics {
@@ -237,6 +239,16 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                     {host.name}
                   </span>
                 </div>
+
+                {/* Uptime */}
+                {host.started_at && (
+                  <div className="flex items-center gap-1.5 min-w-[80px]">
+                    <i className="fa-solid fa-clock text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                    <span className="text-[10px] text-stone-500 dark:text-stone-500 font-mono">
+                      {formatUptimeFromBoot(host.started_at)}
+                    </span>
+                  </div>
+                )}
 
                 {/* Containers for this host */}
                 <button

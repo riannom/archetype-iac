@@ -4,7 +4,7 @@ import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { apiRequest } from '../api';
 import { ArchetypeIcon } from '../components/icons';
-import { formatStorageSize, formatTimestamp } from '../utils/format';
+import { formatStorageSize, formatTimestamp, formatUptimeFromBoot } from '../utils/format';
 import {
   getCpuColor,
   getMemoryColor,
@@ -50,6 +50,7 @@ interface HostDetailed {
   };
   labs: LabInfo[];
   lab_count: number;
+  started_at: string | null;
   last_heartbeat: string | null;
 }
 
@@ -446,6 +447,12 @@ const HostsPage: React.FC = () => {
                             <i className="fa-solid fa-arrow-up ml-1 text-[10px]" title={`Update available: v${latestVersion}`}></i>
                           )}
                         </span>
+                        {host.started_at && (
+                          <span className="text-stone-400 font-mono" title="System uptime">
+                            <i className="fa-solid fa-clock mr-1"></i>
+                            {formatUptimeFromBoot(host.started_at)}
+                          </span>
+                        )}
                         <span className="text-stone-400">
                           <i className="fa-regular fa-clock mr-1"></i>
                           {formatTimestamp(host.last_heartbeat)}

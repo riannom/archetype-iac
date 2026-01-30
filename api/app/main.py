@@ -740,6 +740,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
                 "storage_used_gb": host_disk_used,
                 "storage_total_gb": host_disk_total,
                 "containers_running": host_containers,
+                "started_at": host.started_at.isoformat() if host.started_at else None,
             })
 
             # Track which labs have running containers

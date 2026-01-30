@@ -47,6 +47,7 @@ interface SystemMetrics {
     storage_used_gb: number;
     storage_total_gb: number;
     containers_running: number;
+    started_at: string | null;
   }[];
   is_multi_host?: boolean;
 }

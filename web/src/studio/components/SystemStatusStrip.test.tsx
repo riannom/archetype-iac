@@ -117,6 +117,7 @@ const multiHostMetrics = {
       storage_used_gb: 50,
       storage_total_gb: 200,
       containers_running: 5,
+      started_at: "2026-01-30T10:00:00Z",
     },
     {
       id: "host-2",
@@ -129,6 +130,7 @@ const multiHostMetrics = {
       storage_used_gb: 150,
       storage_total_gb: 300,
       containers_running: 5,
+      started_at: "2026-01-30T08:00:00Z",
     },
   ],
 };
