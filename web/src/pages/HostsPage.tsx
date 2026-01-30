@@ -211,6 +211,47 @@ const HostsPage: React.FC = () => {
     }
   };
 
+  const triggerRebuild = async (hostId: string) => {
+    if (!confirm('Rebuild the agent container? This will restart the agent with the latest code.')) {
+      return;
+    }
+
+    try {
+      setUpdatingAgents(prev => new Set(prev).add(hostId));
+      const response = await apiRequest<{ success: boolean; message: string; output?: string }>(
+        `/agents/${hostId}/rebuild`,
+        { method: 'POST' }
+      );
+
+      if (response.success) {
+        // Clear updating state after a delay to allow agent to restart
+        setTimeout(() => {
+          setUpdatingAgents(prev => {
+            const next = new Set(prev);
+            next.delete(hostId);
+            return next;
+          });
+          loadHosts();
+        }, 5000);
+      } else {
+        alert(response.message || 'Rebuild failed');
+        setUpdatingAgents(prev => {
+          const next = new Set(prev);
+          next.delete(hostId);
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to trigger rebuild:', err);
+      alert(err instanceof Error ? err.message : 'Failed to trigger rebuild');
+      setUpdatingAgents(prev => {
+        const next = new Set(prev);
+        next.delete(hostId);
+        return next;
+      });
+    }
+  };
+
   const triggerBulkUpdate = async () => {
     const outdatedAgents = hosts.filter(
       h => h.status === 'online' && h.version && h.version !== latestVersion
@@ -417,31 +458,46 @@ const HostsPage: React.FC = () => {
                           <div className="flex items-center justify-between text-xs mb-1">
                             <span className="text-blue-700 dark:text-blue-300 font-medium">
                               <i className="fa-solid fa-spinner fa-spin mr-1.5"></i>
-                              {updateStatuses.get(host.id)?.status === 'downloading' && 'Downloading...'}
-                              {updateStatuses.get(host.id)?.status === 'installing' && 'Installing...'}
-                              {updateStatuses.get(host.id)?.status === 'restarting' && 'Restarting...'}
-                              {!updateStatuses.get(host.id) && 'Starting update...'}
+                              {host.deployment_mode === 'docker' ? 'Rebuilding...' :
+                                updateStatuses.get(host.id)?.status === 'downloading' ? 'Downloading...' :
+                                updateStatuses.get(host.id)?.status === 'installing' ? 'Installing...' :
+                                updateStatuses.get(host.id)?.status === 'restarting' ? 'Restarting...' :
+                                'Starting update...'}
                             </span>
-                            <span className="text-blue-600 dark:text-blue-400">
-                              {updateStatuses.get(host.id)?.progress_percent || 0}%
-                            </span>
+                            {host.deployment_mode !== 'docker' && (
+                              <span className="text-blue-600 dark:text-blue-400">
+                                {updateStatuses.get(host.id)?.progress_percent || 0}%
+                              </span>
+                            )}
                           </div>
-                          <div className="h-1.5 bg-blue-200 dark:bg-blue-800 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-blue-500 transition-all"
-                              style={{ width: `${updateStatuses.get(host.id)?.progress_percent || 0}%` }}
-                            ></div>
-                          </div>
+                          {host.deployment_mode !== 'docker' && (
+                            <div className="h-1.5 bg-blue-200 dark:bg-blue-800 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-blue-500 transition-all"
+                                style={{ width: `${updateStatuses.get(host.id)?.progress_percent || 0}%` }}
+                              ></div>
+                            </div>
+                          )}
                         </div>
                       ) : isUpdateAvailable(host) && host.status === 'online' ? (
                         <div className="mb-4">
-                          <button
-                            onClick={() => triggerUpdate(host.id)}
-                            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 rounded-lg transition-all text-xs font-medium"
-                          >
-                            <i className="fa-solid fa-download"></i>
-                            Update to v{latestVersion}
-                          </button>
+                          {host.deployment_mode === 'docker' ? (
+                            <button
+                              onClick={() => triggerRebuild(host.id)}
+                              className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-purple-100 dark:bg-purple-900/30 hover:bg-purple-200 dark:hover:bg-purple-900/50 text-purple-700 dark:text-purple-400 border border-purple-300 dark:border-purple-700 rounded-lg transition-all text-xs font-medium"
+                            >
+                              <i className="fa-solid fa-rotate"></i>
+                              Rebuild Container
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => triggerUpdate(host.id)}
+                              className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 rounded-lg transition-all text-xs font-medium"
+                            >
+                              <i className="fa-solid fa-download"></i>
+                              Update to v{latestVersion}
+                            </button>
+                          )}
                         </div>
                       ) : null}
 

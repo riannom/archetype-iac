@@ -368,6 +368,7 @@ def list_agents_detailed(
             "started_at": host.started_at.isoformat() if host.started_at else None,
             "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
             "image_sync_strategy": host.image_sync_strategy or "on_demand",
+            "deployment_mode": host.deployment_mode or "unknown",
         })
 
     return result
@@ -880,3 +881,104 @@ def list_update_jobs(
         )
         for job in jobs
     ]
+
+
+# --- Docker Agent Rebuild ---
+
+class RebuildResponse(BaseModel):
+    """Response from Docker agent rebuild."""
+    success: bool
+    message: str
+    output: str = ""
+
+
+@router.post("/{agent_id}/rebuild", response_model=RebuildResponse)
+async def rebuild_docker_agent(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+) -> RebuildResponse:
+    """Rebuild a Docker-deployed agent container.
+
+    This triggers a docker compose rebuild for agents running in Docker.
+    Only works for the local agent managed by this controller's docker-compose.
+
+    The rebuild process:
+    1. Runs `docker compose up -d --build agent`
+    2. The agent container is rebuilt with latest code
+    3. Agent re-registers with new version after restart
+    """
+    import subprocess
+
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Check if this is a Docker-deployed agent
+    if host.deployment_mode != "docker":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent is not Docker-deployed (mode: {host.deployment_mode}). "
+                   "Use the update endpoint for systemd agents."
+        )
+
+    # Check if this is the local agent (we can only rebuild local containers)
+    address = host.address.lower()
+    is_local = (
+        "local-agent" in address or
+        address.startswith("localhost") or
+        address.startswith("127.0.0.1") or
+        address.startswith("host.docker.internal")
+    )
+
+    if not is_local:
+        raise HTTPException(
+            status_code=400,
+            detail="Can only rebuild local Docker agents. Remote Docker agents "
+                   "must be rebuilt on their respective hosts."
+        )
+
+    try:
+        # Find docker-compose file
+        compose_file = Path("/app/docker-compose.gui.yml")
+        if not compose_file.exists():
+            # Try relative to working directory
+            compose_file = Path("docker-compose.gui.yml")
+
+        if not compose_file.exists():
+            return RebuildResponse(
+                success=False,
+                message="docker-compose.gui.yml not found",
+            )
+
+        # Run docker compose rebuild
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "up", "-d", "--build", "agent"],
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minute timeout for build
+            cwd=compose_file.parent,
+        )
+
+        if result.returncode == 0:
+            return RebuildResponse(
+                success=True,
+                message="Agent container rebuilt successfully. It will re-register shortly.",
+                output=result.stdout + result.stderr,
+            )
+        else:
+            return RebuildResponse(
+                success=False,
+                message="Rebuild failed",
+                output=result.stdout + result.stderr,
+            )
+
+    except subprocess.TimeoutExpired:
+        return RebuildResponse(
+            success=False,
+            message="Rebuild timed out after 5 minutes",
+        )
+    except Exception as e:
+        return RebuildResponse(
+            success=False,
+            message=f"Rebuild error: {str(e)}",
+        )
