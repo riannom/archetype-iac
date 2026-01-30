@@ -83,20 +83,23 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggl
   };
 
   return (
-    <div className="shrink-0 bg-white/95 dark:bg-stone-950/95 border-t border-stone-200 dark:border-stone-800 backdrop-blur-md">
-      {/* Resize handle - only show when panel is visible */}
-      {isVisible && (
-        <div
-          onMouseDown={handleMouseDown}
-          className={`h-1 cursor-ns-resize hover:bg-cyan-500/50 transition-colors ${
-            isResizing ? 'bg-cyan-500' : 'bg-transparent'
-          }`}
-        />
-      )}
+    <div className="shrink-0 bg-white/95 dark:bg-stone-950/95 backdrop-blur-md border-t border-stone-200 dark:border-stone-800">
+      {/* Header with integrated resize handle at top */}
       <div
-        onClick={onToggle}
-        className="flex justify-between items-center px-4 py-2 cursor-pointer hover:bg-stone-100/50 dark:hover:bg-stone-900/50 select-none"
+        className={`flex justify-between items-center px-4 py-2 select-none ${
+          isVisible ? 'cursor-ns-resize' : 'cursor-pointer'
+        } hover:bg-stone-100/50 dark:hover:bg-stone-900/50 group relative`}
+        onMouseDown={isVisible ? handleMouseDown : undefined}
+        onClick={isVisible ? undefined : onToggle}
       >
+        {/* Resize grip indicator - only when expanded */}
+        {isVisible && (
+          <div className="absolute top-0 left-0 right-0 h-1 flex items-center justify-center">
+            <div className={`w-10 h-1 rounded-full transition-colors ${
+              isResizing ? 'bg-cyan-500' : 'bg-stone-300 dark:bg-stone-600 group-hover:bg-cyan-400'
+            }`} />
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-black uppercase tracking-widest text-stone-600 dark:text-stone-400">
             Task Log
@@ -119,13 +122,21 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({ entries, isVisible, onToggl
               Clear
             </button>
           )}
-          <span className="text-stone-400 dark:text-stone-500 text-xs">{isVisible ? 'v' : '^'}</span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            className="text-stone-400 dark:text-stone-500 text-xs hover:text-stone-600 dark:hover:text-stone-300 px-1"
+          >
+            {isVisible ? 'v' : '^'}
+          </button>
         </div>
       </div>
       {isVisible && (
         <div
           className="overflow-y-auto font-mono text-[11px]"
-          style={{ maxHeight: `${height}px` }}
+          style={{ height: `${height}px` }}
         >
           {entries.length === 0 ? (
             <div className="px-4 py-6 text-center text-stone-400 dark:text-stone-600">No task activity yet</div>
