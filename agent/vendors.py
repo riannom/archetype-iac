@@ -339,7 +339,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     "ceos": VendorConfig(
         kind="ceos",
         vendor="Arista",
-        console_shell="/usr/bin/Cli",  # Full path required for docker exec
+        console_shell="/bin/bash",  # Use bash; users can run 'Cli' if EOS is booted
         default_image="ceos:latest",
         aliases=["eos", "arista_eos", "arista_ceos"],
         entrypoint="/sbin/init",  # cEOS images have no default entrypoint
