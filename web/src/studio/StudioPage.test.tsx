@@ -88,6 +88,17 @@ vi.mock("../contexts/NotificationContext", () => ({
   }),
 }));
 
+// Mock useImageLibrary to avoid needing ImageLibraryProvider
+vi.mock("../contexts/ImageLibraryContext", () => ({
+  useImageLibrary: () => ({
+    imageLibrary: [],
+    loading: false,
+    error: null,
+    refreshImageLibrary: vi.fn(),
+  }),
+  ImageLibraryProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 // Mock getBoundingClientRect for canvas
 const mockGetBoundingClientRect = vi.fn(() => ({
   left: 0,

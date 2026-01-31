@@ -100,7 +100,7 @@ describe("SidebarFilters", () => {
     onVendorToggle: vi.fn(),
     selectedTypes: new Set<string>(),
     onTypeToggle: vi.fn(),
-    imageStatus: "all" as ImageStatus,
+    imageStatus: "has_image" as ImageStatus,
     onImageStatusChange: vi.fn(),
     onClearAll: vi.fn(),
   };
@@ -217,8 +217,8 @@ describe("SidebarFilters", () => {
       expect(screen.getByText("1")).toBeInTheDocument();
     });
 
-    it("shows filter count when image status is not all", () => {
-      render(<SidebarFilters {...defaultProps} imageStatus="has_image" />);
+    it("shows filter count when image status is not default", () => {
+      render(<SidebarFilters {...defaultProps} imageStatus="no_image" />);
       expect(screen.getByText("1")).toBeInTheDocument();
     });
 
