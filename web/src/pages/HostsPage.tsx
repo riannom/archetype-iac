@@ -123,6 +123,27 @@ const HostsPage: React.FC = () => {
         try {
           const status = await apiRequest<UpdateStatus | null>(`/agents/${agentId}/update-status`);
           if (status) {
+            // Check if agent is stuck in restarting but already came back with new version
+            // This handles the case where the completion callback never arrives
+            if (status.status === 'restarting') {
+              const host = hosts.find(h => h.id === agentId);
+              if (host && host.status === 'online' && host.version === status.to_version) {
+                // Agent is back online with new version - treat as completed
+                setUpdateStatuses(prev => new Map(prev).set(agentId, {
+                  ...status,
+                  status: 'completed',
+                  progress_percent: 100
+                }));
+                setUpdatingAgents(prev => {
+                  const next = new Set(prev);
+                  next.delete(agentId);
+                  return next;
+                });
+                loadHosts();
+                continue;
+              }
+            }
+
             setUpdateStatuses(prev => new Map(prev).set(agentId, status));
 
             // If completed or failed, remove from updating set
@@ -146,7 +167,7 @@ const HostsPage: React.FC = () => {
     }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [updatingAgents, loadHosts]);
+  }, [updatingAgents, loadHosts, hosts]);
 
   // Redirect non-admins
   if (!userLoading && user && !user.is_admin) {

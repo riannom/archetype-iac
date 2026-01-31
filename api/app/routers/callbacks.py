@@ -287,6 +287,9 @@ async def update_progress_callback(
 
     if payload.status in ("completed", "failed"):
         update_job.completed_at = datetime.now(timezone.utc)
+        # Ensure completed status shows 100% progress
+        if payload.status == "completed":
+            update_job.progress_percent = 100
 
     database.commit()
 
