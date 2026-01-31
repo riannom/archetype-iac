@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     # How often image reconciliation runs (seconds)
     image_reconciliation_interval: int = 300  # 5 minutes
 
+    # State enforcement settings
+    # Enable automatic correction of desired vs actual state mismatches
+    state_enforcement_enabled: bool = True
+    # How often the enforcement task runs (seconds)
+    state_enforcement_interval: int = 60
+    # Cooldown before retrying enforcement on the same node (seconds)
+    state_enforcement_cooldown: int = 300  # 5 minutes
+
     # Job health monitoring settings
     # How often the job health monitor checks for stuck jobs (seconds)
     job_health_check_interval: int = 30
@@ -80,7 +88,7 @@ class Settings(BaseSettings):
     # Job timeout for destroy operations (seconds) - buffer above agent_destroy_timeout
     job_timeout_destroy: int = 360  # 6 minutes
     # Job timeout for sync operations (seconds)
-    job_timeout_sync: int = 660  # 11 minutes
+    job_timeout_sync: int = 300  # 5 minutes
     # Job timeout for node start/stop operations (seconds)
     job_timeout_node: int = 300  # 5 minutes
     # Grace period after timeout before allowing reconciliation (seconds)

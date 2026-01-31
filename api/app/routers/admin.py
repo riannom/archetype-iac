@@ -427,3 +427,64 @@ async def reconcile_images(
         result = await reconcile_image_hosts()
 
     return result.to_dict()
+
+
+@router.post("/cleanup-stuck-jobs")
+async def cleanup_stuck_jobs(
+    max_age_minutes: int = Query(5, ge=1, le=60, description="Mark jobs stuck longer than this as failed"),
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Manually clean up stuck jobs.
+
+    This endpoint finds jobs that have been in 'running' or 'queued' state
+    for longer than the specified duration and marks them as failed.
+
+    Args:
+        max_age_minutes: Jobs older than this (in minutes) will be marked failed
+
+    Returns:
+        Summary of cleanup actions taken
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=max_age_minutes)
+
+    # Find stuck jobs
+    stuck_jobs = (
+        database.query(models.Job)
+        .filter(
+            models.Job.status.in_(["running", "queued"]),
+            models.Job.created_at < cutoff,
+        )
+        .all()
+    )
+
+    cleaned = []
+    for job in stuck_jobs:
+        logger.info(f"Cleaning up stuck job {job.id}: action={job.action}, status={job.status}")
+        job.status = "failed"
+        job.completed_at = now
+        if not job.log_path:
+            job.log_path = f"Manually marked as failed (stuck for >{max_age_minutes} minutes)"
+        cleaned.append({
+            "id": job.id,
+            "action": job.action,
+            "lab_id": job.lab_id,
+            "previous_status": job.status,
+            "age_minutes": int((now - job.created_at.replace(tzinfo=timezone.utc)).total_seconds() / 60),
+        })
+
+    database.commit()
+
+    logger.info(f"Cleaned up {len(cleaned)} stuck jobs")
+
+    return {
+        "cleaned_count": len(cleaned),
+        "cleaned_jobs": cleaned,
+        "cutoff_minutes": max_age_minutes,
+    }
