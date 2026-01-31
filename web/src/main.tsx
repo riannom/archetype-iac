@@ -5,6 +5,7 @@ import { ThemeProvider } from "./theme/index";
 import { UserProvider } from "./contexts/UserContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 import { ImageLibraryProvider } from "./contexts/ImageLibraryContext";
+import { DeviceCatalogProvider } from "./contexts/DeviceCatalogContext";
 import { ToastContainer } from "./components/ui/ToastContainer";
 import StudioConsolePage from "./pages/StudioConsolePage";
 import HostsPage from "./pages/HostsPage";
@@ -31,10 +32,12 @@ root.render(
     <ThemeProvider>
       <UserProvider>
         <ImageLibraryProvider>
-          <NotificationProvider>
-            <RouterProvider router={router} />
-            <ToastContainer />
-          </NotificationProvider>
+          <DeviceCatalogProvider>
+            <NotificationProvider>
+              <RouterProvider router={router} />
+              <ToastContainer />
+            </NotificationProvider>
+          </DeviceCatalogProvider>
         </ImageLibraryProvider>
       </UserProvider>
     </ThemeProvider>

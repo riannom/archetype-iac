@@ -99,6 +99,22 @@ vi.mock("../contexts/ImageLibraryContext", () => ({
   ImageLibraryProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+// Mock useDeviceCatalog to avoid needing DeviceCatalogProvider
+vi.mock("../contexts/DeviceCatalogContext", () => ({
+  useDeviceCatalog: () => ({
+    vendorCategories: [],
+    imageCatalog: {},
+    deviceModels: [],
+    deviceCategories: [],
+    addCustomDevice: vi.fn(),
+    removeCustomDevice: vi.fn(),
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
+  DeviceCatalogProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 // Mock getBoundingClientRect for canvas
 const mockGetBoundingClientRect = vi.fn(() => ({
   left: 0,
@@ -482,7 +498,9 @@ describe("StudioPage", () => {
       });
     });
 
-    it("loads device catalog on mount", async () => {
+    it("receives device catalog from context", async () => {
+      // Device catalog (/vendors, /images) is now loaded by DeviceCatalogContext,
+      // not by StudioPage directly. The context is mocked in tests.
       render(
         <TestWrapper>
           <StudioPage />
@@ -490,25 +508,7 @@ describe("StudioPage", () => {
       );
 
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith(
-          expect.stringContaining("/vendors"),
-          expect.anything()
-        );
-      });
-    });
-
-    it("loads images on mount", async () => {
-      render(
-        <TestWrapper>
-          <StudioPage />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith(
-          expect.stringContaining("/images"),
-          expect.anything()
-        );
+        expect(screen.getByText("ARCHETYPE")).toBeInTheDocument();
       });
     });
 
@@ -528,35 +528,16 @@ describe("StudioPage", () => {
     });
   });
 
-  describe("Custom Devices from localStorage", () => {
-    it("loads custom devices from localStorage", async () => {
-      const customDevices = [
-        { id: "custom-router", label: "My Custom Router" },
-      ];
-      localStorage.setItem("archetype_custom_devices", JSON.stringify(customDevices));
-
+  describe("Custom Devices from DeviceCatalog", () => {
+    it("renders with device catalog from context", async () => {
+      // Custom devices are now loaded from the DeviceCatalog context (API-based)
+      // rather than localStorage. The mock provides empty deviceModels by default.
       render(
         <TestWrapper>
           <StudioPage />
         </TestWrapper>
       );
 
-      // Custom devices should be loaded (verified by the deviceModels memo)
-      await waitFor(() => {
-        expect(screen.getByText("ARCHETYPE")).toBeInTheDocument();
-      });
-    });
-
-    it("handles invalid JSON in custom devices localStorage", async () => {
-      localStorage.setItem("archetype_custom_devices", "invalid-json");
-
-      render(
-        <TestWrapper>
-          <StudioPage />
-        </TestWrapper>
-      );
-
-      // Should not crash
       await waitFor(() => {
         expect(screen.getByText("ARCHETYPE")).toBeInTheDocument();
       });

@@ -44,6 +44,22 @@ vi.mock("../contexts/ImageLibraryContext", () => ({
   ImageLibraryProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+// Mock useDeviceCatalog hook
+vi.mock("../contexts/DeviceCatalogContext", () => ({
+  useDeviceCatalog: () => ({
+    vendorCategories: [],
+    imageCatalog: {},
+    deviceModels: [],
+    deviceCategories: [],
+    addCustomDevice: vi.fn(),
+    removeCustomDevice: vi.fn(),
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
+  DeviceCatalogProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 // Mock useNavigate
 const mockNavigate = vi.fn();
 vi.mock("react-router-dom", async () => {
@@ -216,32 +232,12 @@ describe("NodesPage", () => {
     });
   });
 
-  describe("custom devices persistence", () => {
-    it("loads custom devices from localStorage", async () => {
-      const customDevices = [{ id: "custom-1", label: "My Custom Device" }];
-      localStorage.setItem(
-        "archetype_custom_devices",
-        JSON.stringify(customDevices)
-      );
-
-      // Uses default mock from beforeEach
-
+  describe("custom devices from DeviceCatalog", () => {
+    it("renders with device catalog from context", async () => {
+      // Custom devices are now loaded from the DeviceCatalog context (API-based)
+      // rather than localStorage. The mock provides empty deviceModels by default.
       renderNodesPageWithBrowser();
 
-      // The custom device should be loaded (though we can't easily verify internal state)
-      await waitFor(() => {
-        expect(screen.getByText("Device Management")).toBeInTheDocument();
-      });
-    });
-
-    it("handles invalid localStorage data gracefully", async () => {
-      localStorage.setItem("archetype_custom_devices", "invalid json");
-
-      // Uses default mock from beforeEach
-
-      renderNodesPageWithBrowser();
-
-      // Should not throw, page should render
       await waitFor(() => {
         expect(screen.getByText("Device Management")).toBeInTheDocument();
       });
@@ -266,7 +262,10 @@ describe("NodesPage", () => {
       renderNodesPage("/nodes/images");
 
       await waitFor(() => {
-        const tab = screen.getByText("Image Management");
+        // Use getAllByText since there might be multiple "Image Management" elements
+        // (tab button and header inside DeviceManager), then find the tab button
+        const elements = screen.getAllByText("Image Management");
+        const tab = elements.find(el => el.tagName === "BUTTON");
         expect(tab).toHaveClass("text-sage-600");
       });
     });

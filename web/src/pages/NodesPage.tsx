@@ -1,112 +1,28 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
-import { apiRequest } from '../api';
+import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
 import DeviceManager from '../studio/components/DeviceManager';
 import DeviceConfigManager from '../studio/components/DeviceConfigManager';
 import ImageSyncProgress from '../components/ImageSyncProgress';
-import { DeviceModel, ImageLibraryEntry } from '../studio/types';
-import { DeviceCategory } from '../studio/constants';
 import { ArchetypeIcon } from '../components/icons';
-
-interface CustomDevice {
-  id: string;
-  label: string;
-}
-
-/**
- * Flatten vendor categories into a flat list of DeviceModels
- */
-const flattenVendorCategories = (categories: DeviceCategory[]): DeviceModel[] => {
-  return categories.flatMap(cat => {
-    if (cat.subCategories) {
-      return cat.subCategories.flatMap(sub => sub.models);
-    }
-    return cat.models || [];
-  });
-};
-
-/**
- * Build device models by merging vendor registry with image library data
- */
-const buildDeviceModels = (
-  vendorCategories: DeviceCategory[],
-  images: ImageLibraryEntry[],
-  customDevices: CustomDevice[]
-): DeviceModel[] => {
-  // Get all devices from vendor registry
-  const vendorDevices = flattenVendorCategories(vendorCategories);
-  const vendorDeviceMap = new Map(vendorDevices.map(d => [d.id, d]));
-
-  // Collect versions from image library
-  const versionsByDevice = new Map<string, Set<string>>();
-  const imageDeviceIds = new Set<string>();
-  images.forEach((image) => {
-    if (!image.device_id) return;
-    imageDeviceIds.add(image.device_id);
-    const versions = versionsByDevice.get(image.device_id) || new Set<string>();
-    if (image.version) {
-      versions.add(image.version);
-    }
-    versionsByDevice.set(image.device_id, versions);
-  });
-
-  // Start with vendor devices (preserves rich metadata like icons, types, vendors)
-  const result: DeviceModel[] = vendorDevices.map(device => {
-    const imageVersions = Array.from(versionsByDevice.get(device.id) || []);
-    return {
-      ...device,
-      // Merge versions from both vendor registry and image library
-      versions: imageVersions.length > 0
-        ? [...new Set([...device.versions, ...imageVersions])]
-        : device.versions,
-    };
-  });
-
-  // Add custom devices that aren't in vendor registry
-  customDevices.forEach(custom => {
-    if (!vendorDeviceMap.has(custom.id)) {
-      const imageVersions = Array.from(versionsByDevice.get(custom.id) || []);
-      result.push({
-        id: custom.id,
-        type: 'container' as DeviceModel['type'],
-        name: custom.label,
-        icon: 'fa-microchip',
-        versions: imageVersions.length > 0 ? imageVersions : ['default'],
-        isActive: true,
-        vendor: 'custom',
-        isCustom: true,
-      });
-    }
-  });
-
-  // Add devices that have images but aren't in vendor registry or custom
-  imageDeviceIds.forEach(deviceId => {
-    if (!vendorDeviceMap.has(deviceId) && !customDevices.find(c => c.id === deviceId)) {
-      const imageVersions = Array.from(versionsByDevice.get(deviceId) || []);
-      result.push({
-        id: deviceId,
-        type: 'container' as DeviceModel['type'],
-        name: deviceId,
-        icon: 'fa-microchip',
-        versions: imageVersions.length > 0 ? imageVersions : ['default'],
-        isActive: true,
-        vendor: 'unknown',
-      });
-    }
-  });
-
-  return result;
-};
 
 type TabType = 'devices' | 'images' | 'sync';
 
 const NodesPage: React.FC = () => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user, loading: userLoading } = useUser();
-  const { imageLibrary, refreshImageLibrary } = useImageLibrary();
+  const { imageLibrary } = useImageLibrary();
+  const {
+    deviceModels,
+    imageCatalog,
+    addCustomDevice,
+    removeCustomDevice,
+    loading: catalogLoading,
+    refresh: refreshCatalog,
+  } = useDeviceCatalog();
   const navigate = useNavigate();
   const location = useLocation();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
@@ -131,47 +47,25 @@ const NodesPage: React.FC = () => {
     navigate(`/nodes/${tab}`);
   };
 
-  const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
-  const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
-  const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
-    const stored = localStorage.getItem('archetype_custom_devices');
-    if (!stored) return [];
-    try {
-      const parsed = JSON.parse(stored) as CustomDevice[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-  const [loading, setLoading] = useState(true);
+  // Build list of custom device IDs from deviceModels (those with vendor='custom' or isCustom=true)
+  const customDevices = deviceModels
+    .filter(d => d.vendor === 'custom' || d.isCustom)
+    .map(d => ({ id: d.id, label: d.name }));
 
-  const loadDevices = useCallback(async () => {
-    try {
-      // Fetch vendor categories (comprehensive device list with rich metadata)
-      const vendorData = await apiRequest<DeviceCategory[]>('/vendors');
-      setVendorCategories(vendorData || []);
-      // Fetch image catalog
-      const imageData = await apiRequest<{ images?: Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }> }>('/images');
-      setImageCatalog(imageData.images || {});
-      // Refresh image library from shared context
-      await refreshImageLibrary();
-    } catch (err) {
-      console.error('Failed to load devices:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [refreshImageLibrary]);
-
-  useEffect(() => {
-    loadDevices();
-  }, [loadDevices]);
-
-  const updateCustomDevices = (next: CustomDevice[]) => {
-    setCustomDevices(next);
-    localStorage.setItem('archetype_custom_devices', JSON.stringify(next));
+  // Wrapper for adding custom device (adapts the context's API)
+  const handleAddCustomDevice = async (device: { id: string; label: string }) => {
+    await addCustomDevice({
+      id: device.id,
+      name: device.label,
+      type: 'container',
+      vendor: 'Custom',
+    });
   };
 
-  const deviceModels = buildDeviceModels(vendorCategories, imageLibrary, customDevices);
+  // Wrapper for removing custom device
+  const handleRemoveCustomDevice = async (deviceId: string) => {
+    await removeCustomDevice(deviceId);
+  };
 
   // Redirect if not authenticated
   if (!userLoading && !user) {
@@ -216,7 +110,7 @@ const NodesPage: React.FC = () => {
             </button>
 
             <button
-              onClick={loadDevices}
+              onClick={refreshCatalog}
               className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
             >
               <i className="fa-solid fa-rotate text-xs"></i>
@@ -265,7 +159,7 @@ const NodesPage: React.FC = () => {
         </div>
 
         <main className="flex-1 overflow-hidden">
-          {loading ? (
+          {catalogLoading ? (
             <div className="flex items-center justify-center h-full">
               <i className="fa-solid fa-spinner fa-spin text-stone-400 text-2xl"></i>
               <span className="ml-3 text-stone-500">Loading...</span>
@@ -274,18 +168,18 @@ const NodesPage: React.FC = () => {
             <DeviceConfigManager
               deviceModels={deviceModels}
               customDevices={customDevices}
-              onAddCustomDevice={(device) => updateCustomDevices([...customDevices, device])}
-              onRemoveCustomDevice={(deviceId) => updateCustomDevices(customDevices.filter((item) => item.id !== deviceId))}
-              onRefresh={loadDevices}
+              onAddCustomDevice={handleAddCustomDevice}
+              onRemoveCustomDevice={handleRemoveCustomDevice}
+              onRefresh={refreshCatalog}
             />
           ) : activeTab === 'images' ? (
             <DeviceManager
               deviceModels={deviceModels}
               imageCatalog={imageCatalog}
               imageLibrary={imageLibrary}
-              onUploadImage={loadDevices}
-              onUploadQcow2={loadDevices}
-              onRefresh={loadDevices}
+              onUploadImage={refreshCatalog}
+              onUploadQcow2={refreshCatalog}
+              onRefresh={refreshCatalog}
             />
           ) : (
             <div className="h-full overflow-auto p-6">
@@ -299,7 +193,7 @@ const NodesPage: React.FC = () => {
                 <ImageSyncProgress
                   showCompleted={true}
                   maxJobs={20}
-                  onJobComplete={loadDevices}
+                  onJobComplete={refreshCatalog}
                 />
               </div>
             </div>

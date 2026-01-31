@@ -12,7 +12,7 @@ import SystemStatusStrip from './components/SystemStatusStrip';
 import ConfigViewerModal from './components/ConfigViewerModal';
 import JobLogModal from './components/JobLogModal';
 import ConfigsView from './components/ConfigsView';
-import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, ImageLibraryEntry, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
+import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
@@ -20,6 +20,7 @@ import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
+import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
 import { ArchetypeIcon } from '../components/icons';
 import './studio.css';
 import 'xterm/css/xterm.css';
@@ -51,22 +52,6 @@ interface NodeStateEntry {
   updated_at: string;
 }
 
-interface DeviceSubCategory {
-  name: string;
-  models: DeviceModel[];
-}
-
-interface DeviceCategory {
-  name: string;
-  models?: DeviceModel[];
-  subCategories?: DeviceSubCategory[];
-}
-
-interface CustomDevice {
-  id: string;
-  label: string;
-}
-
 const DEFAULT_ICON = 'fa-microchip';
 
 /**
@@ -90,90 +75,6 @@ const guessDeviceType = (id: string, label: string): DeviceType => {
   if (token.includes('firewall')) return DeviceType.FIREWALL;
   if (token.includes('linux') || token.includes('server') || token.includes('host')) return DeviceType.HOST;
   return DeviceType.CONTAINER;
-};
-
-/**
- * Flatten vendor categories into a flat list of DeviceModels
- */
-const flattenVendorCategories = (categories: DeviceCategory[]): DeviceModel[] => {
-  return categories.flatMap(cat => {
-    if (cat.subCategories) {
-      return cat.subCategories.flatMap(sub => sub.models);
-    }
-    return cat.models || [];
-  });
-};
-
-/**
- * Build device models by merging vendor registry with image library data
- */
-const buildDeviceModels = (
-  vendorCategories: DeviceCategory[],
-  images: ImageLibraryEntry[],
-  customDevices: CustomDevice[]
-): DeviceModel[] => {
-  // Get all devices from vendor registry
-  const vendorDevices = flattenVendorCategories(vendorCategories);
-  const vendorDeviceMap = new Map(vendorDevices.map(d => [d.id, d]));
-
-  // Collect versions from image library
-  const versionsByDevice = new Map<string, Set<string>>();
-  const imageDeviceIds = new Set<string>();
-  images.forEach((image) => {
-    if (!image.device_id) return;
-    imageDeviceIds.add(image.device_id);
-    const versions = versionsByDevice.get(image.device_id) || new Set<string>();
-    if (image.version) {
-      versions.add(image.version);
-    }
-    versionsByDevice.set(image.device_id, versions);
-  });
-
-  // Start with vendor devices (preserves rich metadata like icons, types, vendors)
-  const result: DeviceModel[] = vendorDevices.map(device => {
-    const imageVersions = Array.from(versionsByDevice.get(device.id) || []);
-    return {
-      ...device,
-      // Merge versions from both vendor registry and image library
-      versions: imageVersions.length > 0
-        ? [...new Set([...device.versions, ...imageVersions])]
-        : device.versions,
-    };
-  });
-
-  // Add custom devices that aren't in vendor registry
-  customDevices.forEach(custom => {
-    if (!vendorDeviceMap.has(custom.id)) {
-      const imageVersions = Array.from(versionsByDevice.get(custom.id) || []);
-      result.push({
-        id: custom.id,
-        type: 'container' as DeviceModel['type'],
-        name: custom.label,
-        icon: 'fa-microchip',
-        versions: imageVersions.length > 0 ? imageVersions : ['default'],
-        isActive: true,
-        vendor: 'custom',
-      });
-    }
-  });
-
-  // Add devices that have images but aren't in vendor registry or custom
-  imageDeviceIds.forEach(deviceId => {
-    if (!vendorDeviceMap.has(deviceId) && !customDevices.find(c => c.id === deviceId)) {
-      const imageVersions = Array.from(versionsByDevice.get(deviceId) || []);
-      result.push({
-        id: deviceId,
-        type: 'container' as DeviceModel['type'],
-        name: deviceId,
-        icon: 'fa-microchip',
-        versions: imageVersions.length > 0 ? imageVersions : ['default'],
-        isActive: true,
-        vendor: 'unknown',
-      });
-    }
-  });
-
-  return result;
 };
 
 const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] => {
@@ -294,7 +195,8 @@ const StudioPage: React.FC = () => {
   const { effectiveMode } = useTheme();
   const { user, refreshUser } = useUser();
   const { addNotification, preferences } = useNotifications();
-  const { imageLibrary, refreshImageLibrary } = useImageLibrary();
+  const { imageLibrary } = useImageLibrary();
+  const { deviceModels, deviceCategories, imageCatalog, refresh: refreshDeviceCatalog } = useDeviceCatalog();
   const isAdmin = user?.is_admin ?? false;
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
@@ -308,18 +210,6 @@ const StudioPage: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
-  const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
-  const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
-  const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
-    const stored = localStorage.getItem('archetype_custom_devices');
-    if (!stored) return [];
-    try {
-      const parsed = JSON.parse(stored) as CustomDevice[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
   const [agents, setAgents] = useState<{ id: string; name: string }[]>(() => {
     return [];
   });
@@ -407,65 +297,10 @@ const StudioPage: React.FC = () => {
     localStorage.setItem('archetype_tasklog_cleared_at', now.toString());
   }, []);
 
-  const deviceModels = useMemo(
-    () => buildDeviceModels(vendorCategories, imageLibrary, customDevices),
-    [vendorCategories, imageLibrary, customDevices]
-  );
   const filteredTaskLog = useMemo(
     () => taskLog.filter((entry) => entry.timestamp.getTime() > taskLogClearedAt),
     [taskLog, taskLogClearedAt]
   );
-  const deviceCategories = useMemo<DeviceCategory[]>(() => {
-    // Rebuild categories using enriched deviceModels to ensure consistency with Image Management.
-    // This is needed because deviceModels includes devices discovered from the image library
-    // that may not exist in the raw vendor registry.
-    if (vendorCategories.length > 0) {
-      const deviceMap = new Map(deviceModels.map(d => [d.id, d]));
-      const usedDeviceIds = new Set<string>();
-
-      const enrichedCategories = vendorCategories.map(cat => {
-        if (cat.subCategories) {
-          return {
-            ...cat,
-            subCategories: cat.subCategories.map(sub => ({
-              ...sub,
-              models: sub.models.map(m => {
-                usedDeviceIds.add(m.id);
-                return deviceMap.get(m.id) || m;
-              }),
-            })),
-          };
-        }
-        if (cat.models) {
-          return {
-            ...cat,
-            models: cat.models.map(m => {
-              usedDeviceIds.add(m.id);
-              return deviceMap.get(m.id) || m;
-            }),
-          };
-        }
-        return cat;
-      });
-
-      // Add devices from image library that aren't in vendor categories
-      const extraDevices = deviceModels.filter(d => !usedDeviceIds.has(d.id));
-      if (extraDevices.length > 0) {
-        enrichedCategories.push({
-          name: 'Other',
-          models: extraDevices,
-        });
-      }
-
-      return enrichedCategories;
-    }
-    return [{ name: 'Devices', models: deviceModels }];
-  }, [vendorCategories, deviceModels]);
-  
-  const updateCustomDevices = (next: CustomDevice[]) => {
-    setCustomDevices(next);
-    localStorage.setItem('archetype_custom_devices', JSON.stringify(next));
-  };
 
   const isUnauthorized = (error: unknown) => error instanceof Error && error.message.toLowerCase().includes('unauthorized');
 
@@ -624,15 +459,6 @@ const StudioPage: React.FC = () => {
   const loadLabs = useCallback(async () => {
     const data = await studioRequest<{ labs: LabSummary[] }>('/labs');
     setLabs(data.labs || []);
-  }, [studioRequest]);
-
-  const loadDevices = useCallback(async () => {
-    const imageData = await studioRequest<{ images?: Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }> }>('/images');
-    setImageCatalog(imageData.images || {});
-    // Image library is loaded from shared ImageLibraryContext
-    // Load vendor categories from unified registry (provides device catalog + rich metadata)
-    const vendorData = await studioRequest<DeviceCategory[]>('/vendors');
-    setVendorCategories(vendorData || []);
   }, [studioRequest]);
 
   const loadAgents = useCallback(async () => {
@@ -818,10 +644,9 @@ const StudioPage: React.FC = () => {
 
   useEffect(() => {
     loadLabs();
-    loadDevices();
     loadSystemMetrics();
     loadAgents();
-  }, [loadLabs, loadDevices, loadSystemMetrics, loadAgents]);
+  }, [loadLabs, loadSystemMetrics, loadAgents]);
 
   // Load lab statuses when labs change
   useEffect(() => {
@@ -1378,8 +1203,7 @@ const StudioPage: React.FC = () => {
       setAuthPassword('');
       await refreshUser();
       await loadLabs();
-      await loadDevices();
-      await refreshImageLibrary();
+      await refreshDeviceCatalog();
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Login failed');
     } finally {
