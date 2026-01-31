@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     ovs_vlan_start: int = 100  # Starting VLAN for port isolation
     ovs_vlan_end: int = 4000  # Ending VLAN for port isolation
 
+    # OVS Docker plugin (pre-boot interface provisioning)
+    # When enabled, uses Docker network plugin for interface provisioning
+    # This ensures interfaces exist BEFORE container init runs (required for cEOS)
+    enable_ovs_plugin: bool = True  # Enable OVS Docker network plugin
+
     # Concurrency limits
     max_concurrent_jobs: int = 4
 
@@ -87,6 +92,22 @@ class Settings(BaseSettings):
     # Logging configuration
     log_format: str = "json"  # "json" or "text"
     log_level: str = "INFO"
+
+    # === Docker OVS Plugin Settings ===
+
+    # Management network settings (eth0 for containers)
+    mgmt_network_subnet_base: str = "172.20.0.0/16"  # /24 allocated per lab
+    mgmt_network_enable_nat: bool = True
+
+    # VXLAN settings for per-lab bridges (multi-host support)
+    plugin_vxlan_vni_base: int = 200000  # Different range from overlay.py
+    plugin_vxlan_vni_max: int = 299999
+    plugin_vxlan_dst_port: int = 4789
+
+    # Lab TTL cleanup settings
+    lab_ttl_enabled: bool = False  # Disabled by default for safety
+    lab_ttl_seconds: int = 86400  # 24 hours
+    lab_ttl_check_interval: int = 3600  # Check every hour
 
     class Config:
         env_prefix = "ARCHETYPE_AGENT_"

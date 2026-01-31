@@ -1,0 +1,1681 @@
+"""Docker Network Plugin for OVS Integration.
+
+This plugin provides Docker networking backed by Open vSwitch, enabling:
+- Per-lab OVS bridges for network isolation
+- VLAN-based logical segmentation
+- Pre-boot interface provisioning (interfaces exist before container init)
+- Hot-connect/disconnect for topology changes via VLAN remapping
+
+Architecture:
+    - One OVS bridge per lab (ovs-{lab_id})
+    - Each container interface = one Docker network attachment
+    - VLAN tags isolate interfaces until hot_connect links them
+
+Docker Plugin Lifecycle:
+    CreateNetwork  → Create OVS bridge (once per lab) or register interface network
+    CreateEndpoint → Create veth pair, attach to OVS with unique VLAN
+    Join           → Return interface name, Docker moves veth into container
+    Leave          → Container disconnecting
+    DeleteEndpoint → Clean up veth and OVS port
+    DeleteNetwork  → Clean up (bridge deleted when last interface network removed)
+
+Usage:
+    # Start the plugin (runs as part of agent or standalone)
+    python -m agent.network.docker_plugin
+
+    # Create lab bridge network
+    docker network create -d archetype-ovs \\
+        -o lab_id=project_2 \\
+        -o interface_name=eth1 \\
+        project_2-eth1
+
+    # Create additional interface networks
+    docker network create -d archetype-ovs -o lab_id=project_2 -o interface_name=eth2 project_2-eth2
+
+    # Run container attached to multiple networks (one per interface)
+    docker create --network project_2-eth1 --name eos-1 ceos:latest
+    docker network connect project_2-eth2 eos-1
+    docker start eos-1
+"""
+
+from __future__ import annotations
+
+import asyncio
+import ipaddress
+import json
+import logging
+import os
+import re
+import secrets
+import signal
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from aiohttp import web
+
+from agent.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Plugin configuration
+PLUGIN_NAME = "archetype-ovs"
+PLUGIN_SOCKET_PATH = f"/run/docker/plugins/{PLUGIN_NAME}.sock"
+PLUGIN_SPEC_PATH = f"/etc/docker/plugins/{PLUGIN_NAME}.spec"
+
+# OVS configuration
+OVS_BRIDGE_PREFIX = "ovs-"
+VLAN_RANGE_START = 100
+VLAN_RANGE_END = 4000
+
+
+@dataclass
+class LabBridge:
+    """State for a lab's OVS bridge."""
+
+    lab_id: str
+    bridge_name: str
+    # VLAN allocator
+    next_vlan: int = VLAN_RANGE_START
+    # Track networks using this bridge
+    network_ids: set[str] = field(default_factory=set)
+    # Activity tracking for TTL cleanup
+    last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # VXLAN tunnels: vni -> port_name
+    vxlan_tunnels: dict[int, str] = field(default_factory=dict)
+    # External interfaces: iface -> vlan
+    external_ports: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class NetworkState:
+    """State for a Docker network (one per interface)."""
+
+    network_id: str
+    lab_id: str
+    interface_name: str  # e.g., "eth1", "eth2"
+    bridge_name: str
+
+
+@dataclass
+class EndpointState:
+    """State for a container endpoint."""
+
+    endpoint_id: str
+    network_id: str
+    interface_name: str
+    host_veth: str
+    cont_veth: str
+    vlan_tag: int
+    container_name: str | None = None
+
+
+@dataclass
+class ManagementNetwork:
+    """State for a lab's management network (eth0)."""
+
+    lab_id: str
+    network_id: str
+    network_name: str  # archetype-mgmt-{lab_id}
+    subnet: str  # e.g., "172.20.1.0/24"
+    gateway: str  # e.g., "172.20.1.1"
+
+
+class DockerOVSPlugin:
+    """Docker Network Plugin backed by Open vSwitch.
+
+    Each Docker network maps to one interface on the lab's OVS bridge.
+    Containers attach to multiple networks to get multiple interfaces.
+    All interfaces are provisioned BEFORE container init runs.
+    """
+
+    def __init__(self):
+        self.lab_bridges: dict[str, LabBridge] = {}  # lab_id -> LabBridge
+        self.networks: dict[str, NetworkState] = {}  # network_id -> NetworkState
+        self.endpoints: dict[str, EndpointState] = {}  # endpoint_id -> EndpointState
+        self.management_networks: dict[str, ManagementNetwork] = {}  # lab_id -> ManagementNetwork
+        self._lock = asyncio.Lock()
+        self._started_at = datetime.now(timezone.utc)
+        self._cleanup_task: asyncio.Task | None = None
+        self._next_mgmt_subnet_index = 1  # For allocating management subnets
+
+    # =========================================================================
+    # OVS Operations
+    # =========================================================================
+
+    async def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
+        """Run a shell command asynchronously."""
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode or 0, stdout.decode(), stderr.decode()
+
+    async def _ovs_vsctl(self, *args: str) -> tuple[int, str, str]:
+        """Run ovs-vsctl command."""
+        return await self._run_cmd(["ovs-vsctl", *args])
+
+    async def _ensure_bridge(self, lab_id: str) -> LabBridge:
+        """Ensure OVS bridge exists for lab, create if needed."""
+        if lab_id in self.lab_bridges:
+            return self.lab_bridges[lab_id]
+
+        bridge_name = f"{OVS_BRIDGE_PREFIX}{lab_id[:12]}"
+
+        # Check if bridge exists
+        code, _, _ = await self._ovs_vsctl("br-exists", bridge_name)
+        if code != 0:
+            # Create bridge
+            code, _, stderr = await self._ovs_vsctl("add-br", bridge_name)
+            if code != 0:
+                raise RuntimeError(f"Failed to create OVS bridge {bridge_name}: {stderr}")
+
+            # Set fail mode to secure (drop unknown traffic by default)
+            await self._ovs_vsctl("set-fail-mode", bridge_name, "secure")
+
+            # Add default flow to allow traffic within same VLAN
+            await self._run_cmd([
+                "ovs-ofctl", "add-flow", bridge_name,
+                "priority=1,actions=normal"
+            ])
+
+            # Bring bridge up
+            await self._run_cmd(["ip", "link", "set", bridge_name, "up"])
+
+            logger.info(f"Created OVS bridge: {bridge_name}")
+        else:
+            logger.info(f"OVS bridge {bridge_name} already exists")
+
+        lab_bridge = LabBridge(lab_id=lab_id, bridge_name=bridge_name)
+        self.lab_bridges[lab_id] = lab_bridge
+        return lab_bridge
+
+    async def _maybe_delete_bridge(self, lab_id: str) -> None:
+        """Delete OVS bridge if no networks are using it."""
+        lab_bridge = self.lab_bridges.get(lab_id)
+        if not lab_bridge:
+            return
+
+        if lab_bridge.network_ids:
+            # Still has networks
+            return
+
+        # No more networks, delete bridge
+        code, _, stderr = await self._ovs_vsctl("--if-exists", "del-br", lab_bridge.bridge_name)
+        if code != 0:
+            logger.error(f"Failed to delete OVS bridge {lab_bridge.bridge_name}: {stderr}")
+        else:
+            logger.info(f"Deleted OVS bridge: {lab_bridge.bridge_name}")
+
+        del self.lab_bridges[lab_id]
+
+    async def _create_veth_pair(self, host_name: str, cont_name: str) -> bool:
+        """Create a veth pair."""
+        code, _, stderr = await self._run_cmd([
+            "ip", "link", "add", host_name, "type", "veth", "peer", "name", cont_name
+        ])
+        if code != 0:
+            logger.error(f"Failed to create veth pair {host_name}/{cont_name}: {stderr}")
+            return False
+        return True
+
+    async def _attach_to_ovs(self, bridge_name: str, port_name: str, vlan_tag: int) -> bool:
+        """Attach a veth to OVS bridge with VLAN tag."""
+        code, _, stderr = await self._ovs_vsctl(
+            "add-port", bridge_name, port_name,
+            f"tag={vlan_tag}",
+            "--", "set", "interface", port_name, "type=system"
+        )
+        if code != 0:
+            logger.error(f"Failed to attach {port_name} to OVS: {stderr}")
+            return False
+
+        # Bring host-side up
+        await self._run_cmd(["ip", "link", "set", port_name, "up"])
+        return True
+
+    async def _delete_port(self, bridge_name: str, port_name: str) -> None:
+        """Delete a port from OVS bridge and remove veth."""
+        await self._ovs_vsctl("--if-exists", "del-port", bridge_name, port_name)
+        await self._run_cmd(["ip", "link", "delete", port_name])
+
+    def _generate_veth_names(self, endpoint_id: str) -> tuple[str, str]:
+        """Generate unique veth pair names (max 15 chars each)."""
+        suffix = secrets.token_hex(3)
+        host_veth = f"vh{endpoint_id[:5]}{suffix}"[:15]
+        cont_veth = f"vc{endpoint_id[:5]}{suffix}"[:15]
+        return host_veth, cont_veth
+
+    def _allocate_vlan(self, lab_bridge: LabBridge) -> int:
+        """Allocate next available VLAN tag."""
+        vlan = lab_bridge.next_vlan
+        lab_bridge.next_vlan += 1
+        if lab_bridge.next_vlan > VLAN_RANGE_END:
+            lab_bridge.next_vlan = VLAN_RANGE_START
+        return vlan
+
+    def _touch_lab(self, lab_id: str) -> None:
+        """Update last_activity timestamp for TTL tracking."""
+        if lab_id in self.lab_bridges:
+            self.lab_bridges[lab_id].last_activity = datetime.now(timezone.utc)
+
+    # =========================================================================
+    # State Recovery (discovers existing OVS state on startup)
+    # =========================================================================
+
+    async def _discover_existing_state(self) -> None:
+        """Rebuild plugin state from existing OVS bridges on startup.
+
+        This enables state recovery after agent restart by:
+        1. Finding all OVS bridges matching our naming pattern (ovs-*)
+        2. Enumerating ports on each bridge
+        3. Matching ports to Docker containers via interface inspection
+        4. Reconstructing LabBridge, NetworkState, and EndpointState
+        """
+        logger.info("Discovering existing OVS state...")
+
+        # List all OVS bridges
+        code, stdout, _ = await self._ovs_vsctl("list-br")
+        if code != 0:
+            logger.warning("Failed to list OVS bridges, skipping state recovery")
+            return
+
+        bridges = [b.strip() for b in stdout.strip().split("\n") if b.strip()]
+        ovs_bridges = [b for b in bridges if b.startswith(OVS_BRIDGE_PREFIX)]
+
+        if not ovs_bridges:
+            logger.info("No existing OVS bridges found")
+            return
+
+        logger.info(f"Found {len(ovs_bridges)} OVS bridges to recover")
+
+        for bridge_name in ovs_bridges:
+            await self._recover_bridge_state(bridge_name)
+
+        logger.info(
+            f"State recovery complete: {len(self.lab_bridges)} bridges, "
+            f"{len(self.endpoints)} endpoints"
+        )
+
+    async def _recover_bridge_state(self, bridge_name: str) -> None:
+        """Recover state for a single OVS bridge."""
+        # Extract lab_id from bridge name (ovs-{lab_id[:12]})
+        lab_id_prefix = bridge_name[len(OVS_BRIDGE_PREFIX):]
+
+        # List ports on this bridge
+        code, stdout, _ = await self._ovs_vsctl("list-ports", bridge_name)
+        if code != 0:
+            logger.warning(f"Failed to list ports on {bridge_name}")
+            return
+
+        ports = [p.strip() for p in stdout.strip().split("\n") if p.strip()]
+
+        # Determine max VLAN in use
+        max_vlan = VLAN_RANGE_START
+        vxlan_tunnels: dict[int, str] = {}
+        external_ports: dict[str, int] = {}
+
+        for port_name in ports:
+            # Get port info including VLAN tag
+            code, stdout, _ = await self._ovs_vsctl("get", "port", port_name, "tag")
+            if code == 0:
+                try:
+                    vlan_str = stdout.strip().strip("[]")
+                    if vlan_str:
+                        vlan = int(vlan_str)
+                        max_vlan = max(max_vlan, vlan)
+                except (ValueError, TypeError):
+                    pass
+
+            # Check if this is a VXLAN port
+            code, stdout, _ = await self._ovs_vsctl("get", "interface", port_name, "type")
+            if code == 0 and stdout.strip() == "vxlan":
+                # Get VNI from options
+                code, opt_stdout, _ = await self._ovs_vsctl(
+                    "get", "interface", port_name, "options:key"
+                )
+                if code == 0:
+                    try:
+                        vni = int(opt_stdout.strip().strip('"'))
+                        vxlan_tunnels[vni] = port_name
+                    except (ValueError, TypeError):
+                        pass
+
+            # Check for external interface (not veth, not vxlan, not internal)
+            elif code == 0 and stdout.strip() == "system":
+                # Could be external interface if not a veth
+                if not port_name.startswith("vh"):
+                    code, tag_stdout, _ = await self._ovs_vsctl("get", "port", port_name, "tag")
+                    if code == 0:
+                        try:
+                            tag_str = tag_stdout.strip().strip("[]")
+                            vlan = int(tag_str) if tag_str else 0
+                            external_ports[port_name] = vlan
+                        except (ValueError, TypeError):
+                            external_ports[port_name] = 0
+
+        # Try to find the full lab_id by checking Docker containers
+        full_lab_id = await self._find_lab_id_from_containers(lab_id_prefix)
+        if not full_lab_id:
+            full_lab_id = lab_id_prefix  # Fall back to prefix
+
+        # Create LabBridge
+        lab_bridge = LabBridge(
+            lab_id=full_lab_id,
+            bridge_name=bridge_name,
+            next_vlan=max_vlan + 1,
+            vxlan_tunnels=vxlan_tunnels,
+            external_ports=external_ports,
+        )
+        self.lab_bridges[full_lab_id] = lab_bridge
+
+        logger.info(
+            f"Recovered bridge {bridge_name}: lab={full_lab_id}, "
+            f"ports={len(ports)}, max_vlan={max_vlan}, "
+            f"vxlan_tunnels={len(vxlan_tunnels)}, external={len(external_ports)}"
+        )
+
+        # Recover endpoint state by matching veth ports to containers
+        await self._recover_endpoints_for_bridge(lab_bridge, ports)
+
+    async def _find_lab_id_from_containers(self, lab_id_prefix: str) -> str | None:
+        """Find full lab_id by checking Docker container labels."""
+        try:
+            import docker
+            client = docker.from_env()
+
+            for container in client.containers.list(all=True):
+                labels = container.labels
+                lab_id = labels.get("archetype.lab_id", "")
+                if lab_id and lab_id.startswith(lab_id_prefix):
+                    return lab_id
+                # Also check legacy containerlab label
+                clab_prefix = labels.get("containerlab", "")
+                if clab_prefix and clab_prefix.startswith(lab_id_prefix):
+                    return clab_prefix
+
+        except Exception as e:
+            logger.debug(f"Error finding lab_id from containers: {e}")
+
+        return None
+
+    async def _recover_endpoints_for_bridge(
+        self, lab_bridge: LabBridge, ports: list[str]
+    ) -> None:
+        """Recover endpoint state by matching veth ports to containers."""
+        try:
+            import docker
+            client = docker.from_env()
+
+            # Build a map of container PIDs for namespace lookups
+            container_pids: dict[str, tuple[str, int]] = {}  # container_name -> (container_id, pid)
+
+            for container in client.containers.list():
+                labels = container.labels
+                lab_id = labels.get("archetype.lab_id", "")
+                if not lab_id:
+                    lab_id = labels.get("containerlab", "")
+
+                if lab_id and lab_id.startswith(lab_bridge.lab_id[:12]):
+                    container_pids[container.name] = (
+                        container.id,
+                        container.attrs["State"]["Pid"],
+                    )
+
+            # For each veth port (vh* pattern), try to find its container
+            for port_name in ports:
+                if not port_name.startswith("vh"):
+                    continue
+
+                # Get VLAN tag
+                code, stdout, _ = await self._ovs_vsctl("get", "port", port_name, "tag")
+                if code != 0:
+                    continue
+
+                try:
+                    vlan_str = stdout.strip().strip("[]")
+                    vlan_tag = int(vlan_str) if vlan_str else VLAN_RANGE_START
+                except (ValueError, TypeError):
+                    vlan_tag = VLAN_RANGE_START
+
+                # Try to find which container owns this port by checking ifindex
+                for container_name, (container_id, pid) in container_pids.items():
+                    interface_name = await self._find_interface_in_container(
+                        pid, port_name
+                    )
+                    if interface_name:
+                        # Found the container, create endpoint state
+                        endpoint_id = f"recovered-{port_name}"
+                        endpoint = EndpointState(
+                            endpoint_id=endpoint_id,
+                            network_id=f"recovered-{lab_bridge.lab_id}-{interface_name}",
+                            interface_name=interface_name,
+                            host_veth=port_name,
+                            cont_veth=f"peer-{port_name}",  # We don't know the exact name
+                            vlan_tag=vlan_tag,
+                            container_name=container_name,
+                        )
+                        self.endpoints[endpoint_id] = endpoint
+                        logger.debug(
+                            f"Recovered endpoint: {container_name}:{interface_name} "
+                            f"-> {port_name} (VLAN {vlan_tag})"
+                        )
+                        break
+
+        except Exception as e:
+            logger.warning(f"Error recovering endpoints: {e}")
+
+    async def _find_interface_in_container(
+        self, pid: int, host_veth: str
+    ) -> str | None:
+        """Find which interface in a container corresponds to a host veth.
+
+        Uses ifindex matching via /sys/class/net.
+        """
+        try:
+            # Get ifindex of host veth's peer
+            code, stdout, _ = await self._run_cmd([
+                "cat", f"/sys/class/net/{host_veth}/ifindex"
+            ])
+            if code != 0:
+                return None
+
+            host_ifindex = int(stdout.strip())
+
+            # In the container namespace, find interface with matching peer ifindex
+            # The peer's iflink should match our ifindex
+            code, stdout, _ = await self._run_cmd([
+                "nsenter", "-t", str(pid), "-n",
+                "sh", "-c",
+                "for iface in /sys/class/net/*/iflink; do "
+                "echo $(dirname $iface | xargs basename):$(cat $iface); done"
+            ])
+            if code != 0:
+                return None
+
+            for line in stdout.strip().split("\n"):
+                if ":" not in line:
+                    continue
+                iface_name, iflink = line.split(":", 1)
+                try:
+                    if int(iflink.strip()) == host_ifindex:
+                        return iface_name
+                except ValueError:
+                    continue
+
+        except Exception as e:
+            logger.debug(f"Error finding interface in container: {e}")
+
+        return None
+
+    # =========================================================================
+    # Health Check
+    # =========================================================================
+
+    async def health_check(self) -> dict[str, Any]:
+        """Check plugin health and return status information."""
+        checks = {}
+
+        # Check socket exists
+        checks["socket_exists"] = os.path.exists(PLUGIN_SOCKET_PATH)
+
+        # Check OVS availability
+        code, _, _ = await self._ovs_vsctl("--version")
+        checks["ovs_available"] = code == 0
+
+        # Count resources
+        checks["bridges_count"] = len(self.lab_bridges)
+        checks["networks_count"] = len(self.networks)
+        checks["endpoints_count"] = len(self.endpoints)
+        checks["management_networks_count"] = len(self.management_networks)
+
+        # Calculate uptime
+        uptime = datetime.now(timezone.utc) - self._started_at
+
+        # Overall health
+        healthy = checks["socket_exists"] and checks["ovs_available"]
+
+        return {
+            "healthy": healthy,
+            "checks": checks,
+            "uptime_seconds": uptime.total_seconds(),
+            "started_at": self._started_at.isoformat(),
+        }
+
+    async def _check_ovs_health(self) -> bool:
+        """Quick check if OVS is responding."""
+        code, _, _ = await self._ovs_vsctl("--version")
+        return code == 0
+
+    # =========================================================================
+    # TTL Cleanup
+    # =========================================================================
+
+    async def _start_ttl_cleanup(self) -> None:
+        """Start the TTL cleanup background task if enabled."""
+        if settings.lab_ttl_enabled:
+            self._cleanup_task = asyncio.create_task(self._ttl_cleanup_loop())
+            logger.info(
+                f"TTL cleanup enabled: TTL={settings.lab_ttl_seconds}s, "
+                f"interval={settings.lab_ttl_check_interval}s"
+            )
+
+    async def _stop_ttl_cleanup(self) -> None:
+        """Stop the TTL cleanup background task."""
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+
+    async def _ttl_cleanup_loop(self) -> None:
+        """Background task to clean up expired labs."""
+        while True:
+            try:
+                await asyncio.sleep(settings.lab_ttl_check_interval)
+                await self._cleanup_expired_labs()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"TTL cleanup error: {e}")
+
+    async def _cleanup_expired_labs(self) -> None:
+        """Remove resources for labs inactive beyond TTL."""
+        now = datetime.now(timezone.utc)
+        ttl = timedelta(seconds=settings.lab_ttl_seconds)
+
+        expired_labs = []
+        async with self._lock:
+            for lab_id, bridge in list(self.lab_bridges.items()):
+                age = now - bridge.last_activity
+                if age > ttl:
+                    expired_labs.append((lab_id, age))
+
+        for lab_id, age in expired_labs:
+            logger.info(f"Cleaning up expired lab {lab_id} (inactive {age})")
+            await self._full_lab_cleanup(lab_id)
+
+    async def _full_lab_cleanup(self, lab_id: str) -> None:
+        """Clean up all resources for a lab."""
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                return
+
+            # Clean up VXLAN tunnels
+            for vni, port_name in list(lab_bridge.vxlan_tunnels.items()):
+                await self._ovs_vsctl("--if-exists", "del-port", lab_bridge.bridge_name, port_name)
+                # Also remove VXLAN interface
+                vxlan_iface = f"vxlan{vni}"
+                await self._run_cmd(["ip", "link", "delete", vxlan_iface])
+
+            # Clean up external interfaces
+            for iface in list(lab_bridge.external_ports.keys()):
+                await self._ovs_vsctl("--if-exists", "del-port", lab_bridge.bridge_name, iface)
+
+            # Clean up endpoints
+            endpoints_to_remove = []
+            for ep_id, endpoint in self.endpoints.items():
+                network = self.networks.get(endpoint.network_id)
+                if network and network.lab_id == lab_id:
+                    await self._delete_port(lab_bridge.bridge_name, endpoint.host_veth)
+                    endpoints_to_remove.append(ep_id)
+
+            for ep_id in endpoints_to_remove:
+                del self.endpoints[ep_id]
+
+            # Clean up networks
+            networks_to_remove = [
+                net_id for net_id, net in self.networks.items()
+                if net.lab_id == lab_id
+            ]
+            for net_id in networks_to_remove:
+                del self.networks[net_id]
+
+            # Delete bridge
+            await self._ovs_vsctl("--if-exists", "del-br", lab_bridge.bridge_name)
+
+            # Remove from tracking
+            del self.lab_bridges[lab_id]
+
+            # Clean up management network if exists
+            if lab_id in self.management_networks:
+                await self.delete_management_network(lab_id)
+
+            logger.info(f"Cleaned up all resources for lab {lab_id}")
+
+    # =========================================================================
+    # Management Network (eth0 with DHCP/NAT)
+    # =========================================================================
+
+    def _allocate_mgmt_subnet(self) -> tuple[str, str]:
+        """Allocate next available /24 subnet from the management range.
+
+        Returns (subnet, gateway) tuple, e.g., ("172.20.1.0/24", "172.20.1.1")
+        """
+        base = ipaddress.ip_network(settings.mgmt_network_subnet_base)
+        # Each lab gets a /24 subnet from the base /16
+        subnet_index = self._next_mgmt_subnet_index
+        self._next_mgmt_subnet_index += 1
+
+        if self._next_mgmt_subnet_index > 255:
+            self._next_mgmt_subnet_index = 1
+
+        # Calculate the /24 subnet
+        # Base is like 172.20.0.0/16, we want 172.20.{index}.0/24
+        base_octets = str(base.network_address).split(".")
+        subnet_str = f"{base_octets[0]}.{base_octets[1]}.{subnet_index}.0/24"
+        gateway = f"{base_octets[0]}.{base_octets[1]}.{subnet_index}.1"
+
+        return subnet_str, gateway
+
+    async def create_management_network(
+        self, lab_id: str, subnet: str | None = None
+    ) -> ManagementNetwork:
+        """Create Docker bridge network for management (eth0).
+
+        This creates a standard Docker bridge network with NAT, providing:
+        - DHCP-assigned IP addresses for containers
+        - NAT for internet access
+        - DNS resolution
+
+        Args:
+            lab_id: Lab identifier
+            subnet: Optional subnet (auto-allocated if not provided)
+
+        Returns:
+            ManagementNetwork with network details
+        """
+        async with self._lock:
+            # Check if already exists
+            if lab_id in self.management_networks:
+                return self.management_networks[lab_id]
+
+            network_name = f"archetype-mgmt-{lab_id[:20]}"
+
+            # Allocate subnet if not provided
+            if subnet:
+                gateway = str(ipaddress.ip_network(subnet, strict=False).network_address + 1)
+            else:
+                subnet, gateway = self._allocate_mgmt_subnet()
+
+            try:
+                import docker
+                client = docker.from_env()
+
+                # Check if network already exists
+                try:
+                    existing = client.networks.get(network_name)
+                    # Get existing network info
+                    network_id = existing.id
+                    config = existing.attrs.get("IPAM", {}).get("Config", [{}])[0]
+                    subnet = config.get("Subnet", subnet)
+                    gateway = config.get("Gateway", gateway)
+                    logger.info(f"Management network {network_name} already exists")
+                except docker.errors.NotFound:
+                    # Create the network
+                    ipam_pool = docker.types.IPAMPool(
+                        subnet=subnet,
+                        gateway=gateway,
+                    )
+                    ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
+
+                    network = client.networks.create(
+                        name=network_name,
+                        driver="bridge",
+                        ipam=ipam_config,
+                        options={
+                            "com.docker.network.bridge.enable_ip_masquerade": (
+                                "true" if settings.mgmt_network_enable_nat else "false"
+                            ),
+                        },
+                        labels={
+                            "archetype.lab_id": lab_id,
+                            "archetype.type": "management",
+                        },
+                    )
+                    network_id = network.id
+                    logger.info(f"Created management network {network_name}: {subnet}")
+
+                mgmt_net = ManagementNetwork(
+                    lab_id=lab_id,
+                    network_id=network_id,
+                    network_name=network_name,
+                    subnet=subnet,
+                    gateway=gateway,
+                )
+                self.management_networks[lab_id] = mgmt_net
+                return mgmt_net
+
+            except Exception as e:
+                logger.error(f"Failed to create management network: {e}")
+                raise
+
+    async def attach_to_management(self, container_id: str, lab_id: str) -> str | None:
+        """Attach container to management network, returns assigned IP.
+
+        Args:
+            container_id: Docker container ID or name
+            lab_id: Lab identifier
+
+        Returns:
+            Assigned IP address, or None if failed
+        """
+        mgmt_net = self.management_networks.get(lab_id)
+        if not mgmt_net:
+            # Create management network if it doesn't exist
+            mgmt_net = await self.create_management_network(lab_id)
+
+        try:
+            import docker
+            client = docker.from_env()
+
+            network = client.networks.get(mgmt_net.network_name)
+            container = client.containers.get(container_id)
+
+            # Check if already connected
+            connected_networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+            if mgmt_net.network_name in connected_networks:
+                return connected_networks[mgmt_net.network_name].get("IPAddress")
+
+            # Connect to network
+            network.connect(container)
+
+            # Get the assigned IP
+            container.reload()
+            ip_addr = container.attrs["NetworkSettings"]["Networks"].get(
+                mgmt_net.network_name, {}
+            ).get("IPAddress")
+
+            logger.info(f"Attached {container_id[:12]} to management network, IP: {ip_addr}")
+            return ip_addr
+
+        except Exception as e:
+            logger.error(f"Failed to attach to management network: {e}")
+            return None
+
+    async def delete_management_network(self, lab_id: str) -> bool:
+        """Remove management network for a lab.
+
+        Args:
+            lab_id: Lab identifier
+
+        Returns:
+            True if deleted, False otherwise
+        """
+        mgmt_net = self.management_networks.pop(lab_id, None)
+        if not mgmt_net:
+            return False
+
+        try:
+            import docker
+            client = docker.from_env()
+
+            try:
+                network = client.networks.get(mgmt_net.network_name)
+                network.remove()
+                logger.info(f"Deleted management network {mgmt_net.network_name}")
+                return True
+            except docker.errors.NotFound:
+                return True  # Already gone
+            except docker.errors.APIError as e:
+                if "has active endpoints" in str(e):
+                    # Force disconnect all containers first
+                    network = client.networks.get(mgmt_net.network_name)
+                    for container_id in list(network.attrs.get("Containers", {}).keys()):
+                        try:
+                            network.disconnect(container_id, force=True)
+                        except Exception:
+                            pass
+                    network.remove()
+                    return True
+                raise
+
+        except Exception as e:
+            logger.error(f"Failed to delete management network: {e}")
+            # Put it back in tracking since we failed
+            self.management_networks[lab_id] = mgmt_net
+            return False
+
+    # =========================================================================
+    # Multi-Host VXLAN Support
+    # =========================================================================
+
+    async def create_vxlan_tunnel(
+        self,
+        lab_id: str,
+        link_id: str,
+        local_ip: str,
+        remote_ip: str,
+        vni: int,
+        vlan_tag: int,
+    ) -> str:
+        """Create VXLAN port on lab bridge for cross-host link.
+
+        This creates a VXLAN tunnel interface and attaches it to the lab's
+        OVS bridge with the specified VLAN tag, enabling L2 connectivity
+        between containers on different hosts.
+
+        Args:
+            lab_id: Lab identifier
+            link_id: Unique link identifier
+            local_ip: Local IP for VXLAN endpoint
+            remote_ip: Remote agent's IP for VXLAN endpoint
+            vni: VXLAN Network Identifier
+            vlan_tag: OVS VLAN tag for this link
+
+        Returns:
+            VXLAN port name
+        """
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                raise ValueError(f"Lab bridge not found for {lab_id}")
+
+            # Check if tunnel already exists
+            if vni in lab_bridge.vxlan_tunnels:
+                return lab_bridge.vxlan_tunnels[vni]
+
+            vxlan_port = f"vx{vni}"
+
+            # Create VXLAN interface
+            code, _, stderr = await self._run_cmd([
+                "ip", "link", "add", vxlan_port,
+                "type", "vxlan",
+                "id", str(vni),
+                "local", local_ip,
+                "remote", remote_ip,
+                "dstport", str(settings.plugin_vxlan_dst_port),
+            ])
+            if code != 0 and "File exists" not in stderr:
+                raise RuntimeError(f"Failed to create VXLAN interface: {stderr}")
+
+            # Bring interface up
+            await self._run_cmd(["ip", "link", "set", vxlan_port, "up"])
+
+            # Add to OVS bridge with VLAN tag
+            code, _, stderr = await self._ovs_vsctl(
+                "add-port", lab_bridge.bridge_name, vxlan_port,
+                f"tag={vlan_tag}",
+            )
+            if code != 0:
+                # Cleanup and raise
+                await self._run_cmd(["ip", "link", "delete", vxlan_port])
+                raise RuntimeError(f"Failed to add VXLAN port to OVS: {stderr}")
+
+            lab_bridge.vxlan_tunnels[vni] = vxlan_port
+            self._touch_lab(lab_id)
+
+            logger.info(
+                f"Created VXLAN tunnel: {vxlan_port} (VNI={vni}, "
+                f"remote={remote_ip}, VLAN={vlan_tag})"
+            )
+            return vxlan_port
+
+    async def delete_vxlan_tunnel(self, lab_id: str, vni: int) -> bool:
+        """Remove VXLAN tunnel.
+
+        Args:
+            lab_id: Lab identifier
+            vni: VXLAN Network Identifier
+
+        Returns:
+            True if deleted, False if not found
+        """
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                return False
+
+            vxlan_port = lab_bridge.vxlan_tunnels.pop(vni, None)
+            if not vxlan_port:
+                return False
+
+            # Remove from OVS
+            await self._ovs_vsctl("--if-exists", "del-port", lab_bridge.bridge_name, vxlan_port)
+
+            # Delete VXLAN interface
+            await self._run_cmd(["ip", "link", "delete", vxlan_port])
+
+            logger.info(f"Deleted VXLAN tunnel: {vxlan_port} (VNI={vni})")
+            return True
+
+    # =========================================================================
+    # External Network Attachment
+    # =========================================================================
+
+    async def attach_external_interface(
+        self,
+        lab_id: str,
+        external_interface: str,
+        vlan_tag: int | None = None,
+    ) -> int:
+        """Attach host interface to lab's OVS bridge.
+
+        This connects a physical host interface to the lab's OVS bridge,
+        enabling containers to communicate with external networks.
+
+        Args:
+            lab_id: Lab identifier
+            external_interface: Host interface name (e.g., "eth1", "enp0s8")
+            vlan_tag: Optional VLAN tag (None = trunk mode)
+
+        Returns:
+            VLAN tag used (0 for trunk mode)
+        """
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                raise ValueError(f"Lab bridge not found for {lab_id}")
+
+            # Check if already attached
+            if external_interface in lab_bridge.external_ports:
+                return lab_bridge.external_ports[external_interface]
+
+            # Verify interface exists
+            code, _, _ = await self._run_cmd([
+                "ip", "link", "show", external_interface
+            ])
+            if code != 0:
+                raise ValueError(f"Interface {external_interface} not found")
+
+            # Add to OVS bridge
+            cmd = ["add-port", lab_bridge.bridge_name, external_interface]
+            if vlan_tag is not None:
+                cmd.append(f"tag={vlan_tag}")
+
+            code, _, stderr = await self._ovs_vsctl(*cmd)
+            if code != 0:
+                raise RuntimeError(f"Failed to attach interface: {stderr}")
+
+            # Bring interface up
+            await self._run_cmd(["ip", "link", "set", external_interface, "up"])
+
+            actual_vlan = vlan_tag or 0
+            lab_bridge.external_ports[external_interface] = actual_vlan
+            self._touch_lab(lab_id)
+
+            logger.info(
+                f"Attached external interface {external_interface} to "
+                f"{lab_bridge.bridge_name} (VLAN={actual_vlan})"
+            )
+            return actual_vlan
+
+    async def connect_to_external(
+        self,
+        lab_id: str,
+        container_name: str,
+        interface_name: str,
+        external_interface: str,
+    ) -> int:
+        """Connect container interface to external network via shared VLAN.
+
+        This sets the container's interface to the same VLAN as the external
+        interface, enabling L2 connectivity.
+
+        Args:
+            lab_id: Lab identifier
+            container_name: Container name
+            interface_name: Interface name in container (e.g., "eth1")
+            external_interface: External interface already attached to bridge
+
+        Returns:
+            Shared VLAN tag
+        """
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                raise ValueError(f"Lab bridge not found for {lab_id}")
+
+            # Get external interface VLAN
+            vlan_tag = lab_bridge.external_ports.get(external_interface)
+            if vlan_tag is None:
+                raise ValueError(f"External interface {external_interface} not attached")
+
+            # Find container endpoint
+            endpoint = None
+            for ep in self.endpoints.values():
+                if ep.container_name == container_name and ep.interface_name == interface_name:
+                    endpoint = ep
+                    break
+
+            if not endpoint:
+                raise ValueError(f"Endpoint not found for {container_name}:{interface_name}")
+
+            # Set endpoint to same VLAN as external interface
+            code, _, stderr = await self._ovs_vsctl(
+                "set", "port", endpoint.host_veth, f"tag={vlan_tag}"
+            )
+            if code != 0:
+                raise RuntimeError(f"Failed to set VLAN: {stderr}")
+
+            endpoint.vlan_tag = vlan_tag
+            self._touch_lab(lab_id)
+
+            logger.info(
+                f"Connected {container_name}:{interface_name} to external "
+                f"{external_interface} (VLAN={vlan_tag})"
+            )
+            return vlan_tag
+
+    async def detach_external_interface(self, lab_id: str, external_interface: str) -> bool:
+        """Remove external interface from bridge.
+
+        Args:
+            lab_id: Lab identifier
+            external_interface: Host interface name
+
+        Returns:
+            True if removed, False if not found
+        """
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                return False
+
+            if external_interface not in lab_bridge.external_ports:
+                return False
+
+            # Remove from OVS
+            await self._ovs_vsctl(
+                "--if-exists", "del-port", lab_bridge.bridge_name, external_interface
+            )
+
+            del lab_bridge.external_ports[external_interface]
+
+            logger.info(
+                f"Detached external interface {external_interface} from "
+                f"{lab_bridge.bridge_name}"
+            )
+            return True
+
+    def list_external_interfaces(self, lab_id: str) -> dict[str, int]:
+        """List external interfaces attached to a lab.
+
+        Returns:
+            Dict of interface_name -> vlan_tag
+        """
+        lab_bridge = self.lab_bridges.get(lab_id)
+        if not lab_bridge:
+            return {}
+        return dict(lab_bridge.external_ports)
+
+    # =========================================================================
+    # Status and Debug Methods
+    # =========================================================================
+
+    async def get_plugin_status(self) -> dict[str, Any]:
+        """Get comprehensive plugin status."""
+        bridges_info = []
+        for lab_id, bridge in self.lab_bridges.items():
+            # Count endpoints for this lab
+            endpoint_count = sum(
+                1 for ep in self.endpoints.values()
+                if self.networks.get(ep.network_id, NetworkState("", lab_id, "", "")).lab_id == lab_id
+            )
+
+            bridges_info.append({
+                "lab_id": lab_id,
+                "bridge_name": bridge.bridge_name,
+                "port_count": endpoint_count,
+                "vlan_range_used": (VLAN_RANGE_START, bridge.next_vlan - 1),
+                "vxlan_tunnels": len(bridge.vxlan_tunnels),
+                "external_interfaces": list(bridge.external_ports.keys()),
+                "last_activity": bridge.last_activity.isoformat(),
+            })
+
+        return {
+            "healthy": await self._check_ovs_health(),
+            "labs_count": len(self.lab_bridges),
+            "endpoints_count": len(self.endpoints),
+            "networks_count": len(self.networks),
+            "management_networks_count": len(self.management_networks),
+            "bridges": bridges_info,
+            "uptime_seconds": (datetime.now(timezone.utc) - self._started_at).total_seconds(),
+        }
+
+    async def get_lab_ports(self, lab_id: str) -> list[dict[str, Any]]:
+        """Get detailed port information for a lab."""
+        lab_bridge = self.lab_bridges.get(lab_id)
+        if not lab_bridge:
+            return []
+
+        ports_info = []
+        for ep in self.endpoints.values():
+            network = self.networks.get(ep.network_id)
+            if not network or network.lab_id != lab_id:
+                continue
+
+            # Get port statistics from OVS
+            rx_bytes = 0
+            tx_bytes = 0
+            code, stdout, _ = await self._run_cmd([
+                "ovs-vsctl", "get", "interface", ep.host_veth, "statistics"
+            ])
+            if code == 0:
+                # Parse statistics JSON-like output
+                try:
+                    stats_str = stdout.strip()
+                    # OVS returns format like {rx_bytes=123, tx_bytes=456, ...}
+                    for part in stats_str.strip("{}").split(", "):
+                        if "=" in part:
+                            key, value = part.split("=", 1)
+                            if key.strip() == "rx_bytes":
+                                rx_bytes = int(value)
+                            elif key.strip() == "tx_bytes":
+                                tx_bytes = int(value)
+                except Exception:
+                    pass
+
+            ports_info.append({
+                "port_name": ep.host_veth,
+                "container": ep.container_name,
+                "interface": ep.interface_name,
+                "vlan_tag": ep.vlan_tag,
+                "rx_bytes": rx_bytes,
+                "tx_bytes": tx_bytes,
+            })
+
+        return ports_info
+
+    async def get_lab_flows(self, lab_id: str) -> dict[str, Any]:
+        """Get OVS flow information for a lab."""
+        lab_bridge = self.lab_bridges.get(lab_id)
+        if not lab_bridge:
+            return {"error": "Lab not found"}
+
+        # Get flows from OVS
+        code, stdout, stderr = await self._run_cmd([
+            "ovs-ofctl", "dump-flows", lab_bridge.bridge_name
+        ])
+        if code != 0:
+            return {"error": f"Failed to get flows: {stderr}"}
+
+        # Parse flows into structured format
+        flows = []
+        for line in stdout.strip().split("\n"):
+            if not line or line.startswith("NXST_FLOW"):
+                continue
+            # Basic parsing - each line is a flow
+            flows.append(line.strip())
+
+        return {
+            "bridge": lab_bridge.bridge_name,
+            "flow_count": len(flows),
+            "flows": flows,
+        }
+
+    # =========================================================================
+    # Docker Plugin API Handlers
+    # =========================================================================
+
+    async def handle_activate(self, request: web.Request) -> web.Response:
+        """Handle /Plugin.Activate - Return plugin capabilities."""
+        return web.json_response({"Implements": ["NetworkDriver"]})
+
+    async def handle_get_capabilities(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.GetCapabilities."""
+        return web.json_response({
+            "Scope": "local",
+            "ConnectivityScope": "local",
+        })
+
+    async def handle_create_network(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.CreateNetwork - Register interface network."""
+        data = await request.json()
+        network_id = data.get("NetworkID", "")
+        options = data.get("Options", {})
+
+        # Get options
+        generic_opts = options.get("com.docker.network.generic", {})
+        lab_id = generic_opts.get("lab_id", "")
+        interface_name = generic_opts.get("interface_name", "eth1")
+
+        if not lab_id:
+            return web.json_response({"Err": "lab_id option is required"})
+
+        logger.info(f"Creating network {network_id[:12]} for lab={lab_id}, interface={interface_name}")
+
+        async with self._lock:
+            try:
+                # Ensure lab bridge exists
+                lab_bridge = await self._ensure_bridge(lab_id)
+
+                # Register network
+                network = NetworkState(
+                    network_id=network_id,
+                    lab_id=lab_id,
+                    interface_name=interface_name,
+                    bridge_name=lab_bridge.bridge_name,
+                )
+                self.networks[network_id] = network
+                lab_bridge.network_ids.add(network_id)
+
+                logger.info(f"Network {network_id[:12]} created on bridge {lab_bridge.bridge_name}")
+
+            except Exception as e:
+                logger.error(f"Failed to create network: {e}")
+                return web.json_response({"Err": str(e)})
+
+        return web.json_response({})
+
+    async def handle_delete_network(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.DeleteNetwork."""
+        data = await request.json()
+        network_id = data.get("NetworkID", "")
+
+        async with self._lock:
+            network = self.networks.pop(network_id, None)
+            if network:
+                lab_bridge = self.lab_bridges.get(network.lab_id)
+                if lab_bridge:
+                    lab_bridge.network_ids.discard(network_id)
+                    await self._maybe_delete_bridge(network.lab_id)
+                logger.info(f"Deleted network {network_id[:12]}")
+
+        return web.json_response({})
+
+    async def handle_create_endpoint(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.CreateEndpoint - Create veth pair for interface.
+
+        This is called BEFORE the container starts. The veth pair is created
+        and attached to OVS. Docker will move the container-side into the
+        container's namespace during Join.
+        """
+        data = await request.json()
+        network_id = data.get("NetworkID", "")
+        endpoint_id = data.get("EndpointID", "")
+
+        async with self._lock:
+            network = self.networks.get(network_id)
+            if not network:
+                return web.json_response({"Err": f"Network {network_id[:12]} not found"})
+
+            lab_bridge = self.lab_bridges.get(network.lab_id)
+            if not lab_bridge:
+                return web.json_response({"Err": f"Lab bridge for {network.lab_id} not found"})
+
+            # Generate veth names
+            host_veth, cont_veth = self._generate_veth_names(endpoint_id)
+
+            # Allocate VLAN (isolated until hot_connect)
+            vlan_tag = self._allocate_vlan(lab_bridge)
+
+            # Create veth pair
+            if not await self._create_veth_pair(host_veth, cont_veth):
+                return web.json_response({"Err": f"Failed to create veth pair"})
+
+            # Attach to OVS
+            if not await self._attach_to_ovs(network.bridge_name, host_veth, vlan_tag):
+                await self._run_cmd(["ip", "link", "delete", host_veth])
+                return web.json_response({"Err": f"Failed to attach to OVS"})
+
+            # Track endpoint
+            endpoint = EndpointState(
+                endpoint_id=endpoint_id,
+                network_id=network_id,
+                interface_name=network.interface_name,
+                host_veth=host_veth,
+                cont_veth=cont_veth,
+                vlan_tag=vlan_tag,
+            )
+            self.endpoints[endpoint_id] = endpoint
+
+            # Update activity timestamp
+            self._touch_lab(network.lab_id)
+
+            logger.info(
+                f"Created endpoint {endpoint_id[:12]}: {host_veth} <-> {cont_veth} "
+                f"({network.interface_name}, VLAN {vlan_tag})"
+            )
+
+        return web.json_response({"Interface": {}})
+
+    async def handle_delete_endpoint(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.DeleteEndpoint - Clean up veth pair."""
+        data = await request.json()
+        network_id = data.get("NetworkID", "")
+        endpoint_id = data.get("EndpointID", "")
+
+        async with self._lock:
+            endpoint = self.endpoints.pop(endpoint_id, None)
+            if endpoint:
+                network = self.networks.get(network_id)
+                if network:
+                    await self._delete_port(network.bridge_name, endpoint.host_veth)
+                logger.info(f"Deleted endpoint {endpoint_id[:12]}")
+
+        return web.json_response({})
+
+    async def handle_join(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.Join - Provide interface config to Docker.
+
+        Docker will move the veth into the container namespace and rename it.
+        This happens BEFORE the container's init process runs.
+        """
+        data = await request.json()
+        endpoint_id = data.get("EndpointID", "")
+        sandbox_key = data.get("SandboxKey", "")
+
+        async with self._lock:
+            endpoint = self.endpoints.get(endpoint_id)
+            if not endpoint:
+                return web.json_response({"Err": f"Endpoint {endpoint_id[:12]} not found"})
+
+            logger.info(
+                f"Join endpoint {endpoint_id[:12]} -> {endpoint.interface_name} "
+                f"(sandbox: {sandbox_key})"
+            )
+
+            return web.json_response({
+                "InterfaceName": {
+                    "SrcName": endpoint.cont_veth,
+                    "DstPrefix": endpoint.interface_name.rstrip("0123456789"),
+                },
+            })
+
+    async def handle_leave(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.Leave - Container disconnecting."""
+        data = await request.json()
+        endpoint_id = data.get("EndpointID", "")
+        logger.debug(f"Leave endpoint {endpoint_id[:12]}")
+        return web.json_response({})
+
+    async def handle_discover_new(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.DiscoverNew."""
+        return web.json_response({})
+
+    async def handle_discover_delete(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.DiscoverDelete."""
+        return web.json_response({})
+
+    async def handle_program_external_connectivity(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.ProgramExternalConnectivity."""
+        return web.json_response({})
+
+    async def handle_revoke_external_connectivity(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.RevokeExternalConnectivity."""
+        return web.json_response({})
+
+    # =========================================================================
+    # VLAN Management API (for hot-connect / topology links)
+    # =========================================================================
+
+    async def hot_connect(
+        self,
+        lab_id: str,
+        container_a: str,
+        iface_a: str,
+        container_b: str,
+        iface_b: str,
+    ) -> int | None:
+        """Connect two interfaces by setting them to the same VLAN.
+
+        Args:
+            lab_id: Lab identifier
+            container_a: First container name
+            iface_a: Interface on first container (e.g., "eth1")
+            container_b: Second container name
+            iface_b: Interface on second container (e.g., "eth1")
+
+        Returns:
+            Shared VLAN tag on success, None on failure
+        """
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                logger.error(f"Lab bridge not found for {lab_id}")
+                return None
+
+            # Find endpoints by container name and interface
+            ep_a = None
+            ep_b = None
+
+            for endpoint in self.endpoints.values():
+                if endpoint.container_name == container_a and endpoint.interface_name == iface_a:
+                    ep_a = endpoint
+                elif endpoint.container_name == container_b and endpoint.interface_name == iface_b:
+                    ep_b = endpoint
+
+            if not ep_a or not ep_b:
+                logger.error(f"Endpoints not found for {container_a}:{iface_a} or {container_b}:{iface_b}")
+                return None
+
+            # Use VLAN from endpoint A
+            shared_vlan = ep_a.vlan_tag
+
+            # Update endpoint B to same VLAN
+            code, _, stderr = await self._ovs_vsctl(
+                "set", "port", ep_b.host_veth, f"tag={shared_vlan}"
+            )
+            if code != 0:
+                logger.error(f"Failed to set VLAN: {stderr}")
+                return None
+
+            ep_b.vlan_tag = shared_vlan
+
+            # Update activity timestamp
+            self._touch_lab(lab_id)
+
+            logger.info(
+                f"Connected {container_a}:{iface_a} <-> {container_b}:{iface_b} "
+                f"(VLAN {shared_vlan})"
+            )
+            return shared_vlan
+
+    async def hot_disconnect(
+        self,
+        lab_id: str,
+        container: str,
+        interface: str,
+    ) -> int | None:
+        """Disconnect an interface by giving it a unique VLAN.
+
+        Args:
+            lab_id: Lab identifier
+            container: Container name
+            interface: Interface name
+
+        Returns:
+            New unique VLAN tag on success, None on failure
+        """
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                return None
+
+            # Find endpoint
+            endpoint = None
+            for ep in self.endpoints.values():
+                if ep.container_name == container and ep.interface_name == interface:
+                    endpoint = ep
+                    break
+
+            if not endpoint:
+                return None
+
+            # Allocate new unique VLAN
+            new_vlan = self._allocate_vlan(lab_bridge)
+
+            code, _, stderr = await self._ovs_vsctl(
+                "set", "port", endpoint.host_veth, f"tag={new_vlan}"
+            )
+            if code != 0:
+                logger.error(f"Failed to set VLAN: {stderr}")
+                return None
+
+            endpoint.vlan_tag = new_vlan
+
+            # Update activity timestamp
+            self._touch_lab(lab_id)
+
+            logger.info(f"Disconnected {container}:{interface} (new VLAN {new_vlan})")
+            return new_vlan
+
+    async def set_endpoint_container_name(self, endpoint_id: str, container_name: str) -> None:
+        """Associate endpoint with container name for hot-connect lookups."""
+        async with self._lock:
+            endpoint = self.endpoints.get(endpoint_id)
+            if endpoint:
+                endpoint.container_name = container_name
+
+    def get_lab_status(self, lab_id: str) -> dict[str, Any] | None:
+        """Get status of a lab's networks and endpoints."""
+        lab_bridge = self.lab_bridges.get(lab_id)
+        if not lab_bridge:
+            return None
+
+        networks_info = []
+        for net_id in lab_bridge.network_ids:
+            network = self.networks.get(net_id)
+            if network:
+                networks_info.append({
+                    "network_id": net_id[:12],
+                    "interface_name": network.interface_name,
+                })
+
+        endpoints_info = []
+        for ep in self.endpoints.values():
+            network = self.networks.get(ep.network_id)
+            if network and network.lab_id == lab_id:
+                endpoints_info.append({
+                    "endpoint_id": ep.endpoint_id[:12],
+                    "container": ep.container_name,
+                    "interface": ep.interface_name,
+                    "host_veth": ep.host_veth,
+                    "vlan": ep.vlan_tag,
+                })
+
+        return {
+            "lab_id": lab_id,
+            "bridge_name": lab_bridge.bridge_name,
+            "networks": networks_info,
+            "endpoints": endpoints_info,
+        }
+
+    def get_all_labs(self) -> list[str]:
+        """Get list of all lab IDs with active bridges."""
+        return list(self.lab_bridges.keys())
+
+    # =========================================================================
+    # HTTP Server
+    # =========================================================================
+
+    def create_app(self) -> web.Application:
+        """Create the aiohttp application with plugin routes."""
+        app = web.Application()
+
+        # Plugin activation
+        app.router.add_post("/Plugin.Activate", self.handle_activate)
+
+        # Network driver endpoints
+        app.router.add_post("/NetworkDriver.GetCapabilities", self.handle_get_capabilities)
+        app.router.add_post("/NetworkDriver.CreateNetwork", self.handle_create_network)
+        app.router.add_post("/NetworkDriver.DeleteNetwork", self.handle_delete_network)
+        app.router.add_post("/NetworkDriver.CreateEndpoint", self.handle_create_endpoint)
+        app.router.add_post("/NetworkDriver.DeleteEndpoint", self.handle_delete_endpoint)
+        app.router.add_post("/NetworkDriver.Join", self.handle_join)
+        app.router.add_post("/NetworkDriver.Leave", self.handle_leave)
+        app.router.add_post("/NetworkDriver.DiscoverNew", self.handle_discover_new)
+        app.router.add_post("/NetworkDriver.DiscoverDelete", self.handle_discover_delete)
+        app.router.add_post("/NetworkDriver.ProgramExternalConnectivity", self.handle_program_external_connectivity)
+        app.router.add_post("/NetworkDriver.RevokeExternalConnectivity", self.handle_revoke_external_connectivity)
+
+        # Store plugin reference in app for status endpoint
+        app["plugin"] = self
+
+        return app
+
+    async def start(self, socket_path: str = PLUGIN_SOCKET_PATH) -> web.AppRunner:
+        """Start the plugin server.
+
+        Returns the AppRunner for lifecycle management.
+        """
+        # Ensure plugin directory exists
+        socket_dir = os.path.dirname(socket_path)
+        os.makedirs(socket_dir, exist_ok=True)
+
+        # Remove stale socket
+        if os.path.exists(socket_path):
+            os.remove(socket_path)
+
+        # Discover existing state on startup (enables recovery after restart)
+        await self._discover_existing_state()
+
+        app = self.create_app()
+        runner = web.AppRunner(app)
+        await runner.setup()
+
+        site = web.UnixSite(runner, socket_path)
+        await site.start()
+
+        # Set socket permissions so Docker can access it
+        os.chmod(socket_path, 0o755)
+
+        logger.info(f"Docker OVS plugin listening on {socket_path}")
+
+        # Create plugin spec file for Docker discovery
+        await self._create_plugin_spec(socket_path)
+
+        # Start TTL cleanup if enabled
+        await self._start_ttl_cleanup()
+
+        return runner
+
+    async def _create_plugin_spec(self, socket_path: str) -> None:
+        """Create plugin spec file for Docker discovery."""
+        spec_dir = os.path.dirname(PLUGIN_SPEC_PATH)
+        os.makedirs(spec_dir, exist_ok=True)
+
+        with open(PLUGIN_SPEC_PATH, "w") as f:
+            f.write(f"unix://{socket_path}\n")
+
+        logger.info(f"Created plugin spec at {PLUGIN_SPEC_PATH}")
+
+
+# Singleton instance
+_plugin_instance: DockerOVSPlugin | None = None
+
+
+def get_docker_ovs_plugin() -> DockerOVSPlugin:
+    """Get or create the singleton plugin instance."""
+    global _plugin_instance
+    if _plugin_instance is None:
+        _plugin_instance = DockerOVSPlugin()
+    return _plugin_instance
+
+
+async def run_plugin_standalone() -> None:
+    """Run the plugin as a standalone daemon."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    plugin = get_docker_ovs_plugin()
+    runner = await plugin.start()
+
+    # Wait for shutdown signal
+    stop_event = asyncio.Event()
+
+    def handle_signal():
+        stop_event.set()
+
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, handle_signal)
+
+    logger.info("Plugin running. Press Ctrl+C to stop.")
+    await stop_event.wait()
+
+    logger.info("Shutting down...")
+    await runner.cleanup()
+
+
+if __name__ == "__main__":
+    asyncio.run(run_plugin_standalone())

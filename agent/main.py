@@ -88,6 +88,23 @@ from agent.schemas import (
     UpdateResponse,
     DockerPruneRequest,
     DockerPruneResponse,
+    # Docker OVS Plugin schemas
+    PluginHealthResponse,
+    PluginBridgeInfo,
+    PluginStatusResponse,
+    PluginPortInfo,
+    PluginLabPortsResponse,
+    PluginFlowsResponse,
+    PluginVxlanRequest,
+    PluginVxlanResponse,
+    PluginExternalAttachRequest,
+    PluginExternalAttachResponse,
+    PluginExternalInfo,
+    PluginExternalListResponse,
+    PluginMgmtNetworkInfo,
+    PluginMgmtNetworkResponse,
+    PluginMgmtAttachRequest,
+    PluginMgmtAttachResponse,
 )
 from agent.version import __version__
 from agent.updater import (
@@ -126,6 +143,9 @@ _lock_manager = None
 
 # Event listener instance (lazy initialized)
 _event_listener = None
+
+# Docker OVS plugin runner (initialized on startup if enabled)
+_docker_plugin_runner = None
 
 
 def get_overlay_manager():
@@ -515,6 +535,17 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to start Docker event listener: {e}")
 
+    # Start Docker OVS network plugin if docker provider is enabled
+    global _docker_plugin_runner
+    if settings.enable_docker:
+        try:
+            from agent.network.docker_plugin import get_docker_ovs_plugin
+            plugin = get_docker_ovs_plugin()
+            _docker_plugin_runner = await plugin.start()
+            logger.info("Docker OVS network plugin started")
+        except Exception as e:
+            logger.error(f"Failed to start Docker OVS plugin: {e}")
+
     yield
 
     # Cleanup
@@ -536,6 +567,14 @@ async def lifespan(app: FastAPI):
             await _event_listener_task
         except asyncio.CancelledError:
             pass
+
+    # Close Docker OVS plugin
+    if _docker_plugin_runner:
+        try:
+            await _docker_plugin_runner.cleanup()
+            logger.info("Docker OVS network plugin stopped")
+        except Exception as e:
+            logger.error(f"Error stopping Docker OVS plugin: {e}")
 
     # Close lock manager
     if _lock_manager:
@@ -1837,6 +1876,391 @@ async def ovs_status() -> OVSStatusResponse:
             bridge_name="",
             initialized=False,
         )
+
+
+# --- Docker OVS Plugin Endpoints ---
+
+def _get_docker_ovs_plugin():
+    """Get the Docker OVS plugin instance."""
+    from agent.network.docker_plugin import get_docker_ovs_plugin
+    return get_docker_ovs_plugin()
+
+
+@app.get("/ovs-plugin/health")
+async def ovs_plugin_health() -> PluginHealthResponse:
+    """Check Docker OVS plugin health.
+
+    Returns health status including socket availability, OVS accessibility,
+    and resource counts.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginHealthResponse(healthy=False)
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        health = await plugin.health_check()
+
+        return PluginHealthResponse(
+            healthy=health["healthy"],
+            checks=health["checks"],
+            uptime_seconds=health["uptime_seconds"],
+            started_at=health.get("started_at"),
+        )
+
+    except Exception as e:
+        logger.error(f"OVS plugin health check failed: {e}")
+        return PluginHealthResponse(healthy=False)
+
+
+@app.get("/ovs-plugin/status")
+async def ovs_plugin_status() -> PluginStatusResponse:
+    """Get comprehensive Docker OVS plugin status.
+
+    Returns detailed information about all lab bridges, endpoints,
+    and management networks.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginStatusResponse(healthy=False)
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        status = await plugin.get_plugin_status()
+
+        bridges = [
+            PluginBridgeInfo(
+                lab_id=b["lab_id"],
+                bridge_name=b["bridge_name"],
+                port_count=b["port_count"],
+                vlan_range_used=tuple(b["vlan_range_used"]),
+                vxlan_tunnels=b["vxlan_tunnels"],
+                external_interfaces=b["external_interfaces"],
+                last_activity=b["last_activity"],
+            )
+            for b in status["bridges"]
+        ]
+
+        return PluginStatusResponse(
+            healthy=status["healthy"],
+            labs_count=status["labs_count"],
+            endpoints_count=status["endpoints_count"],
+            networks_count=status["networks_count"],
+            management_networks_count=status["management_networks_count"],
+            bridges=bridges,
+            uptime_seconds=status["uptime_seconds"],
+        )
+
+    except Exception as e:
+        logger.error(f"OVS plugin status failed: {e}")
+        return PluginStatusResponse(healthy=False)
+
+
+@app.get("/ovs-plugin/labs/{lab_id}")
+async def ovs_plugin_lab_status(lab_id: str) -> PluginBridgeInfo | dict:
+    """Get status of a specific lab's OVS bridge.
+
+    Returns detailed information about the lab's bridge, ports,
+    VXLAN tunnels, and external interfaces.
+    """
+    if not settings.enable_ovs_plugin:
+        return {"error": "OVS plugin not enabled"}
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        status = plugin.get_lab_status(lab_id)
+
+        if not status:
+            return {"error": f"Lab {lab_id} not found"}
+
+        # Get bridge info
+        lab_bridge = plugin.lab_bridges.get(lab_id)
+        if not lab_bridge:
+            return {"error": f"Lab bridge not found for {lab_id}"}
+
+        return PluginBridgeInfo(
+            lab_id=lab_id,
+            bridge_name=lab_bridge.bridge_name,
+            port_count=len(status.get("endpoints", [])),
+            vlan_range_used=(100, lab_bridge.next_vlan - 1),
+            vxlan_tunnels=len(lab_bridge.vxlan_tunnels),
+            external_interfaces=list(lab_bridge.external_ports.keys()),
+            last_activity=lab_bridge.last_activity.isoformat(),
+        )
+
+    except Exception as e:
+        logger.error(f"OVS plugin lab status failed: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/ovs-plugin/labs/{lab_id}/ports")
+async def ovs_plugin_lab_ports(lab_id: str) -> PluginLabPortsResponse:
+    """Get detailed port information for a lab.
+
+    Returns all ports including VLAN tags and traffic statistics.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginLabPortsResponse(lab_id=lab_id, ports=[])
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        ports_data = await plugin.get_lab_ports(lab_id)
+
+        ports = [
+            PluginPortInfo(
+                port_name=p["port_name"],
+                container=p.get("container"),
+                interface=p["interface"],
+                vlan_tag=p["vlan_tag"],
+                rx_bytes=p.get("rx_bytes", 0),
+                tx_bytes=p.get("tx_bytes", 0),
+            )
+            for p in ports_data
+        ]
+
+        return PluginLabPortsResponse(lab_id=lab_id, ports=ports)
+
+    except Exception as e:
+        logger.error(f"OVS plugin lab ports failed: {e}")
+        return PluginLabPortsResponse(lab_id=lab_id, ports=[])
+
+
+@app.get("/ovs-plugin/labs/{lab_id}/flows")
+async def ovs_plugin_lab_flows(lab_id: str) -> PluginFlowsResponse:
+    """Get OVS flow information for a lab.
+
+    Returns OpenFlow rules for debugging network connectivity.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginFlowsResponse(error="OVS plugin not enabled")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        flows_data = await plugin.get_lab_flows(lab_id)
+
+        if "error" in flows_data:
+            return PluginFlowsResponse(error=flows_data["error"])
+
+        return PluginFlowsResponse(
+            bridge=flows_data.get("bridge"),
+            flow_count=flows_data.get("flow_count", 0),
+            flows=flows_data.get("flows", []),
+        )
+
+    except Exception as e:
+        logger.error(f"OVS plugin lab flows failed: {e}")
+        return PluginFlowsResponse(error=str(e))
+
+
+@app.post("/ovs-plugin/labs/{lab_id}/vxlan")
+async def create_plugin_vxlan(lab_id: str, request: PluginVxlanRequest) -> PluginVxlanResponse:
+    """Create VXLAN tunnel on a lab's OVS bridge.
+
+    Used for multi-host connectivity between lab bridges on different agents.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginVxlanResponse(success=False, error="OVS plugin not enabled")
+
+    logger.info(
+        f"Creating plugin VXLAN: lab={lab_id}, vni={request.vni}, "
+        f"remote={request.remote_ip}"
+    )
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        port_name = await plugin.create_vxlan_tunnel(
+            lab_id=lab_id,
+            link_id=request.link_id,
+            local_ip=request.local_ip,
+            remote_ip=request.remote_ip,
+            vni=request.vni,
+            vlan_tag=request.vlan_tag,
+        )
+
+        return PluginVxlanResponse(success=True, port_name=port_name)
+
+    except Exception as e:
+        logger.error(f"Plugin VXLAN creation failed: {e}")
+        return PluginVxlanResponse(success=False, error=str(e))
+
+
+@app.delete("/ovs-plugin/labs/{lab_id}/vxlan/{vni}")
+async def delete_plugin_vxlan(lab_id: str, vni: int) -> PluginVxlanResponse:
+    """Delete VXLAN tunnel from a lab's OVS bridge.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginVxlanResponse(success=False, error="OVS plugin not enabled")
+
+    logger.info(f"Deleting plugin VXLAN: lab={lab_id}, vni={vni}")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        success = await plugin.delete_vxlan_tunnel(lab_id, vni)
+
+        if success:
+            return PluginVxlanResponse(success=True)
+        else:
+            return PluginVxlanResponse(success=False, error="Tunnel not found")
+
+    except Exception as e:
+        logger.error(f"Plugin VXLAN deletion failed: {e}")
+        return PluginVxlanResponse(success=False, error=str(e))
+
+
+@app.post("/ovs-plugin/labs/{lab_id}/external")
+async def attach_plugin_external(
+    lab_id: str, request: PluginExternalAttachRequest
+) -> PluginExternalAttachResponse:
+    """Attach external host interface to lab's OVS bridge.
+
+    Enables connectivity between lab containers and external networks.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginExternalAttachResponse(success=False, error="OVS plugin not enabled")
+
+    logger.info(
+        f"Attaching external interface: lab={lab_id}, "
+        f"interface={request.external_interface}"
+    )
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        vlan_tag = await plugin.attach_external_interface(
+            lab_id=lab_id,
+            external_interface=request.external_interface,
+            vlan_tag=request.vlan_tag,
+        )
+
+        return PluginExternalAttachResponse(success=True, vlan_tag=vlan_tag)
+
+    except Exception as e:
+        logger.error(f"External interface attachment failed: {e}")
+        return PluginExternalAttachResponse(success=False, error=str(e))
+
+
+@app.delete("/ovs-plugin/labs/{lab_id}/external/{interface}")
+async def detach_plugin_external(lab_id: str, interface: str) -> PluginExternalAttachResponse:
+    """Detach external interface from lab's OVS bridge.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginExternalAttachResponse(success=False, error="OVS plugin not enabled")
+
+    logger.info(f"Detaching external interface: lab={lab_id}, interface={interface}")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        success = await plugin.detach_external_interface(lab_id, interface)
+
+        if success:
+            return PluginExternalAttachResponse(success=True)
+        else:
+            return PluginExternalAttachResponse(success=False, error="Interface not found")
+
+    except Exception as e:
+        logger.error(f"External interface detachment failed: {e}")
+        return PluginExternalAttachResponse(success=False, error=str(e))
+
+
+@app.get("/ovs-plugin/labs/{lab_id}/external")
+async def list_plugin_external(lab_id: str) -> PluginExternalListResponse:
+    """List external interfaces attached to a lab's OVS bridge.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginExternalListResponse(lab_id=lab_id, interfaces=[])
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        external_ports = plugin.list_external_interfaces(lab_id)
+
+        interfaces = [
+            PluginExternalInfo(interface=iface, vlan_tag=vlan)
+            for iface, vlan in external_ports.items()
+        ]
+
+        return PluginExternalListResponse(lab_id=lab_id, interfaces=interfaces)
+
+    except Exception as e:
+        logger.error(f"List external interfaces failed: {e}")
+        return PluginExternalListResponse(lab_id=lab_id, interfaces=[])
+
+
+@app.post("/ovs-plugin/labs/{lab_id}/mgmt")
+async def create_plugin_mgmt_network(lab_id: str) -> PluginMgmtNetworkResponse:
+    """Create management network for a lab.
+
+    Creates a Docker bridge network with NAT for container management access.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginMgmtNetworkResponse(success=False, error="OVS plugin not enabled")
+
+    logger.info(f"Creating management network for lab {lab_id}")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        mgmt_net = await plugin.create_management_network(lab_id)
+
+        return PluginMgmtNetworkResponse(
+            success=True,
+            network=PluginMgmtNetworkInfo(
+                lab_id=mgmt_net.lab_id,
+                network_id=mgmt_net.network_id,
+                network_name=mgmt_net.network_name,
+                subnet=mgmt_net.subnet,
+                gateway=mgmt_net.gateway,
+            ),
+        )
+
+    except Exception as e:
+        logger.error(f"Management network creation failed: {e}")
+        return PluginMgmtNetworkResponse(success=False, error=str(e))
+
+
+@app.post("/ovs-plugin/labs/{lab_id}/mgmt/attach")
+async def attach_to_plugin_mgmt(
+    lab_id: str, request: PluginMgmtAttachRequest
+) -> PluginMgmtAttachResponse:
+    """Attach container to management network.
+
+    Returns the assigned IP address for the container's management interface.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginMgmtAttachResponse(success=False, error="OVS plugin not enabled")
+
+    logger.info(f"Attaching {request.container_id} to management network for lab {lab_id}")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        ip_address = await plugin.attach_to_management(request.container_id, lab_id)
+
+        if ip_address:
+            return PluginMgmtAttachResponse(success=True, ip_address=ip_address)
+        else:
+            return PluginMgmtAttachResponse(success=False, error="Failed to get IP address")
+
+    except Exception as e:
+        logger.error(f"Management network attachment failed: {e}")
+        return PluginMgmtAttachResponse(success=False, error=str(e))
+
+
+@app.delete("/ovs-plugin/labs/{lab_id}/mgmt")
+async def delete_plugin_mgmt_network(lab_id: str) -> PluginMgmtNetworkResponse:
+    """Delete management network for a lab.
+    """
+    if not settings.enable_ovs_plugin:
+        return PluginMgmtNetworkResponse(success=False, error="OVS plugin not enabled")
+
+    logger.info(f"Deleting management network for lab {lab_id}")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        success = await plugin.delete_management_network(lab_id)
+
+        if success:
+            return PluginMgmtNetworkResponse(success=True)
+        else:
+            return PluginMgmtNetworkResponse(success=False, error="Network not found")
+
+    except Exception as e:
+        logger.error(f"Management network deletion failed: {e}")
+        return PluginMgmtNetworkResponse(success=False, error=str(e))
 
 
 # --- External Connectivity Endpoints ---

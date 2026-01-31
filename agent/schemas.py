@@ -529,3 +529,128 @@ class BridgeDeletePatchResponse(BaseModel):
     """Response from bridge patch deletion request."""
     success: bool
     error: str | None = None
+
+
+# --- Docker OVS Plugin Status ---
+
+class PluginHealthResponse(BaseModel):
+    """Response from plugin health check."""
+    healthy: bool
+    checks: dict[str, Any] = Field(default_factory=dict)
+    uptime_seconds: float = 0
+    started_at: str | None = None
+
+
+class PluginBridgeInfo(BaseModel):
+    """Information about a lab's OVS bridge."""
+    lab_id: str
+    bridge_name: str
+    port_count: int = 0
+    vlan_range_used: tuple[int, int] = (100, 100)
+    vxlan_tunnels: int = 0
+    external_interfaces: list[str] = Field(default_factory=list)
+    last_activity: str | None = None
+
+
+class PluginStatusResponse(BaseModel):
+    """Response from plugin status endpoint."""
+    healthy: bool
+    labs_count: int = 0
+    endpoints_count: int = 0
+    networks_count: int = 0
+    management_networks_count: int = 0
+    bridges: list[PluginBridgeInfo] = Field(default_factory=list)
+    uptime_seconds: float = 0
+
+
+class PluginPortInfo(BaseModel):
+    """Information about an OVS port in the plugin."""
+    port_name: str
+    container: str | None = None
+    interface: str
+    vlan_tag: int = 0
+    rx_bytes: int = 0
+    tx_bytes: int = 0
+
+
+class PluginLabPortsResponse(BaseModel):
+    """Response listing ports for a lab."""
+    lab_id: str
+    ports: list[PluginPortInfo] = Field(default_factory=list)
+
+
+class PluginFlowsResponse(BaseModel):
+    """Response with OVS flows for a lab."""
+    bridge: str | None = None
+    flow_count: int = 0
+    flows: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class PluginVxlanRequest(BaseModel):
+    """Request to create a VXLAN tunnel on the plugin bridge."""
+    link_id: str
+    local_ip: str
+    remote_ip: str
+    vni: int
+    vlan_tag: int
+
+
+class PluginVxlanResponse(BaseModel):
+    """Response from VXLAN tunnel creation."""
+    success: bool
+    port_name: str | None = None
+    error: str | None = None
+
+
+class PluginExternalAttachRequest(BaseModel):
+    """Request to attach external interface to lab bridge."""
+    external_interface: str
+    vlan_tag: int | None = None
+
+
+class PluginExternalAttachResponse(BaseModel):
+    """Response from external interface attachment."""
+    success: bool
+    vlan_tag: int = 0
+    error: str | None = None
+
+
+class PluginExternalInfo(BaseModel):
+    """Information about an external interface attachment."""
+    interface: str
+    vlan_tag: int = 0
+
+
+class PluginExternalListResponse(BaseModel):
+    """Response listing external interfaces for a lab."""
+    lab_id: str
+    interfaces: list[PluginExternalInfo] = Field(default_factory=list)
+
+
+class PluginMgmtNetworkInfo(BaseModel):
+    """Information about a management network."""
+    lab_id: str
+    network_id: str
+    network_name: str
+    subnet: str
+    gateway: str
+
+
+class PluginMgmtNetworkResponse(BaseModel):
+    """Response from management network operations."""
+    success: bool
+    network: PluginMgmtNetworkInfo | None = None
+    error: str | None = None
+
+
+class PluginMgmtAttachRequest(BaseModel):
+    """Request to attach container to management network."""
+    container_id: str
+
+
+class PluginMgmtAttachResponse(BaseModel):
+    """Response from management network attachment."""
+    success: bool
+    ip_address: str | None = None
+    error: str | None = None
