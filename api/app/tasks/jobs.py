@@ -838,20 +838,61 @@ async def run_node_sync(
         )
         old_agent_ids = {p.host_id for p in old_placements}
 
-        # Find a healthy agent (respects node-level affinity)
-        agent = await agent_client.get_agent_for_lab(
-            session,
-            lab,
-            required_provider=provider,
-        )
+        # Check if nodes have specific host placement in topology
+        # This takes precedence over NodePlacement records and lab.agent_id
+        target_agent_id = None
+        topo_path = topology_path(lab.id)
+        if topo_path.exists():
+            try:
+                topology_yaml = topo_path.read_text(encoding="utf-8")
+                graph = yaml_to_graph(topology_yaml)
+
+                # Get the node names we're syncing
+                node_names_to_sync = {ns.node_name for ns in node_states}
+
+                # Find host assignments for these nodes
+                node_hosts = {}
+                for node in graph.nodes:
+                    if node.name in node_names_to_sync and node.host:
+                        node_hosts[node.name] = node.host
+
+                # If all nodes being synced have the same host, use that
+                if node_hosts:
+                    unique_hosts = set(node_hosts.values())
+                    if len(unique_hosts) == 1:
+                        target_agent_id = list(unique_hosts)[0]
+                        logger.info(f"Node(s) have explicit host placement: {target_agent_id}")
+            except Exception as e:
+                logger.warning(f"Failed to parse topology for host placement: {e}")
+
+        # Find the agent - either from explicit placement or affinity
+        if target_agent_id:
+            # Use the explicitly specified agent
+            agent = session.get(models.Host, target_agent_id)
+            if agent and not agent_client.is_agent_online(agent):
+                # Agent is offline or has stale heartbeat, can't use it
+                logger.warning(f"Target agent {target_agent_id} is offline or unresponsive")
+                agent = None
+        else:
+            # Fall back to affinity-based selection
+            agent = await agent_client.get_agent_for_lab(
+                session,
+                lab,
+                required_provider=provider,
+            )
         if not agent:
             job.status = "failed"
             job.completed_at = datetime.utcnow()
-            job.log_path = f"ERROR: No healthy agent available with {provider} support"
+            if target_agent_id:
+                job.log_path = f"ERROR: Target agent {target_agent_id} is offline or unresponsive"
+                error_msg = f"Target agent offline"
+            else:
+                job.log_path = f"ERROR: No healthy agent available with {provider} support"
+                error_msg = "No agent available"
             # Mark nodes as error
             for ns in node_states:
                 ns.actual_state = "error"
-                ns.error_message = "No agent available"
+                ns.error_message = error_msg
             session.commit()
             logger.warning(f"Job {job_id} failed: no healthy agent available")
             return
