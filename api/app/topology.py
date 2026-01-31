@@ -607,6 +607,19 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         match = re.search(r'(\d+)$', iface_name)
         return int(match.group(1)) if match else None
 
+    def _normalize_interface_name(iface_name: str) -> str:
+        """Normalize interface name to containerlab format.
+
+        Converts vendor-specific names like 'Ethernet1' to 'eth1' for containerlab.
+        This ensures cEOS and other platforms properly map the interfaces.
+        """
+        # Convert Ethernet1 -> eth1, Ethernet2 -> eth2, etc.
+        match = re.match(r'^[Ee]thernet(\d+)$', iface_name)
+        if match:
+            return f"eth{match.group(1)}"
+        # Already in eth format or other format, return as-is
+        return iface_name
+
     def _get_external_endpoint(ext_node: GraphNode) -> str:
         """Generate containerlab external endpoint string for an external network node.
 
@@ -685,15 +698,15 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         node_a = name_map.get(ep_a.node, ep_a.node)
         node_b = name_map.get(ep_b.node, ep_b.node)
 
-        # Get or assign interface names
+        # Get or assign interface names (normalize to containerlab format)
         if ep_a.ifname:
-            iface_a = ep_a.ifname
+            iface_a = _normalize_interface_name(ep_a.ifname)
         else:
             iface_a = f"eth{interface_counters.get(node_a, 1)}"
             interface_counters[node_a] = interface_counters.get(node_a, 1) + 1
 
         if ep_b.ifname:
-            iface_b = ep_b.ifname
+            iface_b = _normalize_interface_name(ep_b.ifname)
         else:
             iface_b = f"eth{interface_counters.get(node_b, 1)}"
             interface_counters[node_b] = interface_counters.get(node_b, 1) + 1

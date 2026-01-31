@@ -53,18 +53,19 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
                 # Get the provider for this lab
                 lab_provider = lab.provider if lab.provider else "containerlab"
 
-                # Check if this is a multi-host lab and find the node's host
-                if not analysis.single_host:
-                    for host_id, placements in analysis.placements.items():
-                        for p in placements:
-                            if p.node_name == node_name:
-                                # Found the host for this node, get the agent
-                                agent = await agent_client.get_agent_by_name(
-                                    database, host_id, required_provider=lab_provider
-                                )
-                                break
-                        if agent:
+                # Check if this node has explicit host placement
+                # Always check placements, even for "single-host" labs, since a node
+                # may have an explicit host assignment that differs from the default
+                for host_id, placements in analysis.placements.items():
+                    for p in placements:
+                        if p.node_name == node_name:
+                            # Found the host for this node, get the agent
+                            agent = await agent_client.get_agent_by_name(
+                                database, host_id, required_provider=lab_provider
+                            )
                             break
+                    if agent:
+                        break
             except Exception as e:
                 logger.warning(f"Console: topology parsing failed for {lab_id}: {e}")
                 # Fall back to default behavior

@@ -1348,10 +1348,13 @@ async def run_node_sync(
             filtered_nodes = [n for n in graph.nodes if (n.container_name or n.name) in all_agent_node_names]
 
             # Include links where BOTH endpoints are in our filtered nodes
+            # Build a set with both container names AND GUI IDs since link endpoints use GUI IDs
             filtered_node_names = {n.container_name or n.name for n in filtered_nodes}
+            filtered_node_ids = {n.id for n in filtered_nodes}
+            filtered_node_identifiers = filtered_node_names | filtered_node_ids
             filtered_links = [
                 link for link in graph.links
-                if all(ep.node in filtered_node_names for ep in link.endpoints)
+                if all(ep.node in filtered_node_identifiers for ep in link.endpoints)
             ]
 
             filtered_graph = TopologyGraph(
@@ -1546,10 +1549,13 @@ async def run_node_sync(
                 filtered_nodes = [n for n in graph.nodes if (n.container_name or n.name) in all_agent_node_names]
 
                 # Include links where BOTH endpoints are in our filtered nodes
+                # Build a set with both container names AND GUI IDs since link endpoints use GUI IDs
                 filtered_node_names = {n.container_name or n.name for n in filtered_nodes}
+                filtered_node_ids = {n.id for n in filtered_nodes}
+                filtered_node_identifiers = filtered_node_names | filtered_node_ids
                 filtered_links = [
                     link for link in graph.links
-                    if all(ep.node in filtered_node_names for ep in link.endpoints)
+                    if all(ep.node in filtered_node_identifiers for ep in link.endpoints)
                 ]
 
                 filtered_graph = TopologyGraph(
