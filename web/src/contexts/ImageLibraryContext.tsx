@@ -42,6 +42,17 @@ export function ImageLibraryProvider({ children }: ImageLibraryProviderProps) {
     fetchImageLibrary();
   }, [fetchImageLibrary]);
 
+  // Refetch when auth token changes (e.g., after login)
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'token' && e.newValue) {
+        fetchImageLibrary();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [fetchImageLibrary]);
+
   const contextValue: ImageLibraryContextType = useMemo(() => ({
     imageLibrary,
     loading,

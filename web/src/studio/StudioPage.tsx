@@ -294,7 +294,7 @@ const StudioPage: React.FC = () => {
   const { effectiveMode } = useTheme();
   const { user, refreshUser } = useUser();
   const { addNotification, preferences } = useNotifications();
-  const { imageLibrary } = useImageLibrary();
+  const { imageLibrary, refreshImageLibrary } = useImageLibrary();
   const isAdmin = user?.is_admin ?? false;
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
@@ -1340,6 +1340,7 @@ const StudioPage: React.FC = () => {
       await refreshUser();
       await loadLabs();
       await loadDevices();
+      await refreshImageLibrary();
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Login failed');
     } finally {
