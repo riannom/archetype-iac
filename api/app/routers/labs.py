@@ -44,6 +44,67 @@ def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
     return node_data
 
 
+def _get_or_create_node_state(
+    database: Session,
+    lab_id: str,
+    node_id: str,
+    initial_desired_state: str = "stopped",
+) -> models.NodeState:
+    """Get or create NodeState, using Node definition for correct naming.
+
+    This eliminates the node_name=node_id placeholder issue by looking up
+    the Node definition to get the correct container_name.
+
+    Args:
+        database: Database session
+        lab_id: Lab identifier
+        node_id: Frontend GUI node ID
+        initial_desired_state: Desired state for new records (default: "stopped")
+
+    Returns:
+        Existing or newly created NodeState record
+    """
+    state = (
+        database.query(models.NodeState)
+        .filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_id == node_id,
+        )
+        .first()
+    )
+    if state:
+        return state
+
+    # Look up Node definition to get correct container_name
+    node_def = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id, models.Node.gui_id == node_id)
+        .first()
+    )
+
+    if node_def:
+        node_name = node_def.container_name
+        node_definition_id = node_def.id
+    else:
+        # Fallback: placeholder will be corrected by topology sync
+        logger.warning(f"Creating NodeState with placeholder for {node_id}")
+        node_name = node_id
+        node_definition_id = None
+
+    state = models.NodeState(
+        lab_id=lab_id,
+        node_id=node_id,
+        node_name=node_name,
+        node_definition_id=node_definition_id,
+        desired_state=initial_desired_state,
+        actual_state="undeployed",
+    )
+    database.add(state)
+    database.commit()
+    database.refresh(state)
+    return state
+
+
 def _upsert_node_states(
     database: Session,
     lab_id: str,
@@ -583,26 +644,7 @@ def get_node_state(
     """Get the state for a specific node."""
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
-    state = (
-        database.query(models.NodeState)
-        .filter(
-            models.NodeState.lab_id == lab_id,
-            models.NodeState.node_id == node_id,
-        )
-        .first()
-    )
-    if not state:
-        # Lazy initialization: create NodeState if it doesn't exist yet
-        state = models.NodeState(
-            lab_id=lab_id,
-            node_id=node_id,
-            node_name=node_id,  # Placeholder - will be updated when topology syncs
-            desired_state="stopped",
-            actual_state="undeployed",
-        )
-        database.add(state)
-        database.commit()
-        database.refresh(state)
+    state = _get_or_create_node_state(database, lab.id, node_id)
     return _enrich_node_state(state)
 
 
@@ -620,33 +662,14 @@ def set_node_desired_state(
     """
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
-    state = (
-        database.query(models.NodeState)
-        .filter(
-            models.NodeState.lab_id == lab_id,
-            models.NodeState.node_id == node_id,
-        )
-        .first()
-    )
-    if not state:
-        # Lazy initialization: create NodeState if it doesn't exist yet
-        # This handles race conditions where UI sends request before topology is saved
-        # The node_name will be corrected when _ensure_node_states_exist runs after topology save
-        state = models.NodeState(
-            lab_id=lab_id,
-            node_id=node_id,
-            node_name=node_id,  # Placeholder - will be updated when topology syncs
-            desired_state=payload.state,
-            actual_state="undeployed",
-        )
-        database.add(state)
+    state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state=payload.state)
+
+    # Update desired state (may differ from initial if record already existed)
+    if state.desired_state != payload.state:
+        state.desired_state = payload.state
         database.commit()
         database.refresh(state)
-        return _enrich_node_state(state)
 
-    state.desired_state = payload.state
-    database.commit()
-    database.refresh(state)
     return _enrich_node_state(state)
 
 
@@ -810,29 +833,8 @@ async def sync_node(
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
 
-    # Get the node state
-    state = (
-        database.query(models.NodeState)
-        .filter(
-            models.NodeState.lab_id == lab_id,
-            models.NodeState.node_id == node_id,
-        )
-        .first()
-    )
-    if not state:
-        # Lazy initialization: create NodeState if it doesn't exist yet
-        state = models.NodeState(
-            lab_id=lab_id,
-            node_id=node_id,
-            node_name=node_id,  # Placeholder - will be updated below
-            desired_state="running",  # Assume user wants to start it
-            actual_state="undeployed",
-        )
-        database.add(state)
-        database.commit()
-        # Re-run ensure to get correct node_name from topology
-        _ensure_node_states_exist(database, lab.id)
-        database.refresh(state)
+    # Get or create the node state with correct naming
+    state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state="running")
 
     # Check if node is out of sync
     out_of_sync = _get_out_of_sync_nodes(database, lab_id, [node_id])

@@ -169,6 +169,33 @@ def _ensure_link_states_for_lab(session, lab_id: str, topology_yaml: str | None 
     return created_count
 
 
+def _backfill_placement_node_ids(session, lab_id: str) -> int:
+    """Backfill node_definition_id for placements missing it.
+
+    This handles existing placements that were created before the FK was added.
+    Called during reconciliation to gradually migrate old data.
+
+    Returns:
+        Number of placements updated
+    """
+    count = 0
+    placements = session.query(models.NodePlacement).filter(
+        models.NodePlacement.lab_id == lab_id,
+        models.NodePlacement.node_definition_id.is_(None),
+    ).all()
+
+    for p in placements:
+        node = session.query(models.Node).filter(
+            models.Node.lab_id == p.lab_id,
+            models.Node.container_name == p.node_name,
+        ).first()
+        if node:
+            p.node_definition_id = node.id
+            count += 1
+
+    return count
+
+
 async def reconcile_lab_states():
     """Query agents and reconcile lab/node states with actual container status.
 
@@ -390,6 +417,15 @@ async def _reconcile_single_lab(session, lab_id: str):
         except Exception as e:
             logger.debug(f"Failed to ensure link states for lab {lab_id}: {e}")
 
+    # Backfill node_definition_id for placements (gradual migration)
+    try:
+        backfilled = _backfill_placement_node_ids(session, lab_id)
+        if backfilled > 0:
+            logger.info(f"Backfilled node_definition_id for {backfilled} placement(s) in lab {lab_id}")
+            session.commit()
+    except Exception as e:
+        logger.debug(f"Failed to backfill placement node IDs for lab {lab_id}: {e}")
+
     # Get ALL agents that have nodes for this lab (multi-host support)
     try:
         lab_provider = get_lab_provider(lab)
@@ -521,6 +557,12 @@ async def _reconcile_single_lab(session, lab_id: str):
         # Ensure NodePlacement records exist for containers found on agents
         # This handles cases where deploy jobs failed after containers were created
         for node_name, agent_id in container_agent_map.items():
+            # Look up node definition for FK
+            node_def = session.query(models.Node).filter(
+                models.Node.lab_id == lab_id,
+                models.Node.container_name == node_name,
+            ).first()
+
             existing_placement = (
                 session.query(models.NodePlacement)
                 .filter(
@@ -538,6 +580,9 @@ async def _reconcile_single_lab(session, lab_id: str):
                     )
                     existing_placement.host_id = agent_id
                     existing_placement.status = "deployed"
+                # Backfill node_definition_id if missing
+                if node_def and not existing_placement.node_definition_id:
+                    existing_placement.node_definition_id = node_def.id
             else:
                 # Create new placement record
                 logger.info(
@@ -546,6 +591,7 @@ async def _reconcile_single_lab(session, lab_id: str):
                 new_placement = models.NodePlacement(
                     lab_id=lab_id,
                     node_name=node_name,
+                    node_definition_id=node_def.id if node_def else None,
                     host_id=agent_id,
                     status="deployed",
                 )

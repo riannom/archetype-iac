@@ -141,6 +141,10 @@ class NodePlacement(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id"))
     node_name: Mapped[str] = mapped_column(String(100))
+    # FK to Node definition for reliable lookups (not dependent on name matching)
+    node_definition_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True
+    )
     host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id"))
     runtime_id: Mapped[str | None] = mapped_column(String(255), nullable=True)  # container/domain ID
     status: Mapped[str] = mapped_column(String(50), default="pending")

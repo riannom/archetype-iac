@@ -74,34 +74,56 @@ async def _get_agent_for_node(
 ) -> models.Host | None:
     """Get the agent that should handle actions for a node.
 
+    Uses FK-first lookup strategy for reliability, falls back to string matching.
+
     Priority order:
-    1. Node definition's host_id (source of truth for where node should run)
-    2. NodePlacement record (runtime placement)
+    1. Node definition's host_id (via FK, then string match)
+    2. NodePlacement record (via FK, then string match)
     3. Lab's default agent
     """
-    # First check the node definition - this is the source of truth
-    node_def = session.query(models.Node).filter(
-        models.Node.lab_id == lab.id,
-        models.Node.container_name == node_state.node_name,
-    ).first()
+    node_def = None
+
+    # 1. Try FK lookup first (most reliable)
+    if node_state.node_definition_id:
+        node_def = session.get(models.Node, node_state.node_definition_id)
+
+    # 2. Fall back to string matching
+    if not node_def:
+        node_def = session.query(models.Node).filter(
+            models.Node.lab_id == lab.id,
+            models.Node.container_name == node_state.node_name,
+        ).first()
+
+        # Link for future lookups
+        if node_def and not node_state.node_definition_id:
+            node_state.node_definition_id = node_def.id
+            logger.info(f"Linked NodeState {node_state.node_id} to Node {node_def.id}")
 
     if node_def and node_def.host_id:
         agent = session.get(models.Host, node_def.host_id)
         if agent and agent_client.is_agent_online(agent):
             return agent
 
-    # Check if there's a placement record for this node
-    placement = session.query(models.NodePlacement).filter(
-        models.NodePlacement.lab_id == lab.id,
-        models.NodePlacement.node_name == node_state.node_name,
-    ).first()
+    # 3. Check NodePlacement (FK-first, then string)
+    placement = None
+    if node_state.node_definition_id:
+        placement = session.query(models.NodePlacement).filter(
+            models.NodePlacement.lab_id == lab.id,
+            models.NodePlacement.node_definition_id == node_state.node_definition_id,
+        ).first()
+
+    if not placement:
+        placement = session.query(models.NodePlacement).filter(
+            models.NodePlacement.lab_id == lab.id,
+            models.NodePlacement.node_name == node_state.node_name,
+        ).first()
 
     if placement and placement.host_id:
         agent = session.get(models.Host, placement.host_id)
         if agent and agent_client.is_agent_online(agent):
             return agent
 
-    # Fall back to lab's default agent
+    # 4. Fall back to lab's default agent
     if lab.agent_id:
         agent = session.get(models.Host, lab.agent_id)
         if agent and agent_client.is_agent_online(agent):
@@ -169,6 +191,16 @@ async def enforce_node_state(
 
     # Ensure placement record matches the agent we're using
     if action == "start":
+        # Get node_definition_id for FK-based placement
+        node_def = None
+        if node_state.node_definition_id:
+            node_def = session.get(models.Node, node_state.node_definition_id)
+        if not node_def:
+            node_def = session.query(models.Node).filter(
+                models.Node.lab_id == lab_id,
+                models.Node.container_name == node_name,
+            ).first()
+
         placement = session.query(models.NodePlacement).filter(
             models.NodePlacement.lab_id == lab_id,
             models.NodePlacement.node_name == node_name,
@@ -180,10 +212,14 @@ async def enforce_node_state(
                     f"Updating placement for {node_name}: {placement.host_id} -> {agent.id}"
                 )
                 placement.host_id = agent.id
+            # Backfill node_definition_id if missing
+            if node_def and not placement.node_definition_id:
+                placement.node_definition_id = node_def.id
         else:
             placement = models.NodePlacement(
                 lab_id=lab_id,
                 node_name=node_name,
+                node_definition_id=node_def.id if node_def else None,
                 host_id=agent.id,
                 status="deployed",
             )

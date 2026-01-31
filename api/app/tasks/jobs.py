@@ -144,6 +144,16 @@ async def _update_node_placements(
     """
     try:
         for node_name in node_names:
+            # Look up node definition for FK
+            node_def = (
+                session.query(models.Node)
+                .filter(
+                    models.Node.lab_id == lab_id,
+                    models.Node.container_name == node_name,
+                )
+                .first()
+            )
+
             # Check for existing placement
             existing = (
                 session.query(models.NodePlacement)
@@ -158,11 +168,15 @@ async def _update_node_placements(
                 # Update existing placement
                 existing.host_id = agent_id
                 existing.status = "deployed"
+                # Backfill node_definition_id if missing
+                if node_def and not existing.node_definition_id:
+                    existing.node_definition_id = node_def.id
             else:
-                # Create new placement
+                # Create new placement with FK
                 placement = models.NodePlacement(
                     lab_id=lab_id,
                     node_name=node_name,
+                    node_definition_id=node_def.id if node_def else None,
                     host_id=agent_id,
                     status="deployed",
                 )
