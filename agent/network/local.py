@@ -387,6 +387,13 @@ class LocalNetworkManager:
                 ])
                 raise RuntimeError(f"Failed to move {veth_b} to container namespace: {stderr}")
 
+            # Delete any existing interface with target name in container A
+            # (e.g., dummy interfaces created by provision_dummy_interfaces)
+            await self._run_cmd([
+                "nsenter", "-t", str(pid_a), "-n",
+                "ip", "link", "delete", iface_a
+            ])
+
             # Rename interface in container A
             # nsenter -t {pid_a} -n ip link set {veth_a} name {iface_a}
             code, _, stderr = await self._run_cmd([
@@ -396,6 +403,12 @@ class LocalNetworkManager:
             if code != 0:
                 logger.warning(f"Failed to rename {veth_a} to {iface_a}: {stderr}")
                 # Continue anyway - interface might already exist with target name
+
+            # Delete any existing interface with target name in container B
+            await self._run_cmd([
+                "nsenter", "-t", str(pid_b), "-n",
+                "ip", "link", "delete", iface_b
+            ])
 
             # Rename interface in container B
             code, _, stderr = await self._run_cmd([

@@ -395,6 +395,12 @@ class OverlayManager:
                 await self._run_cmd(["ip", "link", "delete", veth_host])
                 raise RuntimeError(f"Failed to move veth to container namespace: {stderr}")
 
+            # Delete any existing interface with target name (e.g., dummy interfaces)
+            await self._run_cmd([
+                "nsenter", "-t", str(pid), "-n",
+                "ip", "link", "delete", interface_name
+            ])
+
             # Rename interface inside container and bring it up
             # Use nsenter to execute commands in container network namespace
             await self._run_cmd([

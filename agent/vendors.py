@@ -339,7 +339,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     "ceos": VendorConfig(
         kind="ceos",
         vendor="Arista",
-        console_shell="/bin/bash",  # Use bash; users can run 'Cli' if EOS is booted
+        console_shell="FastCli",  # FastCli is always available; Cli symlink may not exist
         default_image="ceos:latest",
         aliases=["eos", "arista_eos", "arista_ceos"],
         entrypoint="/sbin/init",  # cEOS images have no default entrypoint
@@ -374,10 +374,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT": "1",
             "INTFTYPE": "eth",
             "MGMT_INTF": "eth0",
+            "CEOS_NOZEROTOUCH": "1",  # Cancel ZeroTouch provisioning
         },
         capabilities=["NET_ADMIN", "SYS_ADMIN", "NET_RAW"],
         privileged=True,
-        binds=["{workspace}/configs/{node}/flash:/mnt/flash"],
+        binds=[
+            "{workspace}/configs/{node}/flash:/mnt/flash",
+            "{workspace}/configs/{node}/systemd:/etc/systemd/system.conf.d:ro",
+        ],
         sysctls={
             "net.ipv4.ip_forward": "1",
             "net.ipv6.conf.all.disable_ipv6": "0",

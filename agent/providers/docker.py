@@ -328,6 +328,57 @@ class DockerProvider(Provider):
                 flash_dir.mkdir(parents=True, exist_ok=True)
                 logger.debug(f"Created flash directory: {flash_dir}")
 
+                # Create systemd environment config for cEOS
+                # This is needed because systemd services don't inherit
+                # Docker container environment variables
+                systemd_dir = workspace / "configs" / node_name / "systemd"
+                systemd_dir.mkdir(parents=True, exist_ok=True)
+                env_file = systemd_dir / "ceos-env.conf"
+                env_file.write_text(
+                    "[Manager]\n"
+                    "DefaultEnvironment=EOS_PLATFORM=ceoslab CEOS=1 "
+                    "container=docker ETBA=1 SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT=1 "
+                    "INTFTYPE=eth MGMT_INTF=eth0 CEOS_NOZEROTOUCH=1\n"
+                )
+                logger.debug(f"Created cEOS systemd env config: {env_file}")
+
+                # Write startup-config to flash directory
+                # cEOS reads startup-config from /mnt/flash/startup-config
+                startup_config_path = flash_dir / "startup-config"
+
+                # Check for existing startup-config in configs/{node}/startup-config
+                # (this is where extracted configs are saved)
+                extracted_config = workspace / "configs" / node_name / "startup-config"
+
+                if node.startup_config:
+                    # Use startup-config from topology YAML
+                    startup_config_path.write_text(node.startup_config)
+                    logger.debug(f"Wrote startup-config from topology for {node_name}")
+                elif extracted_config.exists():
+                    # Copy previously extracted config to flash
+                    import shutil
+                    shutil.copy2(extracted_config, startup_config_path)
+                    logger.debug(f"Copied extracted startup-config for {node_name}")
+                elif not startup_config_path.exists():
+                    # Create minimal startup-config with essential initialization
+                    minimal_config = f"""! Minimal cEOS startup config
+hostname {node_name}
+!
+no aaa root
+!
+username admin privilege 15 role network-admin nopassword
+!
+"""
+                    startup_config_path.write_text(minimal_config)
+                    logger.debug(f"Created minimal startup-config for {node_name}")
+
+                # Create zerotouch-config to disable ZTP
+                # This file's presence tells cEOS to skip Zero Touch Provisioning
+                zerotouch_config = flash_dir / "zerotouch-config"
+                if not zerotouch_config.exists():
+                    zerotouch_config.write_text("DISABLE=True\n")
+                    logger.debug(f"Created zerotouch-config for {node_name}")
+
     async def _create_containers(
         self,
         topology: ParsedTopology,
@@ -850,6 +901,77 @@ class DockerProvider(Provider):
     def get_container_name(self, lab_id: str, node_name: str) -> str:
         """Get the Docker container name for a node."""
         return self._container_name(lab_id, node_name)
+
+    async def _extract_all_ceos_configs(
+        self,
+        lab_id: str,
+        workspace: Path,
+    ) -> list[tuple[str, str]]:
+        """Extract running-config from all cEOS containers in a lab.
+
+        Returns list of (node_name, config_content) tuples.
+        Also saves configs to workspace/configs/{node}/startup-config.
+        """
+        extracted = []
+        prefix = self._lab_prefix(lab_id)
+
+        try:
+            containers = self.docker.containers.list(
+                filters={
+                    "name": prefix,
+                    "label": LABEL_PROVIDER + "=" + self.name,
+                },
+            )
+
+            for container in containers:
+                labels = container.labels or {}
+                node_name = labels.get(LABEL_NODE_NAME)
+                kind = labels.get(LABEL_NODE_KIND, "")
+
+                # Only extract from cEOS containers
+                if kind != "ceos" or not node_name:
+                    continue
+
+                if container.status != "running":
+                    logger.warning(f"Skipping {node_name}: container not running")
+                    continue
+
+                try:
+                    # Execute 'show running-config' via FastCli with privilege level 15
+                    result = container.exec_run(
+                        ["FastCli", "-p", "15", "-c", "show running-config"],
+                        demux=True,
+                    )
+                    stdout, stderr = result.output
+
+                    if result.exit_code != 0:
+                        logger.warning(
+                            f"Failed to extract config from {node_name}: "
+                            f"exit={result.exit_code}, stderr={stderr}"
+                        )
+                        continue
+
+                    config_content = stdout.decode("utf-8") if stdout else ""
+                    if not config_content.strip():
+                        logger.warning(f"Empty config from {node_name}")
+                        continue
+
+                    # Save to workspace/configs/{node}/startup-config
+                    config_dir = workspace / "configs" / node_name
+                    config_dir.mkdir(parents=True, exist_ok=True)
+                    config_path = config_dir / "startup-config"
+                    config_path.write_text(config_content)
+
+                    extracted.append((node_name, config_content))
+                    logger.info(f"Extracted config from {node_name}")
+
+                except Exception as e:
+                    logger.error(f"Error extracting config from {node_name}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error during config extraction for lab {lab_id}: {e}")
+
+        return extracted
 
     async def discover_labs(self) -> dict[str, list[NodeInfo]]:
         """Discover all running labs managed by this provider.
