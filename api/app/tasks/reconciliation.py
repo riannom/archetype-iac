@@ -223,6 +223,17 @@ async def reconcile_lab_states():
             .all()
         )
 
+        # Find nodes where desired=running but actual=stopped/undeployed
+        # These may have been started by state enforcement and need reconciliation
+        stale_stopped_nodes = (
+            session.query(models.NodeState)
+            .filter(
+                models.NodeState.desired_state == "running",
+                models.NodeState.actual_state.in_(["stopped", "undeployed", "exited"]),
+            )
+            .all()
+        )
+
         # Find running nodes that are missing NodePlacement records
         # This handles cases where deploy jobs failed after containers were created
         from sqlalchemy import and_, exists
@@ -257,6 +268,8 @@ async def reconcile_lab_states():
         for node in error_nodes:
             labs_to_reconcile.add(node.lab_id)
         for node in running_nodes_without_placement:
+            labs_to_reconcile.add(node.lab_id)
+        for node in stale_stopped_nodes:
             labs_to_reconcile.add(node.lab_id)
 
         # FIRST: Always check readiness for running nodes (this doesn't interfere with jobs)

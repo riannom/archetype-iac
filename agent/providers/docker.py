@@ -315,6 +315,8 @@ class DockerProvider(Provider):
             "detach": True,
             "tty": True,
             "stdin_open": True,
+            # Auto-restart on crash, but respect explicit stops
+            "restart_policy": {"Name": "unless-stopped"},
         }
 
         # Capabilities

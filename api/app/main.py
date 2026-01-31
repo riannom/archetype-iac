@@ -32,6 +32,9 @@ from app.tasks.job_health import job_health_monitor
 from app.tasks.reconciliation import state_reconciliation_monitor
 from app.tasks.disk_cleanup import disk_cleanup_monitor
 from app.tasks.image_reconciliation import image_reconciliation_monitor
+from app.tasks.state_enforcement import state_enforcement_monitor
+from alembic.config import Config as AlembicConfig
+from alembic import command as alembic_command
 
 # Configure structured logging at module load
 setup_logging()
@@ -44,19 +47,28 @@ _reconciliation_task: asyncio.Task | None = None
 _job_health_task: asyncio.Task | None = None
 _disk_cleanup_task: asyncio.Task | None = None
 _image_reconciliation_task: asyncio.Task | None = None
+_state_enforcement_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start background tasks on startup, cleanup on shutdown."""
-    global _agent_monitor_task, _reconciliation_task, _job_health_task, _disk_cleanup_task, _image_reconciliation_task
+    global _agent_monitor_task, _reconciliation_task, _job_health_task, _disk_cleanup_task, _image_reconciliation_task, _state_enforcement_task
 
     # Startup
     logger.info("Starting Archetype API controller")
 
-    # Create database tables
-    logger.info("Creating database tables")
-    models.Base.metadata.create_all(bind=db.engine)
+    # Run database migrations
+    logger.info("Running database migrations")
+    try:
+        alembic_cfg = AlembicConfig("alembic.ini")
+        alembic_command.upgrade(alembic_cfg, "head")
+        logger.info("Database migrations completed")
+    except Exception as e:
+        logger.error(f"Database migration failed: {e}")
+        # Fall back to create_all for fresh installs without migrations
+        logger.info("Falling back to create_all for database tables")
+        models.Base.metadata.create_all(bind=db.engine)
 
     # Seed admin user if configured
     if settings.admin_email and settings.admin_password:
@@ -92,6 +104,9 @@ async def lifespan(app: FastAPI):
 
     # Start image reconciliation monitor background task
     _image_reconciliation_task = asyncio.create_task(image_reconciliation_monitor())
+
+    # Start state enforcement monitor background task
+    _state_enforcement_task = asyncio.create_task(state_enforcement_monitor())
 
     yield
 
@@ -130,6 +145,13 @@ async def lifespan(app: FastAPI):
         _image_reconciliation_task.cancel()
         try:
             await _image_reconciliation_task
+        except asyncio.CancelledError:
+            pass
+
+    if _state_enforcement_task:
+        _state_enforcement_task.cancel()
+        try:
+            await _state_enforcement_task
         except asyncio.CancelledError:
             pass
 
