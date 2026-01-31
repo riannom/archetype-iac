@@ -62,6 +62,7 @@ class AgentInfo(BaseModel):
     capabilities: AgentCapabilities
     version: str = "0.1.0"
     started_at: datetime | None = None  # When the agent process started
+    is_local: bool = False  # True if co-located with controller (enables rebuild)
 
 
 class RegistrationRequest(BaseModel):
@@ -158,6 +159,7 @@ async def register_agent(
         existing.capabilities = json.dumps(agent.capabilities.model_dump())
         existing.version = agent.version
         existing.started_at = agent.started_at
+        existing.is_local = agent.is_local
         existing.last_heartbeat = datetime.now(timezone.utc)
         database.commit()
         host_id = agent.agent_id
@@ -192,6 +194,7 @@ async def register_agent(
             existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
             existing_duplicate.version = agent.version
             existing_duplicate.started_at = agent.started_at
+            existing_duplicate.is_local = agent.is_local
             existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
             database.commit()
             host_id = existing_duplicate.id
@@ -212,6 +215,7 @@ async def register_agent(
                 capabilities=json.dumps(agent.capabilities.model_dump()),
                 version=agent.version,
                 started_at=agent.started_at,
+                is_local=agent.is_local,
                 last_heartbeat=datetime.now(timezone.utc),
             )
             database.add(host)
@@ -390,21 +394,12 @@ def list_agents_detailed(
         except (json.JSONDecodeError, TypeError):
             resource_usage = {}
 
-        # Determine role based on capabilities
+        # Determine role based on capabilities and is_local flag
         providers = capabilities.get("providers", [])
         has_provider = len(providers) > 0
 
-        # Check if this host is co-located with controller
-        # (controller runs on localhost, so check if address matches common patterns)
-        address = host.address.lower()
-        is_local = (
-            address.startswith("localhost") or
-            address.startswith("127.0.0.1") or
-            address.startswith("host.docker.internal")
-        )
-
         if has_provider:
-            role = "agent+controller" if is_local else "agent"
+            role = "agent+controller" if host.is_local else "agent"
         else:
             role = "controller"
 
@@ -436,6 +431,7 @@ def list_agents_detailed(
             "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
             "image_sync_strategy": host.image_sync_strategy or "on_demand",
             "deployment_mode": host.deployment_mode or "unknown",
+            "is_local": host.is_local,
         })
 
     return result
@@ -989,15 +985,7 @@ async def rebuild_docker_agent(
         )
 
     # Check if this is the local agent (we can only rebuild local containers)
-    address = host.address.lower()
-    is_local = (
-        "local-agent" in address or
-        address.startswith("localhost") or
-        address.startswith("127.0.0.1") or
-        address.startswith("host.docker.internal")
-    )
-
-    if not is_local:
+    if not host.is_local:
         raise HTTPException(
             status_code=400,
             detail="Can only rebuild local Docker agents. Remote Docker agents "

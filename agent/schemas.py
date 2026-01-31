@@ -66,6 +66,7 @@ class AgentInfo(BaseModel):
     capabilities: AgentCapabilities
     version: str = __version__
     started_at: datetime | None = None  # When the agent process started
+    is_local: bool = False  # True if co-located with controller (enables rebuild)
 
 
 class RegistrationRequest(BaseModel):

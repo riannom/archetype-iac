@@ -9,6 +9,7 @@ from typing import Literal
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas

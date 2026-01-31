@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     agent_name: str = "default"
     agent_host: str = "0.0.0.0"
     agent_port: int = 8001
+    is_local: bool = False  # True if co-located with controller (enables rebuild)
 
     # Controller connection
     controller_url: str = "http://localhost:8000"
