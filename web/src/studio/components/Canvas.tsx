@@ -423,7 +423,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 : (isHovered ? (effectiveMode === 'dark' ? '#84CC16' : '#65A30D') : (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
             }
 
-            // Calculate port label positions (~40px along line from each node, offset perpendicular)
+            // Calculate port label positions (~60px along line from each node, offset perpendicular)
             const dx = target.x - source.x;
             const dy = target.y - source.y;
             const len = Math.sqrt(dx * dx + dy * dy);
@@ -432,7 +432,7 @@ const Canvas: React.FC<CanvasProps> = ({
             // Perpendicular offset (rotate 90 degrees)
             const perpX = -unitY;
             const perpY = unitX;
-            const labelOffset = 40;
+            const labelOffset = 60;
             const perpOffset = 10; // offset perpendicular to the line
             const sourceLabelX = source.x + unitX * labelOffset + perpX * perpOffset;
             const sourceLabelY = source.y + unitY * labelOffset + perpY * perpOffset;
