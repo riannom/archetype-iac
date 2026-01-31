@@ -734,6 +734,13 @@ async def run_multihost_deploy(
             logger.error(f"Job {job_id} failed: {len(link_failures)} cross-host link(s) failed")
             return
 
+        # Update NodePlacement records for each host
+        # This ensures placement tracking matches actual deployment
+        for host_id, agent in host_to_agent.items():
+            node_names = host_node_names.get(host_id, [])
+            if node_names:
+                await _update_node_placements(session, lab_id, agent.id, node_names)
+
         # Mark job as completed
         job.status = "completed"
         job.completed_at = datetime.utcnow()

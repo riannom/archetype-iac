@@ -154,9 +154,12 @@ class DockerProvider(Provider):
 
     @property
     def docker(self) -> docker.DockerClient:
-        """Lazy-initialize Docker client."""
+        """Lazy-initialize Docker client with extended timeout for slow operations."""
         if self._docker is None:
-            self._docker = docker.from_env()
+            # Use docker_client_timeout for Docker operations since container creation
+            # can be slow (image extraction, network setup, etc.)
+            # Default 60s is too short for cEOS and other complex containers
+            self._docker = docker.from_env(timeout=settings.docker_client_timeout)
         return self._docker
 
     @property

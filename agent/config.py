@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # Container operations
     container_stop_timeout: int = 10
 
+    # Docker client timeout (seconds) - covers container create, network ops, etc.
+    # This needs to be long enough for slow operations like image layer extraction
+    docker_client_timeout: int = 300  # 5 minutes for individual Docker API calls
+
     # Deploy operation timeouts (seconds)
     deploy_timeout: float = 900.0  # 15 minutes for deploy operations
     destroy_timeout: float = 300.0  # 5 minutes for destroy operations
