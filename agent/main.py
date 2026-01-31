@@ -58,11 +58,29 @@ from agent.schemas import (
     JobStatus,
     LabStatusRequest,
     LabStatusResponse,
+    LinkCreate,
+    LinkCreateResponse,
+    LinkDeleteResponse,
+    LinkInfo,
+    LinkListResponse,
+    LinkState,
     NodeActionRequest,
     NodeInfo,
     NodeStatus,
+    OVSPortInfo,
+    OVSStatusResponse,
     OverlayStatusResponse,
     Provider,
+    ExternalConnectRequest,
+    ExternalConnectResponse,
+    ExternalDisconnectRequest,
+    ExternalDisconnectResponse,
+    ExternalConnectionInfo,
+    ExternalListResponse,
+    BridgePatchRequest,
+    BridgePatchResponse,
+    BridgeDeletePatchRequest,
+    BridgeDeletePatchResponse,
     RegistrationRequest,
     RegistrationResponse,
     TunnelInfo,
@@ -117,6 +135,19 @@ def get_overlay_manager():
         from agent.network.overlay import OverlayManager
         _overlay_manager = OverlayManager()
     return _overlay_manager
+
+
+# OVS network manager (lazy initialized)
+_ovs_manager = None
+
+
+def get_ovs_manager():
+    """Lazy-initialize OVS network manager."""
+    global _ovs_manager
+    if _ovs_manager is None:
+        from agent.network.ovs import OVSNetworkManager
+        _ovs_manager = OVSNetworkManager()
+    return _ovs_manager
 
 
 def get_event_listener():
@@ -1500,6 +1531,504 @@ async def overlay_status() -> OverlayStatusResponse:
     except Exception as e:
         logger.error(f"Overlay status failed: {e}")
         return OverlayStatusResponse()
+
+
+# --- OVS Hot-Connect Link Management ---
+
+@app.post("/labs/{lab_id}/links")
+async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
+    """Hot-connect two interfaces in a running lab.
+
+    This creates a Layer 2 link between two container interfaces by
+    assigning them the same VLAN tag on the OVS bridge. Requires OVS
+    to be enabled and interfaces to be pre-provisioned.
+
+    Args:
+        lab_id: Lab identifier
+        link: Link creation request with source/target nodes and interfaces
+
+    Returns:
+        LinkCreateResponse with link details or error
+    """
+    if not settings.enable_ovs:
+        return LinkCreateResponse(
+            success=False,
+            error="OVS networking not enabled on this agent",
+        )
+
+    logger.info(
+        f"Hot-connect request: lab={lab_id}, "
+        f"{link.source_node}:{link.source_interface} <-> "
+        f"{link.target_node}:{link.target_interface}"
+    )
+
+    try:
+        ovs = get_ovs_manager()
+        if not ovs._initialized:
+            await ovs.initialize()
+
+        # Get container names from provider
+        provider = get_provider_for_request()
+        container_a = provider.get_container_name(lab_id, link.source_node)
+        container_b = provider.get_container_name(lab_id, link.target_node)
+
+        # Hot-connect via OVS
+        vlan_tag = await ovs.hot_connect(
+            container_a=container_a,
+            iface_a=link.source_interface,
+            container_b=container_b,
+            iface_b=link.target_interface,
+            lab_id=lab_id,
+        )
+
+        link_id = f"{link.source_node}:{link.source_interface}-{link.target_node}:{link.target_interface}"
+
+        return LinkCreateResponse(
+            success=True,
+            link=LinkInfo(
+                link_id=link_id,
+                lab_id=lab_id,
+                source_node=link.source_node,
+                source_interface=link.source_interface,
+                target_node=link.target_node,
+                target_interface=link.target_interface,
+                state=LinkState.CONNECTED,
+                vlan_tag=vlan_tag,
+            ),
+        )
+
+    except Exception as e:
+        logger.error(f"Hot-connect failed: {e}")
+        return LinkCreateResponse(
+            success=False,
+            error=str(e),
+        )
+
+
+@app.delete("/labs/{lab_id}/links/{link_id}")
+async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
+    """Hot-disconnect a link in a running lab.
+
+    This breaks a Layer 2 link between two container interfaces by
+    assigning them separate VLAN tags.
+
+    Args:
+        lab_id: Lab identifier
+        link_id: Link identifier (format: "node1:iface1-node2:iface2")
+
+    Returns:
+        LinkDeleteResponse with success status
+    """
+    if not settings.enable_ovs:
+        return LinkDeleteResponse(
+            success=False,
+            error="OVS networking not enabled on this agent",
+        )
+
+    logger.info(f"Hot-disconnect request: lab={lab_id}, link={link_id}")
+
+    try:
+        ovs = get_ovs_manager()
+        if not ovs._initialized:
+            return LinkDeleteResponse(
+                success=False,
+                error="OVS not initialized",
+            )
+
+        # Parse link_id to get endpoints
+        # Format: "node1:iface1-node2:iface2"
+        parts = link_id.split("-")
+        if len(parts) != 2:
+            return LinkDeleteResponse(
+                success=False,
+                error=f"Invalid link_id format: {link_id}",
+            )
+
+        ep_a = parts[0].split(":")
+        ep_b = parts[1].split(":")
+
+        if len(ep_a) != 2 or len(ep_b) != 2:
+            return LinkDeleteResponse(
+                success=False,
+                error=f"Invalid link_id format: {link_id}",
+            )
+
+        node_a, iface_a = ep_a
+        node_b, iface_b = ep_b
+
+        # Get container names from provider
+        provider = get_provider_for_request()
+        container_a = provider.get_container_name(lab_id, node_a)
+        container_b = provider.get_container_name(lab_id, node_b)
+
+        # Hot-disconnect via OVS
+        await ovs.hot_disconnect(
+            container_a=container_a,
+            iface_a=iface_a,
+            container_b=container_b,
+            iface_b=iface_b,
+        )
+
+        return LinkDeleteResponse(success=True)
+
+    except Exception as e:
+        logger.error(f"Hot-disconnect failed: {e}")
+        return LinkDeleteResponse(
+            success=False,
+            error=str(e),
+        )
+
+
+@app.get("/labs/{lab_id}/links")
+async def list_links(lab_id: str) -> LinkListResponse:
+    """List all links and their connection states for a lab.
+
+    Returns all OVS-managed links for the specified lab, including
+    their VLAN tags and connection state.
+
+    Args:
+        lab_id: Lab identifier
+
+    Returns:
+        LinkListResponse with list of links
+    """
+    if not settings.enable_ovs:
+        return LinkListResponse(links=[])
+
+    try:
+        ovs = get_ovs_manager()
+        if not ovs._initialized:
+            return LinkListResponse(links=[])
+
+        # Get provider for container name resolution
+        provider = get_provider_for_request()
+
+        links = []
+        for ovs_link in ovs.get_links_for_lab(lab_id):
+            # Parse port keys to get node/interface names
+            # Format: "container_name:interface_name"
+            port_a_parts = ovs_link.port_a.rsplit(":", 1)
+            port_b_parts = ovs_link.port_b.rsplit(":", 1)
+
+            # Extract node names from container names
+            # Container format: "archetype-{lab_id}-{node_name}"
+            source_node = port_a_parts[0].split("-")[-1] if port_a_parts else ""
+            target_node = port_b_parts[0].split("-")[-1] if port_b_parts else ""
+            source_interface = port_a_parts[1] if len(port_a_parts) > 1 else ""
+            target_interface = port_b_parts[1] if len(port_b_parts) > 1 else ""
+
+            links.append(LinkInfo(
+                link_id=ovs_link.link_id,
+                lab_id=ovs_link.lab_id,
+                source_node=source_node,
+                source_interface=source_interface,
+                target_node=target_node,
+                target_interface=target_interface,
+                state=LinkState.CONNECTED,
+                vlan_tag=ovs_link.vlan_tag,
+            ))
+
+        return LinkListResponse(links=links)
+
+    except Exception as e:
+        logger.error(f"List links failed: {e}")
+        return LinkListResponse(links=[])
+
+
+# --- OVS Status Endpoint ---
+
+@app.get("/ovs/status")
+async def ovs_status() -> OVSStatusResponse:
+    """Get status of OVS networking on this agent.
+
+    Returns information about the OVS bridge, provisioned ports,
+    and active links.
+    """
+    if not settings.enable_ovs:
+        return OVSStatusResponse(
+            bridge_name="",
+            initialized=False,
+        )
+
+    try:
+        ovs = get_ovs_manager()
+        status = ovs.get_status()
+
+        ports = [
+            OVSPortInfo(
+                port_name=p["port_name"],
+                container_name=p["container"],
+                interface_name=p["interface"],
+                vlan_tag=p["vlan_tag"],
+                lab_id=p["lab_id"],
+            )
+            for p in status["ports"]
+        ]
+
+        links = [
+            LinkInfo(
+                link_id=l["link_id"],
+                lab_id=l["lab_id"],
+                source_node=l["port_a"].rsplit(":", 1)[0].split("-")[-1],
+                source_interface=l["port_a"].rsplit(":", 1)[1] if ":" in l["port_a"] else "",
+                target_node=l["port_b"].rsplit(":", 1)[0].split("-")[-1],
+                target_interface=l["port_b"].rsplit(":", 1)[1] if ":" in l["port_b"] else "",
+                state=LinkState.CONNECTED,
+                vlan_tag=l["vlan_tag"],
+            )
+            for l in status["links"]
+        ]
+
+        return OVSStatusResponse(
+            bridge_name=status["bridge"],
+            initialized=status["initialized"],
+            ports=ports,
+            links=links,
+            vlan_allocations=status["vlan_allocations"],
+        )
+
+    except Exception as e:
+        logger.error(f"OVS status failed: {e}")
+        return OVSStatusResponse(
+            bridge_name="",
+            initialized=False,
+        )
+
+
+# --- External Connectivity Endpoints ---
+
+@app.post("/labs/{lab_id}/external/connect")
+async def connect_to_external(
+    lab_id: str,
+    request: ExternalConnectRequest,
+) -> ExternalConnectResponse:
+    """Connect a container interface to an external network.
+
+    This establishes connectivity between a container interface and an
+    external host interface (e.g., for internet access, management network,
+    or physical lab equipment).
+
+    Args:
+        lab_id: Lab identifier
+        request: Connection request with container/interface and external interface
+
+    Returns:
+        ExternalConnectResponse with VLAN tag or error
+    """
+    if not settings.enable_ovs:
+        return ExternalConnectResponse(
+            success=False,
+            error="OVS networking not enabled on this agent",
+        )
+
+    logger.info(
+        f"External connect request: lab={lab_id}, "
+        f"node={request.node_name}, interface={request.interface_name}, "
+        f"external={request.external_interface}"
+    )
+
+    try:
+        ovs = get_ovs_manager()
+        if not ovs._initialized:
+            await ovs.initialize()
+
+        # Resolve container name
+        if request.container_name:
+            container_name = request.container_name
+        elif request.node_name:
+            provider = get_provider_for_request()
+            container_name = provider.get_container_name(lab_id, request.node_name)
+        else:
+            return ExternalConnectResponse(
+                success=False,
+                error="Either container_name or node_name must be provided",
+            )
+
+        # Connect to external network
+        vlan_tag = await ovs.connect_to_external(
+            container_name=container_name,
+            interface_name=request.interface_name,
+            external_interface=request.external_interface,
+            vlan_tag=request.vlan_tag,
+        )
+
+        return ExternalConnectResponse(
+            success=True,
+            vlan_tag=vlan_tag,
+        )
+
+    except Exception as e:
+        logger.error(f"External connect failed: {e}")
+        return ExternalConnectResponse(
+            success=False,
+            error=str(e),
+        )
+
+
+@app.post("/ovs/patch")
+async def create_bridge_patch(request: BridgePatchRequest) -> BridgePatchResponse:
+    """Create a patch connection to another OVS or Linux bridge.
+
+    This establishes connectivity between the arch-ovs bridge and another
+    bridge (e.g., libvirt virbr0, Docker bridge, or physical bridge).
+
+    Args:
+        request: Patch request with target bridge name and optional VLAN
+
+    Returns:
+        BridgePatchResponse with patch port name or error
+    """
+    if not settings.enable_ovs:
+        return BridgePatchResponse(
+            success=False,
+            error="OVS networking not enabled on this agent",
+        )
+
+    logger.info(f"Bridge patch request: target={request.target_bridge}")
+
+    try:
+        ovs = get_ovs_manager()
+        if not ovs._initialized:
+            await ovs.initialize()
+
+        patch_port = await ovs.create_patch_to_bridge(
+            target_bridge=request.target_bridge,
+            vlan_tag=request.vlan_tag,
+        )
+
+        return BridgePatchResponse(
+            success=True,
+            patch_port=patch_port,
+        )
+
+    except Exception as e:
+        logger.error(f"Bridge patch failed: {e}")
+        return BridgePatchResponse(
+            success=False,
+            error=str(e),
+        )
+
+
+@app.delete("/ovs/patch")
+async def delete_bridge_patch(request: BridgeDeletePatchRequest) -> BridgeDeletePatchResponse:
+    """Delete a patch connection to another bridge.
+
+    This removes connectivity between the arch-ovs bridge and another bridge.
+
+    Args:
+        request: Delete request with target bridge name
+
+    Returns:
+        BridgeDeletePatchResponse with success status
+    """
+    if not settings.enable_ovs:
+        return BridgeDeletePatchResponse(
+            success=False,
+            error="OVS networking not enabled on this agent",
+        )
+
+    logger.info(f"Bridge patch delete request: target={request.target_bridge}")
+
+    try:
+        ovs = get_ovs_manager()
+        if not ovs._initialized:
+            return BridgeDeletePatchResponse(
+                success=False,
+                error="OVS not initialized",
+            )
+
+        success = await ovs.delete_patch_to_bridge(request.target_bridge)
+        return BridgeDeletePatchResponse(success=success)
+
+    except Exception as e:
+        logger.error(f"Bridge patch delete failed: {e}")
+        return BridgeDeletePatchResponse(
+            success=False,
+            error=str(e),
+        )
+
+
+@app.post("/labs/{lab_id}/external/disconnect")
+async def disconnect_from_external(
+    lab_id: str,
+    request: ExternalDisconnectRequest,
+) -> ExternalDisconnectResponse:
+    """Disconnect an external network interface.
+
+    This detaches an external host interface from the OVS bridge,
+    breaking connectivity to any container interfaces that were connected.
+
+    Args:
+        lab_id: Lab identifier
+        request: Disconnect request with external interface name
+
+    Returns:
+        ExternalDisconnectResponse with success status
+    """
+    if not settings.enable_ovs:
+        return ExternalDisconnectResponse(
+            success=False,
+            error="OVS networking not enabled on this agent",
+        )
+
+    logger.info(f"External disconnect request: lab={lab_id}, interface={request.external_interface}")
+
+    try:
+        ovs = get_ovs_manager()
+        if not ovs._initialized:
+            return ExternalDisconnectResponse(
+                success=False,
+                error="OVS not initialized",
+            )
+
+        success = await ovs.detach_external_interface(request.external_interface)
+        return ExternalDisconnectResponse(success=success)
+
+    except Exception as e:
+        logger.error(f"External disconnect failed: {e}")
+        return ExternalDisconnectResponse(
+            success=False,
+            error=str(e),
+        )
+
+
+@app.get("/labs/{lab_id}/external")
+async def list_external_connections(lab_id: str) -> ExternalListResponse:
+    """List all external network connections.
+
+    Returns all external interfaces attached to the OVS bridge and their
+    connected container interfaces.
+
+    Args:
+        lab_id: Lab identifier (used for filtering, currently returns all)
+
+    Returns:
+        ExternalListResponse with list of external connections
+    """
+    if not settings.enable_ovs:
+        return ExternalListResponse(connections=[])
+
+    try:
+        ovs = get_ovs_manager()
+        if not ovs._initialized:
+            return ExternalListResponse(connections=[])
+
+        connections_data = await ovs.list_external_connections()
+
+        connections = [
+            ExternalConnectionInfo(
+                external_interface=c["external_interface"],
+                vlan_tag=c["vlan_tag"],
+                connected_ports=c["connected_ports"],
+            )
+            for c in connections_data
+        ]
+
+        return ExternalListResponse(connections=connections)
+
+    except Exception as e:
+        logger.error(f"List external connections failed: {e}")
+        return ExternalListResponse(connections=[])
 
 
 # --- Node Readiness Endpoint ---

@@ -744,6 +744,98 @@ class LocalNetworkManager:
         return created
 
 
+    async def create_link_ovs(
+        self,
+        lab_id: str,
+        link_id: str,
+        container_a: str,
+        container_b: str,
+        iface_a: str,
+        iface_b: str,
+    ) -> int:
+        """Create a link using OVS hot-connect.
+
+        This is an alternative to create_link() that uses OVS VLAN tag matching
+        instead of veth pairs. It requires interfaces to already be provisioned
+        via OVS (see OVSNetworkManager.provision_interface).
+
+        Args:
+            lab_id: Lab identifier
+            link_id: Unique link identifier
+            container_a: First container name
+            container_b: Second container name
+            iface_a: First interface name
+            iface_b: Second interface name
+
+        Returns:
+            Shared VLAN tag for the link
+        """
+        from agent.network.ovs import get_ovs_manager
+
+        ovs = get_ovs_manager()
+        vlan = await ovs.hot_connect(
+            container_a=container_a,
+            iface_a=iface_a,
+            container_b=container_b,
+            iface_b=iface_b,
+            lab_id=lab_id,
+        )
+
+        # Track link for cleanup
+        key = f"{lab_id}:{link_id}"
+        link = LocalLink(
+            lab_id=lab_id,
+            link_id=link_id,
+            container_a=container_a,
+            container_b=container_b,
+            iface_a=iface_a,
+            iface_b=iface_b,
+            veth_host_a="",  # Not used with OVS
+            veth_host_b="",
+        )
+        self._links[key] = link
+
+        return vlan
+
+    async def delete_link_ovs(
+        self,
+        lab_id: str,
+        link_id: str,
+    ) -> tuple[int, int] | None:
+        """Delete a link using OVS hot-disconnect.
+
+        This is an alternative to delete_link() that uses OVS VLAN tag separation.
+
+        Args:
+            lab_id: Lab identifier
+            link_id: Link identifier
+
+        Returns:
+            Tuple of new VLAN tags (vlan_a, vlan_b) or None if not found
+        """
+        from agent.network.ovs import get_ovs_manager
+
+        key = f"{lab_id}:{link_id}"
+        link = self._links.get(key)
+
+        if not link:
+            logger.warning(f"Link not found for OVS disconnect: {key}")
+            return None
+
+        ovs = get_ovs_manager()
+        vlans = await ovs.hot_disconnect(
+            container_a=link.container_a,
+            iface_a=link.iface_a,
+            container_b=link.container_b,
+            iface_b=link.iface_b,
+        )
+
+        # Remove from tracking
+        del self._links[key]
+
+        return vlans
+
+
 # Module-level singleton accessor
 _local_manager: LocalNetworkManager | None = None
 

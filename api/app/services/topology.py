@@ -28,6 +28,7 @@ from app.schemas import (
     GraphNode,
     TopologyGraph,
 )
+from app.topology import _denormalize_interface_name
 
 logger = logging.getLogger(__name__)
 
@@ -496,6 +497,8 @@ class TopologyService:
 
         # Build node ID map for link endpoint resolution
         node_id_to_gui_id: dict[str, str] = {n.id: n.gui_id for n in nodes}
+        # Build node ID to device type map for interface name denormalization
+        node_id_to_device: dict[str, str | None] = {n.id: n.device for n in nodes}
 
         graph_nodes: list[GraphNode] = []
         for node in nodes:
@@ -538,6 +541,14 @@ class TopologyService:
             source_gui_id = node_id_to_gui_id.get(link.source_node_id, link.source_node_id)
             target_gui_id = node_id_to_gui_id.get(link.target_node_id, link.target_node_id)
 
+            # Get device types for interface name denormalization
+            source_device = node_id_to_device.get(link.source_node_id)
+            target_device = node_id_to_device.get(link.target_node_id)
+
+            # Denormalize interface names to vendor-specific format for UI display
+            source_iface = _denormalize_interface_name(link.source_interface, source_device)
+            target_iface = _denormalize_interface_name(link.target_interface, target_device)
+
             # Parse link config_json
             link_config: dict[str, Any] = {}
             if link.config_json:
@@ -550,12 +561,12 @@ class TopologyService:
                 endpoints=[
                     GraphEndpoint(
                         node=source_gui_id,
-                        ifname=link.source_interface,
+                        ifname=source_iface,
                         ipv4=link_config.get("ip_a"),
                     ),
                     GraphEndpoint(
                         node=target_gui_id,
-                        ifname=link.target_interface,
+                        ifname=target_iface,
                         ipv4=link_config.get("ip_b"),
                     ),
                 ],

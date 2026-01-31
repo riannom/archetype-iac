@@ -393,3 +393,138 @@ class DockerPruneResponse(BaseModel):
     volumes_removed: int = 0
     space_reclaimed: int = 0
     errors: list[str] = Field(default_factory=list)
+
+
+# --- Hot-Connect Link Management ---
+
+class LinkState(str, Enum):
+    """State of a network link."""
+    CONNECTED = "connected"  # Link is active, traffic can flow
+    DISCONNECTED = "disconnected"  # Link is down, ports isolated
+    PENDING = "pending"  # Link is being created/modified
+    ERROR = "error"  # Link creation failed
+
+
+class LinkCreate(BaseModel):
+    """Controller -> Agent: Create a hot-connect link between two interfaces."""
+    source_node: str  # Source container name or node identifier
+    source_interface: str  # Source interface name (e.g., "eth1", "Ethernet1")
+    target_node: str  # Target container name or node identifier
+    target_interface: str  # Target interface name
+
+
+class LinkInfo(BaseModel):
+    """Information about a network link."""
+    link_id: str  # Unique link identifier (e.g., "r1:eth1-r2:eth1")
+    lab_id: str
+    source_node: str
+    source_interface: str
+    target_node: str
+    target_interface: str
+    state: LinkState = LinkState.DISCONNECTED
+    vlan_tag: int | None = None  # OVS VLAN tag for this link
+    error: str | None = None
+
+
+class LinkCreateResponse(BaseModel):
+    """Agent -> Controller: Link creation result."""
+    success: bool
+    link: LinkInfo | None = None
+    error: str | None = None
+
+
+class LinkDeleteResponse(BaseModel):
+    """Agent -> Controller: Link deletion result."""
+    success: bool
+    error: str | None = None
+
+
+class LinkListResponse(BaseModel):
+    """Agent -> Controller: List of links for a lab."""
+    links: list[LinkInfo] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+# --- OVS Status ---
+
+class OVSPortInfo(BaseModel):
+    """Information about an OVS port."""
+    port_name: str  # OVS port name
+    container_name: str
+    interface_name: str
+    vlan_tag: int
+    lab_id: str
+
+
+class OVSStatusResponse(BaseModel):
+    """Agent -> Controller: Status of OVS networking."""
+    bridge_name: str
+    initialized: bool = False
+    ports: list[OVSPortInfo] = Field(default_factory=list)
+    links: list[LinkInfo] = Field(default_factory=list)
+    vlan_allocations: int = 0
+
+
+# --- External Network Connectivity ---
+
+class ExternalConnectRequest(BaseModel):
+    """Request to connect a container interface to an external network."""
+    container_name: str | None = None  # Container name (overrides node_name)
+    node_name: str | None = None  # Node name (requires lab_id)
+    interface_name: str
+    external_interface: str  # Host interface to connect to
+    vlan_tag: int | None = None  # Optional VLAN for isolation
+
+
+class ExternalConnectResponse(BaseModel):
+    """Response from external connection request."""
+    success: bool
+    vlan_tag: int | None = None
+    error: str | None = None
+
+
+class ExternalDisconnectRequest(BaseModel):
+    """Request to disconnect an external interface."""
+    external_interface: str  # Host interface to disconnect
+
+
+class ExternalDisconnectResponse(BaseModel):
+    """Response from external disconnect request."""
+    success: bool
+    error: str | None = None
+
+
+class ExternalConnectionInfo(BaseModel):
+    """Information about an external network connection."""
+    external_interface: str
+    vlan_tag: int | None = None
+    connected_ports: list[str] = Field(default_factory=list)  # container:interface
+
+
+class ExternalListResponse(BaseModel):
+    """Response listing external network connections."""
+    connections: list[ExternalConnectionInfo] = Field(default_factory=list)
+
+
+class BridgePatchRequest(BaseModel):
+    """Request to create a patch to another bridge."""
+    target_bridge: str
+    vlan_tag: int | None = None
+
+
+class BridgePatchResponse(BaseModel):
+    """Response from bridge patch request."""
+    success: bool
+    patch_port: str | None = None
+    error: str | None = None
+
+
+class BridgeDeletePatchRequest(BaseModel):
+    """Request to delete a patch to another bridge."""
+    target_bridge: str
+
+
+class BridgeDeletePatchResponse(BaseModel):
+    """Response from bridge patch deletion request."""
+    success: bool
+    error: str | None = None

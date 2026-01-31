@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     vxlan_vni_base: int = 100000
     vxlan_vni_max: int = 199999
 
+    # OVS networking (hot-plug support)
+    enable_ovs: bool = True  # Enable OVS-based networking for hot-plug
+    ovs_bridge_name: str = "arch-ovs"  # Name of OVS bridge
+    ovs_vlan_start: int = 100  # Starting VLAN for port isolation
+    ovs_vlan_end: int = 4000  # Ending VLAN for port isolation
+
     # Concurrency limits
     max_concurrent_jobs: int = 4
 

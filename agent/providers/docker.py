@@ -41,6 +41,7 @@ from docker.types import Mount
 
 from agent.config import settings
 from agent.network.local import LocalNetworkManager, get_local_manager
+from agent.network.ovs import OVSNetworkManager, get_ovs_manager
 from agent.providers.base import (
     DeployResult,
     DestroyResult,
@@ -128,11 +129,18 @@ class DockerProvider(Provider):
 
     This provider manages containers directly using the Docker SDK,
     providing full control over the container lifecycle.
+
+    Networking:
+    - When OVS is enabled (default), uses OVS-based networking with hot-plug support
+    - Interfaces are pre-provisioned at boot via OVS veth pairs with VLAN isolation
+    - Links are created by assigning matching VLAN tags (hot-connect)
+    - When OVS is disabled, falls back to traditional veth-pair networking
     """
 
     def __init__(self):
         self._docker: docker.DockerClient | None = None
         self._local_network: LocalNetworkManager | None = None
+        self._ovs_manager: OVSNetworkManager | None = None
 
     @property
     def name(self) -> str:
@@ -155,6 +163,18 @@ class DockerProvider(Provider):
         if self._local_network is None:
             self._local_network = get_local_manager()
         return self._local_network
+
+    @property
+    def ovs_manager(self) -> OVSNetworkManager:
+        """Get OVS network manager instance."""
+        if self._ovs_manager is None:
+            self._ovs_manager = get_ovs_manager()
+        return self._ovs_manager
+
+    @property
+    def use_ovs(self) -> bool:
+        """Check if OVS networking is enabled."""
+        return getattr(settings, "enable_ovs", True)
 
     def _container_name(self, lab_id: str, node_name: str) -> str:
         """Generate container name for a node.
@@ -449,12 +469,24 @@ username admin privilege 15 role network-admin nopassword
         self,
         containers: dict[str, Any],
         topology: ParsedTopology,
+        lab_id: str,
     ) -> list[str]:
         """Start all containers and provision interfaces as needed.
+
+        When OVS is enabled, provisions real veth pairs via OVS for hot-plug support.
+        When OVS is disabled, falls back to dummy interfaces for devices that need them.
 
         Returns list of node names that failed to start.
         """
         failed = []
+
+        # Initialize OVS if enabled
+        if self.use_ovs:
+            try:
+                await self.ovs_manager.initialize()
+            except Exception as e:
+                logger.warning(f"OVS initialization failed, falling back to legacy networking: {e}")
+
         for node_name, container in containers.items():
             try:
                 log_name = topology.log_name(node_name)
@@ -462,29 +494,93 @@ username admin privilege 15 role network-admin nopassword
                     container.start()
                     logger.info(f"Started container {log_name}")
 
-                # Provision dummy interfaces for devices that need them
+                # Provision interfaces based on networking mode
                 node = topology.nodes.get(node_name)
                 if node:
                     config = get_config_by_device(node.kind)
-                    if config and config.provision_interfaces:
-                        await self.local_network.provision_dummy_interfaces(
-                            container_name=container.name,
-                            interface_prefix=config.port_naming,
-                            start_index=config.port_start_index,
-                            count=config.max_ports,
-                        )
+                    if config:
+                        if self.use_ovs and self.ovs_manager._initialized:
+                            # Use OVS-based provisioning for hot-plug support
+                            await self._provision_ovs_interfaces(
+                                container_name=container.name,
+                                interface_prefix=config.port_naming,
+                                start_index=config.port_start_index,
+                                count=config.max_ports,
+                                lab_id=lab_id,
+                            )
+                        elif hasattr(config, 'provision_interfaces') and config.provision_interfaces:
+                            # Legacy fallback: use dummy interfaces
+                            await self.local_network.provision_dummy_interfaces(
+                                container_name=container.name,
+                                interface_prefix=config.port_naming,
+                                start_index=config.port_start_index,
+                                count=config.max_ports,
+                            )
 
             except Exception as e:
                 logger.error(f"Failed to start {container.name}: {e}")
                 failed.append(node_name)
         return failed
 
+    async def _provision_ovs_interfaces(
+        self,
+        container_name: str,
+        interface_prefix: str,
+        start_index: int,
+        count: int,
+        lab_id: str,
+    ) -> int:
+        """Provision interfaces via OVS for hot-plug support.
+
+        Creates real veth pairs attached to OVS bridge with unique VLAN tags.
+        Each interface is isolated until hot-connected to another interface.
+
+        Args:
+            container_name: Docker container name
+            interface_prefix: Interface name prefix (e.g., "eth", "Ethernet")
+            start_index: Starting interface number
+            count: Number of interfaces to create
+            lab_id: Lab identifier for tracking
+
+        Returns:
+            Number of interfaces successfully provisioned
+        """
+        provisioned = 0
+
+        for i in range(count):
+            iface_num = start_index + i
+            # Determine interface name based on prefix
+            if interface_prefix.endswith("-"):
+                # e.g., "e1-" -> "e1-1", "e1-2" (SR Linux style)
+                iface_name = f"{interface_prefix}{iface_num}"
+            else:
+                iface_name = f"{interface_prefix}{iface_num}"
+
+            try:
+                await self.ovs_manager.provision_interface(
+                    container_name=container_name,
+                    interface_name=iface_name,
+                    lab_id=lab_id,
+                )
+                provisioned += 1
+            except Exception as e:
+                logger.warning(f"Failed to provision OVS interface {iface_name}: {e}")
+                # Continue with remaining interfaces
+
+        if provisioned > 0:
+            logger.info(f"Provisioned {provisioned} OVS interfaces in {container_name}")
+
+        return provisioned
+
     async def _create_links(
         self,
         topology: ParsedTopology,
         lab_id: str,
     ) -> int:
-        """Create veth pair links between containers.
+        """Create links between containers.
+
+        When OVS is enabled, uses hot-connect (VLAN tag matching).
+        When OVS is disabled, uses traditional veth pairs.
 
         Returns number of links created.
         """
@@ -512,16 +608,27 @@ username admin privilege 15 role network-admin nopassword
             link_id = f"{node_a}:{iface_a}-{node_b}:{iface_b}"
 
             try:
-                await self.local_network.create_link(
-                    lab_id=lab_id,
-                    link_id=link_id,
-                    container_a=container_a,
-                    container_b=container_b,
-                    iface_a=iface_a,
-                    iface_b=iface_b,
-                    ip_a=ip_a,
-                    ip_b=ip_b,
-                )
+                if self.use_ovs and self.ovs_manager._initialized:
+                    # Use OVS hot-connect (VLAN tag matching)
+                    await self.ovs_manager.hot_connect(
+                        container_a=container_a,
+                        iface_a=iface_a,
+                        container_b=container_b,
+                        iface_b=iface_b,
+                        lab_id=lab_id,
+                    )
+                else:
+                    # Fallback to traditional veth pairs
+                    await self.local_network.create_link(
+                        lab_id=lab_id,
+                        link_id=link_id,
+                        container_a=container_a,
+                        container_b=container_b,
+                        iface_a=iface_a,
+                        iface_b=iface_b,
+                        ip_a=ip_a,
+                        ip_b=ip_b,
+                    )
                 created += 1
             except Exception as e:
                 logger.error(f"Failed to create link {link_id}: {e}")
@@ -711,7 +818,7 @@ username admin privilege 15 role network-admin nopassword
             )
 
         # Start containers
-        failed_starts = await self._start_containers(containers, topology)
+        failed_starts = await self._start_containers(containers, topology, lab_id)
         if failed_starts:
             failed_log_names = [topology.log_name(n) for n in failed_starts]
             logger.warning(f"Some containers failed to start: {failed_log_names}")
@@ -783,7 +890,12 @@ username admin privilege 15 role network-admin nopassword
 
             # Clean up local networking
             cleanup_result = await self.local_network.cleanup_lab(lab_id)
-            logger.info(f"Network cleanup: {cleanup_result}")
+            logger.info(f"Local network cleanup: {cleanup_result}")
+
+            # Clean up OVS networking if enabled
+            if self.use_ovs and self.ovs_manager._initialized:
+                ovs_cleanup_result = await self.ovs_manager.cleanup_lab(lab_id)
+                logger.info(f"OVS network cleanup: {ovs_cleanup_result}")
 
         except Exception as e:
             errors.append(f"Error during destroy: {e}")

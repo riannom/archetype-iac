@@ -1034,6 +1034,192 @@ async def prune_docker_on_agent(
         }
 
 
+# --- Hot-Connect Link Management Functions ---
+
+async def create_link_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    source_node: str,
+    source_interface: str,
+    target_node: str,
+    target_interface: str,
+) -> dict:
+    """Hot-connect two interfaces on an agent.
+
+    This creates a link between two container interfaces by assigning
+    them the same VLAN tag on the OVS bridge.
+
+    Args:
+        agent: The agent managing the lab
+        lab_id: Lab identifier
+        source_node: Source node name
+        source_interface: Source interface name (e.g., "eth1")
+        target_node: Target node name
+        target_interface: Target interface name
+
+    Returns:
+        Dict with 'success', 'link', and optionally 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/links"
+    logger.info(
+        f"Hot-connect on agent {agent.id}: "
+        f"{source_node}:{source_interface} <-> {target_node}:{target_interface}"
+    )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={
+                    "source_node": source_node,
+                    "source_interface": source_interface,
+                    "target_node": target_node,
+                    "target_interface": target_interface,
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            if result.get("success"):
+                logger.info(f"Hot-connect succeeded: {result.get('link', {}).get('link_id')}")
+            else:
+                logger.warning(f"Hot-connect failed: {result.get('error')}")
+            return result
+    except Exception as e:
+        logger.error(f"Hot-connect failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def delete_link_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    link_id: str,
+) -> dict:
+    """Hot-disconnect a link on an agent.
+
+    This breaks a link between two container interfaces by assigning
+    them separate VLAN tags.
+
+    Args:
+        agent: The agent managing the lab
+        lab_id: Lab identifier
+        link_id: Link identifier (format: "node1:iface1-node2:iface2")
+
+    Returns:
+        Dict with 'success' and optionally 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/links/{link_id}"
+    logger.info(f"Hot-disconnect on agent {agent.id}: {link_id}")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(url, timeout=30.0)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("success"):
+                logger.info(f"Hot-disconnect succeeded: {link_id}")
+            else:
+                logger.warning(f"Hot-disconnect failed: {result.get('error')}")
+            return result
+    except Exception as e:
+        logger.error(f"Hot-disconnect failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def list_links_on_agent(
+    agent: models.Host,
+    lab_id: str,
+) -> dict:
+    """List all links for a lab on an agent.
+
+    Args:
+        agent: The agent managing the lab
+        lab_id: Lab identifier
+
+    Returns:
+        Dict with 'links' list
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/links"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error(f"List links failed on agent {agent.id}: {e}")
+        return {"links": []}
+
+
+async def get_ovs_status_from_agent(agent: models.Host) -> dict:
+    """Get OVS networking status from an agent.
+
+    Returns:
+        Dict with 'bridge_name', 'initialized', 'ports', 'links'
+    """
+    url = f"{get_agent_url(agent)}/ovs/status"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error(f"OVS status failed on agent {agent.id}: {e}")
+        return {"bridge_name": "", "initialized": False, "ports": [], "links": []}
+
+
+async def connect_external_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    interface_name: str,
+    external_interface: str,
+    vlan_tag: int | None = None,
+) -> dict:
+    """Connect a container interface to an external network.
+
+    Args:
+        agent: The agent managing the lab
+        lab_id: Lab identifier
+        node_name: Node name
+        interface_name: Interface name inside container
+        external_interface: External host interface to connect to
+        vlan_tag: Optional VLAN for isolation
+
+    Returns:
+        Dict with 'success', 'vlan_tag', and optionally 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/external/connect"
+    logger.info(
+        f"External connect on agent {agent.id}: "
+        f"{node_name}:{interface_name} -> {external_interface}"
+    )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={
+                    "node_name": node_name,
+                    "interface_name": interface_name,
+                    "external_interface": external_interface,
+                    "vlan_tag": vlan_tag,
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            if result.get("success"):
+                logger.info(f"External connect succeeded (VLAN {result.get('vlan_tag')})")
+            else:
+                logger.warning(f"External connect failed: {result.get('error')}")
+            return result
+    except Exception as e:
+        logger.error(f"External connect failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def setup_cross_host_link(
     database: Session,
     lab_id: str,

@@ -35,6 +35,53 @@ def _normalize_interface_name(iface_name: str) -> str:
     return iface_name
 
 
+def _denormalize_interface_name(iface_name: str, device: str | None) -> str:
+    """Convert containerlab interface name to vendor-specific format for UI display.
+
+    This is the reverse of _normalize_interface_name(). It converts generic
+    interface names like 'eth1' to the vendor's preferred naming convention
+    (e.g., 'Ethernet1' for cEOS) based on the device's port_naming config.
+
+    Args:
+        iface_name: The interface name from YAML (e.g., 'eth1')
+        device: The device type (e.g., 'ceos', 'nokia_srlinux')
+
+    Returns:
+        Vendor-formatted interface name (e.g., 'Ethernet1' for cEOS)
+    """
+    if not device or not iface_name:
+        return iface_name
+
+    # Get the vendor config for this device
+    kind = get_kind_for_device(device)
+    config = get_vendor_config(kind)
+    if not config:
+        return iface_name
+
+    port_naming = config.port_naming
+    port_start_index = config.port_start_index
+
+    # If the device uses 'eth' naming, no conversion needed
+    if port_naming == "eth":
+        return iface_name
+
+    # Try to extract index from eth-style interface name
+    match = re.match(r'^eth(\d+)$', iface_name, re.IGNORECASE)
+    if not match:
+        # Not an eth-style name, return as-is
+        return iface_name
+
+    index = int(match.group(1))
+
+    # Generate the vendor-specific interface name
+    # Handle patterns with {index} placeholder vs simple prefix
+    if "{index}" in port_naming:
+        return port_naming.replace("{index}", str(index))
+    else:
+        # Simple prefix like "Ethernet", "e1-", "GigabitEthernet", etc.
+        return f"{port_naming}{index}"
+
+
 class _BlockScalarDumper(yaml.SafeDumper):
     """Custom YAML dumper that uses block scalar style for multi-line strings.
 
@@ -344,10 +391,13 @@ def yaml_to_graph(content: str) -> TopologyGraph:
     nodes: list[GraphNode] = []
     # Build reverse mapping: container_name -> gui_id for link translation
     container_to_gui_id: dict[str, str] = {}
+    # Build mapping: container_name -> device type for interface name denormalization
+    container_to_device: dict[str, str | None] = {}
     if isinstance(nodes_data, list):
         for name in nodes_data:
             nodes.append(GraphNode(id=str(name), name=str(name), container_name=str(name)))
             container_to_gui_id[str(name)] = str(name)
+            container_to_device[str(name)] = None
     elif isinstance(nodes_data, dict):
         for name, attrs in nodes_data.items():
             attrs = attrs or {}
@@ -358,6 +408,9 @@ def yaml_to_graph(content: str) -> TopologyGraph:
             # YAML key is the containerlab container name
             yaml_key = str(name)
             container_to_gui_id[yaml_key] = str(node_id)
+            # Track device type for interface name denormalization
+            device = attrs.get("device") or attrs.get("kind")
+            container_to_device[yaml_key] = device
             # Get host from direct attribute or from containerlab labels
             host = attrs.get("host")
             if not host:
@@ -403,9 +456,16 @@ def yaml_to_graph(content: str) -> TopologyGraph:
                 links.append(parsed)
 
     # Translate link endpoints from container names to GUI IDs
+    # and denormalize interface names to vendor-specific format for UI display
     for link in links:
         for endpoint in link.endpoints:
             if endpoint.type == "node" and endpoint.node in container_to_gui_id:
+                # Denormalize interface name based on the node's device type
+                # Do this BEFORE translating node name since container_to_device uses container_name
+                if endpoint.ifname:
+                    device = container_to_device.get(endpoint.node)
+                    endpoint.ifname = _denormalize_interface_name(endpoint.ifname, device)
+                # Translate container name to GUI ID
                 endpoint.node = container_to_gui_id[endpoint.node]
 
     return TopologyGraph(nodes=nodes, links=links, defaults=defaults)

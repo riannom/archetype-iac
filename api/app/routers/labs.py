@@ -2006,6 +2006,254 @@ def delete_config_snapshot(
     return {"status": "deleted", "snapshot_id": snapshot_id}
 
 
+# ============================================================================
+# Hot-Connect Link Management Endpoints
+# ============================================================================
+
+
+class HotConnectRequest(BaseModel):
+    """Request to hot-connect two interfaces."""
+    source_node: str
+    source_interface: str
+    target_node: str
+    target_interface: str
+
+
+class HotConnectResponse(BaseModel):
+    """Response from hot-connect request."""
+    success: bool
+    link_id: str | None = None
+    vlan_tag: int | None = None
+    error: str | None = None
+
+
+class ExternalConnectRequest(BaseModel):
+    """Request to connect a node to an external network."""
+    node_name: str
+    interface_name: str
+    external_interface: str
+    vlan_tag: int | None = None
+
+
+class ExternalConnectResponse(BaseModel):
+    """Response from external connect request."""
+    success: bool
+    vlan_tag: int | None = None
+    error: str | None = None
+
+
+from pydantic import BaseModel
+
+
+@router.post("/labs/{lab_id}/hot-connect")
+async def hot_connect_link(
+    lab_id: str,
+    request: HotConnectRequest,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> HotConnectResponse:
+    """Hot-connect two interfaces in a running lab.
+
+    This creates a Layer 2 link between two container interfaces without
+    restarting any nodes. The link is established by assigning both interfaces
+    the same VLAN tag on the OVS bridge.
+
+    Requirements:
+    - Lab must be deployed (running state)
+    - Both nodes must be running
+    - Interfaces must be pre-provisioned via OVS
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Verify lab is running
+    if lab.state not in ("running", "starting"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Lab must be running for hot-connect (current state: {lab.state})"
+        )
+
+    # Get agent for this lab
+    lab_provider = get_lab_provider(lab)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if not agent:
+        raise HTTPException(status_code=503, detail="No healthy agent available")
+
+    # Forward to agent
+    result = await agent_client.create_link_on_agent(
+        agent=agent,
+        lab_id=lab.id,
+        source_node=request.source_node,
+        source_interface=request.source_interface,
+        target_node=request.target_node,
+        target_interface=request.target_interface,
+    )
+
+    if result.get("success"):
+        link_data = result.get("link", {})
+
+        # Update LinkState in database
+        link_name = _generate_link_name(
+            request.source_node, request.source_interface,
+            request.target_node, request.target_interface,
+        )
+        link_state = (
+            database.query(models.LinkState)
+            .filter(
+                models.LinkState.lab_id == lab_id,
+                models.LinkState.link_name == link_name,
+            )
+            .first()
+        )
+        if link_state:
+            link_state.actual_state = "up"
+        database.commit()
+
+        return HotConnectResponse(
+            success=True,
+            link_id=link_data.get("link_id"),
+            vlan_tag=link_data.get("vlan_tag"),
+        )
+    else:
+        return HotConnectResponse(
+            success=False,
+            error=result.get("error", "Unknown error"),
+        )
+
+
+@router.delete("/labs/{lab_id}/hot-disconnect/{link_id:path}")
+async def hot_disconnect_link(
+    lab_id: str,
+    link_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> HotConnectResponse:
+    """Hot-disconnect a link in a running lab.
+
+    This breaks a Layer 2 link between two container interfaces without
+    restarting any nodes. The link is broken by assigning each interface
+    a separate VLAN tag.
+
+    Args:
+        lab_id: Lab identifier
+        link_id: Link identifier (format: "node1:iface1-node2:iface2")
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get agent for this lab
+    lab_provider = get_lab_provider(lab)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if not agent:
+        raise HTTPException(status_code=503, detail="No healthy agent available")
+
+    # Forward to agent
+    result = await agent_client.delete_link_on_agent(
+        agent=agent,
+        lab_id=lab.id,
+        link_id=link_id,
+    )
+
+    if result.get("success"):
+        # Update LinkState in database
+        # Parse link_id to find matching LinkState
+        # link_id format: "node1:iface1-node2:iface2"
+        link_states = (
+            database.query(models.LinkState)
+            .filter(models.LinkState.lab_id == lab_id)
+            .all()
+        )
+        for ls in link_states:
+            expected_name = _generate_link_name(
+                ls.source_node, ls.source_interface,
+                ls.target_node, ls.target_interface,
+            )
+            if link_id == f"{ls.source_node}:{ls.source_interface}-{ls.target_node}:{ls.target_interface}" or \
+               link_id == f"{ls.target_node}:{ls.target_interface}-{ls.source_node}:{ls.source_interface}":
+                ls.actual_state = "down"
+                break
+        database.commit()
+
+        return HotConnectResponse(success=True, link_id=link_id)
+    else:
+        return HotConnectResponse(
+            success=False,
+            error=result.get("error", "Unknown error"),
+        )
+
+
+@router.get("/labs/{lab_id}/live-links")
+async def list_live_links(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """List all active OVS links for a running lab.
+
+    This queries the agent for the current state of all OVS-managed links,
+    including their VLAN tags and connection state.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get agent for this lab
+    lab_provider = get_lab_provider(lab)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if not agent:
+        return {"links": [], "error": "No healthy agent available"}
+
+    # Forward to agent
+    result = await agent_client.list_links_on_agent(agent, lab.id)
+    return result
+
+
+@router.post("/labs/{lab_id}/external/connect")
+async def connect_to_external_network(
+    lab_id: str,
+    request: ExternalConnectRequest,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> ExternalConnectResponse:
+    """Connect a node interface to an external network.
+
+    This establishes connectivity between a container interface and an
+    external host interface (e.g., for internet access, management network,
+    or physical lab equipment).
+
+    Requirements:
+    - Lab must be deployed (running state)
+    - Node must be running
+    - External interface must exist on the host
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Verify lab is running
+    if lab.state not in ("running", "starting"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Lab must be running for external connect (current state: {lab.state})"
+        )
+
+    # Get agent for this lab
+    lab_provider = get_lab_provider(lab)
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    if not agent:
+        raise HTTPException(status_code=503, detail="No healthy agent available")
+
+    # Forward to agent
+    result = await agent_client.connect_external_on_agent(
+        agent=agent,
+        lab_id=lab.id,
+        node_name=request.node_name,
+        interface_name=request.interface_name,
+        external_interface=request.external_interface,
+        vlan_tag=request.vlan_tag,
+    )
+
+    return ExternalConnectResponse(
+        success=result.get("success", False),
+        vlan_tag=result.get("vlan_tag"),
+        error=result.get("error"),
+    )
+
+
 @router.post("/labs/{lab_id}/config-diff")
 def generate_config_diff(
     lab_id: str,
