@@ -147,7 +147,7 @@ async def get_healthy_agent(
 
     Args:
         database: Database session
-        required_provider: Provider the agent must support (e.g., "containerlab", "libvirt")
+        required_provider: Provider the agent must support (e.g., "docker", "containerlab", "libvirt")
         prefer_agent_id: Agent ID to prefer for affinity (e.g., lab's current agent)
         exclude_agents: Agent IDs to exclude (e.g., previously failed agents)
 
@@ -213,7 +213,7 @@ async def get_healthy_agent(
 async def get_agent_for_lab(
     database: Session,
     lab: models.Lab,
-    required_provider: str = "containerlab",
+    required_provider: str = "docker",
 ) -> models.Host | None:
     """Get an agent for a lab, respecting node-level affinity.
 
@@ -295,7 +295,7 @@ async def _do_deploy(
     job_id: str,
     lab_id: str,
     topology_yaml: str,
-    provider: str = "containerlab",
+    provider: str = "docker",
 ) -> dict:
     """Internal deploy request (for retry wrapper)."""
     async with httpx.AsyncClient() as client:
@@ -318,7 +318,7 @@ async def deploy_to_agent(
     job_id: str,
     lab_id: str,
     topology_yaml: str,
-    provider: str = "containerlab",
+    provider: str = "docker",
 ) -> dict:
     """Send deploy request to agent with retry logic.
 
@@ -327,7 +327,7 @@ async def deploy_to_agent(
         job_id: Job identifier
         lab_id: Lab identifier
         topology_yaml: Topology YAML content
-        provider: Provider to use (default: containerlab)
+        provider: Provider to use (default: docker)
 
     Returns:
         Agent response dict
@@ -1041,22 +1041,22 @@ async def setup_cross_host_link(
     if not agent_supports_vxlan(agent_b):
         return {"success": False, "error": f"Agent {agent_b.id} does not support VXLAN"}
 
-    # Extract agent IP addresses from their addresses
+    # Extract agent IP addresses from their addresses for VXLAN tunnel endpoints
     # Format is usually "host:port" or "http://host:port"
     addr_a = agent_a.address.replace("http://", "").replace("https://", "")
     addr_b = agent_b.address.replace("http://", "").replace("https://", "")
-    ip_a = addr_a.split(":")[0]
-    ip_b = addr_b.split(":")[0]
+    agent_ip_a = addr_a.split(":")[0]
+    agent_ip_b = addr_b.split(":")[0]
 
-    logger.info(f"Setting up cross-host link {link_id}: {agent_a.id}({ip_a}) <-> {agent_b.id}({ip_b})")
+    logger.info(f"Setting up cross-host link {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
 
     # Create tunnel on agent A (pointing to agent B)
     result_a = await create_tunnel_on_agent(
         agent_a,
         lab_id=lab_id,
         link_id=link_id,
-        local_ip=ip_a,
-        remote_ip=ip_b,
+        local_ip=agent_ip_a,
+        remote_ip=agent_ip_b,
         vni=vni,
     )
 
@@ -1071,8 +1071,8 @@ async def setup_cross_host_link(
         agent_b,
         lab_id=lab_id,
         link_id=link_id,
-        local_ip=ip_b,
-        remote_ip=ip_a,
+        local_ip=agent_ip_b,
+        remote_ip=agent_ip_a,
         vni=tunnel_vni,
     )
 
@@ -1082,6 +1082,7 @@ async def setup_cross_host_link(
         return {"success": False, "error": f"Failed to create tunnel on {agent_b.id}: {result_b.get('error')}"}
 
     # Attach containers to bridges
+    # ip_a/ip_b are the interface IPs from the topology (optional, CIDR format)
     attach_a = await attach_container_on_agent(
         agent_a,
         lab_id=lab_id,

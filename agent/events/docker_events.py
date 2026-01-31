@@ -1,7 +1,7 @@
 """Docker Events API listener for real-time container state updates.
 
 This module implements a listener that watches Docker's Events API for
-container state changes, filtering for containerlab-managed containers
+container state changes, filtering for Archetype-managed containers
 and forwarding events to the controller.
 
 Docker Events API provides real-time notifications for:
@@ -9,8 +9,8 @@ Docker Events API provides real-time notifications for:
 - Container health status changes
 - Container create/destroy
 
-We filter for containers with the "clab-node-name" label, which identifies
-them as managed by containerlab.
+We filter for containers with the "archetype.node_name" label (DockerProvider)
+or "clab-node-name" label (ContainerlabProvider) to identify managed containers.
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class DockerEventListener(NodeEventListener):
     This listener:
     1. Connects to the Docker daemon
     2. Subscribes to container events
-    3. Filters for containerlab-managed containers (clab-* prefix)
+    3. Filters for Archetype-managed containers (archetype-* or clab-* prefix)
     4. Converts Docker events to NodeEvent objects
     5. Invokes the callback for each relevant event
 
@@ -178,7 +178,8 @@ class DockerEventListener(NodeEventListener):
     def _parse_event(self, event: dict) -> NodeEvent | None:
         """Parse a Docker event into a NodeEvent.
 
-        Filters for containerlab-managed containers and extracts relevant info.
+        Filters for Archetype-managed containers and extracts relevant info.
+        Supports both DockerProvider (archetype.*) and ContainerlabProvider (clab-*) labels.
 
         Args:
             event: Raw Docker event dict
@@ -201,13 +202,24 @@ class DockerEventListener(NodeEventListener):
         actor = event.get("Actor", {})
         attributes = actor.get("Attributes", {})
 
-        # Filter for containerlab-managed containers
-        # They have labels: clab-node-name, containerlab
-        if "clab-node-name" not in attributes:
+        # Filter for Archetype-managed containers
+        # DockerProvider labels (primary): archetype.node_name, archetype.lab_id
+        # Legacy containerlab labels (backward compatibility): clab-node-name, containerlab
+        is_archetype = "archetype.node_name" in attributes
+        is_containerlab = "clab-node-name" in attributes  # Legacy support
+
+        if not is_archetype and not is_containerlab:
             return None
 
-        node_name = attributes.get("clab-node-name", "")
-        lab_prefix = attributes.get("containerlab", "")
+        # Extract node name and lab ID based on provider
+        if is_archetype:
+            node_name = attributes.get("archetype.node_name", "")
+            lab_prefix = attributes.get("archetype.lab_id", "")
+            node_kind = attributes.get("archetype.node_kind", "")
+        else:
+            node_name = attributes.get("clab-node-name", "")
+            lab_prefix = attributes.get("containerlab", "")
+            node_kind = attributes.get("clab-node-kind", "")
 
         if not node_name or not lab_prefix:
             return None
@@ -245,7 +257,7 @@ class DockerEventListener(NodeEventListener):
             attributes={
                 "container_name": container_name,
                 "image": attributes.get("image", ""),
-                "node_kind": attributes.get("clab-node-kind", ""),
+                "node_kind": node_kind,
                 "exit_code": attributes.get("exitCode"),
             },
         )

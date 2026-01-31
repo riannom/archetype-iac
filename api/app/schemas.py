@@ -7,7 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 class LabCreate(BaseModel):
     name: str
-    provider: str = "containerlab"
+    provider: str = "docker"
 
 
 class LabUpdate(BaseModel):
@@ -19,7 +19,7 @@ class LabOut(BaseModel):
     name: str
     owner_id: str | None
     workspace_path: str
-    provider: str = "containerlab"
+    provider: str = "docker"
     state: str = "stopped"
     agent_id: str | None = None
     state_updated_at: datetime | None = None
@@ -94,7 +94,7 @@ class GraphNode(BaseModel):
     vars: dict | None = None
     host: str | None = None  # Agent ID for multi-host placement
     network_mode: str | None = None  # Container network mode (e.g., "bridge", "host", "none")
-    container_name: str | None = None  # Name used by containerlab (YAML key), may differ from display name
+    container_name: str | None = None  # Container name (YAML key), may differ from display name
     # External network fields (when node_type="external")
     connection_type: str | None = None  # "vlan" or "bridge"
     parent_interface: str | None = None  # e.g., "ens192", "eth0"
@@ -301,8 +301,8 @@ class NodeEventPayload(BaseModel):
     agent_id: str
 
     # Lab and node identification
-    lab_id: str  # Containerlab lab prefix
-    node_name: str  # Node name (clab-node-name label)
+    lab_id: str  # Lab identifier
+    node_name: str  # Node name (from archetype.node_name label)
     container_id: str | None = None  # Container/VM ID
 
     # Event details
@@ -503,7 +503,7 @@ class NodeInventoryEntry(BaseModel):
     management_ip: str | None = None
     all_ips: list[str] = []
     device_type: str | None = None  # e.g., "ceos", "vr-veos"
-    kind: str | None = None  # containerlab kind
+    kind: str | None = None  # Device kind for YAML export
     host_id: str | None = None  # For multi-host deployments
     host_name: str | None = None
 

@@ -1,17 +1,17 @@
 # Archetype
 
-A web-based network lab management platform for [containerlab](https://containerlab.dev/). Design network topologies with a drag-and-drop canvas, deploy them with one click, and access device consoles directly from your browser.
+A web-based network lab management platform. Design network topologies with a drag-and-drop canvas, deploy them with one click, and access device consoles directly from your browser.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 ## Features
 
 - **Visual Topology Designer** - Drag-and-drop canvas for building network topologies
-- **One-Click Deployment** - Deploy labs to containerlab with a single click
+- **One-Click Deployment** - Deploy labs with a single click
 - **Web Console Access** - SSH/console access to devices directly in the browser via WebSocket
 - **Multi-Host Support** - Distributed agents for running labs across multiple hosts with VXLAN overlay
 - **Image Library** - Upload and manage container images (cEOS, etc.) and QCOW2 disk images
-- **YAML Import/Export** - Import existing containerlab topologies or export for use elsewhere
+- **YAML Import/Export** - Import existing topologies or export for use elsewhere
 - **User Management** - Local authentication and OIDC/SSO support
 - **Lab Lifecycle** - Start, stop, restart, and destroy labs with job queuing
 
@@ -50,9 +50,9 @@ A web-based network lab management platform for [containerlab](https://container
                            │ Job Queue (Redis + RQ)
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                         Worker                               │
+│                      Agent (FastAPI)                         │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  containerlab deploy/destroy  │  netlab up/down      │   │
+│  │  DockerProvider  │  LibvirtProvider  │  Networking   │   │
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
                            │
@@ -86,7 +86,7 @@ After installation, you'll see:
 - Docker Engine 24.0+ with Docker Compose
 - Linux host (Ubuntu 22.04+, Debian 12+, RHEL 9+, or similar)
 - 4GB RAM minimum (8GB+ recommended for multiple labs)
-- Root/sudo access (required for containerlab)
+- Root/sudo access (required for container networking)
 
 #### Step 1: Clone the Repository
 
@@ -137,7 +137,7 @@ This starts:
 - **worker** - RQ worker for async jobs
 - **postgres** - PostgreSQL database
 - **redis** - Redis for job queue
-- **agent** - Local containerlab agent
+- **agent** - Local agent for container management
 
 #### Step 4: Access the UI
 
@@ -188,7 +188,7 @@ Agents automatically register with the controller and appear in the UI.
 
 ### Importing Topologies
 
-You can import existing containerlab YAML files:
+You can import existing topology YAML files:
 
 1. Open a lab
 2. Click **Import** → **From YAML**
@@ -264,13 +264,20 @@ alembic revision --autogenerate -m "description"  # Create migration
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql+psycopg://archetype:archetype@postgres:5432/archetype` |
 | `REDIS_URL` | Redis connection string | `redis://redis:6379/0` |
 | `WORKSPACE` | Lab workspace directory | `/var/lib/archetype` |
-| `PROVIDER` | Lab provider (`clab`) | `clab` |
 | `JWT_SECRET` | JWT signing secret | (required) |
 | `SESSION_SECRET` | Session encryption secret | (required) |
 | `ADMIN_EMAIL` | Initial admin email | - |
 | `ADMIN_PASSWORD` | Initial admin password | - |
 | `LOCAL_AUTH_ENABLED` | Enable local auth | `true` |
 | `MAX_CONCURRENT_JOBS_PER_USER` | Job limit per user | `2` |
+
+### Agent Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ARCHETYPE_AGENT_ENABLE_DOCKER` | Enable DockerProvider | `true` |
+| `ARCHETYPE_AGENT_ENABLE_LIBVIRT` | Enable LibvirtProvider for VMs | `false` |
+| `ARCHETYPE_AGENT_ENABLE_VXLAN` | Enable VXLAN overlay for multi-host | `true` |
 
 ### OIDC/SSO Configuration
 
@@ -375,7 +382,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- [containerlab](https://containerlab.dev/) - The underlying lab orchestration engine
-- [netlab](https://netlab.tools/) - Network lab automation framework
 - [React Flow](https://reactflow.dev/) - Topology canvas library
 - [xterm.js](https://xtermjs.org/) - Terminal emulator for web consoles

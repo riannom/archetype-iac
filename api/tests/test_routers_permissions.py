@@ -84,7 +84,7 @@ class TestListPermissions:
 
         # Create lab owned by admin
         lab = models.Lab(
-            name="Admin Lab", owner_id=admin_user.id, provider="containerlab"
+            name="Admin Lab", owner_id=admin_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.flush()
@@ -136,7 +136,7 @@ class TestAddPermission:
         """Test admin can add permissions to any lab."""
         # Create lab owned by regular user
         lab = models.Lab(
-            name="User Lab", owner_id=test_user.id, provider="containerlab"
+            name="User Lab", owner_id=test_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.commit()
@@ -169,7 +169,7 @@ class TestAddPermission:
         """Test viewer cannot add permissions."""
         # Create lab owned by admin
         lab = models.Lab(
-            name="Admin Lab", owner_id=admin_user.id, provider="containerlab"
+            name="Admin Lab", owner_id=admin_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.flush()
@@ -291,7 +291,7 @@ class TestDeletePermission:
         """Test admin can delete permissions from any lab."""
         # Create lab owned by regular user
         lab = models.Lab(
-            name="User Lab", owner_id=test_user.id, provider="containerlab"
+            name="User Lab", owner_id=test_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.flush()
@@ -329,7 +329,7 @@ class TestDeletePermission:
         """Test viewer cannot delete permissions."""
         # Create lab owned by admin
         lab = models.Lab(
-            name="Admin Lab", owner_id=admin_user.id, provider="containerlab"
+            name="Admin Lab", owner_id=admin_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.flush()
@@ -388,7 +388,7 @@ class TestDeletePermission:
         """Test deleting permission with wrong lab ID fails."""
         # Create another lab
         other_lab = models.Lab(
-            name="Other Lab", owner_id=test_user.id, provider="containerlab"
+            name="Other Lab", owner_id=test_user.id, provider="docker"
         )
         test_db.add(other_lab)
         test_db.flush()
@@ -423,7 +423,7 @@ class TestPermissionAccessControl:
         """Test that a viewer can access a lab shared with them."""
         # Create lab owned by admin
         lab = models.Lab(
-            name="Shared Lab", owner_id=admin_user.id, provider="containerlab"
+            name="Shared Lab", owner_id=admin_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.flush()
@@ -450,7 +450,7 @@ class TestPermissionAccessControl:
         """Test that a user without permission cannot access a private lab."""
         # Create lab owned by admin (not shared with test_user)
         lab = models.Lab(
-            name="Private Lab", owner_id=admin_user.id, provider="containerlab"
+            name="Private Lab", owner_id=admin_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.commit()
@@ -470,7 +470,7 @@ class TestPermissionAccessControl:
         """Test that shared labs appear in user's lab list."""
         # Create lab owned by admin
         lab = models.Lab(
-            name="Shared Lab", owner_id=admin_user.id, provider="containerlab"
+            name="Shared Lab", owner_id=admin_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.flush()

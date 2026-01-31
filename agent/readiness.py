@@ -207,7 +207,7 @@ def get_probe_for_vendor(kind: str) -> ReadinessProbe:
     """Get the appropriate readiness probe for a vendor/device kind.
 
     Args:
-        kind: The containerlab node kind (e.g., "ceos", "nokia_srlinux")
+        kind: The device kind (e.g., "ceos", "nokia_srlinux")
 
     Returns:
         ReadinessProbe instance configured for this vendor
@@ -247,7 +247,7 @@ def get_readiness_timeout(kind: str) -> int:
     """Get the readiness timeout for a vendor/device kind.
 
     Args:
-        kind: The containerlab node kind
+        kind: The device kind
 
     Returns:
         Timeout in seconds to wait for readiness

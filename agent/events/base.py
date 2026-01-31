@@ -40,7 +40,7 @@ class NodeEvent:
 
     Attributes:
         lab_id: The lab ID this node belongs to
-        node_name: The node name (as known to containerlab)
+        node_name: The node name (as known to Archetype)
         container_id: The container/VM ID (if available)
         event_type: The type of state change
         timestamp: When the event occurred
@@ -68,7 +68,7 @@ class NodeEventListener(ABC):
     (Docker, libvirt, etc.) and invoke callbacks when events occur.
 
     Implementations should:
-    1. Filter events to only managed nodes (e.g., clab-* containers)
+    1. Filter events to only managed nodes (e.g., archetype-* or clab-* containers)
     2. Parse provider-specific events into NodeEvent objects
     3. Handle reconnection on connection loss
     4. Be cancellable via the stop() method

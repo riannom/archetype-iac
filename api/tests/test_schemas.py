@@ -22,7 +22,7 @@ class TestLabSchemas:
         """LabCreate with minimal fields."""
         lab = schemas.LabCreate(name="Test Lab")
         assert lab.name == "Test Lab"
-        assert lab.provider == "containerlab"
+        assert lab.provider == "docker"
 
     def test_lab_create_with_provider(self):
         """LabCreate with custom provider."""
@@ -44,7 +44,7 @@ class TestLabSchemas:
             "name": "Test Lab",
             "owner_id": "user-456",
             "workspace_path": "/tmp/lab",
-            "provider": "containerlab",
+            "provider": "docker",
             "state": "running",
             "created_at": datetime.now(timezone.utc),
         }

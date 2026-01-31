@@ -61,7 +61,7 @@ export function createMockHost(
     image_sync_strategy: overrides.image_sync_strategy || "on_demand",
     deployment_mode: overrides.deployment_mode || "systemd",
     capabilities: {
-      providers: ["containerlab"],
+      providers: ["docker"],
       ...overrides.capabilities,
     },
     resource_usage: {
@@ -150,7 +150,7 @@ export function createMockLab(overrides: Partial<MockLab> = {}): MockLab {
     name: overrides.name || `Test Lab ${id}`,
     state: overrides.state || "stopped",
     owner_id: overrides.owner_id || "user-1",
-    provider: overrides.provider || "containerlab",
+    provider: overrides.provider || "docker",
     ...overrides,
   };
 }

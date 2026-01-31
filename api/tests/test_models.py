@@ -73,7 +73,7 @@ class TestLabModel:
             name="Test Lab",
             owner_id=test_user.id,
             workspace_path="/tmp/test-lab",
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)
@@ -83,7 +83,7 @@ class TestLabModel:
         assert lab.id is not None
         assert lab.name == "Test Lab"
         assert lab.owner_id == test_user.id
-        assert lab.provider == "containerlab"
+        assert lab.provider == "docker"
         assert lab.state == "stopped"
 
     def test_lab_defaults(self, test_db: Session, test_user: models.User):
@@ -96,7 +96,7 @@ class TestLabModel:
         test_db.commit()
         test_db.refresh(lab)
 
-        assert lab.provider == "containerlab"
+        assert lab.provider == "docker"
         assert lab.state == "stopped"
         assert lab.workspace_path == ""
         assert lab.agent_id is None
@@ -181,7 +181,7 @@ class TestHostModel:
             name="Test Agent",
             address="192.168.1.10:8080",
             status="online",
-            capabilities='{"providers": ["containerlab"]}',
+            capabilities='{"providers": ["docker"]}',
             version="1.0.0",
         )
         test_db.add(host)

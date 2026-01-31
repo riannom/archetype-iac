@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     heartbeat_interval: int = 10  # seconds
 
     # Provider capabilities
-    enable_containerlab: bool = True
-    enable_libvirt: bool = False
+    enable_docker: bool = True  # Native Docker provider for container management
+    enable_libvirt: bool = False  # Libvirt provider for qcow2 VMs
 
     # Libvirt settings
     libvirt_uri: str = "qemu:///system"
@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     container_stop_timeout: int = 10
 
     # Deploy operation timeouts (seconds)
-    deploy_timeout: float = 900.0  # 15 minutes for containerlab deploy
-    destroy_timeout: float = 300.0  # 5 minutes for containerlab destroy
+    deploy_timeout: float = 900.0  # 15 minutes for deploy operations
+    destroy_timeout: float = 300.0  # 5 minutes for destroy operations
     lock_acquire_timeout: float = 30.0  # Time to wait for deploy lock
 
     # Redis connection for distributed locks

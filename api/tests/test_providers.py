@@ -14,9 +14,9 @@ from app.providers import (
 class TestSupportsNodeActions:
     """Tests for supports_node_actions function."""
 
-    def test_clab_supports_node_actions(self):
-        """Test that clab provider supports node actions."""
-        assert supports_node_actions("clab") is True
+    def test_docker_supports_node_actions(self):
+        """Test that docker provider supports node actions."""
+        assert supports_node_actions("docker") is True
 
     def test_libvirt_does_not_support_node_actions(self):
         """Test that libvirt provider does not support node actions."""
@@ -31,9 +31,9 @@ class TestSupportsNodeActions:
 class TestSupportedNodeActions:
     """Tests for supported_node_actions function."""
 
-    def test_clab_supported_actions(self):
-        """Test clab provider supported actions."""
-        actions = supported_node_actions("clab")
+    def test_docker_supported_actions(self):
+        """Test docker provider supported actions."""
+        actions = supported_node_actions("docker")
         assert "start" in actions
         assert "stop" in actions
 
@@ -49,40 +49,22 @@ class TestSupportedNodeActions:
 
 
 class TestNodeActionCommand:
-    """Tests for node_action_command function."""
+    """Tests for node_action_command function.
 
-    def test_clab_start_command(self):
-        """Test clab start command generation."""
-        commands = node_action_command("clab", "test-lab", "start", "r1")
+    Note: DockerProvider handles node actions via the agent API, not CLI commands.
+    These tests verify that the function correctly raises ProviderActionError
+    since CLI-based node actions are not supported for Docker provider.
+    """
 
-        assert len(commands) == 2  # create command + deploy command
+    def test_docker_start_raises_error(self):
+        """Test docker start raises error (handled by agent API instead)."""
+        with pytest.raises(ProviderActionError, match="agent API"):
+            node_action_command("docker", "test-lab", "start", "r1")
 
-        # First command should be netlab create
-        assert "netlab" in commands[0]
-        assert "create" in commands[0]
-
-        # Second command should be clab deploy with node filter
-        assert "clab" in commands[1]
-        assert "deploy" in commands[1]
-        assert "--node-filter" in commands[1]
-        assert "r1" in commands[1]
-
-    def test_clab_stop_command(self):
-        """Test clab stop command generation."""
-        commands = node_action_command("clab", "test-lab", "stop", "r1")
-
-        assert len(commands) == 2
-
-        # Second command should be clab destroy with node filter
-        assert "clab" in commands[1]
-        assert "destroy" in commands[1]
-        assert "--node-filter" in commands[1]
-        assert "r1" in commands[1]
-
-    def test_clab_unsupported_action(self):
-        """Test clab with unsupported action raises error."""
-        with pytest.raises(ProviderActionError):
-            node_action_command("clab", "test-lab", "restart", "r1")
+    def test_docker_stop_raises_error(self):
+        """Test docker stop raises error (handled by agent API instead)."""
+        with pytest.raises(ProviderActionError, match="agent API"):
+            node_action_command("docker", "test-lab", "stop", "r1")
 
     def test_libvirt_raises_error(self):
         """Test libvirt provider raises error for any action."""

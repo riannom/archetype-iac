@@ -36,7 +36,7 @@ class TestGetHealthyAgent:
             name="Offline Agent",
             address="localhost:8080",
             status="offline",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add(host)
@@ -54,7 +54,7 @@ class TestGetHealthyAgent:
             name="Stale Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc) - timedelta(seconds=120),
         )
         test_db.add(host)
@@ -71,7 +71,7 @@ class TestGetHealthyAgent:
             name="Healthy Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add(host)
@@ -84,13 +84,13 @@ class TestGetHealthyAgent:
     @pytest.mark.asyncio
     async def test_provider_filtering(self, test_db: Session):
         """Only agents supporting required provider are returned."""
-        # Agent with containerlab only
-        clab_agent = models.Host(
-            id="clab-agent",
-            name="Containerlab Agent",
+        # Agent with docker only
+        docker_agent = models.Host(
+            id="docker-agent",
+            name="Docker Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         # Agent with libvirt only
@@ -102,13 +102,13 @@ class TestGetHealthyAgent:
             capabilities=json.dumps({"providers": ["libvirt"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
-        test_db.add_all([clab_agent, libvirt_agent])
+        test_db.add_all([docker_agent, libvirt_agent])
         test_db.commit()
 
-        # Request containerlab provider
-        result = await agent_client.get_healthy_agent(test_db, required_provider="containerlab")
+        # Request docker provider
+        result = await agent_client.get_healthy_agent(test_db, required_provider="docker")
         assert result is not None
-        assert result.id == "clab-agent"
+        assert result.id == "docker-agent"
 
         # Request libvirt provider
         result = await agent_client.get_healthy_agent(test_db, required_provider="libvirt")
@@ -128,7 +128,7 @@ class TestGetHealthyAgent:
             name="Agent 1",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"], "max_concurrent_jobs": 4}),
+            capabilities=json.dumps({"providers": ["docker"], "max_concurrent_jobs": 4}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         agent2 = models.Host(
@@ -136,7 +136,7 @@ class TestGetHealthyAgent:
             name="Agent 2",
             address="localhost:8081",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"], "max_concurrent_jobs": 4}),
+            capabilities=json.dumps({"providers": ["docker"], "max_concurrent_jobs": 4}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add_all([agent1, agent2])
@@ -153,7 +153,7 @@ class TestGetHealthyAgent:
         test_db.commit()
 
         # Should select agent2 (less loaded)
-        result = await agent_client.get_healthy_agent(test_db, required_provider="containerlab")
+        result = await agent_client.get_healthy_agent(test_db, required_provider="docker")
         assert result is not None
         assert result.id == "agent-2"
 
@@ -165,7 +165,7 @@ class TestGetHealthyAgent:
             name="Busy Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"], "max_concurrent_jobs": 2}),
+            capabilities=json.dumps({"providers": ["docker"], "max_concurrent_jobs": 2}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add(agent)
@@ -181,7 +181,7 @@ class TestGetHealthyAgent:
             test_db.add(job)
         test_db.commit()
 
-        result = await agent_client.get_healthy_agent(test_db, required_provider="containerlab")
+        result = await agent_client.get_healthy_agent(test_db, required_provider="docker")
         assert result is None  # No agent has capacity
 
     @pytest.mark.asyncio
@@ -192,7 +192,7 @@ class TestGetHealthyAgent:
             name="Agent 1",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         agent2 = models.Host(
@@ -200,7 +200,7 @@ class TestGetHealthyAgent:
             name="Agent 2",
             address="localhost:8081",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add_all([agent1, agent2])
@@ -209,7 +209,7 @@ class TestGetHealthyAgent:
         # Request with affinity to agent-2
         result = await agent_client.get_healthy_agent(
             test_db,
-            required_provider="containerlab",
+            required_provider="docker",
             prefer_agent_id="agent-2"
         )
         assert result is not None
@@ -223,7 +223,7 @@ class TestGetHealthyAgent:
             name="Agent 1",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         agent2 = models.Host(
@@ -231,7 +231,7 @@ class TestGetHealthyAgent:
             name="Agent 2",
             address="localhost:8081",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add_all([agent1, agent2])
@@ -240,7 +240,7 @@ class TestGetHealthyAgent:
         # Exclude agent-1
         result = await agent_client.get_healthy_agent(
             test_db,
-            required_provider="containerlab",
+            required_provider="docker",
             exclude_agents=["agent-1"]
         )
         assert result is not None
@@ -258,7 +258,7 @@ class TestGetAgentForLab:
             name="Lab Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add(agent)
@@ -267,7 +267,7 @@ class TestGetAgentForLab:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             agent_id="lab-agent",
         )
         test_db.add(lab)
@@ -285,7 +285,7 @@ class TestGetAgentForLab:
             name="Offline Agent",
             address="localhost:8080",
             status="offline",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc) - timedelta(seconds=300),
         )
         healthy_agent = models.Host(
@@ -293,7 +293,7 @@ class TestGetAgentForLab:
             name="Healthy Agent",
             address="localhost:8081",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add_all([offline_agent, healthy_agent])
@@ -302,7 +302,7 @@ class TestGetAgentForLab:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             agent_id="offline-agent",  # Assigned to offline agent
         )
         test_db.add(lab)
@@ -324,7 +324,7 @@ class TestGetAgentByName:
             name="my-agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add(agent)
@@ -348,7 +348,7 @@ class TestGetAgentByName:
             name="offline-agent",
             address="localhost:8080",
             status="offline",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add(agent)
@@ -362,16 +362,16 @@ class TestGetAgentByName:
         """Returns None if agent lacks required provider."""
         agent = models.Host(
             id="agent-1",
-            name="clab-only",
+            name="docker-only",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add(agent)
         test_db.commit()
 
-        result = await agent_client.get_agent_by_name(test_db, "clab-only", required_provider="libvirt")
+        result = await agent_client.get_agent_by_name(test_db, "docker-only", required_provider="libvirt")
         assert result is None
 
 
@@ -446,10 +446,10 @@ class TestAgentCapabilities:
             name="Test",
             address="localhost:8080",
             status="online",
-            capabilities='{"providers": ["containerlab"], "features": ["vxlan"]}',
+            capabilities='{"providers": ["docker"], "features": ["vxlan"]}',
         )
         caps = agent_client.parse_capabilities(agent)
-        assert caps["providers"] == ["containerlab"]
+        assert caps["providers"] == ["docker"]
         assert caps["features"] == ["vxlan"]
 
     def test_parse_capabilities_invalid_json(self):
@@ -483,10 +483,10 @@ class TestAgentCapabilities:
             name="Test",
             address="localhost:8080",
             status="online",
-            capabilities='{"providers": ["containerlab", "libvirt"]}',
+            capabilities='{"providers": ["docker", "libvirt"]}',
         )
         providers = agent_client.get_agent_providers(agent)
-        assert "containerlab" in providers
+        assert "docker" in providers
         assert "libvirt" in providers
 
     def test_get_agent_max_jobs_default(self):
@@ -496,7 +496,7 @@ class TestAgentCapabilities:
             name="Test",
             address="localhost:8080",
             status="online",
-            capabilities='{"providers": ["containerlab"]}',
+            capabilities='{"providers": ["docker"]}',
         )
         max_jobs = agent_client.get_agent_max_jobs(agent)
         assert max_jobs == 4  # Default
@@ -508,7 +508,7 @@ class TestAgentCapabilities:
             name="Test",
             address="localhost:8080",
             status="online",
-            capabilities='{"providers": ["containerlab"], "max_concurrent_jobs": 8}',
+            capabilities='{"providers": ["docker"], "max_concurrent_jobs": 8}',
         )
         max_jobs = agent_client.get_agent_max_jobs(agent)
         assert max_jobs == 8

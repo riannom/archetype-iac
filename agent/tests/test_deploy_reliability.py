@@ -95,7 +95,7 @@ async def test_deploy_returns_503_when_lock_timeout():
             job_id="job-123",
             lab_id=lab_id,
             topology_yaml="name: test\n",
-            provider=Provider.CONTAINERLAB,
+            provider=Provider.DOCKER,
         )
 
         # Try to deploy - should timeout
@@ -129,7 +129,7 @@ async def test_deploy_acquires_lock_when_available():
                 job_id="job-456",
                 lab_id=lab_id,
                 topology_yaml="name: test\n",
-                provider=Provider.CONTAINERLAB,
+                provider=Provider.DOCKER,
             )
 
             result = await deploy_lab(request)
@@ -149,7 +149,7 @@ async def test_deploy_returns_503_when_lock_manager_not_initialized():
             job_id="job-no-manager",
             lab_id="test-lab",
             topology_yaml="name: test\n",
-            provider=Provider.CONTAINERLAB,
+            provider=Provider.DOCKER,
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -173,7 +173,7 @@ async def test_async_deploy_returns_accepted():
         job_id="job-async",
         lab_id=lab_id,
         topology_yaml="name: test\n",
-        provider=Provider.CONTAINERLAB,
+        provider=Provider.DOCKER,
         callback_url="http://localhost:8000/callback",
     )
 
@@ -208,7 +208,7 @@ async def test_async_deploy_callback_sends_timeout_on_lock_failure():
                 job_id="job-timeout",
                 lab_id=lab_id,
                 topology_yaml="name: test\n",
-                provider_name="containerlab",
+                provider_name="docker",
                 callback_url="http://localhost:8000/callback",
             )
 
@@ -248,7 +248,7 @@ async def test_async_deploy_callback_sends_success():
                     job_id="job-success",
                     lab_id=lab_id,
                     topology_yaml="name: test\n",
-                    provider_name="containerlab",
+                    provider_name="docker",
                     callback_url="http://localhost:8000/callback",
                 )
 
@@ -283,7 +283,7 @@ async def test_async_deploy_callback_sends_error_on_exception():
                     job_id="job-error",
                     lab_id=lab_id,
                     topology_yaml="name: test\n",
-                    provider_name="containerlab",
+                    provider_name="docker",
                     callback_url="http://localhost:8000/callback",
                 )
 
@@ -310,7 +310,7 @@ async def test_async_deploy_fails_when_lock_manager_not_initialized():
                 job_id="job-no-manager",
                 lab_id="test-lab",
                 topology_yaml="name: test\n",
-                provider_name="containerlab",
+                provider_name="docker",
                 callback_url="http://localhost:8000/callback",
             )
 

@@ -40,14 +40,14 @@ class ProviderRegistry:
 
         from agent.config import settings
 
-        if settings.enable_containerlab:
+        if settings.enable_docker:
             try:
-                from agent.providers.containerlab import ContainerlabProvider
-                provider = ContainerlabProvider()
-                self._providers["containerlab"] = provider
-                logger.info(f"Registered provider: containerlab")
+                from agent.providers.docker import DockerProvider
+                provider = DockerProvider()
+                self._providers["docker"] = provider
+                logger.info(f"Registered provider: docker")
             except Exception as e:
-                logger.error(f"Failed to initialize containerlab provider: {e}")
+                logger.error(f"Failed to initialize docker provider: {e}")
 
         if settings.enable_libvirt:
             try:
@@ -67,7 +67,7 @@ class ProviderRegistry:
         """Get a provider by name.
 
         Args:
-            name: Provider name (e.g., 'containerlab', 'libvirt')
+            name: Provider name (e.g., 'docker', 'libvirt')
 
         Returns:
             Provider instance if available, None otherwise

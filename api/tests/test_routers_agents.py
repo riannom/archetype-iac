@@ -33,7 +33,7 @@ class TestAgentRegistration:
                     "name": "Test Agent",
                     "address": "192.168.1.10:8080",
                     "capabilities": {
-                        "providers": ["containerlab"],
+                        "providers": ["docker"],
                         "max_concurrent_jobs": 4,
                         "features": ["vxlan"]
                     },
@@ -63,7 +63,7 @@ class TestAgentRegistration:
                     "name": "Updated Agent Name",
                     "address": sample_host.address,
                     "capabilities": {
-                        "providers": ["containerlab", "libvirt"],
+                        "providers": ["docker", "libvirt"],
                     },
                     "version": "2.0.0"
                 }
@@ -88,7 +88,7 @@ class TestAgentRegistration:
                     "agent_id": "different-id-123",
                     "name": sample_host.name,  # Same name
                     "address": "192.168.1.99:8080",
-                    "capabilities": {"providers": ["containerlab"]},
+                    "capabilities": {"providers": ["docker"]},
                     "version": "1.0.0"
                 }
             }
@@ -321,7 +321,7 @@ class TestAgentRoleDetermination:
             name="Local Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
         )
         test_db.add(host)
         test_db.commit()
@@ -339,7 +339,7 @@ class TestAgentRoleDetermination:
             name="Remote Agent",
             address="192.168.1.100:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
         )
         test_db.add(host)
         test_db.commit()
