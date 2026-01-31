@@ -1,12 +1,13 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# System deps for Docker CLI and networking
+# System deps for Docker CLI, networking, and OVS
 RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   bash \
   docker.io \
   iproute2 \
+  openvswitch-switch \
   && rm -rf /var/lib/apt/lists/*
 
 # Python deps

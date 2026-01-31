@@ -151,6 +151,10 @@ services:
       # Use bind mount so containerlab's paths match between agent and cEOS containers
       - /var/lib/archetype-agent:/var/lib/archetype-agent
       - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/openvswitch:/var/run/openvswitch
+      # Docker plugin directories - agent creates OVS network plugin here
+      - /run/docker/plugins:/run/docker/plugins
+      - /etc/docker/plugins:/etc/docker/plugins
     logging:
       driver: "json-file"
       options:

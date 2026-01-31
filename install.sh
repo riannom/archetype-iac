@@ -294,12 +294,22 @@ install_base_deps() {
     case $OS in
         ubuntu|debian)
             apt-get update -qq
-            apt-get install -y -qq git curl iproute2 jq bridge-utils
+            apt-get install -y -qq git curl iproute2 jq bridge-utils openvswitch-switch
             ;;
         centos|rhel|rocky|almalinux|fedora)
-            dnf install -y git curl iproute jq bridge-utils
+            dnf install -y git curl iproute jq bridge-utils openvswitch
             ;;
     esac
+
+    # Ensure OVS is running
+    if systemctl list-unit-files | grep -q openvswitch-switch; then
+        systemctl enable --now openvswitch-switch
+    elif systemctl list-unit-files | grep -q openvswitch; then
+        systemctl enable --now openvswitch
+    fi
+
+    # Create Docker plugin directories for OVS network plugin
+    mkdir -p /run/docker/plugins /etc/docker/plugins
 }
 
 install_agent_deps() {

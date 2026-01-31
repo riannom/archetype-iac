@@ -210,18 +210,25 @@ log_info "Installing system dependencies..."
 case $OS in
     ubuntu|debian)
         apt-get update -qq
-        apt-get install -y -qq python3 python3-venv python3-pip git curl iproute2 ca-certificates gnupg
+        apt-get install -y -qq python3 python3-venv python3-pip git curl iproute2 ca-certificates gnupg openvswitch-switch
         ;;
-    centos|rhel|rocky|almalinux)
-        dnf install -y python3 python3-pip git curl iproute ca-certificates
-        ;;
-    fedora)
-        dnf install -y python3 python3-pip git curl iproute ca-certificates
+    centos|rhel|rocky|almalinux|fedora)
+        dnf install -y python3 python3-pip git curl iproute ca-certificates openvswitch
         ;;
     *)
         log_warn "Unsupported OS: $OS. Attempting generic install..."
         ;;
 esac
+
+# Ensure OVS is running
+if systemctl list-unit-files | grep -q openvswitch-switch; then
+    systemctl enable --now openvswitch-switch 2>/dev/null || true
+elif systemctl list-unit-files | grep -q openvswitch; then
+    systemctl enable --now openvswitch 2>/dev/null || true
+fi
+
+# Create Docker plugin directories for OVS network plugin
+mkdir -p /run/docker/plugins /etc/docker/plugins
 
 # Install Docker
 if [ "$INSTALL_DOCKER" = true ]; then
