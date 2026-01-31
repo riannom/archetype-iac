@@ -4,6 +4,7 @@ import { createBrowserRouter, RouterProvider, Navigate } from "react-router-dom"
 import { ThemeProvider } from "./theme/index";
 import { UserProvider } from "./contexts/UserContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
+import { ImageLibraryProvider } from "./contexts/ImageLibraryContext";
 import { ToastContainer } from "./components/ui/ToastContainer";
 import StudioConsolePage from "./pages/StudioConsolePage";
 import HostsPage from "./pages/HostsPage";
@@ -29,10 +30,12 @@ root.render(
   <React.StrictMode>
     <ThemeProvider>
       <UserProvider>
-        <NotificationProvider>
-          <RouterProvider router={router} />
-          <ToastContainer />
-        </NotificationProvider>
+        <ImageLibraryProvider>
+          <NotificationProvider>
+            <RouterProvider router={router} />
+            <ToastContainer />
+          </NotificationProvider>
+        </ImageLibraryProvider>
       </UserProvider>
     </ThemeProvider>
   </React.StrictMode>

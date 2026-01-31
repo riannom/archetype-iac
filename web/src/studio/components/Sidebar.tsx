@@ -22,10 +22,11 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
   );
 
   // Filter state - initialize from defaults, will be populated from preferences
+  // Default to 'has_image' to show only devices with images available
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedVendors, setSelectedVendors] = useState<Set<string>>(new Set());
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
-  const [imageStatus, setImageStatus] = useState<ImageStatus>('all');
+  const [imageStatus, setImageStatus] = useState<ImageStatus>('has_image');
 
   // Track whether we've loaded initial values from preferences
   const hasLoadedFromPrefs = useRef(false);
@@ -39,7 +40,8 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
       setSearchQuery(savedFilters.searchQuery || '');
       setSelectedVendors(new Set(savedFilters.selectedVendors || []));
       setSelectedTypes(new Set(savedFilters.selectedTypes || []));
-      setImageStatus((savedFilters.imageStatus as ImageStatus) || 'all');
+      // Use saved preference, or keep default 'has_image' if not set
+      setImageStatus((savedFilters.imageStatus as ImageStatus) || 'has_image');
       hasLoadedFromPrefs.current = true;
     }
   }, [preferences]);
