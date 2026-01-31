@@ -76,8 +76,13 @@ class DeployLockManager:
         return self._redis
 
     def _lock_key(self, lab_id: str) -> str:
-        """Get Redis key for a lab's deploy lock."""
-        return f"deploy_lock:{lab_id}"
+        """Get Redis key for a lab's deploy lock.
+
+        The lock is scoped to both agent and lab, allowing multiple agents
+        to deploy their portion of a multi-host lab concurrently while still
+        preventing concurrent deploys of the same lab on the same agent.
+        """
+        return f"deploy_lock:{self.agent_id}:{lab_id}"
 
     def _lock_value(self) -> str:
         """Get lock value containing ownership info."""
@@ -233,21 +238,22 @@ class DeployLockManager:
         }
 
     async def get_all_locks(self) -> list[dict]:
-        """Get status of all deploy locks.
+        """Get status of all deploy locks for this agent.
 
         Returns:
-            List of lock status dicts for all active locks
+            List of lock status dicts for all active locks held by this agent
         """
         r = await self._get_redis()
 
-        # Find all deploy locks
+        # Find all deploy locks for this agent
+        prefix = f"deploy_lock:{self.agent_id}:"
         keys = []
-        async for key in r.scan_iter(match="deploy_lock:*"):
+        async for key in r.scan_iter(match=f"{prefix}*"):
             keys.append(key)
 
         locks = []
         for key in keys:
-            lab_id = key.replace("deploy_lock:", "")
+            lab_id = key.replace(prefix, "")
             status = await self.get_lock_status(lab_id)
             if status["held"]:
                 locks.append(status)
@@ -264,14 +270,13 @@ class DeployLockManager:
         """
         r = await self._get_redis()
         cleared = []
+        prefix = f"deploy_lock:{self.agent_id}:"
 
-        async for key in r.scan_iter(match="deploy_lock:*"):
-            value = await r.get(key)
-            if value and value.startswith(f"{self.agent_id}:"):
-                lab_id = key.replace("deploy_lock:", "")
-                await r.delete(key)
-                cleared.append(lab_id)
-                logger.info(f"Cleared orphaned lock for lab {lab_id} from previous run")
+        async for key in r.scan_iter(match=f"{prefix}*"):
+            lab_id = key.replace(prefix, "")
+            await r.delete(key)
+            cleared.append(lab_id)
+            logger.info(f"Cleared orphaned lock for lab {lab_id} from previous run")
 
         return cleared
 
