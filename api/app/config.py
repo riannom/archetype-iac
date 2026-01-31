@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # vrnetlab repository path for building VM images
     vrnetlab_path: str = "/opt/vrnetlab"
     log_forward_url: str | None = None
-    provider: str = "clab"
+    provider: str = "docker"
 
     local_auth_enabled: bool = True
     oidc_issuer_url: str | None = None

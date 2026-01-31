@@ -30,10 +30,10 @@ class DeviceType(str, Enum):
 
 @dataclass
 class VendorConfig:
-    """Configuration for a vendor's containerlab node kind.
+    """Configuration for a vendor's network device kind.
 
     Fields:
-        kind: Containerlab kind identifier (e.g., "ceos")
+        kind: Device kind identifier (e.g., "ceos") - used in topology YAML
         vendor: Vendor name for display (e.g., "Arista")
         console_shell: Shell command for console access
         default_image: Default Docker image when none specified
@@ -111,6 +111,48 @@ class VendorConfig:
     console_user: str = "admin"  # Username for SSH console access
     console_password: str = "admin"  # Password for SSH console access
 
+    # ==========================================================================
+    # Container runtime configuration (used by DockerProvider)
+    # These settings control how containers are created and configured
+    # ==========================================================================
+
+    # Environment variables to set in the container
+    # Keys are variable names, values are the values to set
+    environment: dict[str, str] = field(default_factory=dict)
+
+    # Linux capabilities to add to the container
+    # Common: NET_ADMIN (required for networking), SYS_ADMIN (for some vendor devices)
+    capabilities: list[str] = field(default_factory=lambda: ["NET_ADMIN"])
+
+    # Whether to run the container in privileged mode
+    # Required for some vendors (cEOS, SR Linux) that need full system access
+    privileged: bool = False
+
+    # Volume mounts in "host:container" format
+    # Use {workspace} placeholder for lab workspace directory
+    # Example: ["{workspace}/configs/{node}/flash:/mnt/flash"]
+    binds: list[str] = field(default_factory=list)
+
+    # Override the default entrypoint
+    entrypoint: Optional[str] = None
+
+    # Override the default command
+    cmd: Optional[list[str]] = None
+
+    # Network mode for container
+    # "none": No networking (links added manually)
+    # "bridge": Use default bridge (for management)
+    network_mode: str = "none"
+
+    # Sysctls to set in the container
+    sysctls: dict[str, str] = field(default_factory=dict)
+
+    # Runtime type (e.g., "runsc" for gVisor, empty for default)
+    runtime: str = ""
+
+    # Hostname template - use {node} for node name
+    hostname_template: str = "{node}"
+
 
 # =============================================================================
 # VENDOR CONFIGURATIONS - Single Source of Truth
@@ -145,6 +187,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         requires_image=False,
         documentation_url="https://docs.vyos.io/",
         tags=["routing", "firewall", "vpn", "bgp", "ospf"],
+        # Container runtime configuration
+        capabilities=["NET_ADMIN", "SYS_ADMIN"],
+        privileged=True,
+        sysctls={
+            "net.ipv4.ip_forward": "1",
+            "net.ipv6.conf.all.forwarding": "1",
+        },
     ),
     "cisco_iosxr": VendorConfig(
         kind="cisco_iosxr",
@@ -315,6 +364,26 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"%SYS-5-CONFIG_I|%SYS-5-SYSTEM_INITIALIZED|%SYS-5-SYSTEM_RESTARTED|%ZTP-6-CANCEL|Startup complete|System ready",
         readiness_timeout=300,  # cEOS can take up to 5 minutes
+        # Container runtime configuration
+        environment={
+            "CEOS": "1",
+            "EOS_PLATFORM": "ceoslab",
+            "container": "docker",
+            "ETBA": "1",
+            "SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT": "1",
+            "INTFTYPE": "eth",
+            "MGMT_INTF": "eth0",
+        },
+        capabilities=["NET_ADMIN", "SYS_ADMIN", "NET_RAW"],
+        privileged=True,
+        binds=["{workspace}/configs/{node}/flash:/mnt/flash"],
+        sysctls={
+            "net.ipv4.ip_forward": "1",
+            "net.ipv6.conf.all.disable_ipv6": "0",
+            "net.ipv6.conf.all.accept_dad": "0",
+            "net.ipv6.conf.default.accept_dad": "0",
+            "net.ipv6.conf.all.autoconf": "0",
+        },
     ),
     "nokia_srlinux": VendorConfig(
         kind="nokia_srlinux",
@@ -342,6 +411,18 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"System is ready|SR Linux.*started|mgmt0.*up",
         readiness_timeout=120,
+        # Container runtime configuration
+        environment={
+            "SRLINUX": "1",
+        },
+        capabilities=["NET_ADMIN", "SYS_ADMIN", "NET_RAW"],
+        privileged=True,
+        sysctls={
+            "net.ipv4.ip_forward": "1",
+            "net.ipv6.conf.all.disable_ipv6": "0",
+            "net.ipv6.conf.all.accept_dad": "0",
+            "net.ipv6.conf.default.accept_dad": "0",
+        },
     ),
     "cvx": VendorConfig(
         kind="cvx",
@@ -625,6 +706,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         requires_image=False,
         documentation_url="https://docs.docker.com/",
         tags=["host", "linux", "container", "testing"],
+        # Container runtime configuration
+        capabilities=["NET_ADMIN"],
+        privileged=False,
+        cmd=["sleep", "infinity"],  # Keep container running
     ),
     "frr": VendorConfig(
         kind="linux",
@@ -646,6 +731,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         requires_image=False,
         documentation_url="https://docs.frrouting.org/",
         tags=["routing", "bgp", "ospf", "open-source", "container"],
+        # Container runtime configuration
+        capabilities=["NET_ADMIN", "SYS_ADMIN"],
+        privileged=True,
+        sysctls={
+            "net.ipv4.ip_forward": "1",
+            "net.ipv6.conf.all.forwarding": "1",
+        },
     ),
     "windows": VendorConfig(
         kind="linux",  # Placeholder - needs special handling
@@ -992,29 +1084,29 @@ for _key, config in VENDOR_CONFIGS.items():
     for alias in config.aliases:
         _ALIAS_TO_KIND[alias.lower()] = config.kind
 
-# Build kind-to-config lookup table (maps containerlab kind -> VendorConfig)
+# Build kind-to-config lookup table (maps device kind -> VendorConfig)
 _KIND_TO_CONFIG: dict[str, VendorConfig] = {}
 for _key, config in VENDOR_CONFIGS.items():
-    # Map the containerlab kind to this config
+    # Map the device kind to this config
     _KIND_TO_CONFIG[config.kind] = config
     # Also map the config key itself
     _KIND_TO_CONFIG[_key] = config
 
 
 def _get_config_by_kind(kind: str) -> VendorConfig | None:
-    """Look up VendorConfig by containerlab node kind.
+    """Look up VendorConfig by device kind.
 
-    This handles the mapping from containerlab kinds (e.g., 'cisco_c8000v')
+    This handles the mapping from device kinds (e.g., 'cisco_c8000v')
     to VendorConfig entries (keyed by 'c8000v').
     """
     return _KIND_TO_CONFIG.get(kind)
 
 
 def get_console_shell(kind: str) -> str:
-    """Get the console shell command for a containerlab node kind.
+    """Get the console shell command for a device kind.
 
     Args:
-        kind: The containerlab node kind (from clab-node-kind label)
+        kind: The device kind (from archetype.node_kind or clab-node-kind label)
 
     Returns:
         Shell command to use for console access
@@ -1026,10 +1118,10 @@ def get_console_shell(kind: str) -> str:
 
 
 def get_console_method(kind: str) -> str:
-    """Get the console access method for a containerlab node kind.
+    """Get the console access method for a device kind.
 
     Args:
-        kind: The containerlab node kind (from clab-node-kind label)
+        kind: The device kind (from archetype.node_kind or clab-node-kind label)
 
     Returns:
         Console method: "docker_exec" or "ssh"
@@ -1044,7 +1136,7 @@ def get_console_credentials(kind: str) -> tuple[str, str]:
     """Get the console credentials for SSH-based console access.
 
     Args:
-        kind: The containerlab node kind (from clab-node-kind label)
+        kind: The device kind (from archetype.node_kind or clab-node-kind label)
 
     Returns:
         Tuple of (username, password)
@@ -1056,7 +1148,7 @@ def get_console_credentials(kind: str) -> tuple[str, str]:
 
 
 def get_default_image(kind: str) -> Optional[str]:
-    """Get the default Docker image for a containerlab node kind."""
+    """Get the default Docker image for a device kind."""
     config = _get_config_by_kind(kind)
     if config:
         return config.default_image
@@ -1064,23 +1156,23 @@ def get_default_image(kind: str) -> Optional[str]:
 
 
 def get_vendor_config(kind: str) -> Optional[VendorConfig]:
-    """Get the full vendor configuration for a containerlab node kind."""
+    """Get the full vendor configuration for a device kind."""
     return VENDOR_CONFIGS.get(kind)
 
 
 def list_supported_kinds() -> list[str]:
-    """List all supported containerlab node kinds."""
+    """List all supported device kinds."""
     return list(VENDOR_CONFIGS.keys())
 
 
 def get_kind_for_device(device: str) -> str:
-    """Resolve a device alias to its containerlab kind.
+    """Resolve a device alias to its canonical kind.
 
     Args:
         device: Device name or alias (e.g., "eos", "arista_eos", "ceos")
 
     Returns:
-        The canonical containerlab kind (e.g., "ceos")
+        The canonical device kind (e.g., "ceos")
     """
     device_lower = device.lower()
     return _ALIAS_TO_KIND.get(device_lower, device_lower)
@@ -1089,6 +1181,105 @@ def get_kind_for_device(device: str) -> str:
 def get_all_vendors() -> list[VendorConfig]:
     """Return all vendor configurations."""
     return list(VENDOR_CONFIGS.values())
+
+
+@dataclass
+class ContainerRuntimeConfig:
+    """Container runtime configuration for DockerProvider.
+
+    This is a simplified view of VendorConfig focused on container creation.
+    """
+    image: str
+    environment: dict[str, str]
+    capabilities: list[str]
+    privileged: bool
+    binds: list[str]
+    entrypoint: str | None
+    cmd: list[str] | None
+    network_mode: str
+    sysctls: dict[str, str]
+    hostname: str
+    memory_mb: int
+    cpu_count: int
+
+
+def get_container_config(
+    device: str,
+    node_name: str,
+    image: str | None = None,
+    workspace: str = "",
+) -> ContainerRuntimeConfig:
+    """Get container runtime configuration for a device type.
+
+    Args:
+        device: Device type/kind (e.g., "ceos", "linux", "nokia_srlinux")
+        node_name: Node name for hostname and path substitution
+        image: Override image (uses default if not specified)
+        workspace: Lab workspace path for bind mount substitution
+
+    Returns:
+        ContainerRuntimeConfig for container creation
+    """
+    # Look up by device key first, then by kind
+    config = VENDOR_CONFIGS.get(device)
+    if not config:
+        config = _get_config_by_kind(device)
+    if not config:
+        # Fallback to linux defaults
+        config = VENDOR_CONFIGS.get("linux")
+
+    # Use provided image or default
+    final_image = image or config.default_image or "alpine:latest"
+
+    # Process bind mounts - substitute {workspace} and {node}
+    processed_binds = []
+    for bind in config.binds:
+        processed = bind.replace("{workspace}", workspace).replace("{node}", node_name)
+        processed_binds.append(processed)
+
+    # Process hostname template
+    hostname = config.hostname_template.replace("{node}", node_name)
+
+    return ContainerRuntimeConfig(
+        image=final_image,
+        environment=dict(config.environment),
+        capabilities=list(config.capabilities),
+        privileged=config.privileged,
+        binds=processed_binds,
+        entrypoint=config.entrypoint,
+        cmd=list(config.cmd) if config.cmd else None,
+        network_mode=config.network_mode,
+        sysctls=dict(config.sysctls),
+        hostname=hostname,
+        memory_mb=config.memory,
+        cpu_count=config.cpu,
+    )
+
+
+def get_config_by_device(device: str) -> VendorConfig | None:
+    """Get VendorConfig by device key or alias.
+
+    Args:
+        device: Device key, kind, or alias
+
+    Returns:
+        VendorConfig if found, None otherwise
+    """
+    # Try direct key lookup
+    if device in VENDOR_CONFIGS:
+        return VENDOR_CONFIGS[device]
+
+    # Try kind lookup
+    config = _get_config_by_kind(device)
+    if config:
+        return config
+
+    # Try alias lookup
+    kind = get_kind_for_device(device)
+    if kind in VENDOR_CONFIGS:
+        return VENDOR_CONFIGS[kind]
+
+    return _get_config_by_kind(kind)
 
 
 def _get_vendor_options(config: VendorConfig) -> dict:

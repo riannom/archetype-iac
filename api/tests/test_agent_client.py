@@ -237,7 +237,7 @@ class MockAgent:
         self.status = status
         self.last_heartbeat = datetime.utcnow()
         self.name = f"agent-{agent_id}"
-        self.capabilities = capabilities or '{"providers": ["containerlab"], "max_concurrent_jobs": 4}'
+        self.capabilities = capabilities or '{"providers": ["docker"], "max_concurrent_jobs": 4}'
         self.version = "0.1.0"
         self.created_at = datetime.utcnow()
 
@@ -257,11 +257,11 @@ class MockLab:
 
 def test_parse_capabilities_valid():
     """Test parsing valid capabilities JSON."""
-    agent = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["containerlab", "libvirt"], "max_concurrent_jobs": 8}')
+    agent = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["docker", "libvirt"], "max_concurrent_jobs": 8}')
 
     caps = agent_client.parse_capabilities(agent)
 
-    assert caps["providers"] == ["containerlab", "libvirt"]
+    assert caps["providers"] == ["docker", "libvirt"]
     assert caps["max_concurrent_jobs"] == 8
 
 
@@ -287,11 +287,11 @@ def test_parse_capabilities_invalid_json():
 
 def test_get_agent_providers():
     """Test extracting provider list from agent."""
-    agent = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["containerlab", "libvirt"]}')
+    agent = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["docker", "libvirt"]}')
 
     providers = agent_client.get_agent_providers(agent)
 
-    assert providers == ["containerlab", "libvirt"]
+    assert providers == ["docker", "libvirt"]
 
 
 def test_get_agent_providers_missing():
@@ -357,13 +357,13 @@ async def test_get_healthy_agent_capability_filtering():
     mock_db = MagicMock()
 
     # Create agents with different capabilities
-    agent_clab = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["containerlab"], "max_concurrent_jobs": 4}')
+    agent_docker = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["docker"], "max_concurrent_jobs": 4}')
     agent_libvirt = MockAgent("agent2", "localhost:8002", capabilities='{"providers": ["libvirt"], "max_concurrent_jobs": 4}')
-    agent_both = MockAgent("agent3", "localhost:8003", capabilities='{"providers": ["containerlab", "libvirt"], "max_concurrent_jobs": 4}')
+    agent_both = MockAgent("agent3", "localhost:8003", capabilities='{"providers": ["docker", "libvirt"], "max_concurrent_jobs": 4}')
 
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
-    mock_query.all.return_value = [agent_clab, agent_libvirt, agent_both]
+    mock_query.all.return_value = [agent_docker, agent_libvirt, agent_both]
     mock_db.query.return_value = mock_query
 
     # Mock count_active_jobs to return 0 for all agents
@@ -380,7 +380,7 @@ async def test_get_healthy_agent_no_matching_provider():
     """Test that returns None when no agent supports required provider."""
     mock_db = MagicMock()
 
-    agent = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["containerlab"]}')
+    agent = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["docker"]}')
 
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
@@ -456,8 +456,8 @@ async def test_get_healthy_agent_load_balancing():
     mock_db = MagicMock()
 
     # Both agents have same max_concurrent_jobs
-    agent1 = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["containerlab"], "max_concurrent_jobs": 4}')
-    agent2 = MockAgent("agent2", "localhost:8002", capabilities='{"providers": ["containerlab"], "max_concurrent_jobs": 4}')
+    agent1 = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["docker"], "max_concurrent_jobs": 4}')
+    agent2 = MockAgent("agent2", "localhost:8002", capabilities='{"providers": ["docker"], "max_concurrent_jobs": 4}')
 
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
@@ -480,8 +480,8 @@ async def test_get_healthy_agent_capacity_check():
     """Test that agents at capacity are skipped."""
     mock_db = MagicMock()
 
-    agent1 = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["containerlab"], "max_concurrent_jobs": 2}')
-    agent2 = MockAgent("agent2", "localhost:8002", capabilities='{"providers": ["containerlab"], "max_concurrent_jobs": 4}')
+    agent1 = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["docker"], "max_concurrent_jobs": 2}')
+    agent2 = MockAgent("agent2", "localhost:8002", capabilities='{"providers": ["docker"], "max_concurrent_jobs": 4}')
 
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
@@ -504,8 +504,8 @@ async def test_get_healthy_agent_all_at_capacity():
     """Test that returns None when all agents at capacity."""
     mock_db = MagicMock()
 
-    agent1 = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["containerlab"], "max_concurrent_jobs": 2}')
-    agent2 = MockAgent("agent2", "localhost:8002", capabilities='{"providers": ["containerlab"], "max_concurrent_jobs": 2}')
+    agent1 = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["docker"], "max_concurrent_jobs": 2}')
+    agent2 = MockAgent("agent2", "localhost:8002", capabilities='{"providers": ["docker"], "max_concurrent_jobs": 2}')
 
     mock_query = MagicMock()
     mock_query.filter.return_value = mock_query
@@ -561,7 +561,7 @@ async def test_get_agent_for_lab_with_existing_agent():
     mock_db.query.side_effect = query_side_effect
 
     with patch.object(agent_client, 'count_active_jobs', return_value=0):
-        result = await agent_client.get_agent_for_lab(mock_db, lab, required_provider="containerlab")
+        result = await agent_client.get_agent_for_lab(mock_db, lab, required_provider="docker")
 
     # Should select agent2 (agent with existing node placements)
     assert result == agent2
@@ -599,7 +599,7 @@ async def test_get_agent_for_lab_without_existing_agent():
         return 1 if agent_id == "agent1" else 3
 
     with patch.object(agent_client, 'count_active_jobs', side_effect=mock_count):
-        result = await agent_client.get_agent_for_lab(mock_db, lab, required_provider="containerlab")
+        result = await agent_client.get_agent_for_lab(mock_db, lab, required_provider="docker")
 
     # Should select agent1 (least loaded)
     assert result == agent1

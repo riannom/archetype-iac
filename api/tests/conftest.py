@@ -109,7 +109,7 @@ def sample_lab(test_db: Session, test_user: models.User) -> models.Lab:
     lab = models.Lab(
         name="Test Lab",
         owner_id=test_user.id,
-        provider="containerlab",
+        provider="docker",
         state="stopped",
         workspace_path="/tmp/test-lab",
     )
@@ -158,7 +158,7 @@ def sample_host(test_db: Session) -> models.Host:
         name="Test Agent",
         address="localhost:8080",
         status="online",
-        capabilities=json.dumps({"providers": ["containerlab"]}),
+        capabilities=json.dumps({"providers": ["docker"]}),
         version="1.0.0",
         resource_usage=json.dumps({
             "cpu_percent": 25.5,
@@ -170,13 +170,13 @@ def sample_host(test_db: Session) -> models.Host:
             "containers_total": 10,
             "container_details": [
                 {
-                    "name": "clab-test-r1",
+                    "name": "archetype-test-r1",
                     "status": "running",
                     "lab_prefix": "test",
                     "is_system": False,
                 },
                 {
-                    "name": "clab-test-r2",
+                    "name": "archetype-test-r2",
                     "status": "running",
                     "lab_prefix": "test",
                     "is_system": False,
@@ -201,7 +201,7 @@ def multiple_hosts(test_db: Session) -> list[models.Host]:
             name="Agent 1",
             address="agent1.local:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "cpu_percent": 30.0,
@@ -219,7 +219,7 @@ def multiple_hosts(test_db: Session) -> list[models.Host]:
             name="Agent 2",
             address="agent2.local:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "cpu_percent": 20.0,
@@ -237,7 +237,7 @@ def multiple_hosts(test_db: Session) -> list[models.Host]:
             name="Agent 3",
             address="agent3.local:8080",
             status="offline",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({}),
         ),
@@ -261,7 +261,7 @@ def offline_host(test_db: Session) -> models.Host:
         name="Offline Agent",
         address="offline.local:8080",
         status="offline",
-        capabilities=json.dumps({"providers": ["containerlab"]}),
+        capabilities=json.dumps({"providers": ["docker"]}),
         version="1.0.0",
         resource_usage=json.dumps({}),
         last_heartbeat=datetime.now(timezone.utc) - timedelta(minutes=10),

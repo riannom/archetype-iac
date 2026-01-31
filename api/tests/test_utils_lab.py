@@ -24,32 +24,26 @@ class TestGetLabProvider:
     def test_returns_lab_provider_when_set(self):
         """Returns the lab's configured provider."""
         lab = MagicMock(spec=models.Lab)
-        lab.provider = "containerlab"
-        assert get_lab_provider(lab) == "containerlab"
+        lab.provider = "docker"
+        assert get_lab_provider(lab) == "docker"
 
-    def test_returns_containerlab_when_provider_is_none(self):
-        """Returns 'containerlab' when provider is None."""
+    def test_returns_docker_when_provider_is_none(self):
+        """Returns 'docker' when provider is None."""
         lab = MagicMock(spec=models.Lab)
         lab.provider = None
-        assert get_lab_provider(lab) == "containerlab"
+        assert get_lab_provider(lab) == "docker"
 
-    def test_returns_containerlab_when_provider_is_empty(self):
-        """Returns 'containerlab' when provider is empty string."""
+    def test_returns_docker_when_provider_is_empty(self):
+        """Returns 'docker' when provider is empty string."""
         lab = MagicMock(spec=models.Lab)
         lab.provider = ""
-        assert get_lab_provider(lab) == "containerlab"
+        assert get_lab_provider(lab) == "docker"
 
     def test_returns_custom_provider(self):
         """Returns custom provider values."""
         lab = MagicMock(spec=models.Lab)
         lab.provider = "libvirt"
         assert get_lab_provider(lab) == "libvirt"
-
-    def test_returns_clab_alias(self):
-        """Returns 'clab' when that's the configured provider."""
-        lab = MagicMock(spec=models.Lab)
-        lab.provider = "clab"
-        assert get_lab_provider(lab) == "clab"
 
 
 class TestGetLabOr404:
@@ -133,7 +127,7 @@ class TestGetLabOr404:
         other_lab = models.Lab(
             name="Other Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
         )
         test_db.add(other_lab)
         test_db.commit()
@@ -224,7 +218,7 @@ class TestGetLabOr404EdgeCases:
         orphan_lab = models.Lab(
             name="Orphan Lab",
             owner_id=None,
-            provider="containerlab",
+            provider="docker",
         )
         test_db.add(orphan_lab)
         test_db.commit()
@@ -238,7 +232,7 @@ class TestGetLabOr404EdgeCases:
         orphan_lab = models.Lab(
             name="Orphan Lab 2",
             owner_id=None,
-            provider="containerlab",
+            provider="docker",
         )
         test_db.add(orphan_lab)
         test_db.commit()
@@ -507,7 +501,7 @@ class TestUpdateLabStateWithMultipleLabs:
             name="Other Lab",
             owner_id=test_user.id,
             state="stopped",
-            provider="containerlab",
+            provider="docker",
         )
         test_db.add(other_lab)
         test_db.commit()
@@ -532,7 +526,7 @@ class TestUpdateLabStateWithMultipleLabs:
                 name=f"Lab {i}",
                 owner_id=test_user.id,
                 state="stopped",
-                provider="containerlab",
+                provider="docker",
             )
             test_db.add(lab)
             labs.append(lab)

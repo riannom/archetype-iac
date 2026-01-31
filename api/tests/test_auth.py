@@ -296,7 +296,7 @@ class TestAdminRoutes:
     ):
         """Test that admin can update labs owned by other users."""
         # Create lab owned by test_user
-        lab = models.Lab(name="User Lab", owner_id=test_user.id, provider="containerlab")
+        lab = models.Lab(name="User Lab", owner_id=test_user.id, provider="docker")
         test_db.add(lab)
         test_db.commit()
         test_db.refresh(lab)
@@ -319,7 +319,7 @@ class TestAdminRoutes:
     ):
         """Test that admin can delete labs owned by other users."""
         # Create lab owned by test_user
-        lab = models.Lab(name="User Lab", owner_id=test_user.id, provider="containerlab")
+        lab = models.Lab(name="User Lab", owner_id=test_user.id, provider="docker")
         test_db.add(lab)
         test_db.commit()
         lab_id = lab.id
@@ -342,7 +342,7 @@ class TestAdminRoutes:
         """Test that non-admin cannot update labs they don't own."""
         # Create lab owned by admin
         lab = models.Lab(
-            name="Admin Lab", owner_id=admin_user.id, provider="containerlab"
+            name="Admin Lab", owner_id=admin_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.commit()

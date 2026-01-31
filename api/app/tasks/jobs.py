@@ -215,7 +215,7 @@ async def run_agent_job(
     action: str,
     topology_yaml: str | None = None,
     node_name: str | None = None,
-    provider: str = "containerlab",
+    provider: str = "docker",
 ):
     """Run a job on an agent in the background.
 
@@ -228,7 +228,7 @@ async def run_agent_job(
         action: Action to perform (up, down, node:start:name, etc.)
         topology_yaml: Topology YAML for deploy actions
         node_name: Node name for node actions
-        provider: Provider for the job (default: containerlab)
+        provider: Provider for the job (default: docker)
     """
     session = SessionLocal()
     try:
@@ -406,7 +406,7 @@ async def run_multihost_deploy(
     job_id: str,
     lab_id: str,
     topology_yaml: str,
-    provider: str = "containerlab",
+    provider: str = "docker",
 ):
     """Deploy a lab across multiple hosts.
 
@@ -515,6 +515,19 @@ async def run_multihost_deploy(
         # Split topology by host
         host_topologies = split_topology_by_host(graph, analysis)
 
+        # Build reserved interfaces per host from cross-host links
+        # These interfaces will be created by the overlay, not containerlab
+        host_reserved_interfaces: dict[str, set[tuple[str, str]]] = {}
+        for chl in analysis.cross_host_links:
+            # Reserve interface on host_a
+            if chl.host_a not in host_reserved_interfaces:
+                host_reserved_interfaces[chl.host_a] = set()
+            host_reserved_interfaces[chl.host_a].add((chl.node_a, chl.interface_a))
+            # Reserve interface on host_b
+            if chl.host_b not in host_reserved_interfaces:
+                host_reserved_interfaces[chl.host_b] = set()
+            host_reserved_interfaces[chl.host_b].add((chl.node_b, chl.interface_b))
+
         # Deploy to each host in parallel
         deploy_tasks = []
         deploy_results: dict[str, dict] = {}
@@ -522,7 +535,8 @@ async def run_multihost_deploy(
 
         for host_name, sub_graph in host_topologies.items():
             agent = host_to_agent[host_name]
-            sub_yaml = graph_to_containerlab_yaml(sub_graph, lab_id)
+            reserved = host_reserved_interfaces.get(host_name, set())
+            sub_yaml = graph_to_containerlab_yaml(sub_graph, lab_id, reserved_interfaces=reserved)
 
             logger.info(
                 f"Deploying to host {host_name} (agent {agent.id}): "
@@ -578,11 +592,9 @@ async def run_multihost_deploy(
                     )
                     continue
 
-                # Get container names from containerlab naming convention
-                # Containerlab names containers as: clab-{lab_id}-{node_name}
-                safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
-                container_a = f"clab-{safe_lab_id}-{chl.node_a}"
-                container_b = f"clab-{safe_lab_id}-{chl.node_b}"
+                # Get container names based on provider naming convention
+                container_a = _get_container_name(lab_id, chl.node_a, provider)
+                container_b = _get_container_name(lab_id, chl.node_b, provider)
 
                 result = await agent_client.setup_cross_host_link(
                     database=session,
@@ -655,7 +667,7 @@ async def run_multihost_destroy(
     job_id: str,
     lab_id: str,
     topology_yaml: str,
-    provider: str = "containerlab",
+    provider: str = "docker",
 ):
     """Destroy a multi-host lab.
 
@@ -804,7 +816,7 @@ async def run_node_sync(
     job_id: str,
     lab_id: str,
     node_ids: list[str],
-    provider: str = "containerlab",
+    provider: str = "docker",
 ):
     """Sync nodes to match their desired state.
 
@@ -822,7 +834,7 @@ async def run_node_sync(
         job_id: The job ID
         lab_id: The lab ID
         node_ids: List of node IDs to sync
-        provider: Provider for the job (default: containerlab)
+        provider: Provider for the job (default: docker)
     """
     from app.storage import topology_path
 
@@ -1738,11 +1750,28 @@ async def run_node_sync(
         session.close()
 
 
-def _get_container_name(lab_id: str, node_name: str) -> str:
-    """Get the containerlab container name for a node.
+def _get_container_name(lab_id: str, node_name: str, provider: str = "docker") -> str:
+    """Get the container name for a node based on the provider.
 
-    Containerlab names containers as: clab-{lab_id}-{node_name}
+    Container naming conventions:
+    - containerlab: clab-{lab_id}-{node_name}
+    - docker: archetype-{lab_id}-{node_name}
+
     Lab ID is sanitized and truncated to ~20 chars.
+
+    Args:
+        lab_id: Lab identifier
+        node_name: Node name in the topology
+        provider: Infrastructure provider (containerlab, docker)
+
+    Returns:
+        Full container name
     """
     safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
-    return f"clab-{safe_lab_id}-{node_name}"
+    safe_node = re.sub(r'[^a-zA-Z0-9_-]', '', node_name)
+
+    if provider == "docker":
+        return f"archetype-{safe_lab_id}-{safe_node}"
+    else:
+        # Default: containerlab naming
+        return f"clab-{safe_lab_id}-{node_name}"

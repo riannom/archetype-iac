@@ -35,10 +35,10 @@ class TestDefaultSettings:
         assert settings.workspace == "/var/lib/archetype"
 
     def test_provider_default(self):
-        """Provider defaults to clab."""
+        """Provider defaults to docker."""
         from app.config import Settings
         settings = Settings()
-        assert settings.provider == "clab"
+        assert settings.provider == "docker"
 
     def test_local_auth_enabled_default(self):
         """Local auth is enabled by default."""
@@ -172,9 +172,9 @@ class TestJobHealthSettings:
         """Job timeouts are set."""
         from app.config import Settings
         settings = Settings()
-        assert settings.job_timeout_deploy == 1200  # 20 minutes
-        assert settings.job_timeout_destroy == 600  # 10 minutes
-        assert settings.job_timeout_sync == 600  # 10 minutes
+        assert settings.job_timeout_deploy == 1020  # 17 minutes
+        assert settings.job_timeout_destroy == 360  # 6 minutes
+        assert settings.job_timeout_sync == 660  # 11 minutes
         assert settings.job_timeout_node == 300  # 5 minutes
 
 

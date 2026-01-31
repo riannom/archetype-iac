@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Callable
 
-from app.storage import topology_path
-
 
 class ProviderActionError(ValueError):
     pass
@@ -13,19 +11,21 @@ def _unsupported_node_command(lab_id: str, action: str, node: str) -> list[list[
     raise ProviderActionError("Node actions are not implemented for this provider")
 
 
-def _clab_node_command(lab_id: str, action: str, node: str) -> list[list[str]]:
-    create_cmd = ["netlab", "create", "-p", "clab"]
-    if action == "start":
-        command = ["clab", "deploy", "--node-filter", node, "-t", "clab.yml"]
-        return [create_cmd, command]
-    if action == "stop":
-        command = ["clab", "destroy", "--node-filter", node, "-t", "clab.yml"]
-        return [create_cmd, command]
-    raise ProviderActionError("Node action is not supported by provider")
+def _docker_node_command(lab_id: str, action: str, node: str) -> list[list[str]]:
+    """Docker provider node actions.
+
+    Note: DockerProvider handles node actions via the agent API, not CLI commands.
+    This is kept for backward compatibility with the legacy netlab-based job execution.
+    For agent-based deployments, node actions are handled by DockerProvider.start_node()
+    and DockerProvider.stop_node() methods.
+    """
+    raise ProviderActionError(
+        "Docker provider node actions are handled by the agent API, not CLI commands"
+    )
 
 
 _NODE_ACTIONS: dict[str, Callable[[str, str, str], list[str]]] = {
-    "clab": _clab_node_command,
+    "docker": _docker_node_command,
     "libvirt": _unsupported_node_command,
 }
 
@@ -36,11 +36,16 @@ _NODE_ACTIONS: dict[str, Callable[[str, str, str], list[str]]] = {
 
 
 def supports_node_actions(provider: str) -> bool:
-    return provider in _NODE_ACTIONS and provider != "libvirt"
+    """Check if a provider supports per-node start/stop actions.
+
+    Note: DockerProvider supports node actions but handles them via the agent API,
+    not through CLI commands built by this module.
+    """
+    return provider in ("docker",)
 
 
 def supported_node_actions(provider: str) -> set[str]:
-    if provider == "clab":
+    if provider == "docker":
         return {"start", "stop"}
     return set()
 

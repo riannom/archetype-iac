@@ -43,8 +43,10 @@ class JobStatus(str, Enum):
 
 class Provider(str, Enum):
     """Supported infrastructure providers."""
+    DOCKER = "docker"  # Native Docker management for containers
+    LIBVIRT = "libvirt"  # Libvirt for qcow2 VMs
+    # DEPRECATED: ContainerlabProvider has been removed. Kept for API compatibility.
     CONTAINERLAB = "containerlab"
-    LIBVIRT = "libvirt"
 
 
 # --- Agent Registration ---
@@ -102,7 +104,7 @@ class DeployRequest(BaseModel):
     job_id: str
     lab_id: str
     topology_yaml: str
-    provider: Provider = Provider.CONTAINERLAB
+    provider: Provider = Provider.DOCKER
     # Optional callback URL for async execution
     # If provided, agent returns 202 Accepted immediately and POSTs result to this URL
     callback_url: str | None = None
@@ -112,6 +114,7 @@ class DestroyRequest(BaseModel):
     """Controller -> Agent: Tear down a lab."""
     job_id: str
     lab_id: str
+    provider: Provider = Provider.DOCKER
     # Optional callback URL for async execution
     callback_url: str | None = None
 

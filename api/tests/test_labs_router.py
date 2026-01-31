@@ -30,8 +30,8 @@ class TestLabsCRUD:
     ):
         """Test listing labs returns owned labs."""
         # Create labs owned by test user
-        lab1 = models.Lab(name="Lab 1", owner_id=test_user.id, provider="containerlab")
-        lab2 = models.Lab(name="Lab 2", owner_id=test_user.id, provider="containerlab")
+        lab1 = models.Lab(name="Lab 1", owner_id=test_user.id, provider="docker")
+        lab2 = models.Lab(name="Lab 2", owner_id=test_user.id, provider="docker")
         test_db.add_all([lab1, lab2])
         test_db.commit()
 
@@ -52,7 +52,7 @@ class TestLabsCRUD:
     ):
         """Test listing labs includes shared labs."""
         # Create lab owned by admin
-        lab = models.Lab(name="Admin Lab", owner_id=admin_user.id, provider="containerlab")
+        lab = models.Lab(name="Admin Lab", owner_id=admin_user.id, provider="docker")
         test_db.add(lab)
         test_db.flush()
 
@@ -80,7 +80,7 @@ class TestLabsCRUD:
         # Create multiple labs
         for i in range(10):
             lab = models.Lab(
-                name=f"Lab {i}", owner_id=test_user.id, provider="containerlab"
+                name=f"Lab {i}", owner_id=test_user.id, provider="docker"
             )
             test_db.add(lab)
         test_db.commit()
@@ -102,13 +102,13 @@ class TestLabsCRUD:
         """Test creating a new lab."""
         response = test_client.post(
             "/labs",
-            json={"name": "New Lab", "provider": "containerlab"},
+            json={"name": "New Lab", "provider": "docker"},
             headers=auth_headers,
         )
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "New Lab"
-        assert data["provider"] == "containerlab"
+        assert data["provider"] == "docker"
         assert data["owner_id"] == test_user.id
         assert data["state"] == "stopped"
 
@@ -121,7 +121,7 @@ class TestLabsCRUD:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["provider"] == "containerlab"
+        assert data["provider"] == "docker"
 
     def test_get_lab(
         self,
@@ -150,7 +150,7 @@ class TestLabsCRUD:
     ):
         """Test getting a lab owned by another user without permission fails."""
         # Create lab owned by admin (not shared with test_user)
-        lab = models.Lab(name="Private Lab", owner_id=admin_user.id, provider="containerlab")
+        lab = models.Lab(name="Private Lab", owner_id=admin_user.id, provider="docker")
         test_db.add(lab)
         test_db.commit()
 
@@ -183,7 +183,7 @@ class TestLabsCRUD:
     ):
         """Test updating a lab owned by another user fails."""
         # Create lab owned by admin
-        lab = models.Lab(name="Admin Lab", owner_id=admin_user.id, provider="containerlab")
+        lab = models.Lab(name="Admin Lab", owner_id=admin_user.id, provider="docker")
         test_db.add(lab)
         test_db.flush()
 

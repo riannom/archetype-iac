@@ -79,7 +79,7 @@ class TestRefreshLabStatus:
         """Test refresh requires access to the lab."""
         # Create lab owned by admin (not shared with test_user)
         lab = models.Lab(
-            name="Private Lab", owner_id=admin_user.id, provider="containerlab"
+            name="Private Lab", owner_id=admin_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.commit()
@@ -270,7 +270,7 @@ class TestAdminAccessControl:
         """Test admin can access labs owned by other users."""
         # Create lab owned by regular user
         lab = models.Lab(
-            name="User Lab", owner_id=test_user.id, provider="containerlab"
+            name="User Lab", owner_id=test_user.id, provider="docker"
         )
         test_db.add(lab)
         test_db.commit()

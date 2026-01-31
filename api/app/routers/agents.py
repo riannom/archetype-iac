@@ -359,7 +359,7 @@ def list_agents_detailed(
     """List all agents with full details including resource usage, role, and labs.
 
     Role is determined by:
-    - "agent": Has containerlab or libvirt provider capabilities
+    - "agent": Has docker, containerlab, or libvirt provider capabilities
     - "controller": Has no provider capabilities (controller-only host)
     - "agent+controller": Has provider capabilities AND is the same host as controller
     """

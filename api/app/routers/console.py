@@ -51,7 +51,7 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
                         break
 
                 # Get the provider for this lab
-                lab_provider = lab.provider if lab.provider else "containerlab"
+                lab_provider = lab.provider if lab.provider else "docker"
 
                 # Check if this node has explicit host placement
                 # Always check placements, even for "single-host" labs, since a node
@@ -71,7 +71,7 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
                 # Fall back to default behavior
 
         # Get the provider for this lab (outside try block for fallback)
-        lab_provider = lab.provider if lab.provider else "containerlab"
+        lab_provider = lab.provider if lab.provider else "docker"
 
         # If not found via topology (single-host or node not found), use lab's agent
         if not agent:

@@ -9,7 +9,7 @@ from agent.providers.base import (
     Provider,
     StatusResult,
 )
-from agent.providers.containerlab import ContainerlabProvider
+from agent.providers.docker import DockerProvider
 from agent.providers.registry import (
     ProviderRegistry,
     get_default_provider,
@@ -28,7 +28,7 @@ __all__ = [
     "NodeStatus",
     "StatusResult",
     # Provider implementations
-    "ContainerlabProvider",
+    "DockerProvider",
     # Registry
     "ProviderRegistry",
     "get_provider",

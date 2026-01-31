@@ -21,6 +21,20 @@ from app.storage import lab_workspace
 from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config
 
 
+def _normalize_interface_name(iface_name: str) -> str:
+    """Normalize interface name to containerlab format.
+
+    Converts vendor-specific names like 'Ethernet1' to 'eth1' for containerlab.
+    This ensures cEOS and other platforms properly map the interfaces.
+    """
+    # Convert Ethernet1 -> eth1, Ethernet2 -> eth2, etc.
+    match = re.match(r'^[Ee]thernet(\d+)$', iface_name)
+    if match:
+        return f"eth{match.group(1)}"
+    # Already in eth format or other format, return as-is
+    return iface_name
+
+
 class _BlockScalarDumper(yaml.SafeDumper):
     """Custom YAML dumper that uses block scalar style for multi-line strings.
 
@@ -449,16 +463,19 @@ def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> T
 
         # If both endpoints have hosts and they differ, it's a cross-host link
         if host_a and host_b and host_a != host_b:
-            link_id = f"{ep_a.node}:{ep_a.ifname or 'eth0'}-{ep_b.node}:{ep_b.ifname or 'eth0'}"
+            # Normalize interface names (e.g., Ethernet1 -> eth1) for containerlab compatibility
+            iface_a = _normalize_interface_name(ep_a.ifname) if ep_a.ifname else f"eth{link_counter}"
+            iface_b = _normalize_interface_name(ep_b.ifname) if ep_b.ifname else f"eth{link_counter}"
+            link_id = f"{ep_a.node}:{iface_a}-{ep_b.node}:{iface_b}"
             cross_host_links.append(
                 CrossHostLink(
                     link_id=link_id,
                     node_a=ep_a.node,
-                    interface_a=ep_a.ifname or f"eth{link_counter}",
+                    interface_a=iface_a,
                     host_a=host_a,
                     ip_a=ep_a.ipv4,
                     node_b=ep_b.node,
-                    interface_b=ep_b.ifname or f"eth{link_counter}",
+                    interface_b=iface_b,
                     host_b=host_b,
                     ip_b=ep_b.ipv4,
                 )
@@ -480,7 +497,11 @@ def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> T
 # Use get_kind_for_device() and get_default_image() functions imported above
 
 
-def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
+def graph_to_containerlab_yaml(
+    graph: TopologyGraph,
+    lab_id: str,
+    reserved_interfaces: set[tuple[str, str]] | None = None,
+) -> str:
     """Convert topology graph to containerlab YAML format.
 
     Containerlab uses a different format than netlab:
@@ -489,6 +510,14 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
     - Topology is nested under 'topology' key
     - External network nodes are not added to the nodes section
     - Links to external networks use containerlab external endpoint format
+
+    Args:
+        graph: The topology graph to convert
+        lab_id: Lab identifier for naming
+        reserved_interfaces: Optional set of (node_name, interface_name) tuples
+            that should be treated as used. This prevents dummy interface
+            generation for cross-host link interfaces that will be created
+            by the overlay network.
     """
     import re
 
@@ -607,19 +636,6 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         match = re.search(r'(\d+)$', iface_name)
         return int(match.group(1)) if match else None
 
-    def _normalize_interface_name(iface_name: str) -> str:
-        """Normalize interface name to containerlab format.
-
-        Converts vendor-specific names like 'Ethernet1' to 'eth1' for containerlab.
-        This ensures cEOS and other platforms properly map the interfaces.
-        """
-        # Convert Ethernet1 -> eth1, Ethernet2 -> eth2, etc.
-        match = re.match(r'^[Ee]thernet(\d+)$', iface_name)
-        if match:
-            return f"eth{match.group(1)}"
-        # Already in eth format or other format, return as-is
-        return iface_name
-
     def _get_external_endpoint(ext_node: GraphNode) -> str:
         """Generate containerlab external endpoint string for an external network node.
 
@@ -722,6 +738,17 @@ def graph_to_containerlab_yaml(graph: TopologyGraph, lab_id: str) -> str:
         links.append({
             "endpoints": [f"{node_a}:{iface_a}", f"{node_b}:{iface_b}"]
         })
+
+    # Add reserved interfaces to used_interfaces (e.g., cross-host link interfaces)
+    # This prevents dummy interface generation for interfaces that will be
+    # created by the overlay network
+    if reserved_interfaces:
+        for node_name, iface_name in reserved_interfaces:
+            # Normalize the interface name for consistent comparison
+            normalized_iface = _normalize_interface_name(iface_name)
+            idx = _extract_interface_index(normalized_iface)
+            if idx is not None and node_name in used_interfaces:
+                used_interfaces[node_name].add(idx)
 
     # Generate dummy interfaces for devices that need them
     for node_name, kind in node_kinds.items():
@@ -827,9 +854,12 @@ def split_topology_by_host(
                 continue
 
             # Skip cross-host links (they're handled by overlay)
-            if (ep_a.node, ep_a.ifname or "eth0") in cross_host_endpoints:
+            # Normalize interface names to match cross_host_endpoints (which are normalized)
+            iface_a = _normalize_interface_name(ep_a.ifname) if ep_a.ifname else "eth0"
+            iface_b = _normalize_interface_name(ep_b.ifname) if ep_b.ifname else "eth0"
+            if (ep_a.node, iface_a) in cross_host_endpoints:
                 continue
-            if (ep_b.node, ep_b.ifname or "eth0") in cross_host_endpoints:
+            if (ep_b.node, iface_b) in cross_host_endpoints:
                 continue
 
             host_links.append(link)

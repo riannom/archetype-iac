@@ -109,7 +109,7 @@ class TestDashboardMetrics:
     ):
         """Test that labs_running is based on actual container presence."""
         # Create a host with container details that reference a lab
-        lab = models.Lab(name="Running Lab", provider="containerlab")
+        lab = models.Lab(name="Running Lab", provider="docker")
         test_db.add(lab)
         test_db.commit()
         test_db.refresh(lab)
@@ -120,7 +120,7 @@ class TestDashboardMetrics:
             name="Test Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "cpu_percent": 10.0,
@@ -129,7 +129,7 @@ class TestDashboardMetrics:
                 "containers_total": 2,
                 "container_details": [
                     {
-                        "name": f"clab-{lab.id}-r1",
+                        "name": f"archetype-{lab.id}-r1",
                         "status": "running",
                         "lab_prefix": lab.id,
                         "is_system": False,
@@ -159,7 +159,7 @@ class TestDashboardMetrics:
             name="Offline Agent",
             address="localhost:8080",
             status="offline",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "cpu_percent": 99.0,
@@ -207,7 +207,7 @@ class TestContainersBreakdown:
     ):
         """Test containers are grouped by lab."""
         # Create lab
-        lab = models.Lab(name="Test Lab", provider="containerlab")
+        lab = models.Lab(name="Test Lab", provider="docker")
         test_db.add(lab)
         test_db.commit()
         test_db.refresh(lab)
@@ -218,18 +218,18 @@ class TestContainersBreakdown:
             name="Test Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "container_details": [
                     {
-                        "name": f"clab-{lab.id}-r1",
+                        "name": f"archetype-{lab.id}-r1",
                         "status": "running",
                         "lab_prefix": lab.id,
                         "is_system": False,
                     },
                     {
-                        "name": f"clab-{lab.id}-r2",
+                        "name": f"archetype-{lab.id}-r2",
                         "status": "running",
                         "lab_prefix": lab.id,
                         "is_system": False,
@@ -260,12 +260,12 @@ class TestContainersBreakdown:
             name="Test Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "container_details": [
                     {
-                        "name": "clab-system-container",
+                        "name": "archetype-system-container",
                         "status": "running",
                         "lab_prefix": "",
                         "is_system": True,
@@ -294,12 +294,12 @@ class TestContainersBreakdown:
             name="Test Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "container_details": [
                     {
-                        "name": "clab-deleted-lab-r1",
+                        "name": "archetype-deleted-lab-r1",
                         "status": "running",
                         "lab_prefix": "nonexistent-lab-id",
                         "is_system": False,
@@ -364,7 +364,7 @@ class TestResourceDistribution:
     ):
         """Test resource distribution by lab."""
         # Create lab
-        lab = models.Lab(name="Test Lab", provider="containerlab")
+        lab = models.Lab(name="Test Lab", provider="docker")
         test_db.add(lab)
         test_db.commit()
         test_db.refresh(lab)
@@ -375,20 +375,20 @@ class TestResourceDistribution:
             name="Test Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "cpu_percent": 50.0,
                 "memory_percent": 60.0,
                 "container_details": [
                     {
-                        "name": f"clab-{lab.id}-r1",
+                        "name": f"archetype-{lab.id}-r1",
                         "status": "running",
                         "lab_prefix": lab.id,
                         "is_system": False,
                     },
                     {
-                        "name": f"clab-{lab.id}-r2",
+                        "name": f"archetype-{lab.id}-r2",
                         "status": "running",
                         "lab_prefix": lab.id,
                         "is_system": False,
@@ -417,9 +417,9 @@ class TestLabPrefixMatching:
         test_client: TestClient,
         test_db: Session,
     ):
-        """Test that truncated lab IDs (containerlab behavior) are matched."""
+        """Test that truncated lab IDs (legacy containerlab behavior) are matched."""
         # Create lab with long ID (UUID format)
-        lab = models.Lab(name="Test Lab", provider="containerlab")
+        lab = models.Lab(name="Test Lab", provider="docker")
         test_db.add(lab)
         test_db.commit()
         test_db.refresh(lab)
@@ -432,7 +432,7 @@ class TestLabPrefixMatching:
             name="Test Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "cpu_percent": 10.0,
@@ -440,7 +440,7 @@ class TestLabPrefixMatching:
                 "containers_running": 1,
                 "container_details": [
                     {
-                        "name": f"clab-{truncated_prefix}-r1",
+                        "name": f"archetype-{truncated_prefix}-r1",
                         "status": "running",
                         "lab_prefix": truncated_prefix,
                         "is_system": False,
@@ -464,7 +464,7 @@ class TestLabPrefixMatching:
         test_db: Session,
     ):
         """Test that partial prefix matching works for short prefixes."""
-        lab = models.Lab(name="Test Lab", provider="containerlab")
+        lab = models.Lab(name="Test Lab", provider="docker")
         test_db.add(lab)
         test_db.commit()
         test_db.refresh(lab)
@@ -477,7 +477,7 @@ class TestLabPrefixMatching:
             name="Test Agent",
             address="localhost:8080",
             status="online",
-            capabilities=json.dumps({"providers": ["containerlab"]}),
+            capabilities=json.dumps({"providers": ["docker"]}),
             version="1.0.0",
             resource_usage=json.dumps({
                 "cpu_percent": 10.0,
@@ -485,7 +485,7 @@ class TestLabPrefixMatching:
                 "containers_running": 1,
                 "container_details": [
                     {
-                        "name": f"clab-{partial_prefix}-r1",
+                        "name": f"archetype-{partial_prefix}-r1",
                         "status": "running",
                         "lab_prefix": partial_prefix,
                         "is_system": False,

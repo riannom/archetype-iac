@@ -12,10 +12,10 @@ from app import models
 def get_lab_provider(lab: models.Lab) -> str:
     """Get the provider for a lab.
 
-    Returns the lab's configured provider, defaulting to containerlab
+    Returns the lab's configured provider, defaulting to docker
     for backward compatibility with labs that don't have a provider set.
     """
-    return lab.provider if lab.provider else "containerlab"
+    return lab.provider if lab.provider else "docker"
 
 
 def get_lab_or_404(lab_id: str, database: Session, user: models.User) -> models.Lab:

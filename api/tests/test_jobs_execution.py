@@ -28,27 +28,27 @@ from app.tasks.jobs import (
 class TestGetContainerName:
     """Tests for _get_container_name helper function."""
 
-    def test_basic_container_name(self):
-        """Container name follows clab-{lab_id}-{node_name} pattern."""
-        result = _get_container_name("my-lab", "router1")
-        assert result == "clab-my-lab-router1"
+    def test_basic_container_name_docker(self):
+        """Container name follows archetype-{lab_id}-{node_name} pattern for docker."""
+        result = _get_container_name("my-lab", "router1", provider="docker")
+        assert result == "archetype-my-lab-router1"
 
     def test_long_lab_id_truncated(self):
         """Lab IDs longer than 20 chars are truncated."""
         long_id = "a" * 30
-        result = _get_container_name(long_id, "r1")
+        result = _get_container_name(long_id, "r1", provider="docker")
         assert len(result.split("-")[1]) <= 20
-        assert result == f"clab-{'a' * 20}-r1"
+        assert result == f"archetype-{'a' * 20}-r1"
 
     def test_special_chars_removed(self):
         """Special characters are removed from lab ID."""
-        result = _get_container_name("my@lab#with$special!", "node")
-        assert result == "clab-mylabwithspecial-node"
+        result = _get_container_name("my@lab#with$special!", "node", provider="docker")
+        assert result == "archetype-mylabwithspecial-node"
 
     def test_allowed_chars_preserved(self):
         """Underscores and hyphens are preserved."""
-        result = _get_container_name("my_lab-123", "node_1")
-        assert result == "clab-my_lab-123-node_1"
+        result = _get_container_name("my_lab-123", "node_1", provider="docker")
+        assert result == "archetype-my_lab-123-node_1"
 
 
 class TestRunAgentJob:
@@ -65,7 +65,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)
@@ -117,7 +117,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)
@@ -149,7 +149,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)
@@ -185,7 +185,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)
@@ -225,7 +225,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="running",
             agent_id=sample_host.id,
         )
@@ -261,7 +261,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="running",
             agent_id=sample_host.id,
         )
@@ -296,7 +296,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="running",
         )
         test_db.add(lab)
@@ -330,7 +330,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)
@@ -370,7 +370,7 @@ class TestRunAgentJob:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)
@@ -414,7 +414,7 @@ class TestRunMultihostDeploy:
         lab = models.Lab(
             name="Multi-host Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)
@@ -465,7 +465,7 @@ class TestRunMultihostDestroy:
         lab = models.Lab(
             name="Multi-host Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="running",
         )
         test_db.add(lab)
@@ -511,7 +511,7 @@ class TestRunNodeSync:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="running",
         )
         test_db.add(lab)
@@ -541,7 +541,7 @@ class TestRunNodeSync:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
             workspace_path=str(tmp_path),
         )
@@ -601,7 +601,7 @@ class TestJobErrorHandling:
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
-            provider="containerlab",
+            provider="docker",
             state="stopped",
         )
         test_db.add(lab)

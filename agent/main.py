@@ -1,7 +1,8 @@
 """Archetype Agent - Host-level orchestration agent.
 
 This agent runs on each compute host and handles:
-- Container/VM lifecycle via containerlab or libvirt
+- Container lifecycle via DockerProvider
+- VM lifecycle via LibvirtProvider
 - Console access to running nodes
 - Network overlay management
 - Health reporting to controller
@@ -178,11 +179,11 @@ def get_workspace(lab_id: str) -> Path:
     return workspace
 
 
-def get_provider_for_request(provider_name: str = "containerlab") -> Provider:
+def get_provider_for_request(provider_name: str = "docker") -> Provider:
     """Get a provider instance for handling a request.
 
     Args:
-        provider_name: Name of the provider to use (default: containerlab)
+        provider_name: Name of the provider to use (default: docker)
 
     Returns:
         Provider instance
@@ -217,8 +218,8 @@ def provider_status_to_schema(status: ProviderNodeStatus) -> NodeStatus:
 def get_capabilities() -> AgentCapabilities:
     """Determine agent capabilities based on config and available tools."""
     providers = []
-    if settings.enable_containerlab:
-        providers.append(Provider.CONTAINERLAB)
+    if settings.enable_docker:
+        providers.append(Provider.DOCKER)
     if settings.enable_libvirt:
         providers.append(Provider.LIBVIRT)
 
@@ -255,7 +256,7 @@ def get_resource_usage() -> dict:
         disk_total_gb = round(disk.total / (1024 ** 3), 2)
 
         # Docker container counts and details
-        # Only count Archetype-related containers (containerlab nodes + archetype system)
+        # Only count Archetype-related containers (docker provider nodes, containerlab nodes, or archetype system)
         containers_running = 0
         containers_total = 0
         container_details = []
@@ -265,16 +266,20 @@ def get_resource_usage() -> dict:
             all_containers = client.containers.list(all=True)
 
             # Collect detailed container info with lab associations
-            # Only include containerlab nodes and archetype system containers
+            # Include DockerProvider nodes (archetype.*), legacy clab-* nodes, and system containers
             for c in all_containers:
                 labels = c.labels
-                # Containerlab stores lab prefix in 'containerlab' label
-                lab_prefix = labels.get("containerlab", "")
+                # DockerProvider labels (primary)
+                is_archetype_node = bool(labels.get("archetype.node_name"))
+                archetype_lab_id = labels.get("archetype.lab_id", "")
+                # Legacy containerlab labels (for backward compatibility with existing containers)
                 is_clab_node = bool(labels.get("clab-node-name"))
-                is_archetype_system = c.name.startswith("archetype-")
+                clab_lab_prefix = labels.get("containerlab", "")
+                # System containers
+                is_archetype_system = c.name.startswith("archetype-") and not is_archetype_node
 
                 # Only include relevant containers
-                if not is_clab_node and not is_archetype_system:
+                if not is_archetype_node and not is_clab_node and not is_archetype_system:
                     continue
 
                 # Count only Archetype-related containers
@@ -282,12 +287,22 @@ def get_resource_usage() -> dict:
                 if c.status == "running":
                     containers_running += 1
 
+                # Extract info based on provider
+                if is_archetype_node:
+                    lab_prefix = archetype_lab_id
+                    node_name = labels.get("archetype.node_name")
+                    node_kind = labels.get("archetype.node_kind")
+                else:
+                    lab_prefix = clab_lab_prefix
+                    node_name = labels.get("clab-node-name")
+                    node_kind = labels.get("clab-node-kind")
+
                 container_details.append({
                     "name": c.name,
                     "status": c.status,
-                    "lab_prefix": lab_prefix,  # Truncated lab ID from containerlab
-                    "node_name": labels.get("clab-node-name"),
-                    "node_kind": labels.get("clab-node-kind"),
+                    "lab_prefix": lab_prefix,
+                    "node_name": node_name,
+                    "node_kind": node_kind,
                     "image": c.image.tags[0] if c.image.tags else c.image.short_id,
                     "is_system": is_archetype_system,
                 })
@@ -446,8 +461,8 @@ async def lifespan(app: FastAPI):
     # Start heartbeat background task
     _heartbeat_task = asyncio.create_task(heartbeat_loop())
 
-    # Start Docker event listener if containerlab is enabled
-    if settings.enable_containerlab:
+    # Start Docker event listener if docker provider is enabled
+    if settings.enable_docker:
         try:
             listener = get_event_listener()
             _event_listener_task = asyncio.create_task(
@@ -892,6 +907,7 @@ async def destroy_lab(request: DestroyRequest) -> JobResult:
             _execute_destroy_with_callback(
                 request.job_id,
                 request.lab_id,
+                request.provider.value,
                 request.callback_url,
             )
         )
@@ -902,9 +918,8 @@ async def destroy_lab(request: DestroyRequest) -> JobResult:
         )
 
     # Synchronous mode (existing behavior)
-    # Use default provider for destroy (containerlab)
-    # In future, could get provider from request or lab metadata
-    provider = get_provider_for_request("containerlab")
+    # Use provider from request
+    provider = get_provider_for_request(request.provider.value)
     workspace = get_workspace(request.lab_id)
     result = await provider.destroy(
         lab_id=request.lab_id,
@@ -931,6 +946,7 @@ async def destroy_lab(request: DestroyRequest) -> JobResult:
 async def _execute_destroy_with_callback(
     job_id: str,
     lab_id: str,
+    provider_name: str,
     callback_url: str,
 ) -> None:
     """Execute destroy in background and send result via callback."""
@@ -940,7 +956,7 @@ async def _execute_destroy_with_callback(
     started_at = datetime.now(timezone.utc)
 
     try:
-        provider = get_provider_for_request("containerlab")
+        provider = get_provider_for_request(provider_name)
         workspace = get_workspace(lab_id)
         logger.info(f"Async destroy starting: lab={lab_id}, workspace={workspace}")
 
@@ -983,7 +999,7 @@ async def node_action(request: NodeActionRequest) -> JobResult:
     logger.info(f"Node action: lab={request.lab_id}, node={request.node_name}, action={request.action}")
 
     # Use default provider for node actions
-    provider = get_provider_for_request("containerlab")
+    provider = get_provider_for_request()
     workspace = get_workspace(request.lab_id)
 
     if request.action == "start":
@@ -1030,7 +1046,7 @@ async def lab_status(request: LabStatusRequest) -> LabStatusResponse:
     logger.debug(f"Status request: lab={request.lab_id}")
 
     # Use default provider for status queries
-    provider = get_provider_for_request("containerlab")
+    provider = get_provider_for_request()
     workspace = get_workspace(request.lab_id)
     result = await provider.status(
         lab_id=request.lab_id,
@@ -1067,7 +1083,7 @@ async def extract_configs(lab_id: str) -> ExtractConfigsResponse:
     logger.info(f"Extract configs request: lab={lab_id}")
 
     try:
-        provider = get_provider_for_request("containerlab")
+        provider = get_provider_for_request()
         workspace = get_workspace(lab_id)
 
         # Call the provider's extract method - now returns list of (node_name, content) tuples
@@ -1165,7 +1181,7 @@ async def discover_labs() -> DiscoverLabsResponse:
     logger.info("Discovering running labs...")
 
     # Use default provider for discovery
-    provider = get_provider_for_request("containerlab")
+    provider = get_provider_for_request()
     discovered = await provider.discover_labs()
 
     labs = [
@@ -1201,7 +1217,7 @@ async def cleanup_orphans(request: CleanupOrphansRequest) -> CleanupOrphansRespo
     logger.info(f"Cleaning up orphan containers, keeping {len(request.valid_lab_ids)} valid labs")
 
     # Use default provider for cleanup
-    provider = get_provider_for_request("containerlab")
+    provider = get_provider_for_request()
     valid_ids = set(request.valid_lab_ids)
     removed = await provider.cleanup_orphan_containers(valid_ids)
 
@@ -1250,7 +1266,10 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
             for container in containers:
                 # Check if container belongs to a valid lab
                 labels = container.labels
-                lab_prefix = labels.get("containerlab", "")
+                # Check both DockerProvider and ContainerlabProvider labels
+                lab_id_archetype = labels.get("archetype.lab_id", "")
+                lab_prefix_clab = labels.get("containerlab", "")
+                lab_prefix = lab_id_archetype or lab_prefix_clab
 
                 # Protect images from valid labs
                 is_valid_lab = any(
@@ -1495,7 +1514,7 @@ async def check_node_ready(lab_id: str, node_name: str) -> dict:
     from agent.readiness import get_probe_for_vendor, get_readiness_timeout
 
     # Get container name from provider
-    provider = get_provider("containerlab")
+    provider = get_provider("docker")
     if provider is None:
         return {
             "is_ready": False,
@@ -1510,7 +1529,8 @@ async def check_node_ready(lab_id: str, node_name: str) -> dict:
         import docker
         client = docker.from_env()
         container = client.containers.get(container_name)
-        kind = container.labels.get("clab-node-kind", "")
+        # Try new archetype labels first, fall back to containerlab labels
+        kind = container.labels.get("archetype.node_kind") or container.labels.get("clab-node-kind", "")
     except Exception as e:
         return {
             "is_ready": False,
@@ -2093,7 +2113,8 @@ def _get_console_config(container_name: str) -> tuple[str, str, str, str]:
         import docker
         client = docker.from_env()
         container = client.containers.get(container_name)
-        kind = container.labels.get("clab-node-kind", "")
+        # Try new archetype labels first, fall back to containerlab labels
+        kind = container.labels.get("archetype.node_kind") or container.labels.get("clab-node-kind", "")
         method = get_console_method(kind)
         shell = get_console_shell(kind)
         username, password = get_console_credentials(kind)
@@ -2123,8 +2144,8 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
     """WebSocket endpoint for console access to a node."""
     await websocket.accept()
 
-    # Get container name from provider (use default containerlab for now)
-    provider = get_provider("containerlab")
+    # Get container name from provider
+    provider = get_provider("docker")
     if provider is None:
         await websocket.send_text("\r\nError: No provider available\r\n")
         await websocket.close(code=1011)
