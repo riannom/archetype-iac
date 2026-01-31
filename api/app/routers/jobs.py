@@ -134,6 +134,22 @@ def _extract_error_summary(log_content: str | None, status: str) -> str | None:
     return "Job failed - check logs for details"
 
 
+def _is_likely_file_path(value: str) -> bool:
+    """Check if a string looks like a file path (not inline content).
+
+    File paths don't contain newlines and are short enough for the OS.
+    """
+    # Paths don't contain newlines
+    if "\n" in value:
+        return False
+    # Linux max path length is 4096, but filename limit is 255
+    # If it's longer than reasonable for a path, it's content
+    if len(value) > 4096:
+        return False
+    # Must start with / for absolute path or look like a relative path
+    return value.startswith("/") or not value.startswith("=")
+
+
 def _get_log_content(log_path_or_content: str | None) -> str | None:
     """Get log content from either a file path or inline content.
 
@@ -143,12 +159,17 @@ def _get_log_content(log_path_or_content: str | None) -> str | None:
     """
     if not log_path_or_content:
         return None
-    log_path = Path(log_path_or_content)
-    if log_path.exists() and log_path.is_file():
+
+    # Check if it looks like a file path before trying Path operations
+    if _is_likely_file_path(log_path_or_content):
         try:
-            return log_path.read_text(encoding="utf-8")
-        except Exception:
-            return None
+            log_path = Path(log_path_or_content)
+            if log_path.exists() and log_path.is_file():
+                return log_path.read_text(encoding="utf-8")
+        except OSError:
+            # Path too long or other OS error - treat as content
+            pass
+
     # Content is stored directly
     return log_path_or_content
 
@@ -192,18 +213,27 @@ async def lab_up(
     clab_yaml = ""
     graph = None
     analysis = None
+    has_explicit_placements = False
     if topology_yaml:
         try:
             graph = yaml_to_graph(topology_yaml)
             analysis = analyze_topology(graph)
-            is_multihost = not analysis.single_host
+
+            # Check if ANY node has explicit host placement
+            has_explicit_placements = bool(analysis.placements)
+
+            # If there are explicit placements, we must respect them
+            # This is multi-host even if all explicit placements are the same host
+            is_multihost = not analysis.single_host or has_explicit_placements
+
             # Convert to containerlab format for deployment
             clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
             logger.info(
                 f"Lab {lab_id} topology analysis: "
                 f"single_host={analysis.single_host}, "
                 f"hosts={list(analysis.placements.keys())}, "
-                f"cross_host_links={len(analysis.cross_host_links)}"
+                f"cross_host_links={len(analysis.cross_host_links)}, "
+                f"has_explicit_placements={has_explicit_placements}"
             )
         except Exception as e:
             logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
@@ -211,7 +241,7 @@ async def lab_up(
     # Get the provider for this lab
     lab_provider = get_lab_provider(lab)
 
-    if is_multihost and analysis:
+    if is_multihost and analysis and graph:
         # Multi-host deployment: validate all required agents exist
         missing_hosts = []
         for host_name in analysis.placements:
@@ -225,6 +255,29 @@ async def lab_up(
             raise HTTPException(
                 status_code=503,
                 detail=f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
+            )
+
+        # Check if there are nodes without explicit placement
+        placed_node_count = sum(len(p) for p in analysis.placements.values())
+        total_node_count = len(graph.nodes)
+
+        if placed_node_count < total_node_count:
+            # Some nodes don't have explicit host placement
+            # Find a default agent for them (lab's preferred agent or any healthy)
+            default_agent = await agent_client.get_agent_for_lab(
+                database, lab, required_provider=lab_provider
+            )
+            if not default_agent:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"No healthy agent available for nodes without explicit host placement"
+                )
+
+            # Re-analyze topology with default host for unplaced nodes
+            analysis = analyze_topology(graph, default_host=default_agent.name)
+            logger.info(
+                f"Lab {lab_id} has {total_node_count - placed_node_count} nodes without "
+                f"explicit placement, using {default_agent.name} as default host"
             )
     else:
         # Single-host deployment: check for any healthy agent
@@ -531,12 +584,15 @@ def get_job_log(
     # log_path can be either:
     # 1. An actual file path (legacy jobs from app/jobs.py)
     # 2. The log content directly (jobs from app/tasks/jobs.py)
-    log_path = Path(job.log_path)
-    if log_path.exists() and log_path.is_file():
-        content = log_path.read_text(encoding="utf-8")
-    else:
-        # log_path contains the content directly
-        content = job.log_path
+    content = job.log_path
+    if _is_likely_file_path(job.log_path):
+        try:
+            log_path = Path(job.log_path)
+            if log_path.exists() and log_path.is_file():
+                content = log_path.read_text(encoding="utf-8")
+        except OSError:
+            # Path too long or other OS error - use as content
+            pass
 
     if tail:
         lines = content.splitlines()

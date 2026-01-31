@@ -695,67 +695,71 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                 detail=f"Deploy already in progress for lab {lab_id}, try again later"
             )
 
-    # Try to acquire lock with timeout
+    # Try to acquire lock with timeout (only for lock acquisition, not deploy)
     try:
         async with asyncio.timeout(settings.lock_acquire_timeout):
-            async with lock:
-                # Track lock acquisition time for stuck detection
-                _deploy_lock_times[lab_id] = datetime.now(timezone.utc)
-                try:
-                    provider = get_provider_for_request(request.provider.value)
-                    workspace = get_workspace(lab_id)
-                    logger.info(f"Deploy starting: lab={lab_id}, workspace={workspace}")
-
-                    result = await provider.deploy(
-                        lab_id=lab_id,
-                        topology_yaml=request.topology_yaml,
-                        workspace=workspace,
-                    )
-
-                    logger.info(f"Deploy finished: lab={lab_id}, success={result.success}")
-
-                    if result.success:
-                        job_result = JobResult(
-                            job_id=request.job_id,
-                            status=JobStatus.COMPLETED,
-                            stdout=result.stdout,
-                            stderr=result.stderr,
-                        )
-                    else:
-                        job_result = JobResult(
-                            job_id=request.job_id,
-                            status=JobStatus.FAILED,
-                            stdout=result.stdout,
-                            stderr=result.stderr,
-                            error_message=result.error,
-                        )
-
-                    # Cache result briefly for concurrent requests
-                    _deploy_results[lab_id] = job_result
-                    # Clean up cache after a short delay
-                    asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
-
-                    return job_result
-
-                except Exception as e:
-                    logger.error(f"Deploy error for lab {lab_id}: {e}", exc_info=True)
-                    job_result = JobResult(
-                        job_id=request.job_id,
-                        status=JobStatus.FAILED,
-                        error_message=str(e),
-                    )
-                    _deploy_results[lab_id] = job_result
-                    asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
-                    return job_result
-                finally:
-                    # Clear lock time tracking when lock is released
-                    _deploy_lock_times.pop(lab_id, None)
+            await lock.acquire()
     except asyncio.TimeoutError:
         logger.warning(f"Timeout waiting for deploy lock on lab {lab_id}")
         raise HTTPException(
             status_code=503,
             detail=f"Deploy already in progress for lab {lab_id}, try again later"
         )
+
+    # Lock acquired - now execute deploy (with deploy_timeout, not lock_acquire_timeout)
+    try:
+        # Track lock acquisition time for stuck detection
+        _deploy_lock_times[lab_id] = datetime.now(timezone.utc)
+        try:
+            provider = get_provider_for_request(request.provider.value)
+            workspace = get_workspace(lab_id)
+            logger.info(f"Deploy starting: lab={lab_id}, workspace={workspace}")
+
+            result = await provider.deploy(
+                lab_id=lab_id,
+                topology_yaml=request.topology_yaml,
+                workspace=workspace,
+            )
+
+            logger.info(f"Deploy finished: lab={lab_id}, success={result.success}")
+
+            if result.success:
+                job_result = JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.COMPLETED,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                )
+            else:
+                job_result = JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.FAILED,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    error_message=result.error,
+                )
+
+            # Cache result briefly for concurrent requests
+            _deploy_results[lab_id] = job_result
+            # Clean up cache after a short delay
+            asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
+
+            return job_result
+
+        except Exception as e:
+            logger.error(f"Deploy error for lab {lab_id}: {e}", exc_info=True)
+            job_result = JobResult(
+                job_id=request.job_id,
+                status=JobStatus.FAILED,
+                error_message=str(e),
+            )
+            _deploy_results[lab_id] = job_result
+            asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
+            return job_result
+    finally:
+        # Always release lock and clear tracking
+        _deploy_lock_times.pop(lab_id, None)
+        lock.release()
 
 
 async def _execute_deploy_with_callback(
