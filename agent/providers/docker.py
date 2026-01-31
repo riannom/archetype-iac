@@ -298,12 +298,21 @@ class DockerProvider(Provider):
         if runtime_config.sysctls:
             config["sysctls"] = runtime_config.sysctls
 
-        # Entry command
+        # Entry command - ensure entrypoint is a list for Docker SDK
+        if runtime_config.entrypoint:
+            # Docker SDK expects entrypoint as a list
+            if isinstance(runtime_config.entrypoint, str):
+                config["entrypoint"] = [runtime_config.entrypoint]
+            else:
+                config["entrypoint"] = runtime_config.entrypoint
+
         if runtime_config.cmd:
             config["command"] = runtime_config.cmd
 
-        if runtime_config.entrypoint:
-            config["entrypoint"] = runtime_config.entrypoint
+        # Ensure at least one of entrypoint or command is set
+        # Some images (like cEOS) have ENTRYPOINT [] which clears defaults
+        if "entrypoint" not in config and "command" not in config:
+            config["command"] = ["sleep", "infinity"]
 
         return config
 
