@@ -6,6 +6,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent.schemas import DeployTopology
 
 
 class NodeStatus(str, Enum):
@@ -99,14 +103,22 @@ class Provider(ABC):
     async def deploy(
         self,
         lab_id: str,
-        topology_yaml: str,
+        topology: "DeployTopology | None",
+        topology_yaml: str | None,
         workspace: Path,
     ) -> DeployResult:
         """Deploy a topology.
 
+        Accepts topology in two formats for backward compatibility:
+        - topology: Structured JSON format (preferred for multi-host)
+        - topology_yaml: Legacy YAML string format
+
+        At least one must be provided. If both are provided, topology takes precedence.
+
         Args:
             lab_id: Unique identifier for the lab
-            topology_yaml: The topology definition in YAML format
+            topology: Structured topology definition (JSON format)
+            topology_yaml: The topology definition in YAML format (legacy)
             workspace: Directory to use for lab files
 
         Returns:

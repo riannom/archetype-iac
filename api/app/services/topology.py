@@ -724,3 +724,145 @@ class TopologyService:
             Tuple of (nodes_created, links_created)
         """
         return self.import_from_yaml(lab_id, yaml_content)
+
+    # =========================================================================
+    # Deploy Topology Generation
+    # =========================================================================
+
+    def build_deploy_topology(self, lab_id: str, host_id: str) -> dict:
+        """Build deploy topology JSON for nodes on a specific host.
+
+        This is the key method that uses database `nodes.host_id` as the
+        authoritative source for host assignments, replacing the previous
+        YAML-based `host:` field approach.
+
+        Args:
+            lab_id: Lab ID to build topology for
+            host_id: Host ID to filter nodes by
+
+        Returns:
+            Dict with 'nodes' and 'links' lists suitable for DeployTopology schema
+        """
+        nodes = self.get_nodes(lab_id)
+        links = self.get_links(lab_id)
+
+        # Filter nodes for this host
+        host_nodes = [n for n in nodes if n.host_id == host_id]
+        host_node_ids = {n.id for n in host_nodes}
+
+        # Filter links where BOTH endpoints are on this host (local links)
+        # Cross-host links are handled separately via VXLAN overlay
+        host_links = [
+            l for l in links
+            if l.source_node_id in host_node_ids and l.target_node_id in host_node_ids
+        ]
+
+        # Build node ID to container_name mapping for link endpoint resolution
+        node_id_to_name = {n.id: n.container_name for n in host_nodes}
+
+        return {
+            "nodes": [self._node_to_deploy_dict(n) for n in host_nodes],
+            "links": [self._link_to_deploy_dict(l, node_id_to_name) for l in host_links],
+        }
+
+    def _node_to_deploy_dict(self, node: models.Node) -> dict:
+        """Convert a Node model to deploy dict format.
+
+        Args:
+            node: Node database model
+
+        Returns:
+            Dict matching DeployNode schema
+        """
+        # Parse config_json for additional fields
+        config: dict[str, Any] = {}
+        if node.config_json:
+            try:
+                config = json.loads(node.config_json)
+            except json.JSONDecodeError:
+                pass
+
+        # Extract environment and binds from config or defaults
+        env = config.get("env", {})
+        binds = config.get("binds", [])
+        ports = config.get("ports", [])
+        exec_cmds = config.get("exec", [])
+        startup_config = config.get("startup-config")
+
+        return {
+            "name": node.container_name,
+            "display_name": node.display_name,
+            "kind": node.device or "linux",
+            "image": node.image,
+            "binds": binds,
+            "env": env,
+            "ports": ports,
+            "startup_config": startup_config,
+            "exec_cmds": exec_cmds,
+        }
+
+    def _link_to_deploy_dict(
+        self,
+        link: models.Link,
+        node_id_to_name: dict[str, str],
+    ) -> dict:
+        """Convert a Link model to deploy dict format.
+
+        Args:
+            link: Link database model
+            node_id_to_name: Mapping of node IDs to container names
+
+        Returns:
+            Dict matching DeployLink schema
+        """
+        return {
+            "source_node": node_id_to_name.get(link.source_node_id, ""),
+            "source_interface": link.source_interface,
+            "target_node": node_id_to_name.get(link.target_node_id, ""),
+            "target_interface": link.target_interface,
+        }
+
+    def get_reserved_interfaces_for_host(
+        self,
+        lab_id: str,
+        host_id: str,
+    ) -> set[tuple[str, str]]:
+        """Get interfaces reserved for cross-host links on a specific host.
+
+        Cross-host links require VXLAN overlay setup, so their interfaces
+        should not be created by the local deploy. This returns the set
+        of (node_name, interface_name) tuples that should be excluded
+        from local link creation.
+
+        Args:
+            lab_id: Lab ID
+            host_id: Host ID to get reserved interfaces for
+
+        Returns:
+            Set of (node_name, interface_name) tuples for cross-host link endpoints
+        """
+        nodes = self.get_nodes(lab_id)
+        links = self.get_links(lab_id)
+
+        # Build lookup maps
+        node_by_id = {n.id: n for n in nodes}
+        host_node_ids = {n.id for n in nodes if n.host_id == host_id}
+
+        reserved: set[tuple[str, str]] = set()
+
+        for link in links:
+            source_on_host = link.source_node_id in host_node_ids
+            target_on_host = link.target_node_id in host_node_ids
+
+            # Cross-host link: one endpoint on this host, one on another
+            if source_on_host != target_on_host:
+                if source_on_host:
+                    source_node = node_by_id.get(link.source_node_id)
+                    if source_node:
+                        reserved.add((source_node.container_name, link.source_interface))
+                if target_on_host:
+                    target_node = node_by_id.get(link.target_node_id)
+                    if target_node:
+                        reserved.add((target_node.container_name, link.target_interface))
+
+        return reserved

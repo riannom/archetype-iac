@@ -11,7 +11,7 @@ from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.db import SessionLocal
 from app.services.topology import TopologyService
-from app.topology import analyze_topology, graph_to_containerlab_yaml, split_topology_by_host, yaml_to_graph
+from app.topology import graph_to_containerlab_yaml, yaml_to_graph
 from app.utils.lab import update_lab_state
 
 logger = logging.getLogger(__name__)
@@ -326,7 +326,11 @@ async def run_agent_job(
 
         try:
             if action == "up":
-                result = await agent_client.deploy_to_agent(agent, job_id, lab_id, topology_yaml or "", provider=provider)
+                result = await agent_client.deploy_to_agent(
+                    agent, job_id, lab_id,
+                    topology_yaml=topology_yaml or "",
+                    provider=provider,
+                )
             elif action == "down":
                 result = await agent_client.destroy_on_agent(agent, job_id, lab_id)
             elif action.startswith("node:"):
@@ -451,16 +455,19 @@ async def run_multihost_deploy(
 ):
     """Deploy a lab across multiple hosts.
 
-    This function:
-    1. Parses the topology to find host assignments
-    2. Splits the topology by host
-    3. Deploys sub-topologies to each agent in parallel
-    4. Sets up VXLAN overlay links for cross-host connections
+    This function uses the database `nodes.host_id` as the authoritative source
+    for host assignments, replacing the previous YAML-based `host:` field approach.
+
+    Steps:
+    1. Analyze placements using TopologyService (reads from database)
+    2. Build JSON topology for each host (filtered by nodes.host_id)
+    3. Deploy to each agent in parallel using structured JSON format
+    4. Set up VXLAN overlay links for cross-host connections
 
     Args:
         job_id: The job ID
         lab_id: The lab ID
-        topology_yaml: Full topology YAML
+        topology_yaml: Full topology YAML (kept for backward compat, but DB is source of truth)
         provider: Provider for the job
     """
     session = SessionLocal()
@@ -479,40 +486,43 @@ async def run_multihost_deploy(
             session.commit()
             return
 
-        # Parse topology YAML to graph
-        graph = yaml_to_graph(topology_yaml)
+        # Use TopologyService to analyze placements from DATABASE (not YAML)
+        # This is the key fix: nodes.host_id is the source of truth
+        topo_service = TopologyService(session)
+        nodes = topo_service.get_nodes(lab_id)
+        total_node_count = len(nodes)
 
-        # Analyze for multi-host deployment
-        analysis = analyze_topology(graph)
+        # Find nodes without host assignment
+        unplaced_nodes = [n for n in nodes if not n.host_id]
 
-        # Check if there are nodes without explicit placement
-        placed_node_count = sum(len(p) for p in analysis.placements.values())
-        total_node_count = len(graph.nodes)
-
-        if placed_node_count < total_node_count:
-            # Some nodes don't have explicit host placement
-            # Find a default agent for them
+        # If some nodes lack host_id, assign them a default agent
+        if unplaced_nodes:
             default_agent = await agent_client.get_agent_for_lab(
                 session, lab, required_provider=provider
             )
             if default_agent:
-                # Re-analyze with default host for unplaced nodes
-                analysis = analyze_topology(graph, default_host=default_agent.name)
+                # Update nodes in database with default host
+                for node in unplaced_nodes:
+                    node.host_id = default_agent.id
+                session.commit()
                 logger.info(
-                    f"Lab {lab_id} has {total_node_count - placed_node_count} nodes without "
-                    f"explicit placement, using {default_agent.name} as default host"
+                    f"Lab {lab_id} has {len(unplaced_nodes)} nodes without "
+                    f"explicit placement, assigned to {default_agent.name}"
                 )
             else:
-                # No default agent available - fail the unplaced nodes
+                # No default agent available
                 job.status = "failed"
                 job.completed_at = datetime.utcnow()
                 job.log_path = (
-                    f"ERROR: {total_node_count - placed_node_count} nodes have no explicit "
-                    f"host placement and no default agent is available"
+                    f"ERROR: {len(unplaced_nodes)} nodes have no host assignment "
+                    f"and no default agent is available"
                 )
                 update_lab_state(session, lab_id, "error", error="No agent for unplaced nodes")
                 session.commit()
                 return
+
+        # Analyze placements from database
+        analysis = topo_service.analyze_placements(lab_id)
 
         logger.info(
             f"Multi-host deployment for lab {lab_id}: "
@@ -530,18 +540,16 @@ async def run_multihost_deploy(
         # Dispatch webhook for deploy started
         await _dispatch_webhook("lab.deploy_started", lab, job, session)
 
-        # Map host names to agents
+        # Map host_id to agent objects
         host_to_agent: dict[str, models.Host] = {}
         missing_hosts = []
 
-        for host_name in analysis.placements:
-            agent = await agent_client.get_agent_by_name(
-                session, host_name, required_provider=provider
-            )
-            if agent:
-                host_to_agent[host_name] = agent
+        for host_id in analysis.placements:
+            agent = session.get(models.Host, host_id)
+            if agent and agent_client.is_agent_online(agent):
+                host_to_agent[host_id] = agent
             else:
-                missing_hosts.append(host_name)
+                missing_hosts.append(host_id)
 
         if missing_hosts:
             error_msg = f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
@@ -553,55 +561,48 @@ async def run_multihost_deploy(
             logger.error(f"Job {job_id} failed: {error_msg}")
             return
 
-        # Split topology by host
-        host_topologies = split_topology_by_host(graph, analysis)
-
-        # Build reserved interfaces per host from cross-host links
-        # These interfaces will be created by the overlay, not containerlab
-        host_reserved_interfaces: dict[str, set[tuple[str, str]]] = {}
-        for chl in analysis.cross_host_links:
-            # Reserve interface on host_a
-            if chl.host_a not in host_reserved_interfaces:
-                host_reserved_interfaces[chl.host_a] = set()
-            host_reserved_interfaces[chl.host_a].add((chl.node_a, chl.interface_a))
-            # Reserve interface on host_b
-            if chl.host_b not in host_reserved_interfaces:
-                host_reserved_interfaces[chl.host_b] = set()
-            host_reserved_interfaces[chl.host_b].add((chl.node_b, chl.interface_b))
-
-        # Deploy to each host in parallel
+        # Deploy to each host in parallel using JSON topology from database
         deploy_tasks = []
         deploy_results: dict[str, dict] = {}
         log_parts = []
+        host_node_names: dict[str, list[str]] = {}  # For logging
 
-        for host_name, sub_graph in host_topologies.items():
-            agent = host_to_agent[host_name]
-            reserved = host_reserved_interfaces.get(host_name, set())
-            sub_yaml = graph_to_containerlab_yaml(sub_graph, lab_id, reserved_interfaces=reserved)
+        for host_id, node_placements in analysis.placements.items():
+            agent = host_to_agent[host_id]
+
+            # Build JSON topology for this host from database
+            topology_json = topo_service.build_deploy_topology(lab_id, host_id)
+            node_names = [n["name"] for n in topology_json.get("nodes", [])]
+            host_node_names[host_id] = node_names
 
             logger.info(
-                f"Deploying to host {host_name} (agent {agent.id}): "
-                f"{len(sub_graph.nodes)} nodes"
+                f"Deploying to host {agent.name} ({host_id}): "
+                f"{len(node_names)} nodes"
             )
-            log_parts.append(f"=== Host: {host_name} ({agent.id}) ===")
-            log_parts.append(f"Nodes: {', '.join(n.name for n in sub_graph.nodes)}")
+            log_parts.append(f"=== Host: {agent.name} ({host_id}) ===")
+            log_parts.append(f"Nodes: {', '.join(node_names)}")
 
+            # Use JSON topology format
             deploy_tasks.append(
-                agent_client.deploy_to_agent(agent, job_id, lab_id, sub_yaml)
+                agent_client.deploy_to_agent(
+                    agent, job_id, lab_id,
+                    topology=topology_json,  # New: structured JSON
+                )
             )
 
         # Wait for all deployments
         results = await asyncio.gather(*deploy_tasks, return_exceptions=True)
 
         deploy_success = True
-        for i, (host_name, result) in enumerate(zip(host_topologies.keys(), results)):
+        for host_id, result in zip(analysis.placements.keys(), results):
+            agent = host_to_agent[host_id]
             if isinstance(result, Exception):
-                log_parts.append(f"\nDeploy to {host_name} FAILED: {result}")
+                log_parts.append(f"\nDeploy to {agent.name} FAILED: {result}")
                 deploy_success = False
             else:
-                deploy_results[host_name] = result
+                deploy_results[host_id] = result
                 status = result.get("status", "unknown")
-                log_parts.append(f"\nDeploy to {host_name}: {status}")
+                log_parts.append(f"\nDeploy to {agent.name}: {status}")
                 if result.get("stdout"):
                     log_parts.append(f"STDOUT:\n{result['stdout']}")
                 if result.get("stderr"):
@@ -619,11 +620,13 @@ async def run_multihost_deploy(
             return
 
         # Set up cross-host links via VXLAN overlay
+        # CrossHostLink from TopologyService uses host_id (database) instead of host_name (YAML)
         if analysis.cross_host_links:
             log_parts.append("\n=== Cross-Host Links ===")
             logger.info(f"Setting up {len(analysis.cross_host_links)} cross-host links")
 
             for chl in analysis.cross_host_links:
+                # host_a and host_b are now host_id from database
                 agent_a = host_to_agent.get(chl.host_a)
                 agent_b = host_to_agent.get(chl.host_b)
 
@@ -712,15 +715,18 @@ async def run_multihost_destroy(
 ):
     """Destroy a multi-host lab.
 
-    This function:
-    1. Parses the topology to find host assignments
-    2. Cleans up overlay networks on each agent
-    3. Destroys containers on each agent
+    This function uses database `nodes.host_id` as the authoritative source
+    for host assignments, matching the approach in run_multihost_deploy.
+
+    Steps:
+    1. Analyze placements from database (not YAML)
+    2. Clean up overlay networks on each agent
+    3. Destroy containers on each agent
 
     Args:
         job_id: The job ID
         lab_id: The lab ID
-        topology_yaml: Full topology YAML (to identify hosts)
+        topology_yaml: Full topology YAML (kept for compat, but DB is source of truth)
         provider: Provider for the job
     """
     session = SessionLocal()
@@ -739,9 +745,9 @@ async def run_multihost_destroy(
             session.commit()
             return
 
-        # Parse topology YAML to find hosts
-        graph = yaml_to_graph(topology_yaml)
-        analysis = analyze_topology(graph)
+        # Use TopologyService to get placements from DATABASE (not YAML)
+        topo_service = TopologyService(session)
+        analysis = topo_service.analyze_placements(lab_id)
 
         logger.info(
             f"Multi-host destroy for lab {lab_id}: "
@@ -755,18 +761,16 @@ async def run_multihost_destroy(
 
         update_lab_state(session, lab_id, "stopping")
 
-        # Map host names to agents
+        # Map host_id to agents
         host_to_agent: dict[str, models.Host] = {}
         log_parts = []
 
-        for host_name in analysis.placements:
-            agent = await agent_client.get_agent_by_name(
-                session, host_name, required_provider=provider
-            )
+        for host_id in analysis.placements:
+            agent = session.get(models.Host, host_id)
             if agent:
-                host_to_agent[host_name] = agent
+                host_to_agent[host_id] = agent
             else:
-                log_parts.append(f"WARNING: Agent '{host_name}' not found, skipping")
+                log_parts.append(f"WARNING: Agent '{host_id}' not found, skipping")
 
         if not host_to_agent:
             # No agents found, try single-agent destroy as fallback
@@ -782,10 +786,10 @@ async def run_multihost_destroy(
         # First, clean up overlay networks on all agents
         if analysis.cross_host_links:
             log_parts.append("=== Cleaning up overlay networks ===")
-            for host_name, agent in host_to_agent.items():
+            for host_id, agent in host_to_agent.items():
                 result = await agent_client.cleanup_overlay_on_agent(agent, lab_id)
                 log_parts.append(
-                    f"{host_name}: {result.get('tunnels_deleted', 0)} tunnels, "
+                    f"{agent.name}: {result.get('tunnels_deleted', 0)} tunnels, "
                     f"{result.get('bridges_deleted', 0)} bridges deleted"
                 )
                 if result.get("errors"):
@@ -795,8 +799,8 @@ async def run_multihost_destroy(
         log_parts.append("\n=== Destroying containers ===")
         destroy_tasks = []
 
-        for host_name, agent in host_to_agent.items():
-            logger.info(f"Destroying on host {host_name} (agent {agent.id})")
+        for host_id, agent in host_to_agent.items():
+            logger.info(f"Destroying on host {agent.name} (agent {agent.id})")
             destroy_tasks.append(
                 agent_client.destroy_on_agent(agent, job_id, lab_id)
             )
@@ -805,13 +809,13 @@ async def run_multihost_destroy(
         results = await asyncio.gather(*destroy_tasks, return_exceptions=True)
 
         all_success = True
-        for host_name, result in zip(host_to_agent.keys(), results):
+        for (host_id, agent), result in zip(host_to_agent.items(), results):
             if isinstance(result, Exception):
-                log_parts.append(f"{host_name}: FAILED - {result}")
+                log_parts.append(f"{agent.name}: FAILED - {result}")
                 all_success = False
             else:
                 status = result.get("status", "unknown")
-                log_parts.append(f"{host_name}: {status}")
+                log_parts.append(f"{agent.name}: {status}")
                 if result.get("stdout"):
                     log_parts.append(f"  STDOUT: {result['stdout'][:200]}")
                 if result.get("stderr"):
@@ -1449,7 +1453,9 @@ async def run_node_sync(
 
             try:
                 result = await agent_client.deploy_to_agent(
-                    agent, job_id, lab_id, clab_yaml, provider=provider
+                    agent, job_id, lab_id,
+                    topology_yaml=clab_yaml,
+                    provider=provider,
                 )
 
                 if result.get("status") == "completed":
@@ -1650,7 +1656,9 @@ async def run_node_sync(
 
                 try:
                     result = await agent_client.deploy_to_agent(
-                        agent, job_id, lab_id, clab_yaml, provider=provider
+                        agent, job_id, lab_id,
+                        topology_yaml=clab_yaml,
+                        provider=provider,
                     )
 
                     if result.get("status") == "completed":

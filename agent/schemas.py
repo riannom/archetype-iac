@@ -100,11 +100,51 @@ class HeartbeatResponse(BaseModel):
 
 # --- Job Execution ---
 
+class DeployNode(BaseModel):
+    """Node definition for JSON deploy request."""
+    name: str                         # Container name (internal ID)
+    display_name: str | None = None   # Human-readable name for logs
+    kind: str = "linux"               # Device kind (ceos, srl, linux, etc.)
+    image: str | None = None          # Docker image (uses vendor default if not specified)
+    binds: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    ports: list[str] = Field(default_factory=list)
+    startup_config: str | None = None
+    exec_cmds: list[str] = Field(default_factory=list)
+
+
+class DeployLink(BaseModel):
+    """Link definition for JSON deploy request."""
+    source_node: str
+    source_interface: str
+    target_node: str
+    target_interface: str
+
+
+class DeployTopology(BaseModel):
+    """Topology for JSON deploy request.
+
+    This is the structured JSON format that replaces YAML for multi-host deployments.
+    Each agent receives only the nodes assigned to it, with node host assignments
+    determined by the controller using database `nodes.host_id`.
+    """
+    nodes: list[DeployNode]
+    links: list[DeployLink] = Field(default_factory=list)
+
+
 class DeployRequest(BaseModel):
-    """Controller -> Agent: Deploy a lab topology."""
+    """Controller -> Agent: Deploy a lab topology.
+
+    Supports two formats for backward compatibility:
+    - topology_yaml: Legacy YAML string format
+    - topology: New structured JSON format (preferred for multi-host)
+
+    At least one of topology_yaml or topology must be provided.
+    """
     job_id: str
     lab_id: str
-    topology_yaml: str
+    topology_yaml: str | None = None      # Legacy YAML format
+    topology: DeployTopology | None = None  # New JSON format (preferred)
     provider: Provider = Provider.DOCKER
     # Optional callback URL for async execution
     # If provided, agent returns 202 Accepted immediately and POSTs result to this URL

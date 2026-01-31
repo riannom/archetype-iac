@@ -38,6 +38,7 @@ from agent.schemas import (
     CreateTunnelRequest,
     CreateTunnelResponse,
     DeployRequest,
+    DeployTopology,
     DestroyRequest,
     DiscoveredLab,
     DiscoverLabsResponse,
@@ -775,6 +776,10 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
     Uses Redis-based per-lab locking to prevent concurrent deploys for the same lab.
     Locks automatically expire via TTL if agent crashes, ensuring recovery.
 
+    Accepts topology in two formats:
+    - topology: Structured JSON format (preferred for multi-host)
+    - topology_yaml: Legacy YAML string format
+
     If callback_url is provided, returns 202 Accepted immediately and executes
     the deploy in the background, POSTing the result to the callback URL when done.
     """
@@ -784,6 +789,13 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
     logger.info(f"Deploy request: lab={lab_id}, job={request.job_id}, provider={request.provider.value}")
     if request.callback_url:
         logger.debug(f"  Async mode with callback: {request.callback_url}")
+
+    # Validate that at least one topology format is provided
+    if not request.topology and not request.topology_yaml:
+        raise HTTPException(
+            status_code=400,
+            detail="No topology provided. Must provide either 'topology' (JSON) or 'topology_yaml' (YAML)."
+        )
 
     lock_manager = get_lock_manager()
     if lock_manager is None:
@@ -799,6 +811,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
             _execute_deploy_with_callback(
                 request.job_id,
                 lab_id,
+                request.topology,
                 request.topology_yaml,
                 request.provider.value,
                 request.callback_url,
@@ -823,6 +836,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
 
             result = await provider.deploy(
                 lab_id=lab_id,
+                topology=request.topology,
                 topology_yaml=request.topology_yaml,
                 workspace=workspace,
             )
@@ -872,7 +886,8 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
 async def _execute_deploy_with_callback(
     job_id: str,
     lab_id: str,
-    topology_yaml: str,
+    topology: "DeployTopology | None",
+    topology_yaml: str | None,
     provider_name: str,
     callback_url: str,
 ) -> None:
@@ -887,6 +902,10 @@ async def _execute_deploy_with_callback(
 
     The Redis lock has a short TTL (2 min) for fast crash recovery, but is
     extended every 30s while the deploy is actively running.
+
+    Args:
+        topology: Structured JSON topology (preferred for multi-host)
+        topology_yaml: Legacy YAML string format
     """
     from agent.callbacks import CallbackPayload, deliver_callback
     from agent.locks import LockAcquisitionTimeout
@@ -925,6 +944,7 @@ async def _execute_deploy_with_callback(
                 async with HeartbeatSender(callback_url, job_id, interval=30.0):
                     result = await provider.deploy(
                         lab_id=lab_id,
+                        topology=topology,
                         topology_yaml=topology_yaml,
                         workspace=workspace,
                     )

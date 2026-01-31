@@ -42,6 +42,7 @@ from docker.types import Mount
 from agent.config import settings
 from agent.network.local import LocalNetworkManager, get_local_manager
 from agent.network.ovs import OVSNetworkManager, get_ovs_manager
+from agent.network.docker_plugin import DockerOVSPlugin, get_docker_ovs_plugin
 from agent.providers.base import (
     DeployResult,
     DestroyResult,
@@ -51,6 +52,7 @@ from agent.providers.base import (
     Provider,
     StatusResult,
 )
+from agent.schemas import DeployLink, DeployNode, DeployTopology
 from agent.vendors import (
     VendorConfig,
     get_config_by_device,
@@ -175,6 +177,16 @@ class DockerProvider(Provider):
     def use_ovs(self) -> bool:
         """Check if OVS networking is enabled."""
         return getattr(settings, "enable_ovs", True)
+
+    @property
+    def use_ovs_plugin(self) -> bool:
+        """Check if OVS Docker plugin is enabled for pre-boot interface provisioning."""
+        return getattr(settings, "enable_ovs_plugin", True) and self.use_ovs
+
+    @property
+    def ovs_plugin(self) -> DockerOVSPlugin:
+        """Get OVS Docker plugin instance."""
+        return get_docker_ovs_plugin()
 
     def _container_name(self, lab_id: str, node_name: str) -> str:
         """Generate container name for a node.
@@ -428,6 +440,130 @@ username admin privilege 15 role network-admin nopassword
                     zerotouch_config.write_text("DISABLE=True\n")
                     logger.debug(f"Created zerotouch-config for {node.log_name()}")
 
+    async def _create_lab_networks(
+        self,
+        lab_id: str,
+        max_interfaces: int = 64,
+    ) -> dict[str, str]:
+        """Create Docker networks for lab interfaces via OVS plugin.
+
+        Creates one network per interface (eth1, eth2, ..., ethN).
+        All networks share the same OVS bridge (ovs-{lab_id}).
+
+        Args:
+            lab_id: Lab identifier
+            max_interfaces: Maximum number of interfaces per node
+
+        Returns:
+            Dict mapping interface name (e.g., "eth1") to network name
+        """
+        networks = {}
+
+        for i in range(1, max_interfaces + 1):
+            interface_name = f"eth{i}"
+            network_name = f"{lab_id}-{interface_name}"
+
+            try:
+                # Check if network already exists
+                try:
+                    self.docker.networks.get(network_name)
+                    logger.debug(f"Network {network_name} already exists")
+                    networks[interface_name] = network_name
+                    continue
+                except NotFound:
+                    pass
+
+                # Create network via Docker API - plugin handles OVS bridge
+                self.docker.networks.create(
+                    name=network_name,
+                    driver="archetype-ovs",
+                    options={
+                        "lab_id": lab_id,
+                        "interface_name": interface_name,
+                    },
+                )
+                networks[interface_name] = network_name
+                logger.debug(f"Created network {network_name}")
+
+            except APIError as e:
+                logger.error(f"Failed to create network {network_name}: {e}")
+
+        logger.info(f"Created {len(networks)} Docker networks for lab {lab_id}")
+        return networks
+
+    async def _delete_lab_networks(self, lab_id: str) -> int:
+        """Delete all Docker networks for a lab.
+
+        Args:
+            lab_id: Lab identifier
+
+        Returns:
+            Number of networks deleted
+        """
+        deleted = 0
+
+        # Delete networks matching pattern {lab_id}-eth*
+        for i in range(1, 65):
+            network_name = f"{lab_id}-eth{i}"
+            try:
+                network = self.docker.networks.get(network_name)
+                network.remove()
+                deleted += 1
+            except NotFound:
+                continue
+            except APIError as e:
+                logger.warning(f"Failed to delete network {network_name}: {e}")
+
+        if deleted > 0:
+            logger.info(f"Deleted {deleted} Docker networks for lab {lab_id}")
+        return deleted
+
+    async def _attach_container_to_networks(
+        self,
+        container: Any,
+        lab_id: str,
+        interface_count: int,
+        interface_prefix: str = "eth",
+        start_index: int = 1,
+    ) -> list[str]:
+        """Attach container to lab interface networks.
+
+        Called after container creation but before container start.
+        Docker provisions interfaces when the container starts.
+
+        Args:
+            container: Docker container object
+            lab_id: Lab identifier
+            interface_count: Number of interfaces to attach
+            interface_prefix: Interface naming prefix
+            start_index: Starting interface number
+
+        Returns:
+            List of attached network names
+        """
+        attached = []
+
+        for i in range(interface_count):
+            iface_num = start_index + i
+            interface_name = f"{interface_prefix}{iface_num}"
+            network_name = f"{lab_id}-{interface_name}"
+
+            try:
+                network = self.docker.networks.get(network_name)
+                network.connect(container.id)
+                attached.append(network_name)
+                logger.debug(f"Attached {container.name} to {network_name}")
+
+            except NotFound:
+                logger.warning(f"Network {network_name} not found")
+            except APIError as e:
+                if "already exists" in str(e).lower():
+                    attached.append(network_name)
+                else:
+                    logger.warning(f"Failed to attach to {network_name}: {e}")
+
+        return attached
+
     async def _create_containers(
         self,
         topology: ParsedTopology,
@@ -439,6 +575,10 @@ username admin privilege 15 role network-admin nopassword
         Returns dict mapping node_name -> container object.
         """
         containers = {}
+
+        # Create lab networks if OVS plugin is enabled
+        if self.use_ovs_plugin:
+            await self._create_lab_networks(lab_id)
 
         for node_name, node in topology.nodes.items():
             container_name = self._container_name(lab_id, node_name)
@@ -465,6 +605,18 @@ username admin privilege 15 role network-admin nopassword
             container = self.docker.containers.create(**config)
             containers[node_name] = container
 
+            # Attach to interface networks if OVS plugin is enabled
+            if self.use_ovs_plugin:
+                vendor_config = get_config_by_device(node.kind)
+                if vendor_config:
+                    await self._attach_container_to_networks(
+                        container=container,
+                        lab_id=lab_id,
+                        interface_count=vendor_config.max_ports,
+                        interface_prefix="eth",  # Plugin uses eth naming
+                        start_index=1,
+                    )
+
         return containers
 
     async def _start_containers(
@@ -475,15 +627,20 @@ username admin privilege 15 role network-admin nopassword
     ) -> list[str]:
         """Start all containers and provision interfaces as needed.
 
-        When OVS is enabled, provisions real veth pairs via OVS for hot-plug support.
-        When OVS is disabled, falls back to dummy interfaces for devices that need them.
+        When OVS plugin is enabled, interfaces are already provisioned via Docker
+        networks (created in _create_containers), so no post-start provisioning needed.
+
+        When using legacy OVS mode (plugin disabled), provisions real veth pairs
+        via OVS for hot-plug support after container start.
+
+        When OVS is disabled entirely, falls back to dummy interfaces.
 
         Returns list of node names that failed to start.
         """
         failed = []
 
-        # Initialize OVS if enabled
-        if self.use_ovs:
+        # Initialize legacy OVS manager if OVS is enabled but plugin is not
+        if self.use_ovs and not self.use_ovs_plugin:
             try:
                 await self.ovs_manager.initialize()
             except Exception as e:
@@ -496,7 +653,13 @@ username admin privilege 15 role network-admin nopassword
                     container.start()
                     logger.info(f"Started container {log_name}")
 
-                # Provision interfaces based on networking mode
+                # Skip interface provisioning if OVS plugin is handling it
+                # (interfaces already exist via Docker network attachments)
+                if self.use_ovs_plugin:
+                    logger.debug(f"Interfaces for {log_name} provisioned via OVS plugin")
+                    continue
+
+                # Legacy interface provisioning (post-start)
                 node = topology.nodes.get(node_name)
                 if node:
                     config = get_config_by_device(node.kind)
@@ -574,6 +737,113 @@ username admin privilege 15 role network-admin nopassword
 
         return provisioned
 
+    async def _plugin_hot_connect(
+        self,
+        lab_id: str,
+        container_a: str,
+        iface_a: str,
+        container_b: str,
+        iface_b: str,
+    ) -> bool:
+        """Connect two interfaces using the OVS plugin's per-lab bridge.
+
+        Finds OVS ports by container endpoint and sets matching VLAN tags.
+
+        Args:
+            lab_id: Lab identifier
+            container_a: First container name
+            iface_a: Interface on first container
+            container_b: Second container name
+            iface_b: Interface on second container
+
+        Returns:
+            True if successful, False otherwise
+        """
+        bridge_name = f"ovs-{lab_id[:12]}"
+
+        # Find OVS ports attached to this container's interfaces
+        # Ports are named with pattern: vh{endpoint_prefix}{random}
+        # We need to find them by checking which port goes to which container
+
+        async def find_ovs_port(container_name: str, interface_name: str) -> str | None:
+            """Find OVS port name for a container interface."""
+            try:
+                container = self.docker.containers.get(container_name)
+                pid = container.attrs["State"]["Pid"]
+
+                # Get interface's peer index from inside container
+                proc = await asyncio.create_subprocess_exec(
+                    "nsenter", "-t", str(pid), "-n",
+                    "cat", f"/sys/class/net/{interface_name}/iflink",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await proc.communicate()
+                if proc.returncode != 0:
+                    return None
+
+                peer_idx = stdout.decode().strip()
+
+                # Find host interface with this index
+                proc = await asyncio.create_subprocess_exec(
+                    "ip", "-o", "link", "show",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await proc.communicate()
+
+                for line in stdout.decode().split("\n"):
+                    if line.startswith(f"{peer_idx}:"):
+                        # Format: "123: vethXXX@if456: <...>"
+                        parts = line.split(":")
+                        if len(parts) >= 2:
+                            port_name = parts[1].strip().split("@")[0]
+                            # Verify it's on our bridge
+                            proc = await asyncio.create_subprocess_exec(
+                                "ovs-vsctl", "port-to-br", port_name,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                            )
+                            br_out, _ = await proc.communicate()
+                            if br_out.decode().strip() == bridge_name:
+                                return port_name
+                return None
+            except Exception as e:
+                logger.error(f"Error finding OVS port for {container_name}:{interface_name}: {e}")
+                return None
+
+        # Find ports for both endpoints
+        port_a = await find_ovs_port(container_a, iface_a)
+        port_b = await find_ovs_port(container_b, iface_b)
+
+        if not port_a or not port_b:
+            logger.error(f"Could not find OVS ports for {container_a}:{iface_a} or {container_b}:{iface_b}")
+            return False
+
+        # Get VLAN tag from port_a
+        proc = await asyncio.create_subprocess_exec(
+            "ovs-vsctl", "get", "port", port_a, "tag",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        vlan_tag = stdout.decode().strip()
+
+        # Set port_b to same VLAN tag
+        proc = await asyncio.create_subprocess_exec(
+            "ovs-vsctl", "set", "port", port_b, f"tag={vlan_tag}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+        if proc.returncode == 0:
+            logger.info(f"Connected {container_a}:{iface_a} <-> {container_b}:{iface_b} (VLAN {vlan_tag})")
+            return True
+        else:
+            logger.error(f"Failed to set VLAN tag on {port_b}")
+            return False
+
     async def _create_links(
         self,
         topology: ParsedTopology,
@@ -581,7 +851,8 @@ username admin privilege 15 role network-admin nopassword
     ) -> int:
         """Create links between containers.
 
-        When OVS is enabled, uses hot-connect (VLAN tag matching).
+        When OVS plugin is enabled, uses plugin's per-lab bridge with VLAN matching.
+        When legacy OVS is enabled, uses global OVS bridge with hot-connect.
         When OVS is disabled, uses traditional veth pairs.
 
         Returns number of links created.
@@ -610,8 +881,17 @@ username admin privilege 15 role network-admin nopassword
             link_id = f"{node_a}:{iface_a}-{node_b}:{iface_b}"
 
             try:
-                if self.use_ovs and self.ovs_manager._initialized:
-                    # Use OVS hot-connect (VLAN tag matching)
+                if self.use_ovs_plugin:
+                    # Use OVS plugin's per-lab bridge
+                    await self._plugin_hot_connect(
+                        lab_id=lab_id,
+                        container_a=container_a,
+                        iface_a=iface_a,
+                        container_b=container_b,
+                        iface_b=iface_b,
+                    )
+                elif self.use_ovs and self.ovs_manager._initialized:
+                    # Use legacy OVS hot-connect (global bridge)
                     await self.ovs_manager.hot_connect(
                         container_a=container_a,
                         iface_a=iface_a,
@@ -754,17 +1034,57 @@ username admin privilege 15 role network-admin nopassword
             ip_addresses=self._get_container_ips(container),
         )
 
+    def _topology_from_json(self, deploy_topology: DeployTopology) -> ParsedTopology:
+        """Convert DeployTopology (JSON) to internal ParsedTopology.
+
+        Args:
+            deploy_topology: Structured JSON topology from controller
+
+        Returns:
+            ParsedTopology for internal use
+        """
+        nodes = {}
+        for n in deploy_topology.nodes:
+            nodes[n.name] = TopologyNode(
+                name=n.name,
+                kind=n.kind,
+                display_name=n.display_name,
+                image=n.image,
+                host=None,  # Not needed for execution; host routing done by controller
+                binds=n.binds,
+                env=n.env,
+                ports=n.ports,
+                startup_config=n.startup_config,
+                exec_=n.exec_cmds,
+            )
+
+        links = []
+        for l in deploy_topology.links:
+            links.append(TopologyLink(
+                endpoints=[
+                    f"{l.source_node}:{l.source_interface}",
+                    f"{l.target_node}:{l.target_interface}",
+                ]
+            ))
+
+        return ParsedTopology(name="lab", nodes=nodes, links=links)
+
     async def deploy(
         self,
         lab_id: str,
-        topology_yaml: str,
+        topology: DeployTopology | None,
+        topology_yaml: str | None,
         workspace: Path,
         agent_id: str | None = None,
     ) -> DeployResult:
         """Deploy a topology using Docker SDK.
 
+        Accepts topology in two formats:
+        - topology: Structured JSON format (preferred)
+        - topology_yaml: Legacy YAML string format
+
         Steps:
-        1. Parse topology
+        1. Parse topology (from JSON or YAML)
         2. Validate images exist
         3. Create required directories
         4. Create containers (network mode: none)
@@ -774,22 +1094,30 @@ username admin privilege 15 role network-admin nopassword
         """
         workspace.mkdir(parents=True, exist_ok=True)
 
-        # Parse topology
-        topology = self._parse_topology(topology_yaml, lab_id)
-        if not topology.nodes:
+        # Parse topology from JSON or YAML
+        if topology:
+            parsed_topology = self._topology_from_json(topology)
+        elif topology_yaml:
+            parsed_topology = self._parse_topology(topology_yaml, lab_id)
+        else:
+            return DeployResult(
+                success=False,
+                error="No topology provided (need either JSON or YAML)",
+            )
+        if not parsed_topology.nodes:
             return DeployResult(
                 success=False,
                 error="No nodes found in topology",
             )
 
-        logger.info(f"Deploying lab {lab_id} with {len(topology.nodes)} nodes")
+        logger.info(f"Deploying lab {lab_id} with {len(parsed_topology.nodes)} nodes")
 
         # Validate images
-        missing_images = self._validate_images(topology)
+        missing_images = self._validate_images(parsed_topology)
         if missing_images:
             error_lines = ["Missing Docker images:"]
             for node_name, image in missing_images:
-                log_name = topology.log_name(node_name)
+                log_name = parsed_topology.log_name(node_name)
                 error_lines.append(f"  • Node '{log_name}' requires: {image}")
             error_lines.append("")
             error_lines.append("Please upload images via the Images page or import manually.")
@@ -801,7 +1129,7 @@ username admin privilege 15 role network-admin nopassword
             )
 
         # Create directories
-        await self._ensure_directories(topology, workspace)
+        await self._ensure_directories(parsed_topology, workspace)
 
         # Create management network
         try:
@@ -811,7 +1139,7 @@ username admin privilege 15 role network-admin nopassword
 
         # Create containers
         try:
-            containers = await self._create_containers(topology, lab_id, workspace)
+            containers = await self._create_containers(parsed_topology, lab_id, workspace)
         except Exception as e:
             logger.error(f"Failed to create containers: {e}")
             return DeployResult(
@@ -820,22 +1148,22 @@ username admin privilege 15 role network-admin nopassword
             )
 
         # Start containers
-        failed_starts = await self._start_containers(containers, topology, lab_id)
+        failed_starts = await self._start_containers(containers, parsed_topology, lab_id)
         if failed_starts:
-            failed_log_names = [topology.log_name(n) for n in failed_starts]
+            failed_log_names = [parsed_topology.log_name(n) for n in failed_starts]
             logger.warning(f"Some containers failed to start: {failed_log_names}")
 
         # Create local links
-        links_created = await self._create_links(topology, lab_id)
+        links_created = await self._create_links(parsed_topology, lab_id)
         logger.info(f"Created {links_created} local links")
 
         # Wait for readiness
         ready_status = await self._wait_for_readiness(
-            topology, lab_id, containers, timeout=settings.deploy_timeout
+            parsed_topology, lab_id, containers, timeout=settings.deploy_timeout
         )
         not_ready = [name for name, ready in ready_status.items() if not ready]
         if not_ready:
-            not_ready_log_names = [topology.log_name(n) for n in not_ready]
+            not_ready_log_names = [parsed_topology.log_name(n) for n in not_ready]
             logger.warning(f"Some nodes not ready after timeout: {not_ready_log_names}")
 
         # Get final status
@@ -846,7 +1174,7 @@ username admin privilege 15 role network-admin nopassword
             f"Created {links_created} links",
         ]
         if not_ready:
-            not_ready_log_names = [topology.log_name(n) for n in not_ready]
+            not_ready_log_names = [parsed_topology.log_name(n) for n in not_ready]
             stdout_lines.append(f"Warning: {len(not_ready)} nodes not fully ready: {', '.join(not_ready_log_names)}")
 
         return DeployResult(
@@ -898,6 +1226,11 @@ username admin privilege 15 role network-admin nopassword
             if self.use_ovs and self.ovs_manager._initialized:
                 ovs_cleanup_result = await self.ovs_manager.cleanup_lab(lab_id)
                 logger.info(f"OVS network cleanup: {ovs_cleanup_result}")
+
+            # Clean up Docker networks if OVS plugin is enabled
+            if self.use_ovs_plugin:
+                networks_deleted = await self._delete_lab_networks(lab_id)
+                logger.info(f"Docker network cleanup: {networks_deleted} networks deleted")
 
         except Exception as e:
             errors.append(f"Error during destroy: {e}")

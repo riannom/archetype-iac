@@ -15,7 +15,10 @@ import subprocess
 import uuid
 from pathlib import Path
 from textwrap import dedent
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agent.schemas import DeployTopology
 
 import yaml
 
@@ -349,12 +352,24 @@ class LibvirtProvider(Provider):
     async def deploy(
         self,
         lab_id: str,
-        topology_yaml: str,
+        topology: "DeployTopology | None",
+        topology_yaml: str | None,
         workspace: Path,
     ) -> DeployResult:
-        """Deploy a libvirt topology."""
+        """Deploy a libvirt topology.
+
+        Note: LibvirtProvider currently only supports YAML format.
+        JSON topology is not yet implemented for VM deployments.
+        """
         workspace.mkdir(parents=True, exist_ok=True)
         disks_dir = self._disks_dir(workspace)
+
+        # LibvirtProvider currently only supports YAML
+        if not topology_yaml:
+            return DeployResult(
+                success=False,
+                error="LibvirtProvider requires topology_yaml (JSON format not yet supported)",
+            )
 
         try:
             topo = yaml.safe_load(topology_yaml)
