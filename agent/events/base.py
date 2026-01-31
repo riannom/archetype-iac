@@ -41,6 +41,7 @@ class NodeEvent:
     Attributes:
         lab_id: The lab ID this node belongs to
         node_name: The node name (as known to Archetype)
+        display_name: Human-readable name for logs (optional)
         container_id: The container/VM ID (if available)
         event_type: The type of state change
         timestamp: When the event occurred
@@ -54,7 +55,14 @@ class NodeEvent:
     event_type: NodeEventType
     timestamp: datetime
     status: str
+    display_name: str | None = None
     attributes: dict | None = None
+
+    def log_name(self) -> str:
+        """Format node name for logging: 'DisplayName(id)' or just 'id'."""
+        if self.display_name and self.display_name != self.node_name:
+            return f"{self.display_name}({self.node_name})"
+        return self.node_name
 
 
 # Type alias for event callbacks

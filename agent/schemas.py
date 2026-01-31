@@ -124,7 +124,14 @@ class NodeActionRequest(BaseModel):
     job_id: str
     lab_id: str
     node_name: str
+    display_name: str | None = None  # Human-readable name for logs
     action: str  # "start" or "stop"
+
+    def log_name(self) -> str:
+        """Format node name for logging: 'DisplayName(id)' or just 'id'."""
+        if self.display_name and self.display_name != self.node_name:
+            return f"{self.display_name}({self.node_name})"
+        return self.node_name
 
 
 class JobResult(BaseModel):

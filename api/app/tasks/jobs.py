@@ -16,6 +16,29 @@ from app.utils.lab import update_lab_state
 logger = logging.getLogger(__name__)
 
 
+def _get_node_display_name(topology_yaml: str | None, node_name: str) -> str | None:
+    """Get display name for a node from topology YAML.
+
+    Args:
+        topology_yaml: The topology YAML content
+        node_name: The internal node name (container_name / YAML key)
+
+    Returns:
+        The display name if found, None otherwise
+    """
+    if not topology_yaml:
+        return None
+    try:
+        graph = yaml_to_graph(topology_yaml)
+        for node in graph.nodes:
+            # Match by container_name (YAML key) which is the internal ID
+            if node.container_name == node_name:
+                return node.name  # This is the display name
+        return None
+    except Exception:
+        return None
+
+
 def _get_node_info_for_webhook(session, lab_id: str) -> list[dict]:
     """Get node info for webhook payload."""
     nodes = (
@@ -296,7 +319,10 @@ async def run_agent_job(
                 parts = action.split(":", 2)
                 node_action_type = parts[1] if len(parts) > 1 else ""
                 node = parts[2] if len(parts) > 2 else ""
-                result = await agent_client.node_action_on_agent(agent, job_id, lab_id, node, node_action_type)
+                display_name = _get_node_display_name(topology_yaml, node)
+                result = await agent_client.node_action_on_agent(
+                    agent, job_id, lab_id, node, node_action_type, display_name
+                )
             else:
                 result = {"status": "failed", "error_message": f"Unknown action: {action}"}
 

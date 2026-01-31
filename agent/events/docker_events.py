@@ -216,10 +216,12 @@ class DockerEventListener(NodeEventListener):
             node_name = attributes.get("archetype.node_name", "")
             lab_prefix = attributes.get("archetype.lab_id", "")
             node_kind = attributes.get("archetype.node_kind", "")
+            display_name = attributes.get("archetype.node_display_name")
         else:
             node_name = attributes.get("clab-node-name", "")
             lab_prefix = attributes.get("containerlab", "")
             node_kind = attributes.get("clab-node-kind", "")
+            display_name = None  # Containerlab doesn't have display names
 
         if not node_name or not lab_prefix:
             return None
@@ -242,9 +244,11 @@ class DockerEventListener(NodeEventListener):
             exit_code = attributes.get("exitCode", "unknown")
             status = f"exited (code {exit_code})"
 
+        # Format log name with display name if available
+        log_name = f"{display_name}({node_name})" if display_name and display_name != node_name else node_name
         logger.debug(
-            f"Docker event: {action} for {container_name} "
-            f"(lab={lab_prefix}, node={node_name})"
+            f"Docker event: {action} for {log_name} "
+            f"(lab={lab_prefix})"
         )
 
         return NodeEvent(
@@ -254,6 +258,7 @@ class DockerEventListener(NodeEventListener):
             event_type=event_type,
             timestamp=timestamp,
             status=status,
+            display_name=display_name,
             attributes={
                 "container_name": container_name,
                 "image": attributes.get("image", ""),

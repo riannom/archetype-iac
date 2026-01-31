@@ -32,6 +32,15 @@ from agent.providers.base import (
 
 logger = logging.getLogger(__name__)
 
+
+def _log_name(node_name: str, node_config: dict) -> str:
+    """Format node name for logging: 'DisplayName(id)' or just 'id'."""
+    display_name = node_config.get("_display_name") if isinstance(node_config, dict) else None
+    if display_name and display_name != node_name:
+        return f"{display_name}({node_name})"
+    return node_name
+
+
 # Try to import libvirt - it's optional
 try:
     import libvirt
@@ -389,8 +398,9 @@ class LibvirtProvider(Provider):
                     )
                     deployed_nodes.append(node_info)
                 except Exception as e:
-                    logger.error(f"Failed to deploy node {node_name}: {e}")
-                    errors.append(f"{node_name}: {e}")
+                    log_name_str = _log_name(node_name, node_config)
+                    logger.error(f"Failed to deploy node {log_name_str}: {e}")
+                    errors.append(f"{log_name_str}: {e}")
 
             if errors and not deployed_nodes:
                 # Complete failure

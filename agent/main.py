@@ -165,7 +165,7 @@ async def forward_event_to_controller(event):
                 timeout=5.0,
             )
             if response.status_code == 200:
-                logger.debug(f"Forwarded event: {event.event_type.value} for {event.node_name}")
+                logger.debug(f"Forwarded event: {event.event_type.value} for {event.log_name()}")
             else:
                 logger.warning(f"Failed to forward event: HTTP {response.status_code}")
     except Exception as e:
@@ -996,7 +996,7 @@ async def _execute_destroy_with_callback(
 @app.post("/jobs/node-action")
 async def node_action(request: NodeActionRequest) -> JobResult:
     """Start or stop a specific node."""
-    logger.info(f"Node action: lab={request.lab_id}, node={request.node_name}, action={request.action}")
+    logger.info(f"Node action: lab={request.lab_id}, node={request.log_name()}, action={request.action}")
 
     # Use default provider for node actions
     provider = get_provider_for_request()

@@ -67,8 +67,18 @@ CONTAINER_PREFIX = "archetype"
 # Label keys for container metadata
 LABEL_LAB_ID = "archetype.lab_id"
 LABEL_NODE_NAME = "archetype.node_name"
+LABEL_NODE_DISPLAY_NAME = "archetype.node_display_name"
 LABEL_NODE_KIND = "archetype.node_kind"
 LABEL_PROVIDER = "archetype.provider"
+
+
+def _log_name_from_labels(labels: dict[str, str]) -> str:
+    """Format node name for logging from container labels."""
+    node_name = labels.get(LABEL_NODE_NAME, "")
+    display_name = labels.get(LABEL_NODE_DISPLAY_NAME, "")
+    if display_name and display_name != node_name:
+        return f"{display_name}({node_name})"
+    return node_name
 
 
 @dataclass
@@ -76,6 +86,7 @@ class TopologyNode:
     """Parsed node from topology YAML."""
     name: str
     kind: str
+    display_name: str | None = None  # Human-readable name for logs
     image: str | None = None
     host: str | None = None
     binds: list[str] = field(default_factory=list)
@@ -83,6 +94,12 @@ class TopologyNode:
     ports: list[str] = field(default_factory=list)
     startup_config: str | None = None
     exec_: list[str] = field(default_factory=list)  # Post-start commands
+
+    def log_name(self) -> str:
+        """Format node name for logging: 'DisplayName(id)' or just 'id'."""
+        if self.display_name and self.display_name != self.name:
+            return f"{self.display_name}({self.name})"
+        return self.name
 
 
 @dataclass
@@ -97,6 +114,13 @@ class ParsedTopology:
     name: str
     nodes: dict[str, TopologyNode]
     links: list[TopologyLink]
+
+    def log_name(self, node_name: str) -> str:
+        """Get formatted log name for a node: 'DisplayName(id)' or just 'id'."""
+        node = self.nodes.get(node_name)
+        if node:
+            return node.log_name()
+        return node_name
 
 
 class DockerProvider(Provider):
@@ -174,6 +198,7 @@ class DockerProvider(Provider):
             nodes[node_name] = TopologyNode(
                 name=node_name,
                 kind=node_config.get("kind", "linux"),
+                display_name=node_config.get("_display_name"),
                 image=node_config.get("image"),
                 host=node_config.get("host"),
                 binds=node_config.get("binds", []),
@@ -252,6 +277,8 @@ class DockerProvider(Provider):
             LABEL_NODE_KIND: node.kind,
             LABEL_PROVIDER: self.name,
         }
+        if node.display_name:
+            labels[LABEL_NODE_DISPLAY_NAME] = node.display_name
 
         # Process binds from runtime config and node-specific binds
         binds = list(runtime_config.binds)
@@ -353,12 +380,12 @@ class DockerProvider(Provider):
                 if node.startup_config:
                     # Use startup-config from topology YAML
                     startup_config_path.write_text(node.startup_config)
-                    logger.debug(f"Wrote startup-config from topology for {node_name}")
+                    logger.debug(f"Wrote startup-config from topology for {node.log_name()}")
                 elif extracted_config.exists():
                     # Copy previously extracted config to flash
                     import shutil
                     shutil.copy2(extracted_config, startup_config_path)
-                    logger.debug(f"Copied extracted startup-config for {node_name}")
+                    logger.debug(f"Copied extracted startup-config for {node.log_name()}")
                 elif not startup_config_path.exists():
                     # Create minimal startup-config with essential initialization
                     minimal_config = f"""! Minimal cEOS startup config
@@ -370,14 +397,14 @@ username admin privilege 15 role network-admin nopassword
 !
 """
                     startup_config_path.write_text(minimal_config)
-                    logger.debug(f"Created minimal startup-config for {node_name}")
+                    logger.debug(f"Created minimal startup-config for {node.log_name()}")
 
                 # Create zerotouch-config to disable ZTP
                 # This file's presence tells cEOS to skip Zero Touch Provisioning
                 zerotouch_config = flash_dir / "zerotouch-config"
                 if not zerotouch_config.exists():
                     zerotouch_config.write_text("DISABLE=True\n")
-                    logger.debug(f"Created zerotouch-config for {node_name}")
+                    logger.debug(f"Created zerotouch-config for {node.log_name()}")
 
     async def _create_containers(
         self,
@@ -393,16 +420,17 @@ username admin privilege 15 role network-admin nopassword
 
         for node_name, node in topology.nodes.items():
             container_name = self._container_name(lab_id, node_name)
+            log_name = node.log_name()
 
             # Check if container already exists
             try:
                 existing = self.docker.containers.get(container_name)
                 if existing.status == "running":
-                    logger.info(f"Container {container_name} already running")
+                    logger.info(f"Container {log_name} already running")
                     containers[node_name] = existing
                     continue
                 else:
-                    logger.info(f"Removing stopped container {container_name}")
+                    logger.info(f"Removing stopped container {log_name}")
                     existing.remove(force=True)
             except NotFound:
                 pass
@@ -411,7 +439,7 @@ username admin privilege 15 role network-admin nopassword
             config = self._create_container_config(node, lab_id, workspace)
 
             # Create container
-            logger.info(f"Creating container {container_name} with image {config['image']}")
+            logger.info(f"Creating container {log_name} with image {config['image']}")
             container = self.docker.containers.create(**config)
             containers[node_name] = container
 
@@ -429,9 +457,10 @@ username admin privilege 15 role network-admin nopassword
         failed = []
         for node_name, container in containers.items():
             try:
+                log_name = topology.log_name(node_name)
                 if container.status != "running":
                     container.start()
-                    logger.info(f"Started container {container.name}")
+                    logger.info(f"Started container {log_name}")
 
                 # Provision dummy interfaces for devices that need them
                 node = topology.nodes.get(node_name)
@@ -528,6 +557,7 @@ username admin privilege 15 role network-admin nopassword
                     ready_status[node_name] = True
                     continue
 
+                log_name = node.log_name()
                 config = get_config_by_device(node.kind)
                 if not config or config.readiness_probe == "none":
                     ready_status[node_name] = True
@@ -536,7 +566,7 @@ username admin privilege 15 role network-admin nopassword
                 # Check node-specific timeout
                 node_timeout = config.readiness_timeout
                 if elapsed > node_timeout:
-                    logger.warning(f"Node {node_name} timed out waiting for readiness")
+                    logger.warning(f"Node {log_name} timed out waiting for readiness")
                     continue
 
                 # Check readiness
@@ -552,7 +582,7 @@ username admin privilege 15 role network-admin nopassword
                         if config.readiness_pattern:
                             if re.search(config.readiness_pattern, logs):
                                 ready_status[node_name] = True
-                                logger.info(f"Node {node_name} is ready")
+                                logger.info(f"Node {log_name} is ready")
                             else:
                                 all_ready = False
                         else:
@@ -561,7 +591,7 @@ username admin privilege 15 role network-admin nopassword
                         ready_status[node_name] = True
 
                 except Exception as e:
-                    logger.debug(f"Error checking readiness for {node_name}: {e}")
+                    logger.debug(f"Error checking readiness for {log_name}: {e}")
                     all_ready = False
 
             if all_ready:
@@ -650,7 +680,8 @@ username admin privilege 15 role network-admin nopassword
         if missing_images:
             error_lines = ["Missing Docker images:"]
             for node_name, image in missing_images:
-                error_lines.append(f"  • Node '{node_name}' requires: {image}")
+                log_name = topology.log_name(node_name)
+                error_lines.append(f"  • Node '{log_name}' requires: {image}")
             error_lines.append("")
             error_lines.append("Please upload images via the Images page or import manually.")
             error_msg = "\n".join(error_lines)
@@ -682,7 +713,8 @@ username admin privilege 15 role network-admin nopassword
         # Start containers
         failed_starts = await self._start_containers(containers, topology)
         if failed_starts:
-            logger.warning(f"Some containers failed to start: {failed_starts}")
+            failed_log_names = [topology.log_name(n) for n in failed_starts]
+            logger.warning(f"Some containers failed to start: {failed_log_names}")
 
         # Create local links
         links_created = await self._create_links(topology, lab_id)
@@ -694,7 +726,8 @@ username admin privilege 15 role network-admin nopassword
         )
         not_ready = [name for name, ready in ready_status.items() if not ready]
         if not_ready:
-            logger.warning(f"Some nodes not ready after timeout: {not_ready}")
+            not_ready_log_names = [topology.log_name(n) for n in not_ready]
+            logger.warning(f"Some nodes not ready after timeout: {not_ready_log_names}")
 
         # Get final status
         status_result = await self.status(lab_id, workspace)
@@ -704,7 +737,8 @@ username admin privilege 15 role network-admin nopassword
             f"Created {links_created} links",
         ]
         if not_ready:
-            stdout_lines.append(f"Warning: {len(not_ready)} nodes not fully ready: {', '.join(not_ready)}")
+            not_ready_log_names = [topology.log_name(n) for n in not_ready]
+            stdout_lines.append(f"Warning: {len(not_ready)} nodes not fully ready: {', '.join(not_ready_log_names)}")
 
         return DeployResult(
             success=True,
@@ -932,8 +966,10 @@ username admin privilege 15 role network-admin nopassword
                 if kind != "ceos" or not node_name:
                     continue
 
+                log_name = _log_name_from_labels(labels)
+
                 if container.status != "running":
-                    logger.warning(f"Skipping {node_name}: container not running")
+                    logger.warning(f"Skipping {log_name}: container not running")
                     continue
 
                 try:
@@ -946,14 +982,14 @@ username admin privilege 15 role network-admin nopassword
 
                     if result.exit_code != 0:
                         logger.warning(
-                            f"Failed to extract config from {node_name}: "
+                            f"Failed to extract config from {log_name}: "
                             f"exit={result.exit_code}, stderr={stderr}"
                         )
                         continue
 
                     config_content = stdout.decode("utf-8") if stdout else ""
                     if not config_content.strip():
-                        logger.warning(f"Empty config from {node_name}")
+                        logger.warning(f"Empty config from {log_name}")
                         continue
 
                     # Save to workspace/configs/{node}/startup-config
@@ -963,10 +999,10 @@ username admin privilege 15 role network-admin nopassword
                     config_path.write_text(config_content)
 
                     extracted.append((node_name, config_content))
-                    logger.info(f"Extracted config from {node_name}")
+                    logger.info(f"Extracted config from {log_name}")
 
                 except Exception as e:
-                    logger.error(f"Error extracting config from {node_name}: {e}")
+                    logger.error(f"Error extracting config from {log_name}: {e}")
 
         except Exception as e:
             logger.error(f"Error during config extraction for lab {lab_id}: {e}")

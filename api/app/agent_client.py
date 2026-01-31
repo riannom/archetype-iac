@@ -384,21 +384,32 @@ async def _do_node_action(
     lab_id: str,
     node_name: str,
     action: str,
+    display_name: str | None = None,
 ) -> dict:
     """Internal node action request (for retry wrapper)."""
+    payload = {
+        "job_id": job_id,
+        "lab_id": lab_id,
+        "node_name": node_name,
+        "action": action,
+    }
+    if display_name:
+        payload["display_name"] = display_name
     async with httpx.AsyncClient() as client:
         response = await client.post(
             url,
-            json={
-                "job_id": job_id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "action": action,
-            },
+            json=payload,
             timeout=settings.agent_node_action_timeout,
         )
         response.raise_for_status()
         return response.json()
+
+
+def _log_name(node_name: str, display_name: str | None) -> str:
+    """Format node name for logging: 'DisplayName(id)' or just 'id'."""
+    if display_name and display_name != node_name:
+        return f"{display_name}({node_name})"
+    return node_name
 
 
 async def node_action_on_agent(
@@ -407,14 +418,16 @@ async def node_action_on_agent(
     lab_id: str,
     node_name: str,
     action: str,
+    display_name: str | None = None,
 ) -> dict:
     """Send node action request to agent with retry logic."""
     url = f"{get_agent_url(agent)}/jobs/node-action"
-    logger.info(f"Node action {action} on {node_name} in lab {lab_id} via agent {agent.id}")
+    log_name = _log_name(node_name, display_name)
+    logger.info(f"Node action {action} on {log_name} in lab {lab_id} via agent {agent.id}")
 
     try:
-        result = await with_retry(_do_node_action, url, job_id, lab_id, node_name, action)
-        logger.info(f"Node action completed for {node_name}: {result.get('status')}")
+        result = await with_retry(_do_node_action, url, job_id, lab_id, node_name, action, display_name)
+        logger.info(f"Node action completed for {log_name}: {result.get('status')}")
         return result
     except AgentError as e:
         e.agent_id = agent.id
