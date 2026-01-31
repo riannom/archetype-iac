@@ -176,6 +176,29 @@ async def reconcile_lab_states():
             .all()
         )
 
+        # Find running nodes that are missing NodePlacement records
+        # This handles cases where deploy jobs failed after containers were created
+        from sqlalchemy import and_, exists
+        from sqlalchemy.sql import select
+
+        placement_exists_subquery = (
+            select(models.NodePlacement.id)
+            .where(
+                models.NodePlacement.lab_id == models.NodeState.lab_id,
+                models.NodePlacement.node_name == models.NodeState.node_name,
+            )
+            .exists()
+        )
+
+        running_nodes_without_placement = (
+            session.query(models.NodeState)
+            .filter(
+                models.NodeState.actual_state == "running",
+                ~placement_exists_subquery,
+            )
+            .all()
+        )
+
         # Collect unique lab IDs that need reconciliation
         labs_to_reconcile = set()
         for lab in transitional_labs:
@@ -185,6 +208,8 @@ async def reconcile_lab_states():
         for node in unready_running_nodes:
             labs_to_reconcile.add(node.lab_id)
         for node in error_nodes:
+            labs_to_reconcile.add(node.lab_id)
+        for node in running_nodes_without_placement:
             labs_to_reconcile.add(node.lab_id)
 
         # FIRST: Always check readiness for running nodes (this doesn't interfere with jobs)
@@ -305,25 +330,55 @@ async def _reconcile_single_lab(session, lab_id: str):
         except Exception as e:
             logger.debug(f"Failed to ensure link states for lab {lab_id}: {e}")
 
-    # Get an agent to query for status
+    # Get ALL agents that have nodes for this lab (multi-host support)
     try:
         lab_provider = get_lab_provider(lab)
-        agent = await agent_client.get_agent_for_lab(
-            session, lab, required_provider=lab_provider
-        )
 
-        if not agent:
+        # Find unique agents from NodePlacement records
+        placements = (
+            session.query(models.NodePlacement)
+            .filter(models.NodePlacement.lab_id == lab_id)
+            .all()
+        )
+        agent_ids = {p.host_id for p in placements}
+
+        # Also include the lab's default agent if set
+        if lab.agent_id:
+            agent_ids.add(lab.agent_id)
+
+        # If no placements and no default, find any healthy agent
+        if not agent_ids:
+            fallback_agent = await agent_client.get_agent_for_lab(
+                session, lab, required_provider=lab_provider
+            )
+            if fallback_agent:
+                agent_ids.add(fallback_agent.id)
+
+        if not agent_ids:
             logger.warning(f"No agent available to reconcile lab {lab_id}")
             return
 
-        # Query actual container status from agent
-        result = await agent_client.get_lab_status_from_agent(agent, lab_id)
-        nodes = result.get("nodes", [])
+        # Query actual container status from ALL agents
+        # Track both status and which agent has each container
+        container_status_map: dict[str, str] = {}
+        container_agent_map: dict[str, str] = {}  # node_name -> agent_id
+        for agent_id in agent_ids:
+            agent = session.get(models.Host, agent_id)
+            if not agent or not agent_client.is_agent_online(agent):
+                logger.debug(f"Agent {agent_id} is offline, skipping in reconciliation")
+                continue
 
-        # Build a map of container status by node name
-        container_status_map = {
-            n.get("name", ""): n.get("status", "unknown") for n in nodes
-        }
+            try:
+                result = await agent_client.get_lab_status_from_agent(agent, lab_id)
+                nodes = result.get("nodes", [])
+                # Merge container status from this agent
+                for n in nodes:
+                    node_name = n.get("name", "")
+                    if node_name:
+                        container_status_map[node_name] = n.get("status", "unknown")
+                        container_agent_map[node_name] = agent_id
+            except Exception as e:
+                logger.warning(f"Failed to query agent {agent.name} for lab {lab_id}: {e}")
 
         logger.debug(f"Lab {lab_id} container status: {container_status_map}")
 
@@ -402,6 +457,39 @@ async def _reconcile_single_lab(session, lab_id: str):
                 logger.info(
                     f"Node {ns.node_name} in lab {lab_id} boot complete"
                 )
+
+        # Ensure NodePlacement records exist for containers found on agents
+        # This handles cases where deploy jobs failed after containers were created
+        for node_name, agent_id in container_agent_map.items():
+            existing_placement = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name == node_name,
+                )
+                .first()
+            )
+            if existing_placement:
+                # Update if container moved to a different agent
+                if existing_placement.host_id != agent_id:
+                    logger.info(
+                        f"Updating placement for {node_name} in lab {lab_id}: "
+                        f"{existing_placement.host_id} -> {agent_id}"
+                    )
+                    existing_placement.host_id = agent_id
+                    existing_placement.status = "deployed"
+            else:
+                # Create new placement record
+                logger.info(
+                    f"Creating placement for {node_name} in lab {lab_id} on agent {agent_id}"
+                )
+                new_placement = models.NodePlacement(
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    host_id=agent_id,
+                    status="deployed",
+                )
+                session.add(new_placement)
 
         # Update lab state based on aggregated node states
         old_lab_state = lab.state
