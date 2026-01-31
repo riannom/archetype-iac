@@ -401,25 +401,29 @@ def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> T
         TopologyAnalysis with placements and cross-host links
     """
     # Build node -> host mapping
+    # Use container_name (yaml key like 'ceos_3') not display name ('CEOS-3')
     node_hosts: dict[str, str] = {}
     for node in graph.nodes:
+        node_key = node.container_name or node.name
         host = node.host or default_host
         if host:
-            node_hosts[node.name] = host
+            node_hosts[node_key] = host
 
     # If no placements specified, all on default host
     if not node_hosts and default_host:
         for node in graph.nodes:
-            node_hosts[node.name] = default_host
+            node_key = node.container_name or node.name
+            node_hosts[node_key] = default_host
 
     # Group nodes by host
     placements: dict[str, list[NodePlacement]] = {}
     for node in graph.nodes:
-        host = node_hosts.get(node.name)
+        node_key = node.container_name or node.name
+        host = node_hosts.get(node_key)
         if host:
             if host not in placements:
                 placements[host] = []
-            placements[host].append(NodePlacement(node_name=node.name, host_id=host))
+            placements[host].append(NodePlacement(node_name=node_key, host_id=host))
 
     # Detect cross-host links
     cross_host_links: list[CrossHostLink] = []
@@ -779,9 +783,9 @@ def split_topology_by_host(
     result: dict[str, TopologyGraph] = {}
 
     for host_id in analysis.placements:
-        # Nodes for this host
+        # Nodes for this host (use container_name for matching)
         host_node_names = {p.node_name for p in analysis.placements[host_id]}
-        host_nodes = [n for n in graph.nodes if n.name in host_node_names]
+        host_nodes = [n for n in graph.nodes if (n.container_name or n.name) in host_node_names]
 
         # Links where both endpoints are on this host
         host_links: list[GraphLink] = []

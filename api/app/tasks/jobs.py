@@ -1080,9 +1080,20 @@ async def run_node_sync(
             else:
                 topology_yaml = topo_path.read_text(encoding="utf-8")
                 graph = yaml_to_graph(topology_yaml)
-                clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
 
-                log_parts.append(f"Redeploying topology with {len(graph.nodes)} nodes...")
+                # For multi-host labs, filter topology to only include nodes for this agent
+                analysis = analyze_topology(graph, default_host=agent.id)
+                host_topologies = split_topology_by_host(graph, analysis)
+
+                if agent.id in host_topologies:
+                    # Use filtered topology for this host
+                    filtered_graph = host_topologies[agent.id]
+                    clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
+                    log_parts.append(f"Redeploying {len(filtered_graph.nodes)} node(s) on {agent.name}...")
+                else:
+                    # No nodes for this host - shouldn't happen but handle gracefully
+                    clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+                    log_parts.append(f"Redeploying topology with {len(graph.nodes)} nodes...")
 
                 try:
                     result = await agent_client.deploy_to_agent(
