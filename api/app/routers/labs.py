@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
 from app.auth import get_current_user
+from app.services.topology import TopologyService
 from app.storage import (
     delete_layout,
     ensure_topology_file,
@@ -194,19 +195,26 @@ async def delete_lab(
     if lab.state in ("running", "starting", "stopping"):
         logger.info(f"Lab {lab_id} has state '{lab.state}', destroying infrastructure before deletion")
 
-        # Get topology to check for multi-host
-        topo_path = topology_path(lab.id)
-        topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
-
-        # Analyze topology for multi-host deployment
+        # Check for multi-host deployment (database first, then YAML fallback)
+        service = TopologyService(database)
         is_multihost = False
-        if topology_yaml:
-            try:
-                graph = yaml_to_graph(topology_yaml)
-                analysis = analyze_topology(graph)
-                is_multihost = not analysis.single_host
-            except Exception as e:
-                logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+        topology_yaml = ""
+
+        if service.has_nodes(lab.id):
+            # Use database for analysis
+            is_multihost = service.is_multihost(lab.id)
+            topology_yaml = service.export_to_yaml(lab.id)
+        else:
+            # Fall back to YAML file for unmigrated labs
+            topo_path = topology_path(lab.id)
+            topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+            if topology_yaml:
+                try:
+                    graph = yaml_to_graph(topology_yaml)
+                    analysis = analyze_topology(graph)
+                    is_multihost = not analysis.single_host
+                except Exception as e:
+                    logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
 
         # Get the provider for this lab
         lab_provider = get_lab_provider(lab)
@@ -242,6 +250,9 @@ async def delete_lab(
             # Continue with deletion even if destroy fails - containers may need manual cleanup
 
     # Delete related records first to avoid foreign key violations
+    # Delete links before nodes due to FK constraints
+    database.query(models.Link).filter(models.Link.lab_id == lab_id).delete()
+    database.query(models.Node).filter(models.Node.lab_id == lab_id).delete()
     database.query(models.Job).filter(models.Job.lab_id == lab_id).delete()
     database.query(models.Permission).filter(models.Permission.lab_id == lab_id).delete()
     database.query(models.LabFile).filter(models.LabFile.lab_id == lab_id).delete()
@@ -302,7 +313,20 @@ def import_yaml(
     lab = get_lab_or_404(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
     workspace.mkdir(parents=True, exist_ok=True)
+
+    # Store topology in database (source of truth)
+    service = TopologyService(database)
+    service.import_from_yaml(lab.id, payload.content)
+
+    # Also write YAML file for backup/version control
     topology_path(lab.id).write_text(payload.content, encoding="utf-8")
+
+    # Sync NodeState/LinkState records
+    graph = yaml_to_graph(payload.content)
+    _upsert_node_states(database, lab.id, graph)
+    _upsert_link_states(database, lab.id, graph)
+
+    database.commit()
     return schemas.LabOut.model_validate(lab)
 
 
@@ -313,6 +337,13 @@ def export_yaml(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabYamlOut:
     lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Try database first (source of truth)
+    service = TopologyService(database)
+    if service.has_nodes(lab.id):
+        return schemas.LabYamlOut(content=service.export_to_yaml(lab.id))
+
+    # Fall back to YAML file for unmigrated labs
     topo_path = topology_path(lab.id)
     if not topo_path.exists():
         raise HTTPException(status_code=404, detail="Topology not found")
@@ -329,6 +360,12 @@ def import_graph(
     lab = get_lab_or_404(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
     workspace.mkdir(parents=True, exist_ok=True)
+
+    # Store topology in database (source of truth)
+    service = TopologyService(database)
+    service.import_from_graph(lab.id, payload)
+
+    # Also write YAML file for backup/version control
     yaml_content = graph_to_yaml(payload)
     topology_path(lab.id).write_text(yaml_content, encoding="utf-8")
 
@@ -357,10 +394,18 @@ def export_graph(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.TopologyGraph | TopologyGraphWithLayout:
     lab = get_lab_or_404(lab_id, database, current_user)
-    topo_path = topology_path(lab.id)
-    if not topo_path.exists():
-        raise HTTPException(status_code=404, detail="Topology not found")
-    graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+
+    # Try database first (source of truth)
+    service = TopologyService(database)
+    if service.has_nodes(lab.id):
+        graph = service.export_to_graph(lab.id)
+    else:
+        # Fall back to YAML file for unmigrated labs
+        topo_path = topology_path(lab.id)
+        if not topo_path.exists():
+            raise HTTPException(status_code=404, detail="Topology not found")
+        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+
     if include_layout:
         layout = read_layout(lab.id)
         return TopologyGraphWithLayout(**graph.model_dump(), layout=layout)

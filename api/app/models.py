@@ -160,6 +160,10 @@ class NodeState(Base):
     lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"))
     node_id: Mapped[str] = mapped_column(String(100))  # Frontend node ID
     node_name: Mapped[str] = mapped_column(String(100))  # Name in topology
+    # FK to Node definition (topology source of truth)
+    node_definition_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True
+    )
     # desired_state: What the user wants - "stopped" or "running"
     desired_state: Mapped[str] = mapped_column(String(50), default="stopped")
     # actual_state: Current reality - "undeployed", "pending", "running", "stopped", "error"
@@ -204,6 +208,10 @@ class LinkState(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"))
+    # FK to Link definition (topology source of truth)
+    link_definition_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("links.id", ondelete="SET NULL"), nullable=True
+    )
     # Unique identifier for this link within the lab (e.g., "node1:eth1-node2:eth1")
     link_name: Mapped[str] = mapped_column(String(255))
     # Source endpoint
@@ -459,4 +467,89 @@ class WebhookDelivery(Base):
     duration_ms: Mapped[int | None] = mapped_column(nullable=True)
     # Result
     success: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Node(Base):
+    """Topology node definition - replaces YAML nodes section.
+
+    This model stores the authoritative definition of nodes in a lab topology.
+    All runtime queries about topology structure read from this table.
+    YAML is generated on-demand for exports and agent communication.
+
+    Node identity:
+    - gui_id: Frontend-assigned ID (preserved through YAML round-trips)
+    - display_name: User-visible name (can be changed without breaking operations)
+    - container_name: Containerlab/YAML key (immutable after first deploy)
+
+    Node types:
+    - device: Regular lab device (ceos, srl, linux, etc.)
+    - external: External network connection (bridge, VLAN, etc.)
+    """
+    __tablename__ = "nodes"
+    __table_args__ = (UniqueConstraint("lab_id", "container_name", name="uq_node_lab_container"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+
+    # Identity
+    gui_id: Mapped[str] = mapped_column(String(100))  # Frontend ID
+    display_name: Mapped[str] = mapped_column(String(200))  # User-visible name
+    container_name: Mapped[str] = mapped_column(String(100))  # YAML key (immutable)
+
+    # Device config
+    node_type: Mapped[str] = mapped_column(String(50), default="device")  # device, external
+    device: Mapped[str | None] = mapped_column(String(100), nullable=True)  # ceos, srl, etc.
+    image: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    network_mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Placement (replaces YAML host: field)
+    host_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("hosts.id"), nullable=True)
+
+    # External network fields
+    connection_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    parent_interface: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    vlan_id: Mapped[int | None] = mapped_column(nullable=True)
+    bridge_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Extra config as JSON (vars, binds, env, role, mgmt, etc.)
+    config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class Link(Base):
+    """Topology link definition - replaces YAML links section.
+
+    This model stores the authoritative definition of links in a lab topology.
+    All runtime queries about topology structure read from this table.
+    YAML is generated on-demand for exports and agent communication.
+
+    Links connect two endpoints (nodes or external connections).
+    Each endpoint has a node reference and interface name.
+    """
+    __tablename__ = "links"
+    __table_args__ = (UniqueConstraint("lab_id", "link_name", name="uq_link_lab_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+    link_name: Mapped[str] = mapped_column(String(255))  # e.g., "nodeA:eth1-nodeB:eth1"
+
+    # Source endpoint
+    source_node_id: Mapped[str] = mapped_column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"))
+    source_interface: Mapped[str] = mapped_column(String(100))
+
+    # Target endpoint
+    target_node_id: Mapped[str] = mapped_column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"))
+    target_interface: Mapped[str] = mapped_column(String(100))
+
+    # Link properties
+    mtu: Mapped[int | None] = mapped_column(nullable=True)
+    bandwidth: Mapped[int | None] = mapped_column(nullable=True)
+
+    # Extra link attributes as JSON (type, name, pool, prefix, bridge, etc.)
+    config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

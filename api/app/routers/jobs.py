@@ -13,6 +13,7 @@ from app import agent_client, db, models, schemas
 from app.auth import get_current_user
 from app.db import SessionLocal
 from app.netlab import run_netlab_command
+from app.services.topology import TopologyService
 from app.storage import lab_workspace, topology_path
 from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
 from app.topology import analyze_topology, graph_to_containerlab_yaml, yaml_to_graph
@@ -204,39 +205,60 @@ async def lab_up(
 ) -> schemas.JobOut:
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Get topology YAML (stored in netlab format)
-    topo_path = topology_path(lab.id)
-    topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
-
-    # Analyze topology for multi-host deployment and convert to containerlab format
+    # Use TopologyService for analysis (database is source of truth)
+    service = TopologyService(database)
     is_multihost = False
     clab_yaml = ""
     graph = None
     analysis = None
     has_explicit_placements = False
-    if topology_yaml:
+
+    # Try database first (source of truth)
+    if service.has_nodes(lab.id):
         try:
-            graph = yaml_to_graph(topology_yaml)
+            db_analysis = service.analyze_placements(lab.id)
+            has_explicit_placements = bool(db_analysis.placements)
+            is_multihost = not db_analysis.single_host or has_explicit_placements
+            clab_yaml = service.to_containerlab_yaml(lab.id)
+            graph = service.export_to_graph(lab.id)
+            # Convert to legacy analysis format for compatibility
             analysis = analyze_topology(graph)
-
-            # Check if ANY node has explicit host placement
-            has_explicit_placements = bool(analysis.placements)
-
-            # If there are explicit placements, we must respect them
-            # This is multi-host even if all explicit placements are the same host
-            is_multihost = not analysis.single_host or has_explicit_placements
-
-            # Convert to containerlab format for deployment
-            clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
             logger.info(
-                f"Lab {lab_id} topology analysis: "
-                f"single_host={analysis.single_host}, "
-                f"hosts={list(analysis.placements.keys())}, "
-                f"cross_host_links={len(analysis.cross_host_links)}, "
+                f"Lab {lab_id} topology analysis (from DB): "
+                f"single_host={db_analysis.single_host}, "
+                f"hosts={list(db_analysis.placements.keys())}, "
+                f"cross_host_links={len(db_analysis.cross_host_links)}, "
                 f"has_explicit_placements={has_explicit_placements}"
             )
         except Exception as e:
-            logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+            logger.warning(f"Failed to analyze topology from DB for lab {lab_id}: {e}")
+    else:
+        # Fall back to YAML file for unmigrated labs
+        topo_path = topology_path(lab.id)
+        topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+
+        if topology_yaml:
+            try:
+                graph = yaml_to_graph(topology_yaml)
+                analysis = analyze_topology(graph)
+
+                # Check if ANY node has explicit host placement
+                has_explicit_placements = bool(analysis.placements)
+
+                # If there are explicit placements, we must respect them
+                is_multihost = not analysis.single_host or has_explicit_placements
+
+                # Convert to containerlab format for deployment
+                clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+                logger.info(
+                    f"Lab {lab_id} topology analysis (from YAML): "
+                    f"single_host={analysis.single_host}, "
+                    f"hosts={list(analysis.placements.keys())}, "
+                    f"cross_host_links={len(analysis.cross_host_links)}, "
+                    f"has_explicit_placements={has_explicit_placements}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
 
     # Get the provider for this lab
     lab_provider = get_lab_provider(lab)
@@ -360,19 +382,30 @@ async def lab_down(
 ) -> schemas.JobOut:
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Get topology YAML to check for multi-host
-    topo_path = topology_path(lab.id)
-    topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
-
-    # Analyze topology for multi-host deployment
+    # Use TopologyService for analysis (database is source of truth)
+    service = TopologyService(database)
     is_multihost = False
-    if topology_yaml:
+    topology_yaml = ""
+
+    # Try database first
+    if service.has_nodes(lab.id):
         try:
-            graph = yaml_to_graph(topology_yaml)
-            analysis = analyze_topology(graph)
-            is_multihost = not analysis.single_host
+            is_multihost = service.is_multihost(lab.id)
+            topology_yaml = service.export_to_yaml(lab.id)
         except Exception as e:
-            logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+            logger.warning(f"Failed to analyze topology from DB for lab {lab_id}: {e}")
+    else:
+        # Fall back to YAML file for unmigrated labs
+        topo_path = topology_path(lab.id)
+        topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+
+        if topology_yaml:
+            try:
+                graph = yaml_to_graph(topology_yaml)
+                analysis = analyze_topology(graph)
+                is_multihost = not analysis.single_host
+            except Exception as e:
+                logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
 
     # Get the provider for this lab
     lab_provider = get_lab_provider(lab)

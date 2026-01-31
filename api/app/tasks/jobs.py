@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.db import SessionLocal
+from app.services.topology import TopologyService
 from app.topology import analyze_topology, graph_to_containerlab_yaml, split_topology_by_host, yaml_to_graph
 from app.utils.lab import update_lab_state
 

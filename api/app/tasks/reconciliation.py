@@ -22,6 +22,7 @@ from pathlib import Path
 from app import agent_client, models
 from app.config import settings
 from app.db import SessionLocal
+from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 
 logger = logging.getLogger(__name__)
@@ -46,15 +47,61 @@ def _generate_link_name(
     return f"{ep_b}-{ep_a}"
 
 
-def _ensure_link_states_for_lab(session, lab_id: str, topology_yaml: str) -> int:
+def _ensure_link_states_for_lab(session, lab_id: str, topology_yaml: str | None = None) -> int:
     """Ensure LinkState records exist for all links in a lab's topology.
 
     This is called during reconciliation to create missing link state records
     for labs that may have been deployed before link state tracking was added.
 
+    Tries database first (source of truth), falls back to YAML if provided.
+
     Returns the number of link states created.
     """
     from app.topology import yaml_to_graph
+
+    # Try to get links from database first
+    service = TopologyService(session)
+    db_links = service.get_links(lab_id)
+
+    if db_links:
+        # Use database as source of truth
+        # Get existing link states
+        existing = (
+            session.query(models.LinkState)
+            .filter(models.LinkState.lab_id == lab_id)
+            .all()
+        )
+        existing_names = {ls.link_name for ls in existing}
+
+        created_count = 0
+        for link in db_links:
+            if link.link_name not in existing_names:
+                # Get node container names for the link state record
+                source_node = session.get(models.Node, link.source_node_id)
+                target_node = session.get(models.Node, link.target_node_id)
+                if not source_node or not target_node:
+                    continue
+
+                new_state = models.LinkState(
+                    lab_id=lab_id,
+                    link_name=link.link_name,
+                    link_definition_id=link.id,
+                    source_node=source_node.container_name,
+                    source_interface=link.source_interface,
+                    target_node=target_node.container_name,
+                    target_interface=link.target_interface,
+                    desired_state="up",
+                    actual_state="unknown",
+                )
+                session.add(new_state)
+                existing_names.add(link.link_name)
+                created_count += 1
+
+        return created_count
+
+    # Fall back to YAML parsing for unmigrated labs
+    if not topology_yaml:
+        return 0
 
     try:
         graph = yaml_to_graph(topology_yaml)

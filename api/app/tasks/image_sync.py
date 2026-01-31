@@ -19,6 +19,7 @@ from app import models
 from app.config import settings
 from app.db import SessionLocal
 from app.image_store import find_image_by_id, load_manifest
+from app.services.topology import TopologyService
 
 
 async def sync_image_to_agent(
@@ -544,6 +545,28 @@ def get_images_from_topology(topology_yaml: str) -> list[str]:
     except Exception as e:
         print(f"Error parsing topology: {e}")
         return []
+
+
+def get_images_from_db(lab_id: str, database: Session) -> list[str]:
+    """Extract Docker image references from database topology.
+
+    Args:
+        lab_id: Lab ID to get images for
+        database: Database session
+
+    Returns:
+        List of unique image references used in the topology
+    """
+    images = (
+        database.query(models.Node.image)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.image.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+    return [img[0] for img in images if img[0]]
 
 
 def get_image_to_nodes_map(topology_yaml: str) -> dict[str, list[str]]:

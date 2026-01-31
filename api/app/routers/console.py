@@ -8,6 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app import agent_client, models
 from app.db import SessionLocal
+from app.services.topology import TopologyService
 from app.storage import topology_path
 from app.topology import analyze_topology, yaml_to_graph
 
@@ -32,44 +33,69 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
         # For multi-host labs, find which agent has the specific node
         agent = None
         node_name = node  # May be GUI ID or actual name
-        topo_path = topology_path(lab.id)
-        if topo_path.exists():
-            try:
-                topology_yaml = topo_path.read_text(encoding="utf-8")
-                graph = yaml_to_graph(topology_yaml)
-                analysis = analyze_topology(graph)
 
-                # Resolve GUI ID to containerlab node name
-                # The 'node' parameter may be a GUI ID (e.g., "8e0qdki") or
-                # the actual node name (e.g., "EOS_1_96ce")
-                # We need the container_name (YAML key) for containerlab, not the display name
-                for n in graph.nodes:
-                    if n.id == node:
-                        # Use container_name (YAML key) if available, otherwise fall back to name
-                        node_name = n.container_name or n.name
-                        logger.debug(f"Console: resolved GUI ID {node} to container name {node_name}")
-                        break
+        # Use TopologyService to look up node and its host from database
+        topology_service = TopologyService(database)
 
-                # Get the provider for this lab
-                lab_provider = lab.provider if lab.provider else "docker"
+        # First try database lookup (new source of truth)
+        node_def = topology_service.get_node_by_any_id(lab.id, node)
+        if node_def:
+            node_name = node_def.container_name
+            logger.debug(f"Console: resolved {node} to container name {node_name} from DB")
 
-                # Check if this node has explicit host placement
-                # Always check placements, even for "single-host" labs, since a node
-                # may have an explicit host assignment that differs from the default
-                for host_id, placements in analysis.placements.items():
-                    for p in placements:
-                        if p.node_name == node_name:
-                            # Found the host for this node, get the agent
-                            agent = await agent_client.get_agent_by_name(
-                                database, host_id, required_provider=lab_provider
-                            )
+            # Get agent from Node.host_id (explicit placement)
+            if node_def.host_id:
+                agent = database.get(models.Host, node_def.host_id)
+                if agent and not agent_client.is_agent_online(agent):
+                    agent = None  # Agent offline, will fall back below
+                else:
+                    logger.debug(f"Console: using host_id {node_def.host_id} from topology")
+        else:
+            # Fall back to YAML parsing for labs not yet migrated to DB
+            topo_path = topology_path(lab.id)
+            if topo_path.exists():
+                try:
+                    topology_yaml = topo_path.read_text(encoding="utf-8")
+                    graph = yaml_to_graph(topology_yaml)
+                    analysis = analyze_topology(graph)
+
+                    # Resolve GUI ID to containerlab node name
+                    for n in graph.nodes:
+                        if n.id == node:
+                            node_name = n.container_name or n.name
+                            logger.debug(f"Console: resolved GUI ID {node} to container name {node_name} via YAML")
                             break
-                    if agent:
-                        break
-            except Exception as e:
-                logger.warning(f"Console: topology parsing failed for {lab_id}: {e}")
-                # Fall back to default behavior
 
+                    # Get the provider for this lab
+                    lab_provider = lab.provider if lab.provider else "docker"
+
+                    # Check if this node has explicit host placement
+                    for host_id, placements in analysis.placements.items():
+                        for p in placements:
+                            if p.node_name == node_name:
+                                agent = await agent_client.get_agent_by_name(
+                                    database, host_id, required_provider=lab_provider
+                                )
+                                break
+                        if agent:
+                            break
+                except Exception as e:
+                    logger.warning(f"Console: topology parsing failed for {lab_id}: {e}")
+
+        # If no agent from topology, check NodePlacement (runtime placement records)
+        if not agent:
+            placement = (
+                database.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name == node_name,
+                )
+                .first()
+            )
+            if placement:
+                agent = database.get(models.Host, placement.host_id)
+                if agent and not agent_client.is_agent_online(agent):
+                    agent = None
         # Get the provider for this lab (outside try block for fallback)
         lab_provider = lab.provider if lab.provider else "docker"
 
