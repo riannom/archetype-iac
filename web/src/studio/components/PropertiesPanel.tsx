@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Node, Link, Annotation, DeviceModel, isExternalNetworkNode, isDeviceNode, ExternalNetworkNode, DeviceNode } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
 import InterfaceSelect from './InterfaceSelect';
@@ -43,6 +43,79 @@ interface PropertiesPanelProps {
   agents?: { id: string; name: string }[];
   nodeStates?: Record<string, NodeStateEntry>;
 }
+
+// Custom dropdown component for agent selection with proper dark mode support
+const AgentDropdown: React.FC<{
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  agents: { id: string; name: string }[];
+}> = ({ value, onChange, disabled, agents }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const selectedAgent = agents.find(a => a.id === value);
+  const displayText = selectedAgent ? selectedAgent.name : 'Auto (any available agent)';
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as HTMLElement)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Agent Placement</label>
+      <div ref={dropdownRef} className="relative">
+        <button
+          type="button"
+          onClick={() => !disabled && setIsOpen(!isOpen)}
+          disabled={disabled}
+          className={`w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-left flex items-center justify-between ${
+            disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-stone-400 dark:hover:border-stone-600'
+          } ${isOpen ? 'border-sage-500 dark:border-sage-500' : ''}`}
+        >
+          <span className={value ? 'text-stone-900 dark:text-stone-100' : 'text-stone-500 dark:text-stone-400'}>
+            {displayText}
+          </span>
+          <i className={`fa-solid fa-chevron-down text-[10px] text-stone-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </button>
+        {isOpen && (
+          <div className="absolute z-50 w-full mt-1 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg shadow-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => { onChange(''); setIsOpen(false); }}
+              className={`w-full px-3 py-2 text-sm text-left hover:bg-stone-100 dark:hover:bg-stone-700 ${
+                !value ? 'bg-sage-50 dark:bg-sage-900/20 text-sage-700 dark:text-sage-400' : 'text-stone-700 dark:text-stone-300'
+              }`}
+            >
+              Auto (any available agent)
+            </button>
+            {agents.map((agent) => (
+              <button
+                key={agent.id}
+                type="button"
+                onClick={() => { onChange(agent.id); setIsOpen(false); }}
+                className={`w-full px-3 py-2 text-sm text-left hover:bg-stone-100 dark:hover:bg-stone-700 ${
+                  value === agent.id ? 'bg-sage-50 dark:bg-sage-900/20 text-sage-700 dark:text-sage-400' : 'text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                {agent.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <p className="text-[9px] text-stone-400 dark:text-stone-500">
+        {disabled ? 'Stop node to change agent placement' : 'Select which agent runs this node'}
+      </p>
+    </div>
+  );
+};
 
 const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, annotations = [], onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, agents = [], nodeStates = {}
@@ -331,27 +404,12 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
             {/* Agent Placement - only show when multiple agents available */}
             {agents.length > 1 && (
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Agent Placement</label>
-                <select
-                  value={node.host || ''}
-                  onChange={(e) => onUpdateNode(node.id, { host: e.target.value || undefined })}
-                  disabled={status === 'running' || status === 'booting'}
-                  className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500 appearance-none disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <option value="">Auto (any available agent)</option>
-                  {agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[9px] text-stone-400 dark:text-stone-500">
-                  {status === 'running' || status === 'booting'
-                    ? 'Stop node to change agent placement'
-                    : 'Select which agent runs this node'}
-                </p>
-              </div>
+              <AgentDropdown
+                value={node.host || ''}
+                onChange={(value) => onUpdateNode(node.id, { host: value || undefined })}
+                disabled={status === 'running' || status === 'booting'}
+                agents={agents}
+              />
             )}
 
             {/* Running On - show when multiple agents and node is running/booting with a host assigned */}

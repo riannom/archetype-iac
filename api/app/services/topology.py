@@ -510,13 +510,6 @@ class TopologyService:
                 except json.JSONDecodeError:
                     pass
 
-            # Resolve host_id to host name for graph
-            host_name = None
-            if node.host_id:
-                host = self.db.get(models.Host, node.host_id)
-                if host:
-                    host_name = host.name
-
             graph_nodes.append(GraphNode(
                 id=node.gui_id,
                 name=node.display_name,
@@ -526,7 +519,7 @@ class TopologyService:
                 image=node.image,
                 version=node.version,
                 network_mode=node.network_mode,
-                host=host_name,
+                host=node.host_id,  # Export host_id directly (frontend uses agent ID)
                 connection_type=node.connection_type,
                 parent_interface=node.parent_interface,
                 vlan_id=node.vlan_id,
