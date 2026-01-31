@@ -7,10 +7,10 @@ set -e
 # Options:
 #   --name NAME           Agent name (required)
 #   --controller URL      Controller URL (required)
+#   --redis URL           Redis URL for distributed locks (required for multi-host)
 #   --ip IP               Local IP for multi-host networking (auto-detected if not set)
 #   --port PORT           Agent port (default: 8001)
 #   --no-docker           Skip Docker installation
-#   --no-containerlab     Skip containerlab installation
 #   --uninstall           Remove the agent
 
 INSTALL_DIR="/opt/archetype-agent"
@@ -31,10 +31,10 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # Default values
 AGENT_NAME=""
 CONTROLLER_URL=""
+REDIS_URL=""
 LOCAL_IP=""
 AGENT_PORT="8001"
 INSTALL_DOCKER=true
-INSTALL_CONTAINERLAB=true
 UNINSTALL=false
 
 # Parse arguments
@@ -48,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             CONTROLLER_URL="$2"
             shift 2
             ;;
+        --redis)
+            REDIS_URL="$2"
+            shift 2
+            ;;
         --ip)
             LOCAL_IP="$2"
             shift 2
@@ -58,10 +62,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-docker)
             INSTALL_DOCKER=false
-            shift
-            ;;
-        --no-containerlab)
-            INSTALL_CONTAINERLAB=false
             shift
             ;;
         --uninstall)
@@ -118,6 +118,17 @@ if [ -z "$CONTROLLER_URL" ]; then
     fi
 fi
 
+if [ -z "$REDIS_URL" ]; then
+    # Extract host from controller URL for default Redis URL
+    CONTROLLER_HOST=$(echo "$CONTROLLER_URL" | sed -E 's|https?://([^:/]+).*|\1|')
+    DEFAULT_REDIS="redis://${CONTROLLER_HOST}:16379/0"
+    echo ""
+    echo "Enter Redis URL for distributed locks (required for multi-host deployments)"
+    echo -n "Redis URL [$DEFAULT_REDIS]: "
+    read REDIS_URL < /dev/tty || REDIS_URL=""
+    REDIS_URL=${REDIS_URL:-$DEFAULT_REDIS}
+fi
+
 # Check root
 if [ "$EUID" -ne 0 ]; then
     log_error "Please run as root (sudo)"
@@ -137,6 +148,7 @@ fi
 log_info "Detected OS: $OS $VERSION"
 log_info "Installing Archetype Agent: $AGENT_NAME"
 log_info "Controller: $CONTROLLER_URL"
+log_info "Redis: $REDIS_URL"
 log_info "Local IP: $LOCAL_IP"
 log_info "Port: $AGENT_PORT"
 
@@ -196,17 +208,6 @@ if [ "$INSTALL_DOCKER" = true ]; then
     fi
 fi
 
-# Install containerlab
-if [ "$INSTALL_CONTAINERLAB" = true ]; then
-    if command -v containerlab &> /dev/null; then
-        log_info "Containerlab already installed: $(containerlab version | head -1)"
-    else
-        log_info "Installing containerlab..."
-        curl -sL https://containerlab.dev/setup | bash -s "all"
-        log_info "Containerlab installed successfully"
-    fi
-fi
-
 # Create install directory
 log_info "Setting up Archetype Agent in $INSTALL_DIR..."
 mkdir -p $INSTALL_DIR
@@ -238,9 +239,10 @@ cat > $INSTALL_DIR/agent.env << EOF
 # Archetype Agent Configuration
 ARCHETYPE_AGENT_AGENT_NAME=$AGENT_NAME
 ARCHETYPE_AGENT_CONTROLLER_URL=$CONTROLLER_URL
+ARCHETYPE_AGENT_REDIS_URL=$REDIS_URL
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT
-ARCHETYPE_AGENT_ENABLE_CONTAINERLAB=true
+ARCHETYPE_AGENT_ENABLE_DOCKER=true
 ARCHETYPE_AGENT_ENABLE_VXLAN=true
 ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
 EOF
@@ -300,6 +302,7 @@ echo "=============================================="
 echo ""
 echo "Agent Name:    $AGENT_NAME"
 echo "Controller:    $CONTROLLER_URL"
+echo "Redis:         $REDIS_URL"
 echo "Local IP:      $LOCAL_IP"
 echo "Port:          $AGENT_PORT"
 echo ""
