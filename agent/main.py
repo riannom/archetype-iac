@@ -1208,6 +1208,32 @@ async def stop_container(container_name: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
+@app.delete("/containers/{container_name}")
+async def remove_container(container_name: str, force: bool = False) -> dict:
+    """Remove a container.
+
+    Used to clean up orphan containers or containers that need to be recreated.
+    """
+    logger.info(f"Removing container: {container_name} (force={force})")
+
+    try:
+        import docker
+        client = docker.from_env()
+        container = client.containers.get(container_name)
+
+        container.remove(force=force)
+        return {"success": True, "message": "Container removed"}
+
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{container_name}' not found")
+    except docker.errors.APIError as e:
+        logger.error(f"Docker API error removing {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"Error removing container {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # --- Reconciliation Endpoints ---
 
 @app.get("/discover-labs")
