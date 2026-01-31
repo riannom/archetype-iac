@@ -49,7 +49,7 @@ GET /agents
     "address": "10.14.23.36:8001",
     "status": "online",
     "capabilities": {
-      "providers": ["containerlab"],
+      "providers": ["docker"],
       "features": ["console", "status", "vxlan"]
     }
   }
@@ -118,7 +118,7 @@ Authorization: Bearer <token>
 
 ## Topology Format
 
-Archetype uses containerlab-compatible YAML format with an additional `host` field for multi-host deployment.
+Archetype uses a YAML format compatible with containerlab topologies, with an additional `host` field for multi-host deployment.
 
 ### Single-Host Topology
 
@@ -177,7 +177,7 @@ When deployed, the system will:
 
 ### Link Format
 
-Links use the containerlab format with optional IP configuration:
+Links use the following format with optional IP configuration:
 
 ```yaml
 links:
@@ -251,7 +251,7 @@ curl -s "http://localhost:8000/labs/${LAB_ID}/jobs" \
 
 ```bash
 # Ping from r1 to r2 across hosts
-docker exec clab-<lab-id>-r1 ping -c 3 10.0.0.2
+docker exec archetype-<lab-id>-r1 ping -c 3 10.0.0.2
 ```
 
 ### 7. Destroy when done

@@ -404,7 +404,7 @@ links:
                 {
                     "id": "node-1",
                     "name": "Display Name",
-                    "container_name": "actual-clab-name",
+                    "container_name": "archetype-lab1-router1",
                     "device": "linux",
                 },
             ],

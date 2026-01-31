@@ -1,7 +1,6 @@
 """Docker provider for native container management.
 
-This provider manages containers directly using the Docker SDK, without
-relying on containerlab. It provides:
+This provider manages containers directly using the Docker SDK. It provides:
 - Container lifecycle management (create, start, stop, remove)
 - Local networking via veth pairs (LocalNetworkManager)
 - Integration with overlay networking for multi-host labs
@@ -103,8 +102,8 @@ class ParsedTopology:
 class DockerProvider(Provider):
     """Native Docker container management provider.
 
-    This provider bypasses containerlab to manage containers directly,
-    providing more control and eliminating the CLI abstraction layer.
+    This provider manages containers directly using the Docker SDK,
+    providing full control over the container lifecycle.
     """
 
     def __init__(self):
@@ -150,7 +149,7 @@ class DockerProvider(Provider):
     def _parse_topology(self, topology_yaml: str, lab_id: str) -> ParsedTopology:
         """Parse topology YAML to internal representation.
 
-        Handles both wrapped (containerlab) and flat formats.
+        Handles both wrapped and flat formats.
         """
         topo = yaml.safe_load(topology_yaml)
         if not topo:
@@ -874,3 +873,44 @@ class DockerProvider(Provider):
             logger.error(f"Error discovering labs: {e}")
 
         return discovered
+
+    async def cleanup_orphan_containers(self, valid_lab_ids: set[str]) -> list[str]:
+        """Remove containers for labs that no longer exist.
+
+        Args:
+            valid_lab_ids: Set of lab IDs that are known to be valid.
+
+        Returns:
+            List of container names that were removed.
+        """
+        removed = []
+        try:
+            containers = self.docker.containers.list(
+                all=True,
+                filters={"label": LABEL_PROVIDER + "=" + self.name},
+            )
+            for container in containers:
+                lab_id = container.labels.get(LABEL_LAB_ID, "")
+                if not lab_id:
+                    continue
+
+                # Check if this lab_id is in the valid set
+                # Handle both exact matches and prefix matches (for truncated IDs)
+                is_orphan = lab_id not in valid_lab_ids
+                if is_orphan:
+                    # Also check for prefix matches (lab IDs may be truncated)
+                    is_orphan = not any(
+                        vid.startswith(lab_id) or lab_id.startswith(vid[:20])
+                        for vid in valid_lab_ids
+                    )
+
+                if is_orphan:
+                    logger.info(f"Removing orphan container {container.name} (lab: {lab_id})")
+                    container.remove(force=True)
+                    removed.append(container.name)
+                    await self.local_network.cleanup_lab(lab_id)
+
+        except Exception as e:
+            logger.error(f"Error during orphan cleanup: {e}")
+
+        return removed

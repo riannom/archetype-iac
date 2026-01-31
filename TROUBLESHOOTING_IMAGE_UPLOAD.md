@@ -6,9 +6,9 @@ EOS container image uploads get stuck at 60% progress even though the image succ
 ## What We've Tried
 
 ### 1. Initial Issue: Missing Image Error Messages
-- Added pre-deployment image validation in `agent/providers/containerlab.py`
+- Added pre-deployment image validation in the Docker provider
 - Added verbose error output with stdout/stderr in task logs
-- Added `_validate_images()`, `_format_missing_images_error()`, `_parse_deploy_error()` methods
+- Added `_validate_images()` method for checking images before deploy
 
 ### 2. SSE Streaming Approach (Failed)
 - Added streaming endpoint `POST /images/load?stream=true` in `api/app/routers/images.py`
@@ -104,7 +104,7 @@ This avoids the pipe deadlock because:
 3. RQ/Celery task queue - heavier solution, good for future consideration
 
 ## Files Modified
-- `agent/providers/containerlab.py` - deploy error handling
+- `agent/providers/docker.py` - deploy error handling and image validation
 - `api/app/routers/images.py` - streaming/polling upload
 - `web/src/studio/components/DeviceManager.tsx` - frontend upload handling
 - `web/nginx.conf` - timeout increases

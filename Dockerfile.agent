@@ -1,16 +1,13 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# System deps for docker CLI and containerlab
+# System deps for Docker CLI and networking
 RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   bash \
   docker.io \
   iproute2 \
   && rm -rf /var/lib/apt/lists/*
-
-# containerlab for container orchestration
-RUN curl -sL https://get.containerlab.dev | bash -s -- --no-sudo
 
 # Python deps
 COPY agent/requirements.txt ./

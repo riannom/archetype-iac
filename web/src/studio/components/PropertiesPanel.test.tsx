@@ -105,7 +105,7 @@ const createDeviceNode = (overrides: Partial<DeviceNode> = {}): DeviceNode => ({
   cpu: 2,
   memory: 2048,
   config: "hostname router1",
-  container_name: "clab-lab1-router1",
+  container_name: "archetype-lab1-router1",
   ...overrides,
 });
 
@@ -708,7 +708,7 @@ describe("PropertiesPanel", () => {
 
         expect(mockOnOpenConfigViewer).toHaveBeenCalledWith(
           "node-1",
-          "clab-lab1-router1"
+          "archetype-lab1-router1"
         );
       });
     });

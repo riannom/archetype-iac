@@ -50,7 +50,7 @@ const mockNodes: DeviceNode[] = [
   {
     id: "node-1",
     name: "Router1",
-    container_name: "clab-lab1-router1",
+    container_name: "archetype-lab1-router1",
     nodeType: "device",
     type: DeviceType.ROUTER,
     model: "ceos",
@@ -61,7 +61,7 @@ const mockNodes: DeviceNode[] = [
   {
     id: "node-2",
     name: "Switch1",
-    container_name: "clab-lab1-switch1",
+    container_name: "archetype-lab1-switch1",
     nodeType: "device",
     type: DeviceType.SWITCH,
     model: "srlinux",
@@ -195,8 +195,8 @@ describe("ConfigsView", () => {
 
     it("displays snapshots after loading", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
-        createMockSnapshot({ id: "snap-2", node_name: "clab-lab1-router1", created_at: new Date(Date.now() - 60000).toISOString() }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
+        createMockSnapshot({ id: "snap-2", node_name: "archetype-lab1-router1", created_at: new Date(Date.now() - 60000).toISOString() }),
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
@@ -347,7 +347,7 @@ describe("ConfigsView", () => {
       const snapshots = [
         createMockSnapshot({
           id: "snap-1",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           content: "hostname router1\ninterface eth0",
         }),
       ];
@@ -384,7 +384,7 @@ describe("ConfigsView", () => {
       const snapshots = [
         createMockSnapshot({
           id: "snap-1",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           content: "test config",
         }),
       ];
@@ -421,7 +421,7 @@ describe("ConfigsView", () => {
       const snapshots = [
         createMockSnapshot({
           id: "snap-1",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           content: "test config content",
         }),
       ];
@@ -460,10 +460,10 @@ describe("ConfigsView", () => {
   describe("View/Compare mode toggle", () => {
     it("shows View and Compare buttons when multiple snapshots exist", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
         createMockSnapshot({
           id: "snap-2",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           created_at: new Date(Date.now() - 60000).toISOString(),
         }),
       ];
@@ -479,7 +479,7 @@ describe("ConfigsView", () => {
 
     it("does not show toggle when only one snapshot exists", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
@@ -494,10 +494,10 @@ describe("ConfigsView", () => {
 
     it("switches to compare mode when Compare button is clicked", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
         createMockSnapshot({
           id: "snap-2",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           created_at: new Date(Date.now() - 60000).toISOString(),
         }),
       ];
@@ -534,10 +534,10 @@ describe("ConfigsView", () => {
 
     it("shows checkboxes in compare mode", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
         createMockSnapshot({
           id: "snap-2",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           created_at: new Date(Date.now() - 60000).toISOString(),
         }),
       ];
@@ -564,10 +564,10 @@ describe("ConfigsView", () => {
 
     it("shows diff viewer when two snapshots are selected in compare mode", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
         createMockSnapshot({
           id: "snap-2",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           created_at: new Date(Date.now() - 60000).toISOString(),
         }),
       ];
@@ -601,7 +601,7 @@ describe("ConfigsView", () => {
   describe("Snapshot deletion", () => {
     it("shows delete button on hover", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
@@ -615,7 +615,7 @@ describe("ConfigsView", () => {
 
     it("shows confirmation dialog before deleting", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
@@ -639,7 +639,7 @@ describe("ConfigsView", () => {
 
     it("calls delete API when confirmed", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
@@ -672,7 +672,7 @@ describe("ConfigsView", () => {
 
     it("does not delete when confirmation is cancelled", async () => {
       const snapshots = [
-        createMockSnapshot({ id: "snap-1", node_name: "clab-lab1-router1" }),
+        createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
@@ -703,7 +703,7 @@ describe("ConfigsView", () => {
       const snapshots = [
         createMockSnapshot({
           id: "snap-1",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           snapshot_type: "manual",
         }),
       ];
@@ -720,7 +720,7 @@ describe("ConfigsView", () => {
       const snapshots = [
         createMockSnapshot({
           id: "snap-1",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           snapshot_type: "auto",
         }),
       ];
@@ -739,7 +739,7 @@ describe("ConfigsView", () => {
       const snapshots = [
         createMockSnapshot({
           id: "snap-1",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           created_at: new Date().toISOString(),
         }),
       ];
@@ -756,7 +756,7 @@ describe("ConfigsView", () => {
       const snapshots = [
         createMockSnapshot({
           id: "snap-1",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           created_at: new Date(Date.now() - 5 * 60000).toISOString(), // 5 minutes ago
         }),
       ];
@@ -773,7 +773,7 @@ describe("ConfigsView", () => {
       const snapshots = [
         createMockSnapshot({
           id: "snap-1",
-          node_name: "clab-lab1-router1",
+          node_name: "archetype-lab1-router1",
           created_at: new Date(Date.now() - 3 * 60 * 60000).toISOString(), // 3 hours ago
         }),
       ];

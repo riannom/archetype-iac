@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# System deps for containerlab tooling
+# System deps for API dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   bash \
@@ -30,9 +30,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # netlab install (real repo pin)
 ARG NETLAB_REF=release_26.01.01
 RUN pip install --no-cache-dir "networklab @ git+https://github.com/ipspace/netlab.git@${NETLAB_REF}"
-
-# containerlab for per-node start/stop actions
-RUN curl -sL https://get.containerlab.dev | bash -s -- --no-sudo
 
 COPY api/ ./
 

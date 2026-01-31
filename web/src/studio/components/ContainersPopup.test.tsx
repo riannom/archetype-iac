@@ -13,7 +13,7 @@ const mockContainersData = {
       name: "Test Lab 1",
       containers: [
         {
-          name: "clab-test-router1",
+          name: "archetype-test-router1",
           status: "running",
           lab_id: "lab-1",
           lab_name: "Test Lab 1",
@@ -23,7 +23,7 @@ const mockContainersData = {
           agent_name: "agent-1",
         },
         {
-          name: "clab-test-router2",
+          name: "archetype-test-router2",
           status: "running",
           lab_id: "lab-1",
           lab_name: "Test Lab 1",
@@ -33,7 +33,7 @@ const mockContainersData = {
           agent_name: "agent-1",
         },
         {
-          name: "clab-test-host1",
+          name: "archetype-test-host1",
           status: "stopped",
           lab_id: "lab-1",
           lab_name: "Test Lab 1",
@@ -48,7 +48,7 @@ const mockContainersData = {
       name: "Production Lab",
       containers: [
         {
-          name: "clab-prod-spine1",
+          name: "archetype-prod-spine1",
           status: "running",
           lab_id: "lab-2",
           lab_name: "Production Lab",
