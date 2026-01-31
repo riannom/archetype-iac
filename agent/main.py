@@ -104,6 +104,9 @@ _overlay_manager = None
 _deploy_locks: dict[str, asyncio.Lock] = {}
 _deploy_results: dict[str, asyncio.Future] = {}
 
+# Track when locks were acquired for stuck detection
+_deploy_lock_times: dict[str, datetime] = {}
+
 # Event listener instance (lazy initialized)
 _event_listener = None
 
@@ -502,6 +505,53 @@ def get_dead_letters():
     return {"dead_letters": fetch_dead_letters()}
 
 
+# --- Lock Status Endpoints ---
+
+@app.get("/locks/status")
+def get_lock_status():
+    """Get status of all deploy locks on this agent.
+
+    Returns information about currently held locks including:
+    - lab_id: The lab holding the lock
+    - acquired_at: When the lock was acquired
+    - age_seconds: How long the lock has been held
+    - is_stuck: Whether the lock exceeds the stuck threshold
+
+    Used by controller to detect and clean up stuck locks.
+    """
+    now = datetime.now(timezone.utc)
+    locks = []
+    for lab_id, acquired_at in _deploy_lock_times.items():
+        age_seconds = (now - acquired_at).total_seconds()
+        locks.append({
+            "lab_id": lab_id,
+            "acquired_at": acquired_at.isoformat(),
+            "age_seconds": age_seconds,
+            "is_stuck": age_seconds > settings.lock_stuck_threshold,
+        })
+    return {"locks": locks, "timestamp": now.isoformat()}
+
+
+@app.post("/locks/{lab_id}/release")
+def release_lock(lab_id: str):
+    """Release a stuck deploy lock for a lab.
+
+    This clears the lock tracking state to allow new deploys.
+    Note: This cannot forcibly release an asyncio.Lock, but it:
+    1. Removes the lock from time tracking
+    2. Clears any cached deploy result
+
+    After calling this, a new deploy request should be able to proceed
+    once the current (stuck) operation times out or completes.
+    """
+    if lab_id in _deploy_lock_times:
+        _deploy_lock_times.pop(lab_id, None)
+        _deploy_results.pop(lab_id, None)
+        logger.info(f"Released stuck lock for lab {lab_id}")
+        return {"status": "cleared", "lab_id": lab_id}
+    return {"status": "not_found", "lab_id": lab_id}
+
+
 # --- Agent Update Endpoint ---
 
 @app.post("/update")
@@ -649,6 +699,8 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
     try:
         async with asyncio.timeout(settings.lock_acquire_timeout):
             async with lock:
+                # Track lock acquisition time for stuck detection
+                _deploy_lock_times[lab_id] = datetime.now(timezone.utc)
                 try:
                     provider = get_provider_for_request(request.provider.value)
                     workspace = get_workspace(lab_id)
@@ -695,6 +747,9 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                     _deploy_results[lab_id] = job_result
                     asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
                     return job_result
+                finally:
+                    # Clear lock time tracking when lock is released
+                    _deploy_lock_times.pop(lab_id, None)
     except asyncio.TimeoutError:
         logger.warning(f"Timeout waiting for deploy lock on lab {lab_id}")
         raise HTTPException(
@@ -727,6 +782,8 @@ async def _execute_deploy_with_callback(
     try:
         async with asyncio.timeout(settings.lock_acquire_timeout):
             async with lock:
+                # Track lock acquisition time for stuck detection
+                _deploy_lock_times[lab_id] = datetime.now(timezone.utc)
                 try:
                     provider = get_provider_for_request(provider_name)
                     workspace = get_workspace(lab_id)
@@ -763,6 +820,9 @@ async def _execute_deploy_with_callback(
                         started_at=started_at,
                         completed_at=datetime.now(timezone.utc),
                     )
+                finally:
+                    # Clear lock time tracking when lock is released
+                    _deploy_lock_times.pop(lab_id, None)
     except asyncio.TimeoutError:
         logger.warning(f"Async deploy timeout waiting for lock on lab {lab_id}")
         payload = CallbackPayload(

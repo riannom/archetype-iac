@@ -102,6 +102,113 @@ async def _capture_node_ips(session, lab_id: str, agent: models.Host) -> None:
         # Don't fail the job - IP capture is best-effort
 
 
+async def _update_node_placements(
+    session,
+    lab_id: str,
+    agent_id: str,
+    node_names: list[str],
+) -> None:
+    """Update NodePlacement records after successful deploy.
+
+    This tracks which agent is running which nodes for affinity.
+
+    Args:
+        session: Database session
+        lab_id: Lab identifier
+        agent_id: Agent that deployed the nodes
+        node_names: List of node names that were deployed
+    """
+    try:
+        for node_name in node_names:
+            # Check for existing placement
+            existing = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name == node_name,
+                )
+                .first()
+            )
+
+            if existing:
+                # Update existing placement
+                existing.host_id = agent_id
+                existing.status = "deployed"
+            else:
+                # Create new placement
+                placement = models.NodePlacement(
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    host_id=agent_id,
+                    status="deployed",
+                )
+                session.add(placement)
+
+        session.commit()
+        logger.info(f"Updated placements for {len(node_names)} nodes in lab {lab_id} on agent {agent_id}")
+
+    except Exception as e:
+        logger.warning(f"Failed to update node placements for lab {lab_id}: {e}")
+        # Don't fail the job - placement tracking is best-effort
+
+
+async def _cleanup_orphan_containers(
+    session,
+    lab_id: str,
+    new_agent_id: str,
+    old_agent_ids: set[str],
+    log_parts: list[str],
+) -> None:
+    """Clean up orphan containers on agents that no longer run this lab.
+
+    When a deploy moves to a new agent, containers may be left behind on
+    the old agent. This function destroys those orphaned containers.
+
+    Args:
+        session: Database session
+        lab_id: Lab identifier
+        new_agent_id: Agent that now runs the lab
+        old_agent_ids: Set of agent IDs that previously had nodes
+        log_parts: List to append log messages to
+    """
+    try:
+        for old_agent_id in old_agent_ids:
+            if old_agent_id == new_agent_id:
+                continue  # Skip the agent we just deployed to
+
+            old_agent = session.get(models.Host, old_agent_id)
+            if not old_agent:
+                continue
+
+            # Check if agent is online before attempting cleanup
+            if not agent_client.is_agent_online(old_agent):
+                logger.info(f"Skipping orphan cleanup on offline agent {old_agent_id}")
+                log_parts.append(f"Note: Skipped cleanup on offline agent {old_agent.name}")
+                continue
+
+            logger.info(f"Cleaning up orphan containers for lab {lab_id} on old agent {old_agent_id}")
+            log_parts.append(f"Cleaning up orphans on old agent {old_agent.name}...")
+
+            result = await agent_client.destroy_lab_on_agent(old_agent, lab_id)
+
+            if result.get("status") == "completed":
+                log_parts.append(f"  Orphan cleanup succeeded on {old_agent.name}")
+                # Remove old placements for this agent
+                session.query(models.NodePlacement).filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.host_id == old_agent_id,
+                ).delete()
+                session.commit()
+            else:
+                error = result.get("error", "Unknown error")
+                log_parts.append(f"  Orphan cleanup failed on {old_agent.name}: {error}")
+                logger.warning(f"Orphan cleanup failed on agent {old_agent_id}: {error}")
+
+    except Exception as e:
+        logger.warning(f"Error during orphan cleanup for lab {lab_id}: {e}")
+        log_parts.append(f"Warning: Orphan cleanup error: {e}")
+
+
 async def run_agent_job(
     job_id: str,
     lab_id: str,
@@ -677,6 +784,11 @@ async def run_node_sync(
     2. After deploy, stops all nodes where desired_state=stopped
     3. For already-deployed nodes, uses docker start/stop as needed
 
+    Agent affinity is maintained by:
+    - Querying NodePlacement records to find which agent has nodes for this lab
+    - Preferring that agent for future deploys
+    - Cleaning up orphan containers if deploy moves to a new agent
+
     Args:
         job_id: The job ID
         lab_id: The lab ID
@@ -718,7 +830,15 @@ async def run_node_sync(
             session.commit()
             return
 
-        # Find a healthy agent
+        # Track old agent placements before deploy (for orphan cleanup)
+        old_placements = (
+            session.query(models.NodePlacement)
+            .filter(models.NodePlacement.lab_id == lab_id)
+            .all()
+        )
+        old_agent_ids = {p.host_id for p in old_placements}
+
+        # Find a healthy agent (respects node-level affinity)
         agent = await agent_client.get_agent_for_lab(
             session,
             lab,
@@ -825,6 +945,18 @@ async def run_node_sync(
                         .all()
                     )
 
+                    # Update NodePlacement records for affinity tracking
+                    all_node_names = [ns.node_name for ns in all_states]
+                    await _update_node_placements(session, lab_id, agent.id, all_node_names)
+
+                    # Clean up orphan containers on old agents if deploy moved
+                    if old_agent_ids and agent.id not in old_agent_ids:
+                        log_parts.append("")
+                        log_parts.append("=== Orphan Cleanup ===")
+                        await _cleanup_orphan_containers(
+                            session, lab_id, agent.id, old_agent_ids, log_parts
+                        )
+
                     # After deploy, all nodes are running by default in containerlab
                     # We need to stop nodes where desired_state=stopped
                     nodes_to_stop_after_deploy = [
@@ -927,6 +1059,18 @@ async def run_node_sync(
                             .filter(models.NodeState.lab_id == lab_id)
                             .all()
                         )
+
+                        # Update NodePlacement records for affinity tracking
+                        all_node_names = [ns.node_name for ns in all_states]
+                        await _update_node_placements(session, lab_id, agent.id, all_node_names)
+
+                        # Clean up orphan containers on old agents if deploy moved
+                        if old_agent_ids and agent.id not in old_agent_ids:
+                            log_parts.append("")
+                            log_parts.append("=== Orphan Cleanup ===")
+                            await _cleanup_orphan_containers(
+                                session, lab_id, agent.id, old_agent_ids, log_parts
+                            )
 
                         # Mark all nodes as running (clab starts them all)
                         for ns in all_states:

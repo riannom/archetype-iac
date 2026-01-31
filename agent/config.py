@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # Concurrency limits
     max_concurrent_jobs: int = 4
 
+    # Lock management
+    lock_stuck_threshold: float = 600.0  # 10 minutes - lock considered stuck
+
     # Logging configuration
     log_format: str = "json"  # "json" or "text"
     log_level: str = "INFO"

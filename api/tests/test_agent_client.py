@@ -521,24 +521,49 @@ async def test_get_healthy_agent_all_at_capacity():
 
 # --- Unit Tests for Lab Affinity ---
 
+class MockNodePlacement:
+    """Helper class for creating mock node placements in tests."""
+
+    def __init__(self, lab_id: str, node_name: str, host_id: str):
+        self.lab_id = lab_id
+        self.node_name = node_name
+        self.host_id = host_id
+
+
 @pytest.mark.asyncio
 async def test_get_agent_for_lab_with_existing_agent():
-    """Test that lab's existing agent is preferred."""
+    """Test that lab's existing agent is preferred via NodePlacement."""
     mock_db = MagicMock()
     lab = MockLab("lab1", agent_id="agent2")
 
     agent1 = MockAgent("agent1", "localhost:8001")
     agent2 = MockAgent("agent2", "localhost:8002")
 
-    mock_query = MagicMock()
-    mock_query.filter.return_value = mock_query
-    mock_query.all.return_value = [agent1, agent2]
-    mock_db.query.return_value = mock_query
+    # Mock NodePlacement query - lab has nodes on agent2
+    placement_query = MagicMock()
+    placement_query.filter.return_value = placement_query
+    placement_query.all.return_value = [
+        MockNodePlacement("lab1", "node1", "agent2"),
+        MockNodePlacement("lab1", "node2", "agent2"),
+    ]
+
+    # Mock Host query - for get_healthy_agent
+    host_query = MagicMock()
+    host_query.filter.return_value = host_query
+    host_query.all.return_value = [agent1, agent2]
+
+    def query_side_effect(model):
+        # Return different query based on model
+        if hasattr(model, '__tablename__') and model.__tablename__ == 'node_placements':
+            return placement_query
+        return host_query
+
+    mock_db.query.side_effect = query_side_effect
 
     with patch.object(agent_client, 'count_active_jobs', return_value=0):
         result = await agent_client.get_agent_for_lab(mock_db, lab, required_provider="containerlab")
 
-    # Should select agent2 (lab's existing agent)
+    # Should select agent2 (agent with existing node placements)
     assert result == agent2
 
 
@@ -551,10 +576,23 @@ async def test_get_agent_for_lab_without_existing_agent():
     agent1 = MockAgent("agent1", "localhost:8001")
     agent2 = MockAgent("agent2", "localhost:8002")
 
-    mock_query = MagicMock()
-    mock_query.filter.return_value = mock_query
-    mock_query.all.return_value = [agent1, agent2]
-    mock_db.query.return_value = mock_query
+    # Mock NodePlacement query - no placements (new lab)
+    placement_query = MagicMock()
+    placement_query.filter.return_value = placement_query
+    placement_query.all.return_value = []  # No existing placements
+
+    # Mock Host query - for get_healthy_agent
+    host_query = MagicMock()
+    host_query.filter.return_value = host_query
+    host_query.all.return_value = [agent1, agent2]
+
+    def query_side_effect(model):
+        # Return different query based on model
+        if hasattr(model, '__tablename__') and model.__tablename__ == 'node_placements':
+            return placement_query
+        return host_query
+
+    mock_db.query.side_effect = query_side_effect
 
     # agent1 less loaded
     def mock_count(db, agent_id):

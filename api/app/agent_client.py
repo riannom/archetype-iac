@@ -215,15 +215,43 @@ async def get_agent_for_lab(
     lab: models.Lab,
     required_provider: str = "containerlab",
 ) -> models.Host | None:
-    """Get an agent for a lab, respecting affinity.
+    """Get an agent for a lab, respecting node-level affinity.
 
-    If the lab already has an assigned agent that is healthy, use it.
-    Otherwise, find a new healthy agent with the required capability.
+    This function uses a multi-level affinity strategy:
+    1. Query NodePlacement records to find which agent(s) have nodes for this lab
+    2. Prefer the agent with the most nodes (to minimize orphan containers)
+    3. Fall back to lab.agent_id if no placements exist
+    4. Find a new healthy agent if preferred agent is unavailable
+
+    This prevents nodes from getting deployed on different agents than where
+    they were previously running, which would cause duplicate containers.
     """
+    # Query NodePlacement to find which agent(s) have nodes for this lab
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab.id)
+        .all()
+    )
+
+    # Count nodes per agent to find the one with most nodes
+    agent_node_counts: dict[str, int] = {}
+    for p in placements:
+        agent_node_counts[p.host_id] = agent_node_counts.get(p.host_id, 0) + 1
+
+    # Prefer agent with most nodes (or lab.agent_id as fallback)
+    if agent_node_counts:
+        preferred_agent_id = max(agent_node_counts, key=agent_node_counts.get)
+        logger.debug(
+            f"Lab {lab.id} has nodes on {len(agent_node_counts)} agent(s), "
+            f"preferring {preferred_agent_id} with {agent_node_counts[preferred_agent_id]} nodes"
+        )
+    else:
+        preferred_agent_id = lab.agent_id
+
     return await get_healthy_agent(
         database,
         required_provider=required_provider,
-        prefer_agent_id=lab.agent_id,
+        prefer_agent_id=preferred_agent_id,
     )
 
 
@@ -541,6 +569,107 @@ async def update_stale_agents(database: Session, timeout_seconds: int | None = N
         database.commit()
 
     return marked_offline
+
+
+# --- Orphan Cleanup Functions ---
+
+async def destroy_lab_on_agent(
+    agent: models.Host,
+    lab_id: str,
+) -> dict:
+    """Destroy a lab's containers on a specific agent (for orphan cleanup).
+
+    This is used when a lab has moved to a new agent and we need to
+    clean up orphaned containers on the old agent.
+
+    Args:
+        agent: The agent to clean up
+        lab_id: Lab identifier
+
+    Returns:
+        Agent response dict with status and details
+    """
+    from uuid import uuid4
+
+    url = f"{get_agent_url(agent)}/jobs/destroy"
+    logger.info(f"Cleaning up orphan containers for lab {lab_id} on agent {agent.id}")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={
+                    "job_id": f"orphan-cleanup-{uuid4()}",
+                    "lab_id": lab_id,
+                },
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"Orphan cleanup completed for lab {lab_id} on agent {agent.id}")
+            return result
+    except Exception as e:
+        logger.error(f"Failed to cleanup orphans for lab {lab_id} on agent {agent.id}: {e}")
+        return {"status": "failed", "error": str(e)}
+
+
+# --- Lock Management Functions ---
+
+async def get_agent_lock_status(agent: models.Host) -> dict:
+    """Get lock status from an agent.
+
+    Returns:
+        Dict with 'locks' list and 'timestamp'
+    """
+    url = f"{get_agent_url(agent)}/locks/status"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error(f"Failed to get lock status from agent {agent.id}: {e}")
+        return {"locks": [], "error": str(e)}
+
+
+async def release_agent_lock(agent: models.Host, lab_id: str) -> dict:
+    """Release a stuck lock on an agent.
+
+    Args:
+        agent: The agent holding the lock
+        lab_id: Lab whose lock should be released
+
+    Returns:
+        Dict with 'status' indicating success/failure
+    """
+    url = f"{get_agent_url(agent)}/locks/{lab_id}/release"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, timeout=10.0)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("status") == "cleared":
+                logger.info(f"Released stuck lock for lab {lab_id} on agent {agent.id}")
+            return result
+    except Exception as e:
+        logger.error(f"Failed to release lock for lab {lab_id} on agent {agent.id}: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+def is_agent_online(agent: models.Host) -> bool:
+    """Check if an agent is considered online based on heartbeat."""
+    from datetime import timezone
+
+    if agent.status != "online":
+        return False
+
+    if not agent.last_heartbeat:
+        return False
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+    return agent.last_heartbeat >= cutoff
 
 
 # --- Reconciliation Functions ---

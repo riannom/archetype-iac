@@ -416,6 +416,73 @@ async def check_stuck_image_sync_jobs():
         session.close()
 
 
+async def check_stuck_locks():
+    """Check all agents for stuck deploy locks and clear them.
+
+    This function queries the /locks/status endpoint on each online agent
+    to find locks that have been held longer than the configured threshold.
+    When stuck locks are found, they are released via /locks/{lab_id}/release.
+
+    This helps recover from scenarios where:
+    - Deploy operations hang indefinitely
+    - Agent crashes during deploy but restarts with stale lock state
+    - Network issues cause deploy to timeout but lock remains
+    """
+    session = SessionLocal()
+    try:
+        # Find all online agents
+        from datetime import timezone as tz
+        cutoff = datetime.now(tz.utc) - timedelta(seconds=60)
+
+        online_agents = (
+            session.query(models.Host)
+            .filter(
+                models.Host.status == "online",
+                models.Host.last_heartbeat >= cutoff,
+            )
+            .all()
+        )
+
+        if not online_agents:
+            return
+
+        for agent in online_agents:
+            try:
+                status = await agent_client.get_agent_lock_status(agent)
+
+                # Check for errors from the agent
+                if status.get("error"):
+                    logger.debug(f"Could not get lock status from agent {agent.id}: {status.get('error')}")
+                    continue
+
+                # Check each lock
+                for lock in status.get("locks", []):
+                    if lock.get("is_stuck"):
+                        lab_id = lock.get("lab_id")
+                        age_seconds = lock.get("age_seconds", 0)
+
+                        logger.warning(
+                            f"Found stuck lock on agent {agent.id} ({agent.name}) "
+                            f"for lab {lab_id} (held for {age_seconds:.0f}s)"
+                        )
+
+                        # Release the stuck lock
+                        result = await agent_client.release_agent_lock(agent, lab_id)
+
+                        if result.get("status") == "cleared":
+                            logger.info(f"Successfully released stuck lock for lab {lab_id} on agent {agent.id}")
+                        else:
+                            logger.warning(f"Failed to release stuck lock for lab {lab_id}: {result}")
+
+            except Exception as e:
+                logger.error(f"Failed to check locks on agent {agent.id}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error in stuck lock check: {e}")
+    finally:
+        session.close()
+
+
 async def job_health_monitor():
     """Background task to periodically check job health.
 
@@ -424,6 +491,7 @@ async def job_health_monitor():
     2. Checks for orphaned queued jobs
     3. Checks for jobs on offline agents
     4. Checks for stuck image sync jobs
+    5. Checks for stuck deploy locks on agents
     """
     logger.info(
         f"Job health monitor started "
@@ -440,6 +508,7 @@ async def job_health_monitor():
             await check_orphaned_queued_jobs()
             await check_jobs_on_offline_agents()
             await check_stuck_image_sync_jobs()
+            await check_stuck_locks()
 
         except asyncio.CancelledError:
             logger.info("Job health monitor stopped")
