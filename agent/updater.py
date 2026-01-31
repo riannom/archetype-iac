@@ -151,7 +151,7 @@ async def perform_systemd_update(
         await report_progress(callback_url, job_id, agent_id, "downloading", 10)
 
         result = subprocess.run(
-            ["git", "fetch", "origin", "--tags"],
+            ["git", "fetch", "origin", "--tags", "--force"],
             capture_output=True,
             text=True,
             timeout=60,
