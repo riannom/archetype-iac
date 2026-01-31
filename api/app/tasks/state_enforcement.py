@@ -72,7 +72,24 @@ def _has_active_job(session: Session, lab_id: str, node_name: str | None = None)
 async def _get_agent_for_node(
     session: Session, lab: models.Lab, node_state: models.NodeState
 ) -> models.Host | None:
-    """Get the agent that should handle actions for a node."""
+    """Get the agent that should handle actions for a node.
+
+    Priority order:
+    1. Node definition's host_id (source of truth for where node should run)
+    2. NodePlacement record (runtime placement)
+    3. Lab's default agent
+    """
+    # First check the node definition - this is the source of truth
+    node_def = session.query(models.Node).filter(
+        models.Node.lab_id == lab.id,
+        models.Node.container_name == node_state.node_name,
+    ).first()
+
+    if node_def and node_def.host_id:
+        agent = session.get(models.Host, node_def.host_id)
+        if agent and agent_client.is_agent_online(agent):
+            return agent
+
     # Check if there's a placement record for this node
     placement = session.query(models.NodePlacement).filter(
         models.NodePlacement.lab_id == lab.id,
