@@ -167,6 +167,29 @@ async def enforce_node_state(
         )
         return False
 
+    # Ensure placement record matches the agent we're using
+    if action == "start":
+        placement = session.query(models.NodePlacement).filter(
+            models.NodePlacement.lab_id == lab_id,
+            models.NodePlacement.node_name == node_name,
+        ).first()
+
+        if placement:
+            if placement.host_id != agent.id:
+                logger.info(
+                    f"Updating placement for {node_name}: {placement.host_id} -> {agent.id}"
+                )
+                placement.host_id = agent.id
+        else:
+            placement = models.NodePlacement(
+                lab_id=lab_id,
+                node_name=node_name,
+                host_id=agent.id,
+                status="deployed",
+            )
+            session.add(placement)
+            logger.info(f"Created placement for {node_name} on agent {agent.id}")
+
     # Create enforcement job
     job = models.Job(
         lab_id=lab_id,
