@@ -1082,7 +1082,8 @@ async def run_node_sync(
                 graph = yaml_to_graph(topology_yaml)
 
                 # For multi-host labs, filter topology to only include nodes for this agent
-                analysis = analyze_topology(graph, default_host=agent.id)
+                # Don't use default_host - only nodes with explicit host placement should be filtered
+                analysis = analyze_topology(graph, default_host=None)
                 host_topologies = split_topology_by_host(graph, analysis)
 
                 if agent.id in host_topologies:
