@@ -22,7 +22,7 @@ def upgrade() -> None:
     # Add provider column to labs table with default value
     op.add_column(
         'labs',
-        sa.Column('provider', sa.String(50), nullable=False, server_default='containerlab')
+        sa.Column('provider', sa.String(50), nullable=False, server_default='docker')
     )
 
 

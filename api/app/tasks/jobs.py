@@ -882,6 +882,7 @@ async def run_node_sync(
         # Check if nodes have specific host placement in topology
         # This takes precedence over NodePlacement records and lab.agent_id
         target_agent_id = None
+        graph = None  # Initialize graph - used later for explicit host placement checks
         topo_path = topology_path(lab.id)
         if topo_path.exists():
             try:
@@ -1205,10 +1206,11 @@ async def run_node_sync(
 
             # Get nodes with explicit host placement from topology
             nodes_with_explicit_host = set()
-            for n in graph.nodes:
-                node_key = n.container_name or n.name
-                if n.host:  # Has explicit host placement
-                    nodes_with_explicit_host.add(node_key)
+            if graph:
+                for n in graph.nodes:
+                    node_key = n.container_name or n.name
+                    if n.host:  # Has explicit host placement
+                        nodes_with_explicit_host.add(node_key)
 
             # Filter to only nodes that:
             # 1. Have no placement record AND
@@ -1487,7 +1489,7 @@ async def run_node_sync(
         if nodes_need_start:
             log_parts.append("")
             log_parts.append("=== Phase 2: Start Nodes (via redeploy) ===")
-            log_parts.append("Note: Containerlab requires full redeploy to recreate network interfaces")
+            log_parts.append("Note: Full redeploy required to recreate network interfaces")
 
             # Read topology YAML
             topo_path = topology_path(lab.id)

@@ -342,6 +342,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         console_shell="/usr/bin/Cli",  # Full path required for docker exec
         default_image="ceos:latest",
         aliases=["eos", "arista_eos", "arista_ceos"],
+        entrypoint="/sbin/init",  # cEOS images have no default entrypoint
         device_type=DeviceType.SWITCH,
         category="Network",
         subcategory="Switches",
