@@ -889,6 +889,21 @@ async def run_node_sync(
                 topology_yaml = topo_path.read_text(encoding="utf-8")
                 graph = yaml_to_graph(topology_yaml)
 
+                # Build node_id -> graph node mapping for placeholder resolution
+                graph_nodes_by_id = {n.id: n for n in graph.nodes}
+
+                # Fix node_name placeholders from lazy initialization.
+                # When NodeState is created lazily (before topology sync), node_name=node_id.
+                # We need to resolve this to the actual container_name for operations to work.
+                for ns in node_states:
+                    if ns.node_name == ns.node_id and ns.node_id in graph_nodes_by_id:
+                        graph_node = graph_nodes_by_id[ns.node_id]
+                        correct_name = graph_node.container_name or graph_node.name
+                        if correct_name != ns.node_name:
+                            logger.info(f"Fixing placeholder node_name: {ns.node_name} -> {correct_name}")
+                            ns.node_name = correct_name
+                            session.commit()
+
                 # Get the node names we're syncing
                 node_names_to_sync = {ns.node_name for ns in node_states}
 

@@ -70,11 +70,15 @@ def _upsert_node_states(
         # Use container_name (YAML key) for containerlab operations, fall back to name
         clab_name = node.container_name or node.name
         if node.id in existing_by_node_id:
-            # CRITICAL: Do NOT update node_name for existing records!
-            # Container identity is immutable - changing it would break console/operations
-            # for containers that were deployed with the original name.
-            # Display name changes (node.name) are purely cosmetic.
-            pass
+            existing_state = existing_by_node_id[node.id]
+            # Fix node_name if it was set as a placeholder from lazy initialization.
+            # Lazy init sets node_name=node_id as a temporary value until topology syncs.
+            # Once a node is deployed (has a real container_name), we must NOT change it
+            # because that would break console/operations for existing containers.
+            if existing_state.node_name == node.id and existing_state.node_name != clab_name:
+                # This was a placeholder - safe to correct it
+                existing_state.node_name = clab_name
+            # If node_name != node_id, it was already set correctly or deployed - don't touch
         else:
             # Create new with defaults - node_name is set only once at creation
             new_state = models.NodeState(
