@@ -96,6 +96,21 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
         f"Retrying job {old_job.id} (attempt {old_job.retry_count + 1}/{settings.job_max_retries})"
     )
 
+    # Force-release lock on agent before retry to prevent new job from blocking
+    if old_job.agent_id and old_job.lab_id:
+        agent = session.get(models.Host, old_job.agent_id)
+        if agent and agent.status == "online":
+            try:
+                result = await agent_client.release_agent_lock(agent, old_job.lab_id)
+                if result.get("status") == "cleared":
+                    logger.info(f"Force-released lock for lab {old_job.lab_id} on agent {old_job.agent_id} before retry")
+                elif result.get("status") == "not_found":
+                    logger.debug(f"No lock found for lab {old_job.lab_id} on agent {old_job.agent_id}")
+                else:
+                    logger.warning(f"Could not release lock for lab {old_job.lab_id}: {result}")
+            except Exception as e:
+                logger.warning(f"Failed to force-release lock for lab {old_job.lab_id}: {e}")
+
     # Mark old job as failed
     old_job.status = "failed"
     old_job.completed_at = datetime.now(timezone.utc)

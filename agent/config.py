@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     destroy_timeout: float = 300.0  # 5 minutes for containerlab destroy
     lock_acquire_timeout: float = 30.0  # Time to wait for deploy lock
 
+    # Redis connection for distributed locks
+    # Uses the same Redis as controller by default
+    redis_url: str = "redis://redis:6379/0"
+
+    # Lock TTL (seconds) - short TTL with periodic extension during active deploys
+    # If agent crashes, lock expires quickly. Active deploys extend the lock.
+    lock_ttl: int = 120  # 2 minutes - extended periodically during deploy
+
+    # How often to extend the lock during active operations (seconds)
+    # Should be less than lock_ttl to ensure lock doesn't expire mid-deploy
+    lock_extend_interval: float = 30.0  # Extend every 30 seconds
+
     # VXLAN networking
     vxlan_vni_base: int = 100000
     vxlan_vni_max: int = 199999
@@ -62,7 +74,8 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 4
 
     # Lock management
-    lock_stuck_threshold: float = 600.0  # 10 minutes - lock considered stuck
+    # Threshold for controller to consider a lock "stuck" (should match deploy_timeout)
+    lock_stuck_threshold: float = 900.0  # 15 minutes - aligned with deploy_timeout
 
     # Logging configuration
     log_format: str = "json"  # "json" or "text"

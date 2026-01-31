@@ -130,17 +130,27 @@ async def register_agent(
     If an agent with the same name or address already exists,
     updates that record instead of creating a new one.
 
+    When an agent restarts (detected by new started_at timestamp),
+    any running jobs on that agent are marked as failed since the
+    agent lost execution context.
+
     After registration, triggers image reconciliation in the background
     to sync ImageHost records with actual agent inventory.
     """
     agent = request.agent
     host_id = None
     is_new_registration = False
+    is_restart = False
 
     # First check if agent already exists by ID
     existing = database.get(models.Host, agent.agent_id)
 
     if existing:
+        # Detect restart: if started_at is newer than what we have on record
+        if existing.started_at and agent.started_at:
+            if agent.started_at > existing.started_at:
+                is_restart = True
+
         # Update existing registration (same agent reconnecting)
         existing.name = agent.name
         existing.address = agent.address
@@ -215,6 +225,10 @@ async def register_agent(
                 assigned_id=agent.agent_id,
             )
 
+    # Handle agent restart: mark stale jobs as failed
+    if is_restart and host_id:
+        await _handle_agent_restart_cleanup(database, host_id)
+
     # Trigger image reconciliation in background
     if host_id and settings.image_sync_enabled:
         from app.tasks.image_sync import reconcile_agent_images, pull_images_on_registration
@@ -227,6 +241,59 @@ async def register_agent(
             asyncio.create_task(pull_images_on_registration(host_id))
 
     return response
+
+
+async def _handle_agent_restart_cleanup(database: Session, agent_id: str) -> None:
+    """Handle cleanup when an agent restarts.
+
+    When an agent restarts, any jobs that were running on it are now
+    orphaned since the agent lost its execution context. This function:
+    1. Finds all running jobs assigned to this agent
+    2. Marks them as failed with appropriate error message
+    3. Updates associated lab state if needed
+
+    Args:
+        database: Database session
+        agent_id: ID of the restarted agent
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Find all running jobs on this agent
+    stale_jobs = (
+        database.query(models.Job)
+        .filter(
+            models.Job.agent_id == agent_id,
+            models.Job.status == "running",
+        )
+        .all()
+    )
+
+    if not stale_jobs:
+        return
+
+    logger.warning(
+        f"Agent {agent_id} restarted - marking {len(stale_jobs)} running jobs as failed"
+    )
+
+    now = datetime.now(timezone.utc)
+    for job in stale_jobs:
+        job.status = "failed"
+        job.completed_at = now
+        job.log_path = (job.log_path or "") + "\n--- Agent restarted, job terminated ---"
+
+        logger.info(f"Marked job {job.id} (action={job.action}) as failed due to agent restart")
+
+        # Update lab state to error if this was a deploy/destroy job
+        if job.lab_id and job.action in ("up", "down"):
+            lab = database.get(models.Lab, job.lab_id)
+            if lab:
+                lab.state = "error"
+                lab.state_error = f"Job {job.action} failed: agent restarted during execution"
+                lab.state_updated_at = now
+                logger.info(f"Set lab {job.lab_id} state to error due to agent restart")
+
+    database.commit()
 
 
 @router.post("/{agent_id}/heartbeat", response_model=HeartbeatResponse)

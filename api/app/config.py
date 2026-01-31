@@ -72,12 +72,13 @@ class Settings(BaseSettings):
     job_health_check_interval: int = 30
     # Maximum number of automatic retry attempts for failed jobs
     job_max_retries: int = 2
-    # Job timeout for deploy operations (seconds) - buffer above agent_deploy_timeout
-    job_timeout_deploy: int = 1200  # 20 minutes
+    # Job timeout for deploy operations (seconds)
+    # Must be > agent lock_ttl (960s) to allow lock to expire before job timeout
+    job_timeout_deploy: int = 1020  # 17 minutes - slightly > lock_ttl
     # Job timeout for destroy operations (seconds) - buffer above agent_destroy_timeout
-    job_timeout_destroy: int = 600  # 10 minutes
+    job_timeout_destroy: int = 360  # 6 minutes
     # Job timeout for sync operations (seconds)
-    job_timeout_sync: int = 600  # 10 minutes
+    job_timeout_sync: int = 660  # 11 minutes
     # Job timeout for node start/stop operations (seconds)
     job_timeout_node: int = 300  # 5 minutes
     # Grace period after timeout before allowing reconciliation (seconds)

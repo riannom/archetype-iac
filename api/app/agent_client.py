@@ -660,6 +660,10 @@ async def release_agent_lock(agent: models.Host, lab_id: str) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+# Alias for clarity - force_release emphasizes this is for stuck recovery
+force_release_lock = release_agent_lock
+
+
 def is_agent_online(agent: models.Host) -> bool:
     """Check if an agent is considered online based on heartbeat."""
     from datetime import timezone

@@ -99,13 +99,11 @@ _event_listener_task: asyncio.Task | None = None
 # Overlay network manager (lazy initialized)
 _overlay_manager = None
 
-# Deploy locks to prevent concurrent deploys for the same lab
-# Maps lab_id -> (lock, result_future)
-_deploy_locks: dict[str, asyncio.Lock] = {}
+# Deploy results cache for concurrent request deduplication
 _deploy_results: dict[str, asyncio.Future] = {}
 
-# Track when locks were acquired for stuck detection
-_deploy_lock_times: dict[str, datetime] = {}
+# Redis lock manager (initialized on startup)
+_lock_manager = None
 
 # Event listener instance (lazy initialized)
 _event_listener = None
@@ -127,6 +125,12 @@ def get_event_listener():
         from agent.events import DockerEventListener
         _event_listener = DockerEventListener()
     return _event_listener
+
+
+def get_lock_manager():
+    """Get the deploy lock manager."""
+    global _lock_manager
+    return _lock_manager
 
 
 async def forward_event_to_controller(event):
@@ -412,13 +416,31 @@ async def heartbeat_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - register on startup, cleanup on shutdown."""
-    global _heartbeat_task, _event_listener_task
+    global _heartbeat_task, _event_listener_task, _lock_manager
 
     logger.info(f"Agent {AGENT_ID} starting...")
     logger.info(f"Controller URL: {settings.controller_url}")
     logger.info(f"Capabilities: {get_capabilities()}")
 
-    # Try initial registration
+    # Initialize Redis lock manager
+    from agent.locks import DeployLockManager, set_lock_manager
+    _lock_manager = DeployLockManager(
+        redis_url=settings.redis_url,
+        lock_ttl=settings.lock_ttl,
+        agent_id=AGENT_ID,
+    )
+    set_lock_manager(_lock_manager)
+    logger.info(f"Redis lock manager initialized (TTL: {settings.lock_ttl}s)")
+
+    # Clean up any orphaned locks from previous run (crash recovery)
+    try:
+        cleared_locks = await _lock_manager.clear_agent_locks()
+        if cleared_locks:
+            logger.warning(f"Cleared {len(cleared_locks)} orphaned locks from previous run: {cleared_locks}")
+    except Exception as e:
+        logger.error(f"Failed to clear orphaned locks: {e}")
+
+    # Try initial registration (will notify controller if this is a restart)
     await register_with_controller()
 
     # Start heartbeat background task
@@ -456,6 +478,11 @@ async def lifespan(app: FastAPI):
             await _event_listener_task
         except asyncio.CancelledError:
             pass
+
+    # Close lock manager
+    if _lock_manager:
+        await _lock_manager.close()
+        logger.info("Redis lock manager closed")
 
     logger.info(f"Agent {AGENT_ID} shutting down")
 
@@ -508,48 +535,66 @@ def get_dead_letters():
 # --- Lock Status Endpoints ---
 
 @app.get("/locks/status")
-def get_lock_status():
+async def get_lock_status():
     """Get status of all deploy locks on this agent.
 
     Returns information about currently held locks including:
     - lab_id: The lab holding the lock
-    - acquired_at: When the lock was acquired
+    - ttl: Remaining time-to-live in seconds
     - age_seconds: How long the lock has been held
     - is_stuck: Whether the lock exceeds the stuck threshold
+    - owner: Agent ID that owns the lock
 
     Used by controller to detect and clean up stuck locks.
     """
     now = datetime.now(timezone.utc)
-    locks = []
-    for lab_id, acquired_at in _deploy_lock_times.items():
-        age_seconds = (now - acquired_at).total_seconds()
-        locks.append({
-            "lab_id": lab_id,
-            "acquired_at": acquired_at.isoformat(),
-            "age_seconds": age_seconds,
-            "is_stuck": age_seconds > settings.lock_stuck_threshold,
-        })
-    return {"locks": locks, "timestamp": now.isoformat()}
+    lock_manager = get_lock_manager()
+
+    if lock_manager is None:
+        return {"locks": [], "timestamp": now.isoformat(), "error": "Lock manager not initialized"}
+
+    try:
+        locks = await lock_manager.get_all_locks()
+        # Add is_stuck flag based on controller threshold
+        for lock in locks:
+            lock["is_stuck"] = lock.get("age_seconds", 0) > settings.lock_stuck_threshold
+        return {"locks": locks, "timestamp": now.isoformat()}
+    except Exception as e:
+        logger.error(f"Failed to get lock status: {e}")
+        return {"locks": [], "timestamp": now.isoformat(), "error": str(e)}
 
 
 @app.post("/locks/{lab_id}/release")
-def release_lock(lab_id: str):
-    """Release a stuck deploy lock for a lab.
+async def release_lock(lab_id: str):
+    """Force release a stuck deploy lock for a lab.
 
-    This clears the lock tracking state to allow new deploys.
-    Note: This cannot forcibly release an asyncio.Lock, but it:
-    1. Removes the lock from time tracking
-    2. Clears any cached deploy result
+    This uses Redis to forcibly release the lock, allowing new deploys
+    to proceed immediately. The lock manager handles ownership checks
+    and logs appropriate warnings.
 
-    After calling this, a new deploy request should be able to proceed
-    once the current (stuck) operation times out or completes.
+    Returns:
+        status: "cleared" if lock was released, "not_found" if no lock existed
     """
-    if lab_id in _deploy_lock_times:
-        _deploy_lock_times.pop(lab_id, None)
+    lock_manager = get_lock_manager()
+
+    if lock_manager is None:
+        return {"status": "error", "lab_id": lab_id, "error": "Lock manager not initialized"}
+
+    try:
+        # Force release via Redis
+        released = await lock_manager.force_release(lab_id)
+
+        # Also clear cached results
         _deploy_results.pop(lab_id, None)
-        logger.info(f"Released stuck lock for lab {lab_id}")
-        return {"status": "cleared", "lab_id": lab_id}
-    return {"status": "not_found", "lab_id": lab_id}
+
+        if released:
+            logger.info(f"Force-released lock for lab {lab_id}")
+            return {"status": "cleared", "lab_id": lab_id}
+        else:
+            return {"status": "not_found", "lab_id": lab_id}
+    except Exception as e:
+        logger.error(f"Failed to release lock for lab {lab_id}: {e}")
+        return {"status": "error", "lab_id": lab_id, "error": str(e)}
 
 
 # --- Agent Update Endpoint ---
@@ -630,22 +675,25 @@ def get_deployment_mode() -> dict:
 async def deploy_lab(request: DeployRequest) -> JobResult:
     """Deploy a lab topology.
 
-    Uses per-lab locking to prevent concurrent deploys for the same lab.
-    If a deploy is already in progress, subsequent requests wait for it to complete.
+    Uses Redis-based per-lab locking to prevent concurrent deploys for the same lab.
+    Locks automatically expire via TTL if agent crashes, ensuring recovery.
 
     If callback_url is provided, returns 202 Accepted immediately and executes
     the deploy in the background, POSTing the result to the callback URL when done.
     """
+    from agent.locks import LockAcquisitionTimeout
+
     lab_id = request.lab_id
     logger.info(f"Deploy request: lab={lab_id}, job={request.job_id}, provider={request.provider.value}")
     if request.callback_url:
         logger.debug(f"  Async mode with callback: {request.callback_url}")
 
-    # Get or create lock for this lab
-    if lab_id not in _deploy_locks:
-        _deploy_locks[lab_id] = asyncio.Lock()
-
-    lock = _deploy_locks[lab_id]
+    lock_manager = get_lock_manager()
+    if lock_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Lock manager not initialized"
+        )
 
     # Async callback mode - return immediately and execute in background
     if request.callback_url:
@@ -657,7 +705,6 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                 request.topology_yaml,
                 request.provider.value,
                 request.callback_url,
-                lock,
             )
         )
         return JobResult(
@@ -666,51 +713,13 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
             stdout="Deploy accepted for async execution",
         )
 
-    # Synchronous mode (existing behavior)
-    # Check if deploy is already in progress
-    if lock.locked():
-        logger.info(f"Deploy already in progress for lab {lab_id}, waiting...")
-        # Try to acquire lock with timeout
-        try:
-            async with asyncio.timeout(settings.lock_acquire_timeout):
-                async with lock:
-                    # Deploy finished while we were waiting, check for cached result
-                    if lab_id in _deploy_results:
-                        cached = _deploy_results.get(lab_id)
-                        if cached:
-                            logger.debug(f"Returning cached deploy result for lab {lab_id}")
-                            # Return the same result but with this job's ID
-                            return JobResult(
-                                job_id=request.job_id,
-                                status=cached.status,
-                                stdout=cached.stdout,
-                                stderr=cached.stderr,
-                                error_message=cached.error_message,
-                            )
-                    # No cached result, continue with deploy below
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout waiting for deploy lock on lab {lab_id}")
-            raise HTTPException(
-                status_code=503,
-                detail=f"Deploy already in progress for lab {lab_id}, try again later"
-            )
-
-    # Try to acquire lock with timeout (only for lock acquisition, not deploy)
+    # Synchronous mode - acquire Redis lock with heartbeat and execute
     try:
-        async with asyncio.timeout(settings.lock_acquire_timeout):
-            await lock.acquire()
-    except asyncio.TimeoutError:
-        logger.warning(f"Timeout waiting for deploy lock on lab {lab_id}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Deploy already in progress for lab {lab_id}, try again later"
-        )
-
-    # Lock acquired - now execute deploy (with deploy_timeout, not lock_acquire_timeout)
-    try:
-        # Track lock acquisition time for stuck detection
-        _deploy_lock_times[lab_id] = datetime.now(timezone.utc)
-        try:
+        async with lock_manager.acquire_with_heartbeat(
+            lab_id,
+            timeout=settings.lock_acquire_timeout,
+            extend_interval=settings.lock_extend_interval,
+        ):
             provider = get_provider_for_request(request.provider.value)
             workspace = get_workspace(lab_id)
             logger.info(f"Deploy starting: lab={lab_id}, workspace={workspace}")
@@ -741,25 +750,26 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
 
             # Cache result briefly for concurrent requests
             _deploy_results[lab_id] = job_result
-            # Clean up cache after a short delay
             asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
 
             return job_result
 
-        except Exception as e:
-            logger.error(f"Deploy error for lab {lab_id}: {e}", exc_info=True)
-            job_result = JobResult(
-                job_id=request.job_id,
-                status=JobStatus.FAILED,
-                error_message=str(e),
-            )
-            _deploy_results[lab_id] = job_result
-            asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
-            return job_result
-    finally:
-        # Always release lock and clear tracking
-        _deploy_lock_times.pop(lab_id, None)
-        lock.release()
+    except LockAcquisitionTimeout as e:
+        logger.warning(f"Timeout waiting for deploy lock on lab {lab_id}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Deploy already in progress for lab {lab_id}, try again later"
+        )
+    except Exception as e:
+        logger.error(f"Deploy error for lab {lab_id}: {e}", exc_info=True)
+        job_result = JobResult(
+            job_id=request.job_id,
+            status=JobStatus.FAILED,
+            error_message=str(e),
+        )
+        _deploy_results[lab_id] = job_result
+        asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
+        return job_result
 
 
 async def _execute_deploy_with_callback(
@@ -768,66 +778,83 @@ async def _execute_deploy_with_callback(
     topology_yaml: str,
     provider_name: str,
     callback_url: str,
-    lock: asyncio.Lock,
 ) -> None:
     """Execute deploy in background and send result via callback.
 
     This function handles the async deploy execution pattern:
-    1. Acquire the lab lock (prevents concurrent deploys)
-    2. Execute the deploy operation
-    3. POST the result to the callback URL
-    4. Handle callback delivery failures with retry
+    1. Acquire the lab lock via Redis with heartbeat (prevents concurrent deploys)
+    2. Periodically extend the lock TTL while deploy is running
+    3. Execute the deploy operation
+    4. POST the result to the callback URL
+    5. Handle callback delivery failures with retry
+
+    The Redis lock has a short TTL (2 min) for fast crash recovery, but is
+    extended every 30s while the deploy is actively running.
     """
     from agent.callbacks import CallbackPayload, deliver_callback
+    from agent.locks import LockAcquisitionTimeout
     from datetime import datetime, timezone
 
     started_at = datetime.now(timezone.utc)
+    lock_manager = get_lock_manager()
+
+    if lock_manager is None:
+        logger.error(f"Lock manager not initialized for async deploy of lab {lab_id}")
+        payload = CallbackPayload(
+            job_id=job_id,
+            agent_id=AGENT_ID,
+            status="failed",
+            error_message="Lock manager not initialized",
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
+        )
+        await deliver_callback(callback_url, payload)
+        return
 
     try:
-        async with asyncio.timeout(settings.lock_acquire_timeout):
-            async with lock:
-                # Track lock acquisition time for stuck detection
-                _deploy_lock_times[lab_id] = datetime.now(timezone.utc)
-                try:
-                    provider = get_provider_for_request(provider_name)
-                    workspace = get_workspace(lab_id)
-                    logger.info(f"Async deploy starting: lab={lab_id}, workspace={workspace}")
+        async with lock_manager.acquire_with_heartbeat(
+            lab_id,
+            timeout=settings.lock_acquire_timeout,
+            extend_interval=settings.lock_extend_interval,
+        ):
+            try:
+                provider = get_provider_for_request(provider_name)
+                workspace = get_workspace(lab_id)
+                logger.info(f"Async deploy starting: lab={lab_id}, workspace={workspace}")
 
-                    result = await provider.deploy(
-                        lab_id=lab_id,
-                        topology_yaml=topology_yaml,
-                        workspace=workspace,
-                    )
+                result = await provider.deploy(
+                    lab_id=lab_id,
+                    topology_yaml=topology_yaml,
+                    workspace=workspace,
+                )
 
-                    logger.info(f"Async deploy finished: lab={lab_id}, success={result.success}")
+                logger.info(f"Async deploy finished: lab={lab_id}, success={result.success}")
 
-                    # Build callback payload
-                    payload = CallbackPayload(
-                        job_id=job_id,
-                        agent_id=AGENT_ID,
-                        status="completed" if result.success else "failed",
-                        stdout=result.stdout or "",
-                        stderr=result.stderr or "",
-                        error_message=result.error if not result.success else None,
-                        started_at=started_at,
-                        completed_at=datetime.now(timezone.utc),
-                    )
+                # Build callback payload
+                payload = CallbackPayload(
+                    job_id=job_id,
+                    agent_id=AGENT_ID,
+                    status="completed" if result.success else "failed",
+                    stdout=result.stdout or "",
+                    stderr=result.stderr or "",
+                    error_message=result.error if not result.success else None,
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc),
+                )
 
-                except Exception as e:
-                    logger.error(f"Async deploy error for lab {lab_id}: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Async deploy error for lab {lab_id}: {e}", exc_info=True)
 
-                    payload = CallbackPayload(
-                        job_id=job_id,
-                        agent_id=AGENT_ID,
-                        status="failed",
-                        error_message=str(e),
-                        started_at=started_at,
-                        completed_at=datetime.now(timezone.utc),
-                    )
-                finally:
-                    # Clear lock time tracking when lock is released
-                    _deploy_lock_times.pop(lab_id, None)
-    except asyncio.TimeoutError:
+                payload = CallbackPayload(
+                    job_id=job_id,
+                    agent_id=AGENT_ID,
+                    status="failed",
+                    error_message=str(e),
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc),
+                )
+
+    except LockAcquisitionTimeout:
         logger.warning(f"Async deploy timeout waiting for lock on lab {lab_id}")
         payload = CallbackPayload(
             job_id=job_id,

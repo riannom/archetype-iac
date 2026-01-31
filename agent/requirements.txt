@@ -8,6 +8,7 @@ websockets==12.0
 psutil==6.0.0
 python-multipart==0.0.9
 asyncssh==2.14.2
+redis==5.0.1  # For distributed deploy locks
 
 # Testing
 pytest==8.3.3
