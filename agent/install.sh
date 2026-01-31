@@ -5,13 +5,19 @@ set -e
 # Usage: curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/agent/install.sh | sudo bash -s -- [OPTIONS]
 #
 # Options:
-#   --name NAME           Agent name (required)
-#   --controller URL      Controller URL (required)
+#   --name NAME           Agent name (required for install)
+#   --controller URL      Controller URL (required for install)
 #   --redis URL           Redis URL for distributed locks (required for multi-host)
 #   --ip IP               Local IP for multi-host networking (auto-detected if not set)
 #   --port PORT           Agent port (default: 8001)
 #   --no-docker           Skip Docker installation
+#   --update              Quick update: pull latest code and restart (no full reinstall)
 #   --uninstall           Remove the agent
+#
+# Examples:
+#   Install:  curl ... | sudo bash -s -- --name myagent --controller http://192.168.1.100:8000
+#   Update:   curl ... | sudo bash -s -- --update
+#   Remove:   curl ... | sudo bash -s -- --uninstall
 
 INSTALL_DIR="/opt/archetype-agent"
 SERVICE_NAME="archetype-agent"
@@ -36,6 +42,7 @@ LOCAL_IP=""
 AGENT_PORT="8001"
 INSTALL_DOCKER=true
 UNINSTALL=false
+UPDATE_ONLY=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -68,12 +75,57 @@ while [[ $# -gt 0 ]]; do
             UNINSTALL=true
             shift
             ;;
+        --update)
+            UPDATE_ONLY=true
+            shift
+            ;;
         *)
             log_error "Unknown option: $1"
             exit 1
             ;;
     esac
 done
+
+# Update only mode - quick update without full reinstall
+if [ "$UPDATE_ONLY" = true ]; then
+    if [ ! -d "$INSTALL_DIR/repo" ]; then
+        log_error "Agent not installed. Run without --update first."
+        exit 1
+    fi
+
+    log_info "Updating Archetype Agent..."
+    cd $INSTALL_DIR/repo
+
+    # Fetch and reset to latest
+    git fetch origin
+    CURRENT=$(git rev-parse HEAD)
+    git reset --hard origin/$BRANCH
+    NEW=$(git rev-parse HEAD)
+
+    if [ "$CURRENT" = "$NEW" ]; then
+        log_info "Already up to date."
+    else
+        log_info "Updated: $CURRENT -> $NEW"
+
+        # Update dependencies in case requirements changed
+        log_info "Updating Python dependencies..."
+        source $INSTALL_DIR/venv/bin/activate
+        pip install --quiet -r $INSTALL_DIR/repo/agent/requirements.txt
+    fi
+
+    # Restart service
+    log_info "Restarting agent..."
+    systemctl restart $SERVICE_NAME
+    sleep 2
+
+    if systemctl is-active --quiet $SERVICE_NAME; then
+        log_info "Agent updated and running!"
+    else
+        log_error "Agent failed to start. Check: journalctl -u $SERVICE_NAME -f"
+        exit 1
+    fi
+    exit 0
+fi
 
 # Uninstall
 if [ "$UNINSTALL" = true ]; then
