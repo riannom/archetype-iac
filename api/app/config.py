@@ -84,7 +84,8 @@ class Settings(BaseSettings):
     job_max_retries: int = 2
     # Job timeout for deploy operations (seconds)
     # Must be > agent lock_ttl (960s) to allow lock to expire before job timeout
-    job_timeout_deploy: int = 1020  # 17 minutes - slightly > lock_ttl
+    # Using 1200s (20 min) gives 240s (4 min) margin over lock_ttl for safety
+    job_timeout_deploy: int = 1200  # 20 minutes - 4 min margin over lock_ttl
     # Job timeout for destroy operations (seconds) - buffer above agent_destroy_timeout
     job_timeout_destroy: int = 360  # 6 minutes
     # Job timeout for sync operations (seconds)

@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Set
 
+import redis
 from sqlalchemy.orm import Session
 
 from app import models
@@ -22,35 +23,62 @@ from app import agent_client
 
 logger = logging.getLogger(__name__)
 
-# In-memory tracking of recent enforcement attempts to avoid retry storms
-# Maps (lab_id, node_name) -> last enforcement timestamp
-_enforcement_cooldowns: Dict[tuple[str, str], datetime] = {}
+# Redis client for persistent cooldown storage
+_redis: redis.Redis | None = None
+
+
+def _get_redis() -> redis.Redis:
+    """Get the Redis client, creating it if necessary.
+
+    The cooldowns are stored in Redis so they survive API restarts,
+    preventing retry storms after restarts.
+    """
+    global _redis
+    if _redis is None:
+        _redis = redis.from_url(settings.redis_url)
+    return _redis
+
+
+def _cooldown_key(lab_id: str, node_name: str) -> str:
+    """Generate Redis key for a node's enforcement cooldown."""
+    return f"enforcement_cooldown:{lab_id}:{node_name}"
 
 
 def _is_on_cooldown(lab_id: str, node_name: str) -> bool:
-    """Check if a node is still on cooldown from a recent enforcement attempt."""
-    key = (lab_id, node_name)
-    last_attempt = _enforcement_cooldowns.get(key)
-    if not last_attempt:
-        return False
+    """Check if a node is still on cooldown from a recent enforcement attempt.
 
-    cooldown_until = last_attempt + timedelta(seconds=settings.state_enforcement_cooldown)
-    return datetime.now(timezone.utc) < cooldown_until
+    Uses Redis EXIST to check if the cooldown key exists (TTL handles expiry).
+    """
+    try:
+        return _get_redis().exists(_cooldown_key(lab_id, node_name)) > 0
+    except redis.RedisError as e:
+        logger.warning(f"Redis error checking cooldown: {e}")
+        # On Redis error, assume not on cooldown to avoid blocking enforcement
+        return False
 
 
 def _set_cooldown(lab_id: str, node_name: str):
-    """Mark a node as having a recent enforcement attempt."""
-    key = (lab_id, node_name)
-    _enforcement_cooldowns[key] = datetime.now(timezone.utc)
+    """Mark a node as having a recent enforcement attempt.
+
+    Uses Redis SETEX with TTL equal to the cooldown period.
+    """
+    try:
+        _get_redis().setex(
+            _cooldown_key(lab_id, node_name),
+            settings.state_enforcement_cooldown,
+            "1"
+        )
+    except redis.RedisError as e:
+        logger.warning(f"Redis error setting cooldown: {e}")
+        # Continue even if Redis fails - enforcement will still work, just might retry sooner
 
 
 def _cleanup_old_cooldowns():
-    """Remove expired cooldowns from memory."""
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(seconds=settings.state_enforcement_cooldown * 2)
-    expired = [k for k, v in _enforcement_cooldowns.items() if v < cutoff]
-    for k in expired:
-        del _enforcement_cooldowns[k]
+    """Cleanup is handled automatically by Redis TTL.
+
+    This function is kept for interface compatibility but is now a no-op.
+    """
+    pass
 
 
 def _has_active_job(session: Session, lab_id: str, node_name: str | None = None) -> bool:

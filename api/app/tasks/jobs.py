@@ -284,12 +284,40 @@ async def run_agent_job(
             session.commit()
             return
 
-        # Find a healthy agent with required capability, respecting affinity
-        agent = await agent_client.get_agent_for_lab(
-            session,
-            lab,
-            required_provider=provider,
-        )
+        # Find a healthy agent with required capability
+        # For node-specific actions, use the node's assigned host (nodes.host_id)
+        # For lab-wide actions, use the lab affinity logic (node_placements)
+        agent = None
+        if action.startswith("node:"):
+            # Parse node name from action: "node:start:nodename"
+            parts = action.split(":", 2)
+            target_node_name = parts[2] if len(parts) > 2 else None
+            if target_node_name:
+                # Look up the node's assigned host from nodes.host_id
+                node_def = (
+                    session.query(models.Node)
+                    .filter(
+                        models.Node.lab_id == lab_id,
+                        models.Node.container_name == target_node_name,
+                    )
+                    .first()
+                )
+                if node_def and node_def.host_id:
+                    target_host = session.get(models.Host, node_def.host_id)
+                    if target_host and agent_client.is_agent_online(target_host):
+                        agent = target_host
+                        logger.info(
+                            f"Node {target_node_name} assigned to host {target_host.name} "
+                            f"(from nodes.host_id)"
+                        )
+
+        # Fallback to lab affinity if no node-specific agent found
+        if not agent:
+            agent = await agent_client.get_agent_for_lab(
+                session,
+                lab,
+                required_provider=provider,
+            )
         if not agent:
             job.status = "failed"
             job.completed_at = datetime.utcnow()
@@ -611,16 +639,46 @@ async def run_multihost_deploy(
                     deploy_success = False
 
         if not deploy_success:
+            # Rollback: destroy containers on hosts that succeeded to prevent orphans
+            logger.warning(f"Multi-host deploy partially failed for lab {lab_id}, initiating rollback")
+            log_parts.append("\n=== Rollback: Cleaning up partially deployed hosts ===")
+
+            rollback_tasks = []
+            rollback_hosts = []
+            for host_id, result in zip(analysis.placements.keys(), results):
+                # Only rollback hosts where deploy succeeded
+                if not isinstance(result, Exception) and result.get("status") == "completed":
+                    agent = host_to_agent.get(host_id)
+                    if agent:
+                        rollback_tasks.append(
+                            agent_client.destroy_on_agent(agent, job_id, lab_id)
+                        )
+                        rollback_hosts.append(agent.name)
+
+            if rollback_tasks:
+                log_parts.append(f"Rolling back hosts: {', '.join(rollback_hosts)}")
+                rollback_results = await asyncio.gather(*rollback_tasks, return_exceptions=True)
+
+                for agent_name, rb_result in zip(rollback_hosts, rollback_results):
+                    if isinstance(rb_result, Exception):
+                        log_parts.append(f"  {agent_name}: rollback FAILED - {rb_result}")
+                    else:
+                        status = rb_result.get("status", "unknown")
+                        log_parts.append(f"  {agent_name}: rollback {status}")
+            else:
+                log_parts.append("No hosts to rollback (all failed)")
+
             job.status = "failed"
             job.completed_at = datetime.utcnow()
             job.log_path = "\n".join(log_parts)
             update_lab_state(session, lab_id, "error", error="Deployment failed on one or more hosts")
             session.commit()
-            logger.error(f"Job {job_id} failed: deployment error on one or more hosts")
+            logger.error(f"Job {job_id} failed: deployment error on one or more hosts (rollback completed)")
             return
 
         # Set up cross-host links via VXLAN overlay
         # CrossHostLink from TopologyService uses host_id (database) instead of host_name (YAML)
+        link_failures = []
         if analysis.cross_host_links:
             log_parts.append("\n=== Cross-Host Links ===")
             logger.info(f"Setting up {len(analysis.cross_host_links)} cross-host links")
@@ -631,9 +689,9 @@ async def run_multihost_deploy(
                 agent_b = host_to_agent.get(chl.host_b)
 
                 if not agent_a or not agent_b:
-                    log_parts.append(
-                        f"SKIP {chl.link_id}: missing agent for {chl.host_a} or {chl.host_b}"
-                    )
+                    error_msg = f"missing agent for {chl.host_a} or {chl.host_b}"
+                    log_parts.append(f"Link {chl.link_id}: FAILED - {error_msg}")
+                    link_failures.append(f"{chl.link_id}: {error_msg}")
                     continue
 
                 # Get container names based on provider naming convention
@@ -659,10 +717,22 @@ async def run_multihost_deploy(
                         f"Link {chl.link_id}: OK (VNI {result.get('vni')})"
                     )
                 else:
-                    log_parts.append(
-                        f"Link {chl.link_id}: FAILED - {result.get('error')}"
-                    )
-                    # Don't fail the whole job for overlay issues - containers are running
+                    error_msg = result.get('error', 'unknown error')
+                    log_parts.append(f"Link {chl.link_id}: FAILED - {error_msg}")
+                    link_failures.append(f"{chl.link_id}: {error_msg}")
+
+        # Fail the job if any cross-host links failed
+        if link_failures:
+            log_parts.append(f"\n=== Cross-Host Link Failures ===")
+            log_parts.append(f"Failed links: {', '.join(link_failures)}")
+            log_parts.append("\nNote: Containers are deployed but inter-host connectivity is broken.")
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = "\n".join(log_parts)
+            update_lab_state(session, lab_id, "error", error=f"Cross-host link setup failed: {len(link_failures)} link(s)")
+            session.commit()
+            logger.error(f"Job {job_id} failed: {len(link_failures)} cross-host link(s) failed")
+            return
 
         # Mark job as completed
         job.status = "completed"

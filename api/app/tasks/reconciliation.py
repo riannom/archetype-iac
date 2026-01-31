@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import redis
 
 from app import agent_client, models
 from app.config import settings
@@ -26,6 +29,54 @@ from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 
 logger = logging.getLogger(__name__)
+
+# Redis client for distributed locking
+_redis: redis.Redis | None = None
+
+
+def _get_redis() -> redis.Redis:
+    """Get the Redis client, creating it if necessary."""
+    global _redis
+    if _redis is None:
+        _redis = redis.from_url(settings.redis_url)
+    return _redis
+
+
+@contextmanager
+def reconciliation_lock(lab_id: str, timeout: int = 60):
+    """Acquire a distributed lock before reconciling a lab.
+
+    This prevents multiple reconciliation tasks from running concurrently
+    for the same lab, and prevents reconciliation from interfering with
+    active jobs.
+
+    Args:
+        lab_id: Lab identifier to lock
+        timeout: Lock TTL in seconds (auto-releases if holder crashes)
+
+    Yields:
+        True if lock was acquired, False if another process holds it.
+    """
+    lock_key = f"reconcile_lock:{lab_id}"
+    r = _get_redis()
+
+    try:
+        # Try to acquire lock with NX (only if not exists) and TTL
+        lock_acquired = r.set(lock_key, "1", nx=True, ex=timeout)
+        if not lock_acquired:
+            logger.debug(f"Could not acquire reconciliation lock for lab {lab_id}")
+            yield False
+            return
+        yield True
+    except redis.RedisError as e:
+        logger.warning(f"Redis error acquiring lock for lab {lab_id}: {e}")
+        # On Redis error, proceed without lock (better than blocking reconciliation)
+        yield True
+    finally:
+        try:
+            r.delete(lock_key)
+        except redis.RedisError:
+            pass  # Lock will auto-expire via TTL
 
 
 def _generate_link_name(
@@ -377,34 +428,52 @@ async def _reconcile_single_lab(session, lab_id: str):
     if not lab:
         return
 
-    # Check if there's an active job for this lab
-    active_job = (
-        session.query(models.Job)
-        .filter(
-            models.Job.lab_id == lab_id,
-            models.Job.status.in_(["pending", "running", "queued"]),
-        )
-        .first()
-    )
-
-    if active_job:
-        # Check if job is still within its expected timeout window
-        if is_job_within_timeout(
-            active_job.action,
-            active_job.status,
-            active_job.started_at,
-            active_job.created_at,
-        ):
-            logger.debug(f"Lab {lab_id} has active job {active_job.id}, skipping reconciliation")
+    # Acquire distributed lock to prevent concurrent reconciliation
+    with reconciliation_lock(lab_id) as lock_acquired:
+        if not lock_acquired:
+            logger.debug(f"Lab {lab_id} reconciliation skipped - another process holds lock")
             return
-        else:
-            # Job is stuck - log warning but proceed with reconciliation
-            # The job_health_monitor will handle the stuck job separately
-            logger.warning(
-                f"Lab {lab_id} has stuck job {active_job.id} "
-                f"(action={active_job.action}, status={active_job.status}), "
-                f"proceeding with state reconciliation"
+
+        # Check if there's an active job for this lab
+        active_job = (
+            session.query(models.Job)
+            .filter(
+                models.Job.lab_id == lab_id,
+                models.Job.status.in_(["pending", "running", "queued"]),
             )
+            .first()
+        )
+
+        if active_job:
+            # Check if job is still within its expected timeout window
+            if is_job_within_timeout(
+                active_job.action,
+                active_job.status,
+                active_job.started_at,
+                active_job.created_at,
+            ):
+                logger.debug(f"Lab {lab_id} has active job {active_job.id}, skipping reconciliation")
+                return
+            else:
+                # Job is stuck - log warning but proceed with reconciliation
+                # The job_health_monitor will handle the stuck job separately
+                logger.warning(
+                    f"Lab {lab_id} has stuck job {active_job.id} "
+                    f"(action={active_job.action}, status={active_job.status}), "
+                    f"proceeding with state reconciliation"
+                )
+
+        # Call the actual reconciliation logic (extracted to allow locking)
+        await _do_reconcile_lab(session, lab, lab_id)
+
+
+async def _do_reconcile_lab(session, lab, lab_id: str):
+    """Perform the actual reconciliation logic for a lab.
+
+    This is called by _reconcile_single_lab after acquiring the lock.
+    """
+    from app.storage import topology_path
+    from app.utils.lab import get_lab_provider
 
     # Ensure link states exist for this lab (for backwards compatibility)
     topo_path = topology_path(lab_id)

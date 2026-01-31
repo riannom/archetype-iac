@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 from datetime import datetime, timedelta
@@ -23,6 +24,38 @@ MAX_RETRIES = settings.agent_max_retries
 
 # Cache for healthy agents
 _agent_cache: dict[str, tuple[str, datetime]] = {}  # agent_id -> (address, last_check)
+
+# Shared HTTP client with connection pooling
+_http_client: httpx.AsyncClient | None = None
+
+
+def get_http_client() -> httpx.AsyncClient:
+    """Get the shared HTTP client with connection pooling.
+
+    Creates the client on first use with appropriate connection limits.
+    The client is reused across all agent communication for efficiency.
+    """
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            limits=httpx.Limits(
+                max_connections=100,
+                max_keepalive_connections=20,
+            ),
+            timeout=httpx.Timeout(30.0),
+        )
+    return _http_client
+
+
+async def close_http_client() -> None:
+    """Close the shared HTTP client.
+
+    Should be called during application shutdown.
+    """
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
 
 
 class AgentError(Exception):
@@ -56,10 +89,19 @@ async def with_retry(
 ) -> Any:
     """Execute an async function with exponential backoff retry logic.
 
-    Only retries on connection errors and timeouts, not on application errors.
+    Retries on:
+    - Connection errors and timeouts (network issues)
+    - Transient 5xx errors (502, 503, 504) that indicate temporary issues
+
+    Does not retry on:
+    - 4xx client errors
+    - 500 Internal Server Error (likely a bug, not transient)
     """
     if max_retries is None:
         max_retries = settings.agent_max_retries
+
+    # Transient HTTP errors that are worth retrying
+    TRANSIENT_HTTP_CODES = {502, 503, 504}
 
     last_exception = None
 
@@ -84,12 +126,33 @@ async def with_retry(
                     f"Agent unreachable after {max_retries + 1} attempts: {e}"
                 )
         except httpx.HTTPStatusError as e:
-            # Don't retry on HTTP errors (4xx, 5xx) - these are application-level
-            logger.error(f"Agent returned error: {e.response.status_code}")
+            status_code = e.response.status_code
+
+            # Retry transient 5xx errors with backoff
+            if status_code in TRANSIENT_HTTP_CODES and attempt < max_retries:
+                delay = min(
+                    settings.agent_retry_backoff_base * (2 ** attempt),
+                    settings.agent_retry_backoff_max,
+                )
+                logger.warning(
+                    f"Agent returned {status_code} (attempt {attempt + 1}/{max_retries + 1}), "
+                    f"retrying in {delay:.1f}s"
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            # Capture response body for debugging
+            error_body = ""
+            try:
+                error_body = e.response.text[:500]
+            except Exception:
+                pass
+
+            logger.error(f"Agent returned error: {status_code}")
             raise AgentJobError(
-                f"Agent returned HTTP {e.response.status_code}",
+                f"Agent returned HTTP {status_code}",
                 stdout="",
-                stderr=str(e),
+                stderr=f"{e}\nResponse: {error_body}" if error_body else str(e),
             )
 
     # Should never reach here, but just in case
@@ -272,10 +335,10 @@ async def check_agent_health(agent: models.Host) -> bool:
     url = f"{get_agent_url(agent)}/health"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=settings.agent_health_check_timeout)
-            if response.status_code == 200:
-                return True
+        client = get_http_client()
+        response = await client.get(url, timeout=settings.agent_health_check_timeout)
+        if response.status_code == 200:
+            return True
     except Exception as e:
         logger.debug(f"Health check failed for agent {agent.id}: {e}")
 
@@ -322,14 +385,14 @@ async def _do_deploy(
     elif topology_yaml is not None:
         payload["topology_yaml"] = topology_yaml
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            json=payload,
-            timeout=settings.agent_deploy_timeout,
-        )
-        response.raise_for_status()
-        return response.json()
+    client = get_http_client()
+    response = await client.post(
+        url,
+        json=payload,
+        timeout=settings.agent_deploy_timeout,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def deploy_to_agent(
@@ -377,17 +440,17 @@ async def deploy_to_agent(
 
 async def _do_destroy(url: str, job_id: str, lab_id: str) -> dict:
     """Internal destroy request (for retry wrapper)."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            json={
-                "job_id": job_id,
-                "lab_id": lab_id,
-            },
-            timeout=settings.agent_destroy_timeout,
-        )
-        response.raise_for_status()
-        return response.json()
+    client = get_http_client()
+    response = await client.post(
+        url,
+        json={
+            "job_id": job_id,
+            "lab_id": lab_id,
+        },
+        timeout=settings.agent_destroy_timeout,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def destroy_on_agent(
@@ -425,14 +488,14 @@ async def _do_node_action(
     }
     if display_name:
         payload["display_name"] = display_name
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            json=payload,
-            timeout=settings.agent_node_action_timeout,
-        )
-        response.raise_for_status()
-        return response.json()
+    client = get_http_client()
+    response = await client.post(
+        url,
+        json=payload,
+        timeout=settings.agent_node_action_timeout,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def _log_name(node_name: str, display_name: str | None) -> str:
@@ -466,14 +529,14 @@ async def node_action_on_agent(
 
 async def _do_get_status(url: str, lab_id: str) -> dict:
     """Internal status request (for retry wrapper)."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            json={"lab_id": lab_id},
-            timeout=settings.agent_status_timeout,
-        )
-        response.raise_for_status()
-        return response.json()
+    client = get_http_client()
+    response = await client.post(
+        url,
+        json={"lab_id": lab_id},
+        timeout=settings.agent_status_timeout,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def get_lab_status_from_agent(
@@ -516,11 +579,11 @@ async def check_node_readiness(
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/ready"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0)
-            response.raise_for_status()
-            result = response.json()
-            return result
+        client = get_http_client()
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
+        result = response.json()
+        return result
     except Exception as e:
         logger.error(f"Failed to check readiness for {node_name} on agent {agent.id}: {e}")
         return {
@@ -640,19 +703,19 @@ async def destroy_lab_on_agent(
     logger.info(f"Cleaning up orphan containers for lab {lab_id} on agent {agent.id}")
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={
-                    "job_id": f"orphan-cleanup-{uuid4()}",
-                    "lab_id": lab_id,
-                },
-                timeout=120.0,
-            )
-            response.raise_for_status()
-            result = response.json()
-            logger.info(f"Orphan cleanup completed for lab {lab_id} on agent {agent.id}")
-            return result
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={
+                "job_id": f"orphan-cleanup-{uuid4()}",
+                "lab_id": lab_id,
+            },
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info(f"Orphan cleanup completed for lab {lab_id} on agent {agent.id}")
+        return result
     except Exception as e:
         logger.error(f"Failed to cleanup orphans for lab {lab_id} on agent {agent.id}: {e}")
         return {"status": "failed", "error": str(e)}
@@ -669,10 +732,10 @@ async def get_agent_lock_status(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/locks/status"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0)
-            response.raise_for_status()
-            return response.json()
+        client = get_http_client()
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         logger.error(f"Failed to get lock status from agent {agent.id}: {e}")
         return {"locks": [], "error": str(e)}
@@ -691,13 +754,13 @@ async def release_agent_lock(agent: models.Host, lab_id: str) -> dict:
     url = f"{get_agent_url(agent)}/locks/{lab_id}/release"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, timeout=10.0)
-            response.raise_for_status()
-            result = response.json()
-            if result.get("status") == "cleared":
-                logger.info(f"Released stuck lock for lab {lab_id} on agent {agent.id}")
-            return result
+        client = get_http_client()
+        response = await client.post(url, timeout=10.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("status") == "cleared":
+            logger.info(f"Released stuck lock for lab {lab_id} on agent {agent.id}")
+        return result
     except Exception as e:
         logger.error(f"Failed to release lock for lab {lab_id} on agent {agent.id}: {e}")
         return {"status": "error", "error": str(e)}
@@ -731,10 +794,10 @@ async def discover_labs_on_agent(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/discover-labs"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
-            response.raise_for_status()
-            return response.json()
+        client = get_http_client()
+        response = await client.get(url, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         logger.error(f"Failed to discover labs on agent {agent.id}: {e}")
         return {"labs": [], "error": str(e)}
@@ -752,14 +815,14 @@ async def cleanup_orphans_on_agent(agent: models.Host, valid_lab_ids: list[str])
     url = f"{get_agent_url(agent)}/cleanup-orphans"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={"valid_lab_ids": valid_lab_ids},
-                timeout=120.0,
-            )
-            response.raise_for_status()
-            return response.json()
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={"valid_lab_ids": valid_lab_ids},
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         logger.error(f"Failed to cleanup orphans on agent {agent.id}: {e}")
         return {"removed_containers": [], "errors": [str(e)]}
@@ -791,25 +854,25 @@ async def create_tunnel_on_agent(
     url = f"{get_agent_url(agent)}/overlay/tunnel"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={
-                    "lab_id": lab_id,
-                    "link_id": link_id,
-                    "local_ip": local_ip,
-                    "remote_ip": remote_ip,
-                    "vni": vni,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            result = response.json()
-            if result.get("success"):
-                logger.info(f"Created tunnel on {agent.id}: {link_id} -> {remote_ip}")
-            else:
-                logger.warning(f"Tunnel creation failed on {agent.id}: {result.get('error')}")
-            return result
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={
+                "lab_id": lab_id,
+                "link_id": link_id,
+                "local_ip": local_ip,
+                "remote_ip": remote_ip,
+                "vni": vni,
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Created tunnel on {agent.id}: {link_id} -> {remote_ip}")
+        else:
+            logger.warning(f"Tunnel creation failed on {agent.id}: {result.get('error')}")
+        return result
     except Exception as e:
         logger.error(f"Failed to create tunnel on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
@@ -848,16 +911,16 @@ async def attach_container_on_agent(
         payload["ip_address"] = ip_address
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=30.0)
-            response.raise_for_status()
-            result = response.json()
-            if result.get("success"):
-                ip_info = f" with IP {ip_address}" if ip_address else ""
-                logger.info(f"Attached {container_name} to overlay on {agent.id}{ip_info}")
-            else:
-                logger.warning(f"Container attachment failed on {agent.id}: {result.get('error')}")
-            return result
+        client = get_http_client()
+        response = await client.post(url, json=payload, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            ip_info = f" with IP {ip_address}" if ip_address else ""
+            logger.info(f"Attached {container_name} to overlay on {agent.id}{ip_info}")
+        else:
+            logger.warning(f"Container attachment failed on {agent.id}: {result.get('error')}")
+        return result
     except Exception as e:
         logger.error(f"Failed to attach container on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
@@ -876,20 +939,20 @@ async def cleanup_overlay_on_agent(agent: models.Host, lab_id: str) -> dict:
     url = f"{get_agent_url(agent)}/overlay/cleanup"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={"lab_id": lab_id},
-                timeout=60.0,
-            )
-            response.raise_for_status()
-            result = response.json()
-            logger.info(
-                f"Overlay cleanup on {agent.id}: "
-                f"{result.get('tunnels_deleted', 0)} tunnels, "
-                f"{result.get('bridges_deleted', 0)} bridges"
-            )
-            return result
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={"lab_id": lab_id},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info(
+            f"Overlay cleanup on {agent.id}: "
+            f"{result.get('tunnels_deleted', 0)} tunnels, "
+            f"{result.get('bridges_deleted', 0)} bridges"
+        )
+        return result
     except Exception as e:
         logger.error(f"Failed to cleanup overlay on agent {agent.id}: {e}")
         return {"tunnels_deleted": 0, "bridges_deleted": 0, "errors": [str(e)]}
@@ -904,10 +967,10 @@ async def get_overlay_status_from_agent(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/overlay/status"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0)
-            response.raise_for_status()
-            return response.json()
+        client = get_http_client()
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         logger.error(f"Failed to get overlay status from agent {agent.id}: {e}")
         return {"tunnels": [], "bridges": []}
@@ -933,10 +996,10 @@ async def get_agent_images(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/images"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
-            response.raise_for_status()
-            return response.json()
+        client = get_http_client()
+        response = await client.get(url, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         logger.error(f"Failed to get images from agent {agent.id}: {e}")
         return {"images": []}
@@ -961,15 +1024,15 @@ async def container_action(
     logger.info(f"Container {action} for {container_name} via agent {agent.id}")
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, timeout=60.0)
-            response.raise_for_status()
-            result = response.json()
-            if result.get("success"):
-                logger.info(f"Container {action} completed for {container_name}")
-            else:
-                logger.warning(f"Container {action} failed for {container_name}: {result.get('error')}")
-            return result
+        client = get_http_client()
+        response = await client.post(url, timeout=60.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Container {action} completed for {container_name}")
+        else:
+            logger.warning(f"Container {action} failed for {container_name}: {result.get('error')}")
+        return result
     except httpx.HTTPStatusError as e:
         error_msg = f"HTTP {e.response.status_code}"
         try:
@@ -1001,15 +1064,15 @@ async def extract_configs_on_agent(
     logger.info(f"Extracting configs for lab {lab_id} via agent {agent.id}")
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, timeout=120.0)
-            response.raise_for_status()
-            result = response.json()
-            if result.get("success"):
-                logger.info(f"Extracted {result.get('extracted_count', 0)} configs for lab {lab_id}")
-            else:
-                logger.warning(f"Config extraction failed for lab {lab_id}: {result.get('error')}")
-            return result
+        client = get_http_client()
+        response = await client.post(url, timeout=120.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Extracted {result.get('extracted_count', 0)} configs for lab {lab_id}")
+        else:
+            logger.warning(f"Config extraction failed for lab {lab_id}: {result.get('error')}")
+        return result
     except Exception as e:
         logger.error(f"Failed to extract configs for lab {lab_id} on agent {agent.id}: {e}")
         return {"success": False, "extracted_count": 0, "error": str(e)}
@@ -1038,20 +1101,20 @@ async def prune_docker_on_agent(
     url = f"{get_agent_url(agent)}/prune-docker"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={
-                    "valid_lab_ids": valid_lab_ids,
-                    "prune_dangling_images": prune_dangling_images,
-                    "prune_build_cache": prune_build_cache,
-                    "prune_unused_volumes": prune_unused_volumes,
-                },
-                timeout=120.0,  # Docker prune can take a while
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={
+                "valid_lab_ids": valid_lab_ids,
+                "prune_dangling_images": prune_dangling_images,
+                "prune_build_cache": prune_build_cache,
+                "prune_unused_volumes": prune_unused_volumes,
+            },
+            timeout=120.0,  # Docker prune can take a while
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result
     except Exception as e:
         logger.error(f"Failed to prune Docker on agent {agent.id}: {e}")
         return {
@@ -1097,24 +1160,24 @@ async def create_link_on_agent(
     )
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={
-                    "source_node": source_node,
-                    "source_interface": source_interface,
-                    "target_node": target_node,
-                    "target_interface": target_interface,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            result = response.json()
-            if result.get("success"):
-                logger.info(f"Hot-connect succeeded: {result.get('link', {}).get('link_id')}")
-            else:
-                logger.warning(f"Hot-connect failed: {result.get('error')}")
-            return result
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={
+                "source_node": source_node,
+                "source_interface": source_interface,
+                "target_node": target_node,
+                "target_interface": target_interface,
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Hot-connect succeeded: {result.get('link', {}).get('link_id')}")
+        else:
+            logger.warning(f"Hot-connect failed: {result.get('error')}")
+        return result
     except Exception as e:
         logger.error(f"Hot-connect failed on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
@@ -1142,15 +1205,15 @@ async def delete_link_on_agent(
     logger.info(f"Hot-disconnect on agent {agent.id}: {link_id}")
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.delete(url, timeout=30.0)
-            response.raise_for_status()
-            result = response.json()
-            if result.get("success"):
-                logger.info(f"Hot-disconnect succeeded: {link_id}")
-            else:
-                logger.warning(f"Hot-disconnect failed: {result.get('error')}")
-            return result
+        client = get_http_client()
+        response = await client.delete(url, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Hot-disconnect succeeded: {link_id}")
+        else:
+            logger.warning(f"Hot-disconnect failed: {result.get('error')}")
+        return result
     except Exception as e:
         logger.error(f"Hot-disconnect failed on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
@@ -1172,10 +1235,10 @@ async def list_links_on_agent(
     url = f"{get_agent_url(agent)}/labs/{lab_id}/links"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
-            response.raise_for_status()
-            return response.json()
+        client = get_http_client()
+        response = await client.get(url, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         logger.error(f"List links failed on agent {agent.id}: {e}")
         return {"links": []}
@@ -1190,10 +1253,10 @@ async def get_ovs_status_from_agent(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/ovs/status"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10.0)
-            response.raise_for_status()
-            return response.json()
+        client = get_http_client()
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         logger.error(f"OVS status failed on agent {agent.id}: {e}")
         return {"bridge_name": "", "initialized": False, "ports": [], "links": []}
@@ -1227,24 +1290,24 @@ async def connect_external_on_agent(
     )
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json={
-                    "node_name": node_name,
-                    "interface_name": interface_name,
-                    "external_interface": external_interface,
-                    "vlan_tag": vlan_tag,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            result = response.json()
-            if result.get("success"):
-                logger.info(f"External connect succeeded (VLAN {result.get('vlan_tag')})")
-            else:
-                logger.warning(f"External connect failed: {result.get('error')}")
-            return result
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={
+                "node_name": node_name,
+                "interface_name": interface_name,
+                "external_interface": external_interface,
+                "vlan_tag": vlan_tag,
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"External connect succeeded (VLAN {result.get('vlan_tag')})")
+        else:
+            logger.warning(f"External connect failed: {result.get('error')}")
+        return result
     except Exception as e:
         logger.error(f"External connect failed on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
