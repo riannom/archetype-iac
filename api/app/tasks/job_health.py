@@ -60,13 +60,13 @@ async def check_stuck_jobs():
 
 async def _check_single_job(session, job: models.Job, now: datetime):
     """Check if a single job is stuck and handle it."""
-    # Check if job is stuck
-    if not is_job_stuck(job.action, job.status, job.started_at, job.created_at):
+    # Check if job is stuck (considers last_heartbeat if present)
+    if not is_job_stuck(job.action, job.status, job.started_at, job.created_at, job.last_heartbeat):
         return
 
     logger.warning(
         f"Detected stuck job {job.id}: action={job.action}, status={job.status}, "
-        f"started_at={job.started_at}, agent_id={job.agent_id}"
+        f"started_at={job.started_at}, last_heartbeat={job.last_heartbeat}, agent_id={job.agent_id}"
     )
 
     # Check if assigned agent is offline

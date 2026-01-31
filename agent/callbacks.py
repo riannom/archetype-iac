@@ -227,6 +227,75 @@ def get_dead_letters() -> list[dict]:
     ]
 
 
+async def send_heartbeat(callback_url: str, job_id: str) -> bool:
+    """Send a heartbeat to the controller for a running job.
+
+    The heartbeat URL is derived from the callback URL by appending /heartbeat.
+    This proves the job is still making progress even during long operations.
+
+    Args:
+        callback_url: The original callback URL (e.g., http://host/callbacks/job/xxx)
+        job_id: The job ID
+
+    Returns:
+        True if heartbeat was delivered successfully
+    """
+    # Derive heartbeat URL: /callbacks/job/{id} -> /callbacks/job/{id}/heartbeat
+    heartbeat_url = f"{callback_url}/heartbeat"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(heartbeat_url, timeout=10.0)
+            if response.status_code >= 200 and response.status_code < 300:
+                logger.debug(f"Heartbeat sent for job {job_id}")
+                return True
+            else:
+                logger.warning(f"Heartbeat failed for job {job_id}: HTTP {response.status_code}")
+                return False
+    except Exception as e:
+        logger.warning(f"Heartbeat failed for job {job_id}: {e}")
+        return False
+
+
+class HeartbeatSender:
+    """Background heartbeat sender for long-running operations.
+
+    Usage:
+        async with HeartbeatSender(callback_url, job_id, interval=30):
+            # Long-running operation here
+            await some_slow_operation()
+    """
+
+    def __init__(self, callback_url: str, job_id: str, interval: float = 30.0):
+        self.callback_url = callback_url
+        self.job_id = job_id
+        self.interval = interval
+        self._task: asyncio.Task | None = None
+        self._running = False
+
+    async def __aenter__(self):
+        self._running = True
+        self._task = asyncio.create_task(self._heartbeat_loop())
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        return False
+
+    async def _heartbeat_loop(self):
+        """Send heartbeats at regular intervals."""
+        while self._running:
+            await asyncio.sleep(self.interval)
+            if self._running:
+                await send_heartbeat(self.callback_url, self.job_id)
+
+
 async def execute_with_callback(
     job_id: str,
     agent_id: str,

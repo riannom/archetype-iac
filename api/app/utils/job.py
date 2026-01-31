@@ -53,23 +53,37 @@ def is_job_stuck(
     status: str,
     started_at: datetime | None,
     created_at: datetime | None = None,
+    last_heartbeat: datetime | None = None,
 ) -> bool:
     """Check if a job is stuck (past its expected runtime).
 
     A job is considered stuck if:
-    - It's in 'running' state and past its timeout
+    - It's in 'running' state and past its timeout AND no recent heartbeat
     - It's in 'queued' state for more than 2 minutes without starting
+
+    If a job has a recent heartbeat (within 60s), it's not considered stuck
+    even if past the timeout - the agent is still actively working on it.
 
     Args:
         action: Job action string
         status: Current job status
         started_at: When the job started
         created_at: When the job was created (for queued jobs)
+        last_heartbeat: Last heartbeat from agent (proves job is active)
 
     Returns:
         True if the job appears to be stuck.
     """
     now = datetime.now(timezone.utc)
+
+    # Check for recent heartbeat - if we got one within 60s, job is alive
+    if last_heartbeat is not None:
+        if last_heartbeat.tzinfo is None:
+            last_heartbeat = last_heartbeat.replace(tzinfo=timezone.utc)
+        heartbeat_age = (now - last_heartbeat).total_seconds()
+        if heartbeat_age < 60:
+            # Recent heartbeat - job is still making progress
+            return False
 
     if status == "running" and started_at is not None:
         # Ensure started_at is timezone-aware

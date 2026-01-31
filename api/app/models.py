@@ -100,6 +100,8 @@ class Job(Base):
     # Timestamps for tracking job lifecycle
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Last heartbeat from agent (proves job is still making progress)
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Number of retry attempts
     retry_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -124,6 +126,8 @@ class Host(Base):
     image_sync_strategy: Mapped[str] = mapped_column(String(50), default="on_demand")
     # Deployment mode: how the agent was installed (systemd, docker, unknown)
     deployment_mode: Mapped[str] = mapped_column(String(50), default="unknown")
+    # Whether this agent is co-located with the controller (for rebuild support)
+    is_local: Mapped[bool] = mapped_column(default=False)
     # When the agent process started (for uptime tracking)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

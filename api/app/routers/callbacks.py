@@ -178,6 +178,33 @@ def _update_node_states(
                 )
 
 
+@router.post("/job/{job_id}/heartbeat")
+async def job_heartbeat(
+    job_id: str,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Receive heartbeat from agent for a running job.
+
+    Agents call this periodically during long-running operations to prove
+    the job is still making progress. This allows the job health monitor
+    to distinguish between stuck jobs (no heartbeat) and slow jobs (active heartbeat).
+
+    The heartbeat includes no payload - just updating the timestamp is enough.
+    """
+    job = database.get(models.Job, job_id)
+    if not job:
+        return {"success": False, "message": "Job not found"}
+
+    if job.status not in ("running", "queued"):
+        return {"success": True, "message": f"Job already {job.status}"}
+
+    job.last_heartbeat = datetime.now(timezone.utc)
+    database.commit()
+
+    logger.debug(f"Heartbeat received for job {job_id}")
+    return {"success": True, "message": "Heartbeat recorded"}
+
+
 @router.post("/dead-letter/{job_id}")
 async def dead_letter_callback(
     job_id: str,

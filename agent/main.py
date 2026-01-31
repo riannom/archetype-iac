@@ -373,6 +373,7 @@ def get_agent_info() -> AgentInfo:
         address=address,
         capabilities=get_capabilities(),
         started_at=AGENT_STARTED_AT,
+        is_local=settings.is_local,
     )
 
 
@@ -864,15 +865,19 @@ async def _execute_deploy_with_callback(
             extend_interval=settings.lock_extend_interval,
         ):
             try:
+                from agent.callbacks import HeartbeatSender
+
                 provider = get_provider_for_request(provider_name)
                 workspace = get_workspace(lab_id)
                 logger.info(f"Async deploy starting: lab={lab_id}, workspace={workspace}")
 
-                result = await provider.deploy(
-                    lab_id=lab_id,
-                    topology_yaml=topology_yaml,
-                    workspace=workspace,
-                )
+                # Send heartbeats during deploy to prove job is active
+                async with HeartbeatSender(callback_url, job_id, interval=30.0):
+                    result = await provider.deploy(
+                        lab_id=lab_id,
+                        topology_yaml=topology_yaml,
+                        workspace=workspace,
+                    )
 
                 logger.info(f"Async deploy finished: lab={lab_id}, success={result.success}")
 
@@ -981,7 +986,7 @@ async def _execute_destroy_with_callback(
     callback_url: str,
 ) -> None:
     """Execute destroy in background and send result via callback."""
-    from agent.callbacks import CallbackPayload, deliver_callback
+    from agent.callbacks import CallbackPayload, deliver_callback, HeartbeatSender
     from datetime import datetime, timezone
 
     started_at = datetime.now(timezone.utc)
@@ -991,10 +996,12 @@ async def _execute_destroy_with_callback(
         workspace = get_workspace(lab_id)
         logger.info(f"Async destroy starting: lab={lab_id}, workspace={workspace}")
 
-        result = await provider.destroy(
-            lab_id=lab_id,
-            workspace=workspace,
-        )
+        # Send heartbeats during destroy to prove job is active
+        async with HeartbeatSender(callback_url, job_id, interval=30.0):
+            result = await provider.destroy(
+                lab_id=lab_id,
+                workspace=workspace,
+            )
 
         logger.info(f"Async destroy finished: lab={lab_id}, success={result.success}")
 
