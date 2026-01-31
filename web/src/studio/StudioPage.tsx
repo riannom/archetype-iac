@@ -416,9 +416,48 @@ const StudioPage: React.FC = () => {
     [taskLog, taskLogClearedAt]
   );
   const deviceCategories = useMemo<DeviceCategory[]>(() => {
-    // Use vendor categories from API if available, otherwise fall back to flat structure
+    // Rebuild categories using enriched deviceModels to ensure consistency with Image Management.
+    // This is needed because deviceModels includes devices discovered from the image library
+    // that may not exist in the raw vendor registry.
     if (vendorCategories.length > 0) {
-      return vendorCategories;
+      const deviceMap = new Map(deviceModels.map(d => [d.id, d]));
+      const usedDeviceIds = new Set<string>();
+
+      const enrichedCategories = vendorCategories.map(cat => {
+        if (cat.subCategories) {
+          return {
+            ...cat,
+            subCategories: cat.subCategories.map(sub => ({
+              ...sub,
+              models: sub.models.map(m => {
+                usedDeviceIds.add(m.id);
+                return deviceMap.get(m.id) || m;
+              }),
+            })),
+          };
+        }
+        if (cat.models) {
+          return {
+            ...cat,
+            models: cat.models.map(m => {
+              usedDeviceIds.add(m.id);
+              return deviceMap.get(m.id) || m;
+            }),
+          };
+        }
+        return cat;
+      });
+
+      // Add devices from image library that aren't in vendor categories
+      const extraDevices = deviceModels.filter(d => !usedDeviceIds.has(d.id));
+      if (extraDevices.length > 0) {
+        enrichedCategories.push({
+          name: 'Other',
+          models: extraDevices,
+        });
+      }
+
+      return enrichedCategories;
     }
     return [{ name: 'Devices', models: deviceModels }];
   }, [vendorCategories, deviceModels]);
