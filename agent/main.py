@@ -172,10 +172,21 @@ async def forward_event_to_controller(event):
     state change is detected. It POSTs the event to the controller's
     /events/node endpoint for real-time state synchronization.
     """
-    from agent.events.base import NodeEvent
+    from agent.events.base import NodeEvent, NodeEventType
 
     if not isinstance(event, NodeEvent):
         return
+
+    # Handle container restart - reprovision OVS interfaces if needed
+    if event.event_type == NodeEventType.STARTED:
+        container_name = event.attributes.get("container_name") if event.attributes else None
+        if container_name:
+            try:
+                ovs = get_ovs_manager()
+                if ovs._initialized:
+                    await ovs.handle_container_restart(container_name, event.lab_id)
+            except Exception as e:
+                logger.warning(f"Failed to reprovision interfaces for {container_name}: {e}")
 
     payload = {
         "agent_id": AGENT_ID,

@@ -976,6 +976,219 @@ class OVSNetworkManager:
         key = f"{container_name}:{interface_name}"
         return self._ports.get(key)
 
+    def get_ports_for_container(self, container_name: str) -> list[OVSPort]:
+        """Get all OVS ports for a specific container.
+
+        Args:
+            container_name: Docker container name
+
+        Returns:
+            List of OVSPort objects for this container
+        """
+        return [p for p in self._ports.values() if p.container_name == container_name]
+
+    async def is_port_stale(self, port: OVSPort) -> bool:
+        """Check if an OVS port is stale (host-side exists but container peer missing).
+
+        When a container restarts, its network namespace is recreated and the
+        veth peer inside is destroyed. The host-side veth (attached to OVS)
+        still exists but has no peer - this is a "stale" port.
+
+        Args:
+            port: OVS port to check
+
+        Returns:
+            True if the port is stale (needs reprovisioning), False if healthy
+        """
+        # Check if host-side veth exists
+        if not await self._ip_link_exists(port.port_name):
+            # Host-side doesn't exist - not stale, just missing entirely
+            return False
+
+        # Get container PID
+        pid = self._get_container_pid(port.container_name)
+        if pid is None:
+            # Container not running - can't check, assume not stale
+            return False
+
+        # Check if interface exists inside container namespace
+        code, stdout, _ = await self._run_cmd([
+            "nsenter", "-t", str(pid), "-n",
+            "ip", "link", "show", port.interface_name
+        ])
+
+        # If the interface doesn't exist inside container, port is stale
+        return code != 0
+
+    async def _cleanup_stale_port(self, port: OVSPort) -> None:
+        """Remove a stale OVS port and release resources.
+
+        This cleans up the host-side veth and OVS port entry for a port
+        whose container-side peer no longer exists.
+
+        Args:
+            port: OVS port to clean up
+        """
+        key = port.key
+
+        # Remove from OVS bridge
+        code, _, stderr = await self._ovs_vsctl(
+            "--if-exists", "del-port", self._bridge_name, port.port_name
+        )
+        if code != 0:
+            logger.warning(f"Failed to delete OVS port {port.port_name}: {stderr}")
+
+        # Delete host-side veth (if it exists)
+        if await self._ip_link_exists(port.port_name):
+            await self._run_cmd(["ip", "link", "delete", port.port_name])
+
+        # Release VLAN allocation
+        self._vlan_allocator.release(key)
+
+        # Remove from port tracking
+        self._ports.pop(key, None)
+
+        # Remove any links involving this port
+        links_to_remove = [
+            link_key for link_key, link in self._links.items()
+            if link.port_a == key or link.port_b == key
+        ]
+        for link_key in links_to_remove:
+            del self._links[link_key]
+
+        logger.debug(f"Cleaned up stale port: {key}")
+
+    async def handle_container_restart(
+        self,
+        container_name: str,
+        lab_id: str,
+    ) -> dict[str, Any]:
+        """Handle container restart by reprovisioning stale OVS interfaces.
+
+        When a container restarts, its network namespace is recreated and veth
+        peers inside are destroyed. This method:
+        1. Finds all tracked ports for the container
+        2. Checks which are stale (host-side exists but container peer missing)
+        3. Saves link information before cleanup
+        4. Cleans up stale ports
+        5. Reprovisions fresh veth pairs
+        6. Reconnects any previously connected links
+
+        Args:
+            container_name: Docker container name
+            lab_id: Lab identifier
+
+        Returns:
+            Summary dict with counts of reprovisioned ports/links and any errors
+        """
+        result = {
+            "ports_reprovisioned": 0,
+            "links_reconnected": 0,
+            "errors": [],
+        }
+
+        # Get all ports for this container
+        ports = self.get_ports_for_container(container_name)
+        if not ports:
+            logger.debug(f"No tracked OVS ports for container {container_name}")
+            return result
+
+        # Check which ports are stale and collect link info before cleanup
+        stale_ports: list[OVSPort] = []
+        port_links: dict[str, list[tuple[str, str, str, str]]] = {}  # port_key -> [(cont_a, if_a, cont_b, if_b), ...]
+
+        for port in ports:
+            try:
+                if await self.is_port_stale(port):
+                    stale_ports.append(port)
+
+                    # Find connected links for this port
+                    port_key = port.key
+                    connected_links = []
+                    for link in self._links.values():
+                        if link.port_a == port_key:
+                            # Parse the other endpoint
+                            other_key = link.port_b
+                            parts = other_key.split(":", 1)
+                            if len(parts) == 2:
+                                connected_links.append((
+                                    port.container_name, port.interface_name,
+                                    parts[0], parts[1]
+                                ))
+                        elif link.port_b == port_key:
+                            other_key = link.port_a
+                            parts = other_key.split(":", 1)
+                            if len(parts) == 2:
+                                connected_links.append((
+                                    parts[0], parts[1],
+                                    port.container_name, port.interface_name
+                                ))
+
+                    if connected_links:
+                        port_links[port_key] = connected_links
+
+            except Exception as e:
+                result["errors"].append(f"Error checking port {port.key}: {e}")
+
+        if not stale_ports:
+            logger.debug(f"No stale OVS ports for container {container_name}")
+            return result
+
+        logger.info(
+            f"Container {container_name} restart detected - "
+            f"reprovisioning {len(stale_ports)} stale OVS interfaces"
+        )
+
+        # Clean up stale ports and reprovision
+        for port in stale_ports:
+            port_key = port.key
+            interface_name = port.interface_name
+
+            try:
+                # Cleanup the stale port
+                await self._cleanup_stale_port(port)
+
+                # Reprovision fresh veth pair
+                await self.provision_interface(
+                    container_name=container_name,
+                    interface_name=interface_name,
+                    lab_id=lab_id,
+                )
+                result["ports_reprovisioned"] += 1
+
+                # Reconnect any links that were previously connected
+                if port_key in port_links:
+                    for link_endpoints in port_links[port_key]:
+                        cont_a, if_a, cont_b, if_b = link_endpoints
+                        try:
+                            await self.hot_connect(
+                                container_a=cont_a,
+                                iface_a=if_a,
+                                container_b=cont_b,
+                                iface_b=if_b,
+                                lab_id=lab_id,
+                            )
+                            result["links_reconnected"] += 1
+                        except Exception as e:
+                            result["errors"].append(
+                                f"Failed to reconnect link {cont_a}:{if_a} <-> {cont_b}:{if_b}: {e}"
+                            )
+
+            except Exception as e:
+                result["errors"].append(f"Failed to reprovision {interface_name}: {e}")
+
+        if result["ports_reprovisioned"] > 0:
+            logger.info(
+                f"Reprovisioned {result['ports_reprovisioned']} interfaces, "
+                f"reconnected {result['links_reconnected']} links for {container_name}"
+            )
+
+        if result["errors"]:
+            for error in result["errors"]:
+                logger.warning(error)
+
+        return result
+
     def get_link_by_endpoints(
         self,
         container_a: str,
