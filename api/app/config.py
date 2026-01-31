@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     stale_pending_threshold: int = 600  # 10 minutes
     # How long a lab can be "starting" before auto-reconcile (seconds)
     stale_starting_threshold: int = 900  # 15 minutes
+    # How often image reconciliation runs (seconds)
+    image_reconciliation_interval: int = 300  # 5 minutes
 
     # Job health monitoring settings
     # How often the job health monitor checks for stuck jobs (seconds)

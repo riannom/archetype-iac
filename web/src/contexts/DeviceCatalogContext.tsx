@@ -12,6 +12,7 @@ import { DeviceModel } from '../studio/types';
 import { DeviceCategory } from '../studio/constants';
 import { useImageLibrary } from './ImageLibraryContext';
 import { buildDeviceModels, enrichDeviceCategories } from '../utils/deviceModels';
+import { initializePatterns } from '../studio/utils/interfaceRegistry';
 
 interface ImageCatalogEntry {
   clab?: string;
@@ -117,6 +118,14 @@ export function DeviceCatalogProvider({ children }: DeviceCatalogProviderProps) 
     () => buildDeviceModels(vendorCategories, imageLibrary),
     [vendorCategories, imageLibrary]
   );
+
+  // Initialize interface patterns when device models change
+  // This ensures the interface registry uses data from /vendors API (single source of truth)
+  useEffect(() => {
+    if (deviceModels.length > 0) {
+      initializePatterns(deviceModels);
+    }
+  }, [deviceModels]);
 
   // Compute enriched device categories
   const deviceCategories = useMemo(

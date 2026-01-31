@@ -890,6 +890,28 @@ def agent_supports_vxlan(agent: models.Host) -> bool:
     return "vxlan" in features
 
 
+async def get_agent_images(agent: models.Host) -> dict:
+    """Get list of Docker images on an agent.
+
+    Args:
+        agent: The agent to query
+
+    Returns:
+        Dict with 'images' list containing DockerImageInfo objects
+        Each image has: id, tags, size_bytes, created
+    """
+    url = f"{get_agent_url(agent)}/images"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error(f"Failed to get images from agent {agent.id}: {e}")
+        return {"images": []}
+
+
 async def container_action(
     agent: models.Host,
     container_name: str,

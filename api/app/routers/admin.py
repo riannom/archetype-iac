@@ -391,3 +391,39 @@ async def get_system_logs(
         total_count=len(entries),
         has_more=len(entries) > limit,
     )
+
+
+@router.post("/reconcile-images")
+async def reconcile_images(
+    verify_agents: bool = False,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Reconcile image manifest with ImageHost database table.
+
+    This endpoint ensures consistency between manifest.json (source of truth
+    for image metadata) and the ImageHost table (tracks which images exist
+    on which agents).
+
+    Args:
+        verify_agents: If True, also query agents to verify actual image status
+
+    Returns:
+        Summary of reconciliation actions taken
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    from app.tasks.image_reconciliation import (
+        reconcile_image_hosts,
+        full_image_reconciliation,
+    )
+
+    logger.info("Starting image reconciliation")
+
+    if verify_agents:
+        result = await full_image_reconciliation()
+    else:
+        result = await reconcile_image_hosts()
+
+    return result.to_dict()

@@ -1,7 +1,55 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { usePortManager } from "./usePortManager";
-import { Node, Link, DeviceNode, ExternalNetworkNode, DeviceType } from "../types";
+import { Node, Link, DeviceNode, ExternalNetworkNode, DeviceType, DeviceModel } from "../types";
+import { initializePatterns } from "../utils/interfaceRegistry";
+
+// Initialize interface patterns before tests run
+// This mimics what DeviceCatalogContext does when loading from /vendors API
+const testDeviceModels: DeviceModel[] = [
+  {
+    id: "linux",
+    type: DeviceType.HOST,
+    name: "Linux",
+    icon: "fa-terminal",
+    versions: ["latest"],
+    isActive: true,
+    vendor: "Open Source",
+    portNaming: "eth",
+    portStartIndex: 1,
+    maxPorts: 32,
+  },
+  {
+    id: "ceos",
+    type: DeviceType.SWITCH,
+    name: "Arista EOS",
+    icon: "fa-arrows-left-right-to-line",
+    versions: ["latest"],
+    isActive: true,
+    vendor: "Arista",
+    kind: "ceos",
+    portNaming: "Ethernet",
+    portStartIndex: 1,
+    maxPorts: 64,
+  },
+  {
+    id: "srl",
+    type: DeviceType.SWITCH,
+    name: "Nokia SR Linux",
+    icon: "fa-arrows-left-right-to-line",
+    versions: ["latest"],
+    isActive: true,
+    vendor: "Nokia",
+    kind: "nokia_srlinux",
+    portNaming: "e1-",
+    portStartIndex: 1,
+    maxPorts: 34,
+  },
+];
+
+beforeAll(() => {
+  initializePatterns(testDeviceModels);
+});
 
 // Factory functions for test data
 const createDeviceNode = (overrides: Partial<DeviceNode> = {}): DeviceNode => ({

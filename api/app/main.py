@@ -31,6 +31,7 @@ from app.tasks.health import agent_health_monitor
 from app.tasks.job_health import job_health_monitor
 from app.tasks.reconciliation import state_reconciliation_monitor
 from app.tasks.disk_cleanup import disk_cleanup_monitor
+from app.tasks.image_reconciliation import image_reconciliation_monitor
 
 # Configure structured logging at module load
 setup_logging()
@@ -42,12 +43,13 @@ _agent_monitor_task: asyncio.Task | None = None
 _reconciliation_task: asyncio.Task | None = None
 _job_health_task: asyncio.Task | None = None
 _disk_cleanup_task: asyncio.Task | None = None
+_image_reconciliation_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start background tasks on startup, cleanup on shutdown."""
-    global _agent_monitor_task, _reconciliation_task, _job_health_task, _disk_cleanup_task
+    global _agent_monitor_task, _reconciliation_task, _job_health_task, _disk_cleanup_task, _image_reconciliation_task
 
     # Startup
     logger.info("Starting Archetype API controller")
@@ -88,6 +90,9 @@ async def lifespan(app: FastAPI):
     # Start disk cleanup monitor background task
     _disk_cleanup_task = asyncio.create_task(disk_cleanup_monitor())
 
+    # Start image reconciliation monitor background task
+    _image_reconciliation_task = asyncio.create_task(image_reconciliation_monitor())
+
     yield
 
     # Shutdown
@@ -118,6 +123,13 @@ async def lifespan(app: FastAPI):
         _disk_cleanup_task.cancel()
         try:
             await _disk_cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    if _image_reconciliation_task:
+        _image_reconciliation_task.cancel()
+        try:
+            await _image_reconciliation_task
         except asyncio.CancelledError:
             pass
 

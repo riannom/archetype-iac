@@ -100,6 +100,62 @@ Copy `.env.example` to `.env`. Key settings:
 - `ARCHETYPE_AGENT_ENABLE_LIBVIRT`: Enable LibvirtProvider for VMs (default: false)
 - `ARCHETYPE_AGENT_ENABLE_VXLAN`: Enable VXLAN overlay for multi-host (default: true)
 
+## Data Sources of Truth
+
+This section documents the canonical/authoritative source for each data type in the system.
+
+### Database (PostgreSQL)
+
+| Data Type | Table | Notes |
+|-----------|-------|-------|
+| Lab definitions | `labs` | Core lab metadata (name, owner, state) |
+| Node definitions | `nodes` | Nodes within labs (name, kind, image, host) |
+| Link definitions | `links` | Point-to-point connections between nodes |
+| Node runtime state | `node_states` | actual_state, is_ready, boot_started_at |
+| Link runtime state | `link_states` | actual_state for link up/down |
+| Node placements | `node_placements` | Which agent hosts which node |
+| Image host status | `image_hosts` | Which agents have which images |
+| Jobs | `jobs` | Deploy/destroy operations |
+| Users/Permissions | `users`, `permissions` | Authentication and authorization |
+| Agents | `hosts` | Registered compute agents |
+
+### File-Based Storage (`{WORKSPACE}/images/`)
+
+| File | Purpose | Reconciliation |
+|------|---------|----------------|
+| `manifest.json` | **Source of truth** for image metadata (id, reference, device_id, version) | ImageHost table tracks agent presence |
+| `custom_devices.json` | User-defined device types | Merged with vendor registry in `/vendors` API |
+| `hidden_devices.json` | Hidden device IDs | Filters `/vendors` API output |
+| `device_overrides.json` | Per-device config overrides | Merged in `/vendors/{id}/config` API |
+| `rules.json` | Regex rules for device detection | Used during image import |
+
+### Agent Registry (`agent/vendors.py`)
+
+| Data Type | Notes |
+|-----------|-------|
+| Device catalog | **Single source of truth** for vendor configs (console shell, port naming, boot detection) |
+| Interface patterns | `portNaming`, `portStartIndex`, `maxPorts` per device |
+| Container runtime config | Environment vars, capabilities, sysctls, mounts |
+
+The frontend fetches device data from `/vendors` API (which sources from `agent/vendors.py`) rather than maintaining hardcoded duplicates.
+
+### Runtime State
+
+| State | Location | Persistence |
+|-------|----------|-------------|
+| Container status | Docker daemon (agent) | Reconciled to `node_states` via background task |
+| Deploy locks | Redis (`deploy_lock:{lab_id}`) | TTL-based, auto-expires |
+| Job queue | Redis (RQ queue "archetype") | Lost on Redis restart |
+| Upload sessions | API process memory | Lost on API restart |
+
+### Reconciliation Tasks
+
+Background tasks run periodically to reconcile state:
+
+- **State Reconciliation** (`app/tasks/reconciliation.py`): Syncs `node_states` and `link_states` with actual container status
+- **Image Reconciliation** (`app/tasks/image_reconciliation.py`): Syncs `image_hosts` table with `manifest.json`
+- **Job Health** (`app/tasks/job_health.py`): Detects stuck jobs and marks them failed
+
 ## Conventions
 
 - Use Conventional Commits: `feat:`, `fix:`, `docs:`, etc.
