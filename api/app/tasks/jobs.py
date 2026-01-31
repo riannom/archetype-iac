@@ -851,10 +851,12 @@ async def run_node_sync(
                 node_names_to_sync = {ns.node_name for ns in node_states}
 
                 # Find host assignments for these nodes
+                # Use container_name (yaml key like 'ceos_3') not display name ('CEOS-3')
                 node_hosts = {}
                 for node in graph.nodes:
-                    if node.name in node_names_to_sync and node.host:
-                        node_hosts[node.name] = node.host
+                    node_key = node.container_name or node.name
+                    if node_key in node_names_to_sync and node.host:
+                        node_hosts[node_key] = node.host
 
                 # If all nodes being synced have the same host, use that
                 if node_hosts:
