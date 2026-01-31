@@ -444,6 +444,35 @@ async def run_multihost_deploy(
         # Analyze for multi-host deployment
         analysis = analyze_topology(graph)
 
+        # Check if there are nodes without explicit placement
+        placed_node_count = sum(len(p) for p in analysis.placements.values())
+        total_node_count = len(graph.nodes)
+
+        if placed_node_count < total_node_count:
+            # Some nodes don't have explicit host placement
+            # Find a default agent for them
+            default_agent = await agent_client.get_agent_for_lab(
+                session, lab, required_provider=provider
+            )
+            if default_agent:
+                # Re-analyze with default host for unplaced nodes
+                analysis = analyze_topology(graph, default_host=default_agent.name)
+                logger.info(
+                    f"Lab {lab_id} has {total_node_count - placed_node_count} nodes without "
+                    f"explicit placement, using {default_agent.name} as default host"
+                )
+            else:
+                # No default agent available - fail the unplaced nodes
+                job.status = "failed"
+                job.completed_at = datetime.utcnow()
+                job.log_path = (
+                    f"ERROR: {total_node_count - placed_node_count} nodes have no explicit "
+                    f"host placement and no default agent is available"
+                )
+                update_lab_state(session, lab_id, "error", error="No agent for unplaced nodes")
+                session.commit()
+                return
+
         logger.info(
             f"Multi-host deployment for lab {lab_id}: "
             f"{len(analysis.placements)} hosts, "
@@ -858,30 +887,161 @@ async def run_node_sync(
                     if node_key in node_names_to_sync and node.host:
                         node_hosts[node_key] = node.host
 
-                # If all nodes being synced have the same host, use that
-                if node_hosts:
-                    unique_hosts = set(node_hosts.values())
-                    if len(unique_hosts) == 1:
-                        target_agent_id = list(unique_hosts)[0]
-                        logger.info(f"Node(s) have explicit host placement: {target_agent_id}")
+                # Determine target agent for ALL nodes (explicit and auto-placed)
+                # to avoid spawning jobs that race on the same agent
+                all_node_agents: dict[str, str] = {}  # node_name -> agent_id
+
+                # First, assign explicit placements
+                # Topology host field can be either agent NAME or agent ID
+                for node_name, host_value in node_hosts.items():
+                    # Try lookup by name first
+                    host_agent = await agent_client.get_agent_by_name(session, host_value, required_provider=provider)
+                    if not host_agent:
+                        # Try lookup by ID (topology might store ID instead of name)
+                        host_agent = session.get(models.Host, host_value)
+                        if host_agent and not agent_client.is_agent_online(host_agent):
+                            host_agent = None
+                    if host_agent:
+                        all_node_agents[node_name] = host_agent.id
+                    else:
+                        logger.warning(f"Agent '{host_value}' not found for node {node_name}")
+
+                # Then, determine agent for auto-placed nodes
+                auto_placed_nodes = [ns for ns in node_states if ns.node_name not in node_hosts]
+                if auto_placed_nodes:
+                    # Check existing placements
+                    auto_node_names = {ns.node_name for ns in auto_placed_nodes}
+                    existing_placements = (
+                        session.query(models.NodePlacement)
+                        .filter(
+                            models.NodePlacement.lab_id == lab_id,
+                            models.NodePlacement.node_name.in_(auto_node_names),
+                        )
+                        .all()
+                    )
+                    placement_map = {p.node_name: p.host_id for p in existing_placements}
+
+                    # Find default agent for nodes without existing placement
+                    default_agent_id = None
+                    if lab.agent_id:
+                        default_agent = session.get(models.Host, lab.agent_id)
+                        if default_agent and agent_client.is_agent_online(default_agent):
+                            default_agent_id = lab.agent_id
+                    if not default_agent_id:
+                        healthy_agent = await agent_client.get_healthy_agent(session, required_provider=provider)
+                        if healthy_agent:
+                            default_agent_id = healthy_agent.id
+
+                    for ns in auto_placed_nodes:
+                        if ns.node_name in placement_map:
+                            # Use existing placement
+                            all_node_agents[ns.node_name] = placement_map[ns.node_name]
+                        elif default_agent_id:
+                            # Use default agent
+                            all_node_agents[ns.node_name] = default_agent_id
+                        # else: will be handled by fallback logic later
+
+                # Group nodes by their target agent
+                nodes_by_agent: dict[str, list] = {}
+                nodes_without_agent = []
+                for ns in node_states:
+                    agent_id = all_node_agents.get(ns.node_name)
+                    if agent_id:
+                        if agent_id not in nodes_by_agent:
+                            nodes_by_agent[agent_id] = []
+                        nodes_by_agent[agent_id].append(ns)
+                    else:
+                        nodes_without_agent.append(ns)
+
+                if nodes_by_agent:
+                    # Pick the first agent to handle in this job
+                    agent_ids = list(nodes_by_agent.keys())
+                    target_agent_id = agent_ids[0]
+                    node_states = nodes_by_agent[target_agent_id]
+                    logger.info(f"Processing {len(node_states)} node(s) on agent {target_agent_id}")
+
+                    # Spawn separate jobs for other agents
+                    for other_agent_id in agent_ids[1:]:
+                        other_nodes = nodes_by_agent[other_agent_id]
+                        other_node_ids = [ns.node_id for ns in other_nodes]
+                        logger.info(f"Spawning sync job for {len(other_node_ids)} node(s) on agent {other_agent_id}")
+                        other_job = models.Job(
+                            lab_id=lab_id,
+                            user_id=job.user_id,
+                            action=f"sync:agent:{other_agent_id}:{','.join(other_node_ids)}",
+                            status="queued",
+                        )
+                        session.add(other_job)
+                        session.commit()
+                        session.refresh(other_job)
+                        asyncio.create_task(run_node_sync(other_job.id, lab_id, other_node_ids, provider=provider))
+
+                # Handle nodes that couldn't be assigned an agent
+                # DON'T spawn separate jobs - that can cause infinite loops if agent lookup keeps failing
+                if nodes_without_agent:
+                    if not node_states:
+                        # No other nodes with agents, try to handle these with fallback logic
+                        node_states = nodes_without_agent
+                    else:
+                        # We have nodes with assigned agents - mark unassigned nodes as error
+                        # Don't spawn a job that might loop indefinitely
+                        logger.warning(
+                            f"Cannot assign agent for {len(nodes_without_agent)} node(s), marking as error"
+                        )
+                        for ns in nodes_without_agent:
+                            ns.actual_state = "error"
+                            ns.error_message = "No agent available for explicit host placement"
+                        session.commit()
             except Exception as e:
                 logger.warning(f"Failed to parse topology for host placement: {e}")
 
-        # Find the agent - either from explicit placement or affinity
+        # Find the agent - either from explicit placement or for non-placed nodes
         if target_agent_id:
-            # Use the explicitly specified agent
+            # Use the explicitly specified agent from topology
             agent = session.get(models.Host, target_agent_id)
             if agent and not agent_client.is_agent_online(agent):
                 # Agent is offline or has stale heartbeat, can't use it
                 logger.warning(f"Target agent {target_agent_id} is offline or unresponsive")
                 agent = None
         else:
-            # Fall back to affinity-based selection
-            agent = await agent_client.get_agent_for_lab(
-                session,
-                lab,
-                required_provider=provider,
+            # Nodes don't have explicit host - check for existing placements first
+            # This keeps nodes on their current agent if they have one
+            agent = None  # Initialize before conditional blocks
+            node_names_to_sync = {ns.node_name for ns in node_states}
+            existing_placements = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name.in_(node_names_to_sync),
+                )
+                .all()
             )
+
+            if existing_placements:
+                # Use the agent where these nodes are already placed
+                placement_agents = {p.host_id for p in existing_placements}
+                if len(placement_agents) == 1:
+                    placement_agent_id = list(placement_agents)[0]
+                    agent = session.get(models.Host, placement_agent_id)
+                    if agent and agent_client.is_agent_online(agent):
+                        logger.info(f"Using existing placement agent: {agent.name}")
+                    else:
+                        agent = None
+
+            if not agent:
+                # No existing placement - use lab's default agent or find any healthy one
+                # Don't use affinity here to avoid placing on wrong agent
+                if lab.agent_id:
+                    agent = session.get(models.Host, lab.agent_id)
+                    if agent and not agent_client.is_agent_online(agent):
+                        agent = None
+
+                if not agent:
+                    # Find any healthy agent (no affinity preference)
+                    agent = await agent_client.get_healthy_agent(
+                        session,
+                        required_provider=provider,
+                    )
         if not agent:
             job.status = "failed"
             job.completed_at = datetime.utcnow()
@@ -944,6 +1104,158 @@ async def run_node_sync(
             ns.error_message = None
         session.commit()
 
+        # Migration detection: Check if nodes exist on different agents and clean them up
+        # This handles the case where a node's host placement changed
+        nodes_to_start_or_deploy = nodes_need_deploy + nodes_need_start
+        if nodes_to_start_or_deploy:
+            node_names_to_check = [ns.node_name for ns in nodes_to_start_or_deploy]
+
+            # Get current placements for these nodes
+            current_placements = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name.in_(node_names_to_check),
+                )
+                .all()
+            )
+
+            # Find nodes on wrong agents
+            migrations_needed = []
+            for placement in current_placements:
+                if placement.host_id != agent.id:
+                    migrations_needed.append(placement)
+
+            if migrations_needed:
+                log_parts.append("=== Migration: Cleaning up containers on old agents ===")
+                logger.info(
+                    f"Migration needed for {len(migrations_needed)} nodes in lab {lab_id}"
+                )
+
+                # Group by old agent for efficiency
+                old_agent_nodes: dict[str, list[str]] = {}
+                for placement in migrations_needed:
+                    if placement.host_id not in old_agent_nodes:
+                        old_agent_nodes[placement.host_id] = []
+                    old_agent_nodes[placement.host_id].append(placement.node_name)
+
+                # Stop containers on each old agent
+                for old_agent_id, node_names in old_agent_nodes.items():
+                    old_agent = session.get(models.Host, old_agent_id)
+                    if not old_agent:
+                        log_parts.append(f"  Old agent {old_agent_id} not found, skipping cleanup")
+                        continue
+
+                    if not agent_client.is_agent_online(old_agent):
+                        log_parts.append(f"  Old agent {old_agent.name} is offline, skipping cleanup")
+                        continue
+
+                    log_parts.append(f"  Stopping {len(node_names)} container(s) on {old_agent.name}...")
+
+                    for node_name in node_names:
+                        container_name = _get_container_name(lab_id, node_name)
+                        try:
+                            result = await agent_client.container_action(
+                                old_agent, container_name, "stop"
+                            )
+                            if result.get("success"):
+                                log_parts.append(f"    {node_name}: stopped on {old_agent.name}")
+                            else:
+                                # Container might not exist or already stopped - that's OK
+                                error = result.get("error", "unknown")
+                                log_parts.append(f"    {node_name}: {error}")
+                        except Exception as e:
+                            log_parts.append(f"    {node_name}: cleanup failed - {e}")
+
+                    # Delete old placement records for migrated nodes
+                    for node_name in node_names:
+                        session.query(models.NodePlacement).filter(
+                            models.NodePlacement.lab_id == lab_id,
+                            models.NodePlacement.node_name == node_name,
+                            models.NodePlacement.host_id == old_agent_id,
+                        ).delete()
+
+                session.commit()
+                log_parts.append("")
+
+            # Fallback: For nodes without NodePlacement records, check all other agents
+            # This handles containers created before placement tracking was added
+            #
+            # OPTIMIZATION: Skip nodes that have never been deployed (actual_state=undeployed)
+            # or have explicit host placement. These nodes can't exist on other agents.
+            placed_node_names = {p.node_name for p in current_placements}
+
+            # Get the actual state of nodes we're checking
+            node_actual_states = {
+                ns.node_name: ns.actual_state
+                for ns in nodes_to_start_or_deploy
+            }
+
+            # Get nodes with explicit host placement from topology
+            nodes_with_explicit_host = set()
+            for n in graph.nodes:
+                node_key = n.container_name or n.name
+                if n.host:  # Has explicit host placement
+                    nodes_with_explicit_host.add(node_key)
+
+            # Filter to only nodes that:
+            # 1. Have no placement record AND
+            # 2. Were previously deployed (not undeployed) AND
+            # 3. Don't have explicit host placement
+            untracked_nodes = [
+                n for n in node_names_to_check
+                if n not in placed_node_names
+                and node_actual_states.get(n) not in ("undeployed", None)
+                and n not in nodes_with_explicit_host
+            ]
+
+            if untracked_nodes:
+                # Get all online agents except the target
+                all_agents = (
+                    session.query(models.Host)
+                    .filter(
+                        models.Host.id != agent.id,
+                        models.Host.status == "online",
+                    )
+                    .all()
+                )
+
+                # Filter to actually online agents
+                other_agents = [a for a in all_agents if agent_client.is_agent_online(a)]
+
+                if other_agents:
+                    log_parts.append("=== Migration: Checking other agents for untracked containers ===")
+                    logger.info(
+                        f"Checking {len(other_agents)} other agents for {len(untracked_nodes)} "
+                        f"untracked nodes in lab {lab_id}"
+                    )
+
+                    for other_agent in other_agents:
+                        containers_found = []
+                        for node_name in untracked_nodes:
+                            container_name = _get_container_name(lab_id, node_name)
+                            try:
+                                # Try to stop - if it succeeds, container existed
+                                result = await agent_client.container_action(
+                                    other_agent, container_name, "stop"
+                                )
+                                if result.get("success"):
+                                    containers_found.append(node_name)
+                                    log_parts.append(
+                                        f"  {node_name}: found and stopped on {other_agent.name}"
+                                    )
+                                # If "not found" error, container doesn't exist - that's expected
+                            except Exception as e:
+                                logger.debug(f"Container check failed on {other_agent.name}: {e}")
+
+                        if containers_found:
+                            logger.info(
+                                f"Stopped {len(containers_found)} containers on {other_agent.name} "
+                                f"during migration for lab {lab_id}"
+                            )
+
+                    log_parts.append("")
+
         # Phase 1: If any nodes need deploy, we need to deploy the full topology
         # Containerlab doesn't support per-node deploy, so we deploy all and then stop unwanted
         if nodes_need_deploy:
@@ -966,9 +1278,101 @@ async def run_node_sync(
 
             # Convert to containerlab format
             graph = yaml_to_graph(topology_yaml)
-            clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
 
-            log_parts.append(f"Deploying topology with {len(graph.nodes)} nodes...")
+            # Get the names of nodes we're actually trying to deploy
+            nodes_to_deploy_names = {ns.node_name for ns in nodes_need_deploy}
+
+            # IMPORTANT: Include ALL nodes that belong on this agent, not just nodes being deployed
+            # Containerlab's --reconfigure will DESTROY nodes not in the topology!
+            # So we must include running nodes to prevent them from being removed.
+            from app.topology import TopologyGraph
+
+            # Get all nodes that should be on this agent
+            all_agent_node_names = set()
+            for n in graph.nodes:
+                node_key = n.container_name or n.name
+                # Check if this node belongs on this agent
+                if n.host:
+                    # Explicit host - check if it matches this agent (by name or ID)
+                    if n.host == agent.name or n.host == agent.id:
+                        all_agent_node_names.add(node_key)
+                else:
+                    # Auto-placed node - include if it's one we're deploying
+                    # (auto-placed nodes on this agent are the ones we're syncing)
+                    if node_key in nodes_to_deploy_names:
+                        all_agent_node_names.add(node_key)
+                    else:
+                        # Check if this node has a placement on this agent
+                        placement = (
+                            session.query(models.NodePlacement)
+                            .filter(
+                                models.NodePlacement.lab_id == lab_id,
+                                models.NodePlacement.node_name == node_key,
+                                models.NodePlacement.host_id == agent.id,
+                            )
+                            .first()
+                        )
+                        if placement:
+                            all_agent_node_names.add(node_key)
+
+            # Also include nodes that exist (running or stopped) and should be on this agent
+            # For nodes without placement records, assume they're on the lab's default agent
+            # Include stopped nodes too - they have containers that would be destroyed!
+            all_existing = (
+                session.query(models.NodeState)
+                .filter(
+                    models.NodeState.lab_id == lab_id,
+                    models.NodeState.actual_state.in_(["running", "stopped"]),
+                )
+                .all()
+            )
+            for ns in all_existing:
+                # Check if this node has a placement
+                placement = (
+                    session.query(models.NodePlacement)
+                    .filter(
+                        models.NodePlacement.lab_id == lab_id,
+                        models.NodePlacement.node_name == ns.node_name,
+                    )
+                    .first()
+                )
+                if placement:
+                    if placement.host_id == agent.id:
+                        all_agent_node_names.add(ns.node_name)
+                else:
+                    # No placement - assume it's on lab's default agent or this agent
+                    if lab.agent_id == agent.id or lab.agent_id is None:
+                        all_agent_node_names.add(ns.node_name)
+
+            # Filter topology to include all nodes for this agent
+            filtered_nodes = [n for n in graph.nodes if (n.container_name or n.name) in all_agent_node_names]
+
+            # Include links where BOTH endpoints are in our filtered nodes
+            filtered_node_names = {n.container_name or n.name for n in filtered_nodes}
+            filtered_links = [
+                link for link in graph.links
+                if all(ep.node in filtered_node_names for ep in link.endpoints)
+            ]
+
+            filtered_graph = TopologyGraph(
+                nodes=filtered_nodes,
+                links=filtered_links,
+                defaults=graph.defaults,
+            )
+
+            # Track which nodes are actually being deployed (the new ones)
+            deployed_node_names = nodes_to_deploy_names & filtered_node_names
+
+            if deployed_node_names:
+                clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
+                log_parts.append(f"Deploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
+            else:
+                log_parts.append(f"No nodes to deploy on {agent.name}")
+                for ns in nodes_need_deploy:
+                    ns.actual_state = "error"
+                    ns.error_message = "No nodes to deploy"
+                session.commit()
+                nodes_need_deploy = []
 
             try:
                 result = await agent_client.deploy_to_agent(
@@ -988,9 +1392,10 @@ async def run_node_sync(
                         .all()
                     )
 
-                    # Update NodePlacement records for affinity tracking
-                    all_node_names = [ns.node_name for ns in all_states]
-                    await _update_node_placements(session, lab_id, agent.id, all_node_names)
+                    # Only update NodePlacement for nodes that were actually deployed
+                    await _update_node_placements(
+                        session, lab_id, agent.id, list(deployed_node_names)
+                    )
 
                     # Clean up orphan containers on old agents if deploy moved
                     if old_agent_ids and agent.id not in old_agent_ids:
@@ -1000,19 +1405,20 @@ async def run_node_sync(
                             session, lab_id, agent.id, old_agent_ids, log_parts
                         )
 
-                    # After deploy, all nodes are running by default in containerlab
-                    # We need to stop nodes where desired_state=stopped
+                    # After deploy, only deployed nodes are running
+                    # We need to stop deployed nodes where desired_state=stopped
                     nodes_to_stop_after_deploy = [
                         ns for ns in all_states
-                        if ns.desired_state == "stopped"
+                        if ns.desired_state == "stopped" and ns.node_name in deployed_node_names
                     ]
 
-                    # First, mark all nodes as running (since clab starts them all)
+                    # Mark deployed nodes as running (since clab starts them all)
                     for ns in all_states:
-                        ns.actual_state = "running"
-                        ns.error_message = None
-                        if not ns.boot_started_at:
-                            ns.boot_started_at = datetime.now(timezone.utc)
+                        if ns.node_name in deployed_node_names:
+                            ns.actual_state = "running"
+                            ns.error_message = None
+                            if not ns.boot_started_at:
+                                ns.boot_started_at = datetime.now(timezone.utc)
 
                     session.commit()
 
@@ -1081,20 +1487,90 @@ async def run_node_sync(
                 topology_yaml = topo_path.read_text(encoding="utf-8")
                 graph = yaml_to_graph(topology_yaml)
 
-                # For multi-host labs, filter topology to only include nodes for this agent
-                # Don't use default_host - only nodes with explicit host placement should be filtered
-                analysis = analyze_topology(graph, default_host=None)
-                host_topologies = split_topology_by_host(graph, analysis)
+                # Get the names of nodes we're actually trying to start
+                nodes_to_start_names = {ns.node_name for ns in nodes_need_start}
 
-                if agent.id in host_topologies:
-                    # Use filtered topology for this host
-                    filtered_graph = host_topologies[agent.id]
+                # IMPORTANT: Include ALL nodes that belong on this agent, not just nodes being started
+                # Containerlab's --reconfigure will DESTROY nodes not in the topology!
+                from app.topology import TopologyGraph
+
+                # Get all nodes that should be on this agent
+                all_agent_node_names = set()
+                for n in graph.nodes:
+                    node_key = n.container_name or n.name
+                    if n.host:
+                        if n.host == agent.name or n.host == agent.id:
+                            all_agent_node_names.add(node_key)
+                    else:
+                        if node_key in nodes_to_start_names:
+                            all_agent_node_names.add(node_key)
+                        else:
+                            placement = (
+                                session.query(models.NodePlacement)
+                                .filter(
+                                    models.NodePlacement.lab_id == lab_id,
+                                    models.NodePlacement.node_name == node_key,
+                                    models.NodePlacement.host_id == agent.id,
+                                )
+                                .first()
+                            )
+                            if placement:
+                                all_agent_node_names.add(node_key)
+
+                # Also include nodes that exist (running or stopped) and should be on this agent
+                all_existing = (
+                    session.query(models.NodeState)
+                    .filter(
+                        models.NodeState.lab_id == lab_id,
+                        models.NodeState.actual_state.in_(["running", "stopped"]),
+                    )
+                    .all()
+                )
+                for ns in all_existing:
+                    placement = (
+                        session.query(models.NodePlacement)
+                        .filter(
+                            models.NodePlacement.lab_id == lab_id,
+                            models.NodePlacement.node_name == ns.node_name,
+                        )
+                        .first()
+                    )
+                    if placement:
+                        if placement.host_id == agent.id:
+                            all_agent_node_names.add(ns.node_name)
+                    else:
+                        if lab.agent_id == agent.id or lab.agent_id is None:
+                            all_agent_node_names.add(ns.node_name)
+
+                # Filter topology to include all nodes for this agent
+                filtered_nodes = [n for n in graph.nodes if (n.container_name or n.name) in all_agent_node_names]
+
+                # Include links where BOTH endpoints are in our filtered nodes
+                filtered_node_names = {n.container_name or n.name for n in filtered_nodes}
+                filtered_links = [
+                    link for link in graph.links
+                    if all(ep.node in filtered_node_names for ep in link.endpoints)
+                ]
+
+                filtered_graph = TopologyGraph(
+                    nodes=filtered_nodes,
+                    links=filtered_links,
+                    defaults=graph.defaults,
+                )
+
+                # Track which nodes are actually being started (the new ones)
+                deployed_node_names = nodes_to_start_names & filtered_node_names
+
+                if deployed_node_names:
                     clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
-                    log_parts.append(f"Redeploying {len(filtered_graph.nodes)} node(s) on {agent.name}...")
+                    log_parts.append(f"Redeploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
                 else:
-                    # No nodes for this host - shouldn't happen but handle gracefully
-                    clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
-                    log_parts.append(f"Redeploying topology with {len(graph.nodes)} nodes...")
+                    log_parts.append(f"No nodes to redeploy on {agent.name}")
+                    for ns in nodes_need_start:
+                        ns.actual_state = "error"
+                        ns.error_message = "No nodes to deploy"
+                    session.commit()
+                    nodes_need_start = []
 
                 try:
                     result = await agent_client.deploy_to_agent(
@@ -1107,17 +1583,17 @@ async def run_node_sync(
                         # Capture management IPs for IaC workflows
                         await _capture_node_ips(session, lab_id, agent)
 
-                        # After redeploy, all nodes are running
-                        # Get all node states for this lab to update them
+                        # Get all node states for this lab
                         all_states = (
                             session.query(models.NodeState)
                             .filter(models.NodeState.lab_id == lab_id)
                             .all()
                         )
 
-                        # Update NodePlacement records for affinity tracking
-                        all_node_names = [ns.node_name for ns in all_states]
-                        await _update_node_placements(session, lab_id, agent.id, all_node_names)
+                        # Only update NodePlacement for nodes that were actually deployed
+                        await _update_node_placements(
+                            session, lab_id, agent.id, list(deployed_node_names)
+                        )
 
                         # Clean up orphan containers on old agents if deploy moved
                         if old_agent_ids and agent.id not in old_agent_ids:
@@ -1127,17 +1603,18 @@ async def run_node_sync(
                                 session, lab_id, agent.id, old_agent_ids, log_parts
                             )
 
-                        # Mark all nodes as running (clab starts them all)
+                        # Only mark deployed nodes as running (not all nodes)
                         for ns in all_states:
-                            ns.actual_state = "running"
-                            ns.error_message = None
-                            if not ns.boot_started_at:
-                                ns.boot_started_at = datetime.now(timezone.utc)
+                            if ns.node_name in deployed_node_names:
+                                ns.actual_state = "running"
+                                ns.error_message = None
+                                if not ns.boot_started_at:
+                                    ns.boot_started_at = datetime.now(timezone.utc)
 
-                        # Now stop nodes that should be stopped
+                        # Now stop deployed nodes that should be stopped
                         nodes_to_stop_after = [
                             ns for ns in all_states
-                            if ns.desired_state == "stopped"
+                            if ns.desired_state == "stopped" and ns.node_name in deployed_node_names
                         ]
 
                         if nodes_to_stop_after:

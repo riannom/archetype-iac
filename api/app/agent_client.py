@@ -497,23 +497,25 @@ async def get_agent_by_name(
     name: str,
     required_provider: str | None = None,
 ) -> models.Host | None:
-    """Get a healthy agent by name.
+    """Get a healthy agent by name or ID.
 
     Args:
         database: Database session
-        name: Agent name to look for
+        name: Agent name or ID to look for
         required_provider: Optional provider the agent must support
 
     Returns:
         Agent if found and healthy, None otherwise
     """
     from datetime import timezone
+    from sqlalchemy import or_
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
 
+    # Check both name and ID since topology may store either
     agent = (
         database.query(models.Host)
         .filter(
-            models.Host.name == name,
+            or_(models.Host.name == name, models.Host.id == name),
             models.Host.status == "online",
             models.Host.last_heartbeat >= cutoff,
         )

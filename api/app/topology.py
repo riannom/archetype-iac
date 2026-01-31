@@ -311,9 +311,11 @@ def _parse_link_item(item: Any) -> GraphLink | None:
 def yaml_to_graph(content: str) -> TopologyGraph:
     data = yaml.safe_load(content) or {}
 
+    # Handle both graph format (nodes at top level) and containerlab format (topology.nodes)
+    topology = data.get("topology", {})
     defaults = data.get("defaults", {})
-    nodes_data = data.get("nodes", {})
-    links_data = data.get("links", [])
+    nodes_data = data.get("nodes") or topology.get("nodes", {})
+    links_data = data.get("links") or topology.get("links", [])
 
     # Fields that are parsed as explicit GraphNode attributes (not stored in vars)
     node_explicit_fields = {
@@ -321,6 +323,8 @@ def yaml_to_graph(content: str) -> TopologyGraph:
         "_gui_id", "_display_name",
         # External network fields
         "node_type", "connection_type", "parent_interface", "vlan_id", "bridge_name",
+        # Containerlab-specific fields
+        "kind", "labels",
     }
 
     nodes: list[GraphNode] = []
@@ -340,6 +344,12 @@ def yaml_to_graph(content: str) -> TopologyGraph:
             # YAML key is the containerlab container name
             yaml_key = str(name)
             container_to_gui_id[yaml_key] = str(node_id)
+            # Get host from direct attribute or from containerlab labels
+            host = attrs.get("host")
+            if not host:
+                labels = attrs.get("labels", {})
+                if isinstance(labels, dict):
+                    host = labels.get("archetype-host")
             nodes.append(
                 GraphNode(
                     id=str(node_id),
@@ -347,14 +357,14 @@ def yaml_to_graph(content: str) -> TopologyGraph:
                     container_name=yaml_key,
                     # Node type (device or external)
                     node_type=attrs.get("node_type", "device"),
-                    # Device node fields
-                    device=attrs.get("device"),
+                    # Device node fields - support both 'device' and containerlab 'kind'
+                    device=attrs.get("device") or attrs.get("kind"),
                     image=attrs.get("image"),
                     version=attrs.get("version"),
                     role=attrs.get("role"),
                     mgmt=attrs.get("mgmt"),
                     network_mode=attrs.get("network-mode"),
-                    host=attrs.get("host"),
+                    host=host,
                     # External network fields
                     connection_type=attrs.get("connection_type"),
                     parent_interface=attrs.get("parent_interface"),
