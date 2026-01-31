@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
+import { useImageLibrary } from '../contexts/ImageLibraryContext';
 import { apiRequest } from '../api';
 import DeviceManager from '../studio/components/DeviceManager';
 import DeviceConfigManager from '../studio/components/DeviceConfigManager';
@@ -105,6 +106,7 @@ type TabType = 'devices' | 'images' | 'sync';
 const NodesPage: React.FC = () => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user, loading: userLoading } = useUser();
+  const { imageLibrary, refreshImageLibrary } = useImageLibrary();
   const navigate = useNavigate();
   const location = useLocation();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
@@ -130,7 +132,6 @@ const NodesPage: React.FC = () => {
   };
 
   const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
-  const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
   const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
   const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
     const stored = localStorage.getItem('archetype_custom_devices');
@@ -149,17 +150,17 @@ const NodesPage: React.FC = () => {
       // Fetch vendor categories (comprehensive device list with rich metadata)
       const vendorData = await apiRequest<DeviceCategory[]>('/vendors');
       setVendorCategories(vendorData || []);
-      // Fetch image catalog and library
+      // Fetch image catalog
       const imageData = await apiRequest<{ images?: Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }> }>('/images');
       setImageCatalog(imageData.images || {});
-      const libraryData = await apiRequest<{ images?: ImageLibraryEntry[] }>('/images/library');
-      setImageLibrary(libraryData.images || []);
+      // Refresh image library from shared context
+      await refreshImageLibrary();
     } catch (err) {
       console.error('Failed to load devices:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [refreshImageLibrary]);
 
   useEffect(() => {
     loadDevices();

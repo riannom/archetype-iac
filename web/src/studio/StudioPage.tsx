@@ -19,6 +19,7 @@ import { usePortManager } from './hooks/usePortManager';
 import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { useNotifications } from '../contexts/NotificationContext';
+import { useImageLibrary } from '../contexts/ImageLibraryContext';
 import { ArchetypeIcon } from '../components/icons';
 import './studio.css';
 import 'xterm/css/xterm.css';
@@ -293,6 +294,7 @@ const StudioPage: React.FC = () => {
   const { effectiveMode } = useTheme();
   const { user, refreshUser } = useUser();
   const { addNotification, preferences } = useNotifications();
+  const { imageLibrary } = useImageLibrary();
   const isAdmin = user?.is_admin ?? false;
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
@@ -307,7 +309,6 @@ const StudioPage: React.FC = () => {
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
   const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
-  const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
   const [imageCatalog, setImageCatalog] = useState<Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }>>({});
   const [customDevices, setCustomDevices] = useState<CustomDevice[]>(() => {
     const stored = localStorage.getItem('archetype_custom_devices');
@@ -589,8 +590,7 @@ const StudioPage: React.FC = () => {
   const loadDevices = useCallback(async () => {
     const imageData = await studioRequest<{ images?: Record<string, { clab?: string; libvirt?: string; virtualbox?: string; caveats?: string[] }> }>('/images');
     setImageCatalog(imageData.images || {});
-    const libraryData = await studioRequest<{ images?: ImageLibraryEntry[] }>('/images/library');
-    setImageLibrary(libraryData.images || []);
+    // Image library is loaded from shared ImageLibraryContext
     // Load vendor categories from unified registry (provides device catalog + rich metadata)
     const vendorData = await studioRequest<DeviceCategory[]>('/vendors');
     setVendorCategories(vendorData || []);
