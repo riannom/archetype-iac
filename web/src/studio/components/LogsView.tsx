@@ -567,8 +567,20 @@ const LogsView: React.FC<LogsViewProps> = ({
                       <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'} text-stone-400 dark:text-stone-600 shrink-0`} />
                     </div>
                     {isExpanded && (
-                      <div className="px-4 py-3 bg-stone-100 dark:bg-stone-800/70 border-l-2 border-l-stone-300 dark:border-l-stone-600 ml-0">
-                        <div className="flex flex-col gap-2">
+                      <div className="px-4 py-3 bg-stone-100 dark:bg-stone-800/70 border-l-2 border-l-stone-300 dark:border-l-stone-600 ml-0 relative">
+                        {/* Close button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedEntryIdx(null);
+                            setExpandedJobLog(null);
+                          }}
+                          className="absolute top-2 right-2 p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 rounded transition-all"
+                          title="Collapse"
+                        >
+                          <i className="fa-solid fa-times" />
+                        </button>
+                        <div className="flex flex-col gap-2 pr-8">
                           {/* Full message */}
                           <div>
                             <span className="text-[9px] font-bold text-stone-500 uppercase">Message</span>
