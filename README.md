@@ -8,8 +8,9 @@ A web-based network lab management platform. Design network topologies with a dr
 
 - **Visual Topology Designer** - Drag-and-drop canvas for building network topologies
 - **One-Click Deployment** - Deploy labs with a single click
-- **Web Console Access** - SSH/console access to devices directly in the browser via WebSocket
+- **Web Console Access** - SSH/console access to devices directly in the browser via WebSocket, with boot logs displayed before CLI prompt
 - **Multi-Host Support** - Distributed agents for running labs across multiple hosts with VXLAN overlay
+- **OVS Network Plugin** - Per-lab Open vSwitch bridges with pre-boot interface provisioning for devices that require interfaces at startup (cEOS, etc.)
 - **Image Library** - Upload and manage container images (cEOS, etc.) and QCOW2 disk images
 - **YAML Import/Export** - Import existing topologies or export for use elsewhere
 - **User Management** - Local authentication and OIDC/SSO support
@@ -52,16 +53,18 @@ A web-based network lab management platform. Design network topologies with a dr
 ┌─────────────────────────────────────────────────────────────┐
 │                      Agent (FastAPI)                         │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  DockerProvider  │  LibvirtProvider  │  Networking   │   │
+│  │  DockerProvider  │  LibvirtProvider  │  OVS Plugin   │   │
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    Container Runtime                         │
+│               Container Runtime + OVS Bridges                │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐        │
 │  │  cEOS   │  │  SRLinux│  │   FRR   │  │  Linux  │  ...   │
-│  └─────────┘  └─────────┘  └─────────┘  └─────────┘        │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘        │
+│       └────────────┴───────┬────┴────────────┘              │
+│                     OVS Bridge (per-lab)                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -192,6 +195,14 @@ Options:
 
 Agents automatically register with the controller and appear in the UI.
 
+### Cross-Host Connectivity
+
+When nodes in the same lab are placed on different hosts, Archetype automatically creates VXLAN tunnels:
+
+- **Same-host links**: Connected via OVS with VLAN tags for isolation
+- **Cross-host links**: Connected via VXLAN tunnels with deterministic VNI allocation
+- **Link state**: Each link endpoint tracks carrier state (up/down) independently
+
 ## Usage
 
 ### Creating a Lab
@@ -206,6 +217,8 @@ Agents automatically register with the controller and appear in the UI.
 1. Click on a running device in the topology
 2. Select **Console** from the context menu
 3. A terminal opens in your browser with SSH/console access
+
+The console displays the last 50 lines of container boot output before the CLI prompt, helping diagnose startup issues.
 
 ### Importing Topologies
 
@@ -296,9 +309,12 @@ alembic revision --autogenerate -m "description"  # Create migration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `ARCHETYPE_AGENT_NAME` | Unique agent identifier | `default` |
+| `ARCHETYPE_AGENT_LOCAL_IP` | Local IP for VXLAN tunnels (auto-detect if empty) | - |
 | `ARCHETYPE_AGENT_ENABLE_DOCKER` | Enable DockerProvider | `true` |
 | `ARCHETYPE_AGENT_ENABLE_LIBVIRT` | Enable LibvirtProvider for VMs | `false` |
 | `ARCHETYPE_AGENT_ENABLE_VXLAN` | Enable VXLAN overlay for multi-host | `true` |
+| `ARCHETYPE_AGENT_ENABLE_OVS_PLUGIN` | Enable OVS Docker plugin for pre-boot interface provisioning | `true` |
 | `ARCHETYPE_AGENT_OVERLAY_MTU` | MTU for overlay tunnel interfaces (0 to disable) | `1450` |
 
 ### OIDC/SSO Configuration
@@ -368,6 +384,20 @@ Manual cleanup:
 docker compose -f docker-compose.gui.yml down -v
 ```
 
+## Device Notes
+
+### Arista cEOS
+
+cEOS requires network interfaces to exist before the container starts for proper platform detection. Archetype handles this automatically via:
+
+- **OVS Plugin**: Pre-provisions interfaces before container boot using Docker's CNM network driver API
+- **if-wait.sh**: Wrapper script that waits for interfaces before `/sbin/init` (similar to containerlab)
+- **CLAB_INTFS**: Environment variable telling the container how many interfaces to expect
+
+**Boot time**: cEOS takes 60-90 seconds to fully boot. The console shows boot logs during startup.
+
+**Image requirements**: cEOS images must be imported via **Catalog** → **Images** before use.
+
 ## Troubleshooting
 
 ### Lab Deployment Fails
@@ -388,6 +418,14 @@ docker compose -f docker-compose.gui.yml down -v
 2. Check agent logs: `journalctl -u archetype-agent -f`
 3. Ensure firewall allows traffic on agent port (default 8001)
 
+### OVS Plugin Issues
+
+The OVS plugin manages per-lab bridges and interface provisioning. If containers fail to start:
+
+1. Check OVS is running: `ovs-vsctl show`
+2. View plugin logs: `docker compose -f docker-compose.gui.yml logs agent | grep -i ovs`
+3. See `TROUBLESHOOTING_OVS_PLUGIN.md` for detailed debugging
+
 ## Contributing
 
 1. Fork the repository
@@ -406,3 +444,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 - [React Flow](https://reactflow.dev/) - Topology canvas library
 - [xterm.js](https://xtermjs.org/) - Terminal emulator for web consoles
+- [Open vSwitch](https://www.openvswitch.org/) - Software switch for network virtualization
+- [containerlab](https://containerlab.dev/) - Inspiration for cEOS interface waiting approach
