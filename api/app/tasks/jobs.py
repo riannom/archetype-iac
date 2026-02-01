@@ -378,6 +378,48 @@ async def run_agent_job(
                 parts = action.split(":", 2)
                 node_action_type = parts[1] if len(parts) > 1 else ""
                 node = parts[2] if len(parts) > 2 else ""
+
+                # For system-initiated (enforcement) jobs, re-check desired_state
+                # to avoid executing stale actions when user changed their mind
+                if job.user_id is None and node_action_type in ("start", "stop"):
+                    node_state = (
+                        session.query(models.NodeState)
+                        .filter(
+                            models.NodeState.lab_id == lab_id,
+                            models.NodeState.node_name == node,
+                        )
+                        .first()
+                    )
+                    if node_state:
+                        desired = node_state.desired_state
+                        # Skip if desired_state no longer matches the action
+                        if node_action_type == "stop" and desired == "running":
+                            logger.info(
+                                f"Skipping stale enforcement job {job_id}: "
+                                f"node {node} desired_state changed to 'running'"
+                            )
+                            job.status = "cancelled"
+                            job.completed_at = datetime.utcnow()
+                            job.log_path = (
+                                f"Job cancelled: desired_state changed to '{desired}' "
+                                f"before job executed. No action taken."
+                            )
+                            session.commit()
+                            return
+                        elif node_action_type == "start" and desired == "stopped":
+                            logger.info(
+                                f"Skipping stale enforcement job {job_id}: "
+                                f"node {node} desired_state changed to 'stopped'"
+                            )
+                            job.status = "cancelled"
+                            job.completed_at = datetime.utcnow()
+                            job.log_path = (
+                                f"Job cancelled: desired_state changed to '{desired}' "
+                                f"before job executed. No action taken."
+                            )
+                            session.commit()
+                            return
+
                 display_name = _get_node_display_name_from_db(session, lab_id, node)
                 result = await agent_client.node_action_on_agent(
                     agent, job_id, lab_id, node, node_action_type, display_name
