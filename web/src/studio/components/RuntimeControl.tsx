@@ -63,6 +63,12 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     return status === 'running' || status === 'booting';
   });
 
+  // Check if all nodes are currently running
+  const allNodesRunning = deviceNodes.length > 0 && deviceNodes.every(node => {
+    const status = runtimeStates[node.id];
+    return status === 'running';
+  });
+
   // Check if lab is deployed (any node has ever been started)
   const isLabDeployed = hasRunningNodes;
 
@@ -147,15 +153,17 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
               </button>
             ) : (
               <>
-                <button
-                  onClick={() => handleBulkAction('running')}
-                  disabled={isOperationPending()}
-                  className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
-                  title="Start all stopped nodes"
-                >
-                  <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-play'} mr-2`}></i>
-                  {pendingOps.has('bulk') ? 'Starting...' : 'Start All'}
-                </button>
+                {!allNodesRunning && (
+                  <button
+                    onClick={() => handleBulkAction('running')}
+                    disabled={isOperationPending()}
+                    className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
+                    title="Start all stopped nodes"
+                  >
+                    <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-play'} mr-2`}></i>
+                    {pendingOps.has('bulk') ? 'Starting...' : 'Start All'}
+                  </button>
+                )}
                 <button
                   onClick={handleStopAll}
                   disabled={isOperationPending()}
