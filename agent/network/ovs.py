@@ -96,13 +96,146 @@ class OVSLink:
 
 
 class VlanAllocator:
-    """Allocates unique VLAN tags for interface isolation."""
+    """Allocates unique VLAN tags for interface isolation.
 
-    def __init__(self, start: int = VLAN_START, end: int = VLAN_END):
+    Allocations are persisted to disk to survive agent restarts.
+    On startup, the allocator recovers state from:
+    1. Persisted allocation file (if exists)
+    2. Querying OVS for existing port VLAN tags
+    """
+
+    def __init__(
+        self,
+        start: int = VLAN_START,
+        end: int = VLAN_END,
+        persistence_path: Path | None = None,
+    ):
         self._start = start
         self._end = end
         self._allocated: dict[str, int] = {}  # key -> vlan
         self._next_vlan = start
+
+        # Persistence file path
+        if persistence_path is None:
+            workspace = Path(settings.workspace_path)
+            workspace.mkdir(parents=True, exist_ok=True)
+            persistence_path = workspace / "vlan_allocations.json"
+        self._persistence_path = persistence_path
+
+        # Load persisted state on init
+        self._load_from_disk()
+
+    def _load_from_disk(self) -> None:
+        """Load allocations from persistence file."""
+        if not self._persistence_path.exists():
+            return
+
+        try:
+            with open(self._persistence_path, "r") as f:
+                data = json.load(f)
+
+            self._allocated = data.get("allocations", {})
+            self._next_vlan = data.get("next_vlan", self._start)
+
+            # Validate loaded VLANs are in range
+            valid_allocations = {}
+            for key, vlan in self._allocated.items():
+                if self._start <= vlan <= self._end:
+                    valid_allocations[key] = vlan
+                else:
+                    logger.warning(f"Ignoring out-of-range VLAN allocation: {key}={vlan}")
+
+            self._allocated = valid_allocations
+            logger.info(f"Loaded {len(self._allocated)} VLAN allocations from disk")
+
+        except Exception as e:
+            logger.warning(f"Failed to load VLAN allocations from disk: {e}")
+            self._allocated = {}
+
+    def _save_to_disk(self) -> None:
+        """Save allocations to persistence file."""
+        try:
+            data = {
+                "allocations": self._allocated,
+                "next_vlan": self._next_vlan,
+            }
+            # Write atomically via temp file
+            tmp_path = self._persistence_path.with_suffix(".tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            tmp_path.rename(self._persistence_path)
+
+        except Exception as e:
+            logger.warning(f"Failed to save VLAN allocations to disk: {e}")
+
+    async def recover_from_ovs(self, bridge_name: str) -> int:
+        """Scan OVS bridge ports and recover VLAN allocations.
+
+        This should be called on agent startup to detect VLANs in use
+        that may not be in the persisted file (e.g., after crash).
+
+        Args:
+            bridge_name: OVS bridge to scan
+
+        Returns:
+            Number of VLANs recovered from OVS state
+        """
+        recovered = 0
+        used_vlans = set(self._allocated.values())
+
+        try:
+            # List all ports on the bridge
+            proc = await asyncio.create_subprocess_exec(
+                "ovs-vsctl", "list-ports", bridge_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+
+            if proc.returncode != 0:
+                return 0
+
+            ports = stdout.decode().strip().split("\n") if stdout else []
+
+            for port_name in ports:
+                if not port_name or not port_name.startswith("vh"):
+                    continue
+
+                # Get VLAN tag for this port
+                proc = await asyncio.create_subprocess_exec(
+                    "ovs-vsctl", "get", "port", port_name, "tag",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                tag_stdout, _ = await proc.communicate()
+
+                if proc.returncode != 0:
+                    continue
+
+                tag_str = tag_stdout.decode().strip()
+                if not tag_str or tag_str == "[]":
+                    continue
+
+                try:
+                    vlan = int(tag_str)
+                    if self._start <= vlan <= self._end and vlan not in used_vlans:
+                        # Found an in-use VLAN not in our allocations
+                        placeholder_key = f"_recovered:{port_name}"
+                        self._allocated[placeholder_key] = vlan
+                        used_vlans.add(vlan)
+                        recovered += 1
+                        logger.debug(f"Recovered VLAN {vlan} from OVS port {port_name}")
+                except ValueError:
+                    continue
+
+            if recovered > 0:
+                self._save_to_disk()
+                logger.info(f"Recovered {recovered} VLANs from OVS state")
+
+        except Exception as e:
+            logger.warning(f"Failed to recover VLANs from OVS: {e}")
+
+        return recovered
 
     def allocate(self, key: str) -> int:
         """Allocate a VLAN tag for a key.
@@ -137,6 +270,9 @@ class VlanAllocator:
         if self._next_vlan > self._end:
             self._next_vlan = self._start
 
+        # Persist allocation
+        self._save_to_disk()
+
         return vlan
 
     def release(self, key: str) -> int | None:
@@ -144,7 +280,33 @@ class VlanAllocator:
 
         Returns the released VLAN or None if not found.
         """
-        return self._allocated.pop(key, None)
+        vlan = self._allocated.pop(key, None)
+        if vlan is not None:
+            self._save_to_disk()
+        return vlan
+
+    def release_lab(self, lab_id: str) -> int:
+        """Release all VLAN allocations for a lab.
+
+        Args:
+            lab_id: Lab identifier (matches container names starting with archetype-{lab_id})
+
+        Returns:
+            Number of allocations released
+        """
+        # Keys are in format "container:interface"
+        # Container names are "archetype-{lab_id}-{node}"
+        prefix = f"archetype-{lab_id[:20]}"
+        keys_to_remove = [k for k in self._allocated if k.startswith(prefix)]
+
+        for key in keys_to_remove:
+            del self._allocated[key]
+
+        if keys_to_remove:
+            self._save_to_disk()
+            logger.info(f"Released {len(keys_to_remove)} VLAN allocations for lab {lab_id}")
+
+        return len(keys_to_remove)
 
     def get_vlan(self, key: str) -> int | None:
         """Get VLAN for a key, or None if not allocated."""
@@ -153,6 +315,15 @@ class VlanAllocator:
     def get_keys_for_vlan(self, vlan: int) -> list[str]:
         """Get all keys using a specific VLAN tag."""
         return [k for k, v in self._allocated.items() if v == vlan]
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get allocator statistics for monitoring."""
+        return {
+            "total_allocated": len(self._allocated),
+            "vlan_range": f"{self._start}-{self._end}",
+            "next_vlan": self._next_vlan,
+            "persistence_path": str(self._persistence_path),
+        }
 
 
 class OVSNetworkManager:
@@ -920,6 +1091,7 @@ class OVSNetworkManager:
         result = {
             "ports_deleted": 0,
             "links_deleted": 0,
+            "vlans_released": 0,
             "errors": [],
         }
 
@@ -960,8 +1132,20 @@ class OVSNetworkManager:
             except Exception as e:
                 result["errors"].append(f"Port {key}: {e}")
 
+        # Release any remaining VLAN allocations for this lab
+        # (handles allocations that may not have tracked ports)
+        result["vlans_released"] = self._vlan_allocator.release_lab(lab_id)
+
         logger.info(f"Lab {lab_id} OVS cleanup: {result}")
         return result
+
+    async def recover_allocations(self) -> int:
+        """Recover VLAN allocations from OVS state on startup.
+
+        Returns:
+            Number of VLANs recovered
+        """
+        return await self._vlan_allocator.recover_from_ovs(self._bridge_name)
 
     def get_ports_for_lab(self, lab_id: str) -> list[OVSPort]:
         """Get all OVS ports for a lab."""

@@ -320,13 +320,14 @@ class DockerProvider(Provider):
         binds.extend(node.binds)
 
         # Build container configuration
+        # Note: network_mode is NOT set here - it's handled dynamically in
+        # _create_containers based on whether OVS plugin is enabled.
         config: dict[str, Any] = {
             "image": runtime_config.image,
             "name": self._container_name(lab_id, node.name),
             "hostname": runtime_config.hostname,
             "environment": env,
             "labels": labels,
-            "network_mode": "none",  # We manage networking separately
             "detach": True,
             "tty": True,
             "stdin_open": True,
@@ -499,6 +500,10 @@ username admin privilege 15 role network-admin nopassword
     async def _delete_lab_networks(self, lab_id: str) -> int:
         """Delete all Docker networks for a lab.
 
+        Uses efficient query-first approach: lists networks matching the lab's
+        name prefix, then deletes only those that exist. Much faster than the
+        previous brute-force approach that tried 325 network names.
+
         Args:
             lab_id: Lab identifier
 
@@ -507,17 +512,26 @@ username admin privilege 15 role network-admin nopassword
         """
         deleted = 0
 
-        # Delete networks matching pattern {lab_id}-eth*
-        for i in range(1, 65):
-            network_name = f"{lab_id}-eth{i}"
-            try:
-                network = self.docker.networks.get(network_name)
-                network.remove()
-                deleted += 1
-            except NotFound:
-                continue
-            except APIError as e:
-                logger.warning(f"Failed to delete network {network_name}: {e}")
+        try:
+            # Query networks by name prefix (efficient - single API call)
+            # Networks are named: {lab_id}-eth1, {lab_id}-Ethernet1, etc.
+            all_networks = self.docker.networks.list()
+
+            # Filter to networks that start with this lab's prefix
+            lab_prefix = f"{lab_id}-"
+            lab_networks = [n for n in all_networks if n.name.startswith(lab_prefix)]
+
+            for network in lab_networks:
+                try:
+                    network.remove()
+                    deleted += 1
+                    logger.debug(f"Deleted network {network.name}")
+                except APIError as e:
+                    # Network might be in use or already deleted
+                    logger.warning(f"Failed to delete network {network.name}: {e}")
+
+        except APIError as e:
+            logger.warning(f"Failed to list networks for lab {lab_id}: {e}")
 
         if deleted > 0:
             logger.info(f"Deleted {deleted} Docker networks for lab {lab_id}")
@@ -583,6 +597,8 @@ username admin privilege 15 role network-admin nopassword
         containers = {}
 
         # Create lab networks if OVS plugin is enabled
+        # Always use "eth" naming for Docker networks for consistency
+        # The OVS plugin handles interface naming inside containers
         if self.use_ovs_plugin:
             await self._create_lab_networks(lab_id)
 
@@ -606,26 +622,45 @@ username admin privilege 15 role network-admin nopassword
             # Build container config
             config = self._create_container_config(node, lab_id, workspace)
 
-            # Create container - run in thread pool to avoid blocking event loop
-            # This is critical when using OVS plugin, which needs the event loop
-            # to respond to Docker's network plugin callbacks
-            logger.info(f"Creating container {log_name} with image {config['image']}")
-            container = await asyncio.to_thread(
-                lambda: self.docker.containers.create(**config)
-            )
-            containers[node_name] = container
-
-            # Attach to interface networks if OVS plugin is enabled
+            # Set network mode based on whether OVS plugin is enabled
+            # When OVS plugin is enabled, we attach to Docker networks which
+            # provision interfaces BEFORE container init runs (critical for cEOS).
+            # When disabled, we use "none" mode and provision interfaces post-start.
             if self.use_ovs_plugin:
+                # Get vendor config for interface count
                 vendor_config = get_config_by_device(node.kind)
-                if vendor_config:
-                    await self._attach_container_to_networks(
-                        container=container,
-                        lab_id=lab_id,
-                        interface_count=vendor_config.max_ports,
-                        interface_prefix="eth",  # Plugin uses eth naming
-                        start_index=1,
-                    )
+                interface_count = vendor_config.max_ports if vendor_config else 16
+
+                # Docker network names always use "eth" prefix for consistency
+                # The OVS plugin handles renaming inside the container based on
+                # the interface_name option passed during network creation
+                first_network = f"{lab_id}-eth1"
+                config["network"] = first_network
+                logger.info(f"Creating container {log_name} with image {config['image']}")
+
+                # Create container - run in thread pool to avoid blocking event loop
+                container = await asyncio.to_thread(
+                    lambda cfg=config: self.docker.containers.create(**cfg)
+                )
+                containers[node_name] = container
+
+                # Attach to remaining interface networks (eth2, eth3, ...)
+                await self._attach_container_to_networks(
+                    container=container,
+                    lab_id=lab_id,
+                    interface_count=interface_count - 1,  # Already attached to eth1
+                    interface_prefix="eth",
+                    start_index=2,  # Start from eth2
+                )
+            else:
+                # Legacy mode: use "none" network, provision interfaces post-start
+                config["network_mode"] = "none"
+                logger.info(f"Creating container {log_name} with image {config['image']}")
+
+                container = await asyncio.to_thread(
+                    lambda cfg=config: self.docker.containers.create(**cfg)
+                )
+                containers[node_name] = container
 
         return containers
 
@@ -1202,6 +1237,7 @@ username admin privilege 15 role network-admin nopassword
         """Destroy all containers and networking for a lab."""
         prefix = self._lab_prefix(lab_id)
         removed = 0
+        volumes_removed = 0
         errors = []
 
         try:
@@ -1223,11 +1259,16 @@ username admin privilege 15 role network-admin nopassword
             # Remove containers
             for container in all_containers.values():
                 try:
-                    container.remove(force=True)
+                    container.remove(force=True, v=True)  # v=True removes anonymous volumes
                     removed += 1
                     logger.info(f"Removed container {container.name}")
                 except Exception as e:
                     errors.append(f"Failed to remove {container.name}: {e}")
+
+            # Clean up orphaned volumes for this lab
+            volumes_removed = await self._cleanup_lab_volumes(lab_id)
+            if volumes_removed > 0:
+                logger.info(f"Volume cleanup: {volumes_removed} volumes removed")
 
             # Clean up local networking
             cleanup_result = await self.local_network.cleanup_lab(lab_id)
@@ -1247,12 +1288,60 @@ username admin privilege 15 role network-admin nopassword
             errors.append(f"Error during destroy: {e}")
 
         success = len(errors) == 0
+        stdout_parts = [f"Removed {removed} containers"]
+        if volumes_removed > 0:
+            stdout_parts.append(f"Removed {volumes_removed} volumes")
         return DestroyResult(
             success=success,
-            stdout=f"Removed {removed} containers",
+            stdout=", ".join(stdout_parts),
             stderr="\n".join(errors) if errors else "",
             error=errors[0] if errors else None,
         )
+
+    async def _cleanup_lab_volumes(self, lab_id: str) -> int:
+        """Clean up orphaned Docker volumes for a lab.
+
+        Removes volumes that:
+        1. Have the archetype.lab_id label matching this lab
+        2. Are dangling (not attached to any container)
+
+        Args:
+            lab_id: Lab identifier
+
+        Returns:
+            Number of volumes removed
+        """
+        removed = 0
+
+        try:
+            # Find volumes with our lab label
+            volumes = self.docker.volumes.list(
+                filters={"label": f"{LABEL_LAB_ID}={lab_id}"}
+            )
+
+            for volume in volumes:
+                try:
+                    volume.remove(force=True)
+                    removed += 1
+                    logger.debug(f"Removed volume {volume.name}")
+                except APIError as e:
+                    # Volume might still be in use
+                    logger.debug(f"Could not remove volume {volume.name}: {e}")
+
+            # Also prune any dangling volumes (not tied to a container)
+            # This catches volumes that weren't labeled but were created by our containers
+            prune_result = self.docker.volumes.prune(
+                filters={"dangling": "true"}
+            )
+            if prune_result.get("VolumesDeleted"):
+                pruned_count = len(prune_result["VolumesDeleted"])
+                removed += pruned_count
+                logger.debug(f"Pruned {pruned_count} dangling volumes")
+
+        except APIError as e:
+            logger.warning(f"Failed to cleanup volumes for lab {lab_id}: {e}")
+
+        return removed
 
     async def status(
         self,

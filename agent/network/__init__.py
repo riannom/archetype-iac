@@ -5,6 +5,7 @@ This module provides networking capabilities for labs:
 - Overlay (VXLAN) networking for multi-host connectivity
 - Local networking (veth pairs) for intra-host container links
 - VLAN management for external network connectivity
+- Cleanup utilities for orphaned network resources
 """
 
 from agent.network.overlay import OverlayManager, VxlanTunnel, OverlayBridge
@@ -25,6 +26,11 @@ from agent.network.docker_plugin import (
     DockerOVSPlugin,
     get_docker_ovs_plugin,
     run_plugin_standalone,
+)
+from agent.network.cleanup import (
+    NetworkCleanupManager,
+    CleanupStats,
+    get_cleanup_manager,
 )
 
 __all__ = [
@@ -47,4 +53,8 @@ __all__ = [
     "get_vlan_manager",
     "setup_external_networks",
     "cleanup_external_networks",
+    # Cleanup utilities
+    "NetworkCleanupManager",
+    "CleanupStats",
+    "get_cleanup_manager",
 ]

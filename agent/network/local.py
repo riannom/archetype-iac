@@ -189,6 +189,43 @@ class LocalNetworkManager:
         # arch = 4 chars, suffix = 8 chars, total = 12 chars (within 15 limit)
         return f"{VETH_PREFIX}{suffix}"
 
+    def _check_subnet_conflict(self, requested_subnet: str) -> str | None:
+        """Check if a subnet conflicts with existing Docker networks.
+
+        Args:
+            requested_subnet: Subnet in CIDR format (e.g., "172.20.0.0/24")
+
+        Returns:
+            Name of conflicting network, or None if no conflict
+        """
+        try:
+            import ipaddress
+            requested_net = ipaddress.ip_network(requested_subnet, strict=False)
+
+            # Get all existing Docker networks
+            networks = self.docker.networks.list()
+
+            for network in networks:
+                # Get IPAM config for this network
+                ipam = network.attrs.get("IPAM", {})
+                configs = ipam.get("Config", [])
+
+                for config in configs:
+                    existing_subnet = config.get("Subnet")
+                    if not existing_subnet:
+                        continue
+
+                    existing_net = ipaddress.ip_network(existing_subnet, strict=False)
+
+                    # Check for overlap
+                    if requested_net.overlaps(existing_net):
+                        return network.name
+
+        except Exception as e:
+            logger.warning(f"Error checking subnet conflict: {e}")
+
+        return None
+
     async def create_management_network(
         self,
         lab_id: str,
@@ -207,7 +244,7 @@ class LocalNetworkManager:
             ManagedNetwork object
 
         Raises:
-            RuntimeError: If network creation fails
+            RuntimeError: If network creation fails or subnet conflicts
         """
         # Check if network already exists
         if lab_id in self._networks:
@@ -229,6 +266,15 @@ class LocalNetworkManager:
                 )
                 self._networks[lab_id] = managed
                 return managed
+
+            # Check for subnet conflicts before creating
+            if subnet:
+                conflicting_network = self._check_subnet_conflict(subnet)
+                if conflicting_network:
+                    raise RuntimeError(
+                        f"Subnet {subnet} conflicts with existing network '{conflicting_network}'. "
+                        f"Choose a different subnet or delete the conflicting network."
+                    )
 
             # Create IPAM config if subnet specified
             ipam_config = None

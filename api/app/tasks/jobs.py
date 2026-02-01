@@ -1,4 +1,15 @@
-"""Background job execution functions."""
+"""Background job execution functions.
+
+Job Status Values:
+    - queued: Job is waiting to be processed
+    - running: Job is currently executing
+    - completed: Job finished successfully
+    - completed_with_warnings: Job finished but with partial failures (e.g., some
+      agents were offline during multi-host destroy). The primary operation
+      succeeded but cleanup may be incomplete.
+    - failed: Job encountered an error and could not complete
+    - cancelled: Job was cancelled by user
+"""
 from __future__ import annotations
 
 import asyncio
@@ -902,9 +913,12 @@ async def run_multihost_destroy(
             job.status = "completed"
             update_lab_state(session, lab_id, "stopped")
         else:
-            job.status = "completed"  # Mark as completed even with partial failures
+            # Use completed_with_warnings for partial failures
+            # This provides visibility that cleanup may be incomplete
+            job.status = "completed_with_warnings"
             update_lab_state(session, lab_id, "stopped")
             log_parts.append("\nWARNING: Some hosts may have had issues during destroy")
+            log_parts.append("Containers may need manual cleanup on failed hosts.")
 
         job.completed_at = datetime.utcnow()
         job.log_path = "\n".join(log_parts)
@@ -1227,6 +1241,9 @@ async def run_node_sync(
         log_parts.append(f"Agent: {agent.id} ({agent.name})")
         log_parts.append(f"Nodes: {', '.join(node_ids)}")
         log_parts.append("")
+
+        # Initialize graph to None - will be loaded later if needed for deploy
+        graph = None
 
         # Categorize nodes by what action they need
         nodes_need_deploy = []  # undeployed -> running

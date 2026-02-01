@@ -520,6 +520,38 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to clear orphaned locks: {e}")
 
+    # Recover network allocations from system state (crash recovery)
+    try:
+        if settings.enable_vxlan:
+            overlay_mgr = get_overlay_manager()
+            vnis_recovered = await overlay_mgr.recover_allocations()
+            if vnis_recovered > 0:
+                logger.info(f"Recovered {vnis_recovered} VNI allocations from system state")
+
+        if settings.enable_ovs:
+            ovs_mgr = get_ovs_manager()
+            await ovs_mgr.initialize()
+            vlans_recovered = await ovs_mgr.recover_allocations()
+            if vlans_recovered > 0:
+                logger.info(f"Recovered {vlans_recovered} VLAN allocations from OVS state")
+    except Exception as e:
+        logger.warning(f"Failed to recover network allocations: {e}")
+
+    # Start periodic network cleanup task
+    from agent.network.cleanup import get_cleanup_manager
+    cleanup_mgr = get_cleanup_manager()
+    try:
+        # Run initial cleanup to clear any orphans from previous crash
+        initial_stats = await cleanup_mgr.run_full_cleanup()
+        if initial_stats.veths_deleted > 0 or initial_stats.bridges_deleted > 0:
+            logger.info(f"Initial network cleanup: {initial_stats.to_dict()}")
+
+        # Start periodic cleanup (every 5 minutes)
+        await cleanup_mgr.start_periodic_cleanup(interval_seconds=300)
+        logger.info("Periodic network cleanup started (interval: 5 minutes)")
+    except Exception as e:
+        logger.warning(f"Failed to start network cleanup: {e}")
+
     # Try initial registration (will notify controller if this is a restart)
     await register_with_controller()
 
@@ -577,6 +609,15 @@ async def lifespan(app: FastAPI):
             logger.info("Docker OVS network plugin stopped")
         except Exception as e:
             logger.error(f"Error stopping Docker OVS plugin: {e}")
+
+    # Stop periodic network cleanup
+    try:
+        from agent.network.cleanup import get_cleanup_manager
+        cleanup_mgr = get_cleanup_manager()
+        await cleanup_mgr.stop_periodic_cleanup()
+        logger.info("Periodic network cleanup stopped")
+    except Exception as e:
+        logger.warning(f"Error stopping network cleanup: {e}")
 
     # Close lock manager
     if _lock_manager:

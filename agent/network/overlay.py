@@ -17,9 +17,11 @@ VXLAN Overview:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import docker
@@ -476,6 +478,7 @@ class OverlayManager:
         result = {
             "tunnels_deleted": 0,
             "bridges_deleted": 0,
+            "vnis_released": 0,
             "errors": [],
         }
 
@@ -499,8 +502,19 @@ class OverlayManager:
             except Exception as e:
                 result["errors"].append(f"Tunnel {tunnel.interface_name}: {e}")
 
+        # Release all VNI allocations for this lab
+        result["vnis_released"] = self._vni_allocator.release_lab(lab_id)
+
         logger.info(f"Lab {lab_id} overlay cleanup: {result}")
         return result
+
+    async def recover_allocations(self) -> int:
+        """Recover VNI allocations from system state on startup.
+
+        Returns:
+            Number of VNIs recovered
+        """
+        return await self._vni_allocator.recover_from_system()
 
     async def get_tunnels_for_lab(self, lab_id: str) -> list[VxlanTunnel]:
         """Get all tunnels for a lab."""
@@ -538,13 +552,129 @@ class OverlayManager:
 
 
 class VniAllocator:
-    """Allocates unique VNIs for VXLAN tunnels."""
+    """Allocates unique VNIs for VXLAN tunnels.
 
-    def __init__(self, base: int | None = None, max_vni: int | None = None):
+    Allocations are persisted to disk to survive agent restarts.
+    On startup, the allocator recovers state from:
+    1. Persisted allocation file (if exists)
+    2. Scanning existing VXLAN interfaces on the system
+    """
+
+    def __init__(
+        self,
+        base: int | None = None,
+        max_vni: int | None = None,
+        persistence_path: Path | None = None,
+    ):
         self._base = base if base is not None else settings.vxlan_vni_base
         self._max = max_vni if max_vni is not None else settings.vxlan_vni_max
         self._allocated: dict[str, int] = {}  # key -> vni
         self._next_vni = self._base
+
+        # Persistence file path
+        if persistence_path is None:
+            workspace = Path(settings.workspace_path)
+            workspace.mkdir(parents=True, exist_ok=True)
+            persistence_path = workspace / "vni_allocations.json"
+        self._persistence_path = persistence_path
+
+        # Load persisted state on init
+        self._load_from_disk()
+
+    def _load_from_disk(self) -> None:
+        """Load allocations from persistence file."""
+        if not self._persistence_path.exists():
+            return
+
+        try:
+            with open(self._persistence_path, "r") as f:
+                data = json.load(f)
+
+            self._allocated = data.get("allocations", {})
+            self._next_vni = data.get("next_vni", self._base)
+
+            # Validate loaded VNIs are in range
+            valid_allocations = {}
+            for key, vni in self._allocated.items():
+                if self._base <= vni <= self._max:
+                    valid_allocations[key] = vni
+                else:
+                    logger.warning(f"Ignoring out-of-range VNI allocation: {key}={vni}")
+
+            self._allocated = valid_allocations
+            logger.info(f"Loaded {len(self._allocated)} VNI allocations from disk")
+
+        except Exception as e:
+            logger.warning(f"Failed to load VNI allocations from disk: {e}")
+            self._allocated = {}
+
+    def _save_to_disk(self) -> None:
+        """Save allocations to persistence file."""
+        try:
+            data = {
+                "allocations": self._allocated,
+                "next_vni": self._next_vni,
+            }
+            # Write atomically via temp file
+            tmp_path = self._persistence_path.with_suffix(".tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            tmp_path.rename(self._persistence_path)
+
+        except Exception as e:
+            logger.warning(f"Failed to save VNI allocations to disk: {e}")
+
+    async def recover_from_system(self) -> int:
+        """Scan existing VXLAN interfaces and recover allocations.
+
+        This should be called on agent startup to detect VNIs in use
+        that may not be in the persisted file (e.g., after crash).
+
+        Returns:
+            Number of VNIs recovered from system state
+        """
+        recovered = 0
+        used_vnis = set(self._allocated.values())
+
+        try:
+            # List all VXLAN interfaces
+            proc = await asyncio.create_subprocess_exec(
+                "ip", "-j", "link", "show", "type", "vxlan",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+
+            if proc.returncode != 0:
+                return 0
+
+            interfaces = json.loads(stdout.decode()) if stdout else []
+
+            for iface in interfaces:
+                name = iface.get("ifname", "")
+                # Our VXLAN interfaces are named vxlan{vni}
+                if name.startswith("vxlan"):
+                    try:
+                        vni = int(name[5:])  # Extract VNI from name
+                        if self._base <= vni <= self._max and vni not in used_vnis:
+                            # Found an in-use VNI not in our allocations
+                            # Mark it as used with a placeholder key
+                            placeholder_key = f"_recovered:{name}"
+                            self._allocated[placeholder_key] = vni
+                            used_vnis.add(vni)
+                            recovered += 1
+                            logger.info(f"Recovered VNI {vni} from existing interface {name}")
+                    except ValueError:
+                        continue
+
+            if recovered > 0:
+                self._save_to_disk()
+                logger.info(f"Recovered {recovered} VNIs from system state")
+
+        except Exception as e:
+            logger.warning(f"Failed to recover VNIs from system: {e}")
+
+        return recovered
 
     def allocate(self, lab_id: str, link_id: str) -> int:
         """Allocate a VNI for a link.
@@ -582,6 +712,9 @@ class VniAllocator:
         if self._next_vni > self._max:
             self._next_vni = self._base
 
+        # Persist allocation
+        self._save_to_disk()
+
         return vni
 
     def release(self, lab_id: str, link_id: str) -> None:
@@ -589,7 +722,38 @@ class VniAllocator:
         key = f"{lab_id}:{link_id}"
         if key in self._allocated:
             del self._allocated[key]
+            self._save_to_disk()
+
+    def release_lab(self, lab_id: str) -> int:
+        """Release all VNI allocations for a lab.
+
+        Args:
+            lab_id: Lab identifier
+
+        Returns:
+            Number of allocations released
+        """
+        prefix = f"{lab_id}:"
+        keys_to_remove = [k for k in self._allocated if k.startswith(prefix)]
+
+        for key in keys_to_remove:
+            del self._allocated[key]
+
+        if keys_to_remove:
+            self._save_to_disk()
+            logger.info(f"Released {len(keys_to_remove)} VNI allocations for lab {lab_id}")
+
+        return len(keys_to_remove)
 
     def get_vni(self, lab_id: str, link_id: str) -> int | None:
         """Get VNI for a link, or None if not allocated."""
         return self._allocated.get(f"{lab_id}:{link_id}")
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get allocator statistics for monitoring."""
+        return {
+            "total_allocated": len(self._allocated),
+            "vni_range": f"{self._base}-{self._max}",
+            "next_vni": self._next_vni,
+            "persistence_path": str(self._persistence_path),
+        }
