@@ -1262,9 +1262,18 @@ async def run_node_sync(
             f"start={len(nodes_need_start)}, stop={len(nodes_need_stop)}"
         )
 
-        # Mark nodes that need deploy/start as pending
-        for ns in nodes_need_deploy + nodes_need_start:
+        # Mark nodes that need deploy as "pending" (first-time container creation)
+        for ns in nodes_need_deploy:
             ns.actual_state = "pending"
+            ns.error_message = None
+
+        # Mark nodes that need start as "starting" with timestamp for timeout tracking
+        # "starting" is distinct from "pending" - it's for existing containers being started
+        if nodes_need_start:
+            log_parts.append(f"Starting {len(nodes_need_start)} node(s)...")
+        for ns in nodes_need_start:
+            ns.actual_state = "starting"
+            ns.starting_started_at = datetime.now(timezone.utc)
             ns.error_message = None
 
         # Mark nodes that need stop as "stopping" with timestamp for timeout tracking
@@ -1677,6 +1686,7 @@ async def run_node_sync(
                 error_msg = "No topology defined in database"
                 for ns in nodes_need_start:
                     ns.actual_state = "error"
+                    ns.starting_started_at = None  # Clear starting timestamp
                     ns.error_message = error_msg
                 session.commit()
                 log_parts.append(f"Redeploy FAILED: {error_msg}")
@@ -1773,6 +1783,7 @@ async def run_node_sync(
                     log_parts.append(f"No nodes to redeploy on {agent.name}")
                     for ns in nodes_need_start:
                         ns.actual_state = "error"
+                        ns.starting_started_at = None  # Clear starting timestamp
                         ns.error_message = "No nodes to deploy"
                     session.commit()
                     nodes_need_start = []
@@ -1818,9 +1829,11 @@ async def run_node_sync(
                             for ns in all_states:
                                 if ns.node_name in deployed_node_names:
                                     ns.actual_state = "running"
+                                    ns.starting_started_at = None  # Clear starting timestamp
                                     ns.error_message = None
                                     if not ns.boot_started_at:
                                         ns.boot_started_at = datetime.now(timezone.utc)
+                                    log_parts.append(f"  Node {ns.node_name}: started")
 
                             # Now stop deployed nodes that should be stopped
                             nodes_to_stop_after = [
@@ -1853,6 +1866,7 @@ async def run_node_sync(
                             log_parts.append(f"Redeploy FAILED: {error_msg}")
                             for ns in nodes_need_start:
                                 ns.actual_state = "error"
+                                ns.starting_started_at = None  # Clear starting timestamp
                                 ns.error_message = error_msg
 
                         if result.get("stdout"):
@@ -1867,6 +1881,8 @@ async def run_node_sync(
                         log_parts.append("  Note: This may be a temporary network issue. Nodes will be retried by reconciliation.")
                         for ns in nodes_need_start:
                             # Keep existing state rather than marking as error
+                            # but clear starting timestamp since we're not actively starting
+                            ns.starting_started_at = None
                             ns.error_message = error_msg
                         logger.warning(f"Redeploy in sync job {job_id} failed due to agent unavailability: {e}")
                     except Exception as e:
@@ -1874,6 +1890,7 @@ async def run_node_sync(
                         log_parts.append(f"Redeploy FAILED: {error_msg}")
                         for ns in nodes_need_start:
                             ns.actual_state = "error"
+                            ns.starting_started_at = None  # Clear starting timestamp
                             ns.error_message = error_msg
                         logger.exception(f"Redeploy failed in sync job {job_id}: {e}")
 

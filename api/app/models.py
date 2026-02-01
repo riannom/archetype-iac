@@ -159,13 +159,14 @@ class NodeState(Base):
 
     This model enables per-node control where each node tracks:
     - desired_state: What the user wants (stopped/running)
-    - actual_state: What the node actually is (undeployed/pending/running/stopped/stopping/error)
+    - actual_state: What the node actually is (undeployed/pending/starting/running/stopped/stopping/error)
     - is_ready: Whether the node's application has completed boot (for console access)
 
     Nodes default to 'stopped' when added and only boot when user triggers start.
 
     Transitional states:
-    - pending: Node is being deployed or started (desired_state=running)
+    - pending: Node is being deployed for the first time (creates container)
+    - starting: Already-deployed node is being started (starts existing container)
     - stopping: Node is being stopped (desired_state=stopped, tracked by stopping_started_at)
     """
     __tablename__ = "node_states"
@@ -181,7 +182,7 @@ class NodeState(Base):
     )
     # desired_state: What the user wants - "stopped" or "running"
     desired_state: Mapped[str] = mapped_column(String(50), default="stopped")
-    # actual_state: Current reality - "undeployed", "pending", "running", "stopped", "error"
+    # actual_state: Current reality - "undeployed", "pending", "starting", "running", "stopped", "stopping", "error"
     actual_state: Mapped[str] = mapped_column(String(50), default="undeployed")
     # Error message if actual_state is "error"
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -191,6 +192,8 @@ class NodeState(Base):
     boot_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Timestamp when container started stopping (for tracking stop duration and timeout recovery)
     stopping_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Timestamp when container started starting (for tracking start duration and timeout recovery)
+    starting_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Image sync status: null (not syncing), "checking", "syncing", "synced", "failed"
     image_sync_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Image sync progress/error message

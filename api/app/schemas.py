@@ -242,7 +242,7 @@ class NodeStateOut(BaseModel):
     node_id: str
     node_name: str
     desired_state: str  # "stopped" or "running"
-    actual_state: str  # "undeployed", "pending", "running", "stopped", "error"
+    actual_state: str  # "undeployed", "pending", "starting", "running", "stopped", "stopping", "error"
     error_message: str | None = None
     # Boot readiness: True when application has completed boot
     is_ready: bool = False
