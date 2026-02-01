@@ -46,6 +46,7 @@ from agent.schemas import (
     ExtractConfigsRequest,
     ExtractConfigsResponse,
     ExtractedConfig,
+    FixInterfacesResponse,
     HeartbeatRequest,
     HeartbeatResponse,
     ImageExistsResponse,
@@ -1767,6 +1768,52 @@ async def overlay_status() -> OverlayStatusResponse:
     except Exception as e:
         logger.error(f"Overlay status failed: {e}")
         return OverlayStatusResponse()
+
+
+# --- OVS Interface Management ---
+
+
+@app.post("/labs/{lab_id}/nodes/{node_name}/fix-interfaces")
+async def fix_node_interfaces(lab_id: str, node_name: str) -> FixInterfacesResponse:
+    """Fix interface names for a running container.
+
+    Docker may assign interface names based on network attachment order rather
+    than the intended names. This endpoint renames interfaces to match their
+    intended OVS network names (eth1, eth2, etc.).
+
+    Useful for:
+    - Containers restarted outside normal deployment flow
+    - Recovering from agent restart that lost plugin state
+    - Manual troubleshooting
+
+    Args:
+        lab_id: Lab identifier
+        node_name: Node name (display name, not container name)
+
+    Returns:
+        FixInterfacesResponse with counts of fixed interfaces
+    """
+    provider = get_provider_for_request()
+    container_name = provider.get_container_name(lab_id, node_name)
+
+    logger.info(f"Fixing interface names for {container_name}")
+
+    try:
+        result = await provider._fix_interface_names(container_name, lab_id)
+        return FixInterfacesResponse(
+            success=True,
+            node=node_name,
+            fixed=result.get("fixed", 0),
+            already_correct=result.get("already_correct", 0),
+            errors=result.get("errors", []),
+        )
+    except Exception as e:
+        logger.error(f"Failed to fix interfaces for {node_name}: {e}")
+        return FixInterfacesResponse(
+            success=False,
+            node=node_name,
+            errors=[str(e)],
+        )
 
 
 # --- OVS Hot-Connect Link Management ---

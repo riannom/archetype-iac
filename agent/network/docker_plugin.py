@@ -2108,6 +2108,69 @@ class DockerOVSPlugin:
                     return ep.vlan_tag
             return None
 
+    def get_container_interface_mapping(
+        self,
+        lab_id: str,
+        container_name: str,
+    ) -> dict[str, str]:
+        """Get mapping of host veth to intended interface name for a container.
+
+        This is used to fix interface names after container start, when Docker
+        may have assigned incorrect names due to network attachment ordering.
+
+        This method works even when endpoint state is lost (e.g., after agent
+        restart) by using the network definitions which are more persistent.
+
+        Args:
+            lab_id: Lab identifier
+            container_name: Container name to get mapping for
+
+        Returns:
+            Dict mapping host_veth name to intended interface name.
+            Example: {"vh0f3e74300da": "eth1", "vhd93aad3d6f7": "eth2"}
+        """
+        mapping = {}
+        lab_bridge = self.lab_bridges.get(lab_id)
+        if not lab_bridge:
+            return mapping
+
+        # First try using endpoint state (preferred when available)
+        for ep in self.endpoints.values():
+            network = self.networks.get(ep.network_id)
+            if not network or network.lab_id != lab_id:
+                continue
+
+            # Only include if container_name matches or isn't set yet
+            if ep.container_name and ep.container_name != container_name:
+                continue
+
+            # Skip management network (eth0)
+            if ep.interface_name == "eth0":
+                continue
+
+            mapping[ep.host_veth] = ep.interface_name
+
+        # If we have endpoint mappings, return them
+        if mapping:
+            return mapping
+
+        # Fallback: build mapping from network definitions
+        # This works when endpoint state is lost but networks still exist
+        # The mapping will be applied to ALL containers in the lab (caller filters)
+        for network in self.networks.values():
+            if network.lab_id != lab_id:
+                continue
+            # Skip management network
+            if network.interface_name == "eth0":
+                continue
+            # We don't know the exact host_veth for each network without endpoint state,
+            # but we can return the intended interface names for the caller to match
+            # by checking which veth connects to the container
+            # Return network_id -> interface_name for caller to resolve
+            mapping[f"network:{network.network_id}"] = network.interface_name
+
+        return mapping
+
     async def set_endpoint_container_name(self, endpoint_id: str, container_name: str) -> None:
         """Associate endpoint with container name for hot-connect lookups."""
         async with self._lock:

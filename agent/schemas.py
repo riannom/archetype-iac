@@ -487,6 +487,15 @@ class LinkListResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
+class FixInterfacesResponse(BaseModel):
+    """Agent -> Controller: Interface fixing result."""
+    success: bool
+    node: str
+    fixed: int = 0
+    already_correct: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
 # --- OVS Status ---
 
 class OVSPortInfo(BaseModel):

@@ -950,6 +950,12 @@ username admin privilege 15 role network-admin nopassword
                 # (interfaces already exist via Docker network attachments)
                 if self.use_ovs_plugin:
                     logger.debug(f"Interfaces for {log_name} provisioned via OVS plugin")
+                    # Fix interface names - Docker may have assigned them incorrectly
+                    # due to network attachment ordering
+                    try:
+                        await self._fix_interface_names(container.name, lab_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to fix interface names for {log_name}: {e}")
                     continue
 
                 # Legacy interface provisioning (post-start)
@@ -1029,6 +1035,264 @@ username admin privilege 15 role network-admin nopassword
             logger.info(f"Provisioned {provisioned} OVS interfaces in {container_name}")
 
         return provisioned
+
+    async def _fix_interface_names(
+        self,
+        container_name: str,
+        lab_id: str,
+    ) -> dict[str, Any]:
+        """Fix container interface names after Docker start.
+
+        Docker assigns interface names based on network attachment order, not
+        the intended names from the OVS plugin. This method:
+        1. Detects when OVS endpoints are missing (e.g., after agent restart)
+        2. Reconnects networks to force endpoint recreation
+        3. Renames interfaces to match intended names (eth1, eth2, etc.)
+
+        Args:
+            container_name: Docker container name
+            lab_id: Lab identifier
+
+        Returns:
+            Dict with counts of fixed interfaces and any errors.
+        """
+        result = {"fixed": 0, "already_correct": 0, "reconnected": 0, "errors": []}
+
+        plugin = get_docker_ovs_plugin()
+        if not plugin:
+            return result
+
+        try:
+            container = await asyncio.to_thread(self.docker.containers.get, container_name)
+            pid = container.attrs["State"]["Pid"]
+            if not pid:
+                result["errors"].append("Container not running")
+                return result
+
+            # Get container's network attachments
+            networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+        except Exception as e:
+            result["errors"].append(f"Failed to get container: {e}")
+            return result
+
+        # Build mapping of network_id -> intended interface name from plugin
+        network_to_interface = {}
+        for network in plugin.networks.values():
+            if network.lab_id == lab_id and network.interface_name != "eth0":
+                network_to_interface[network.network_id] = network.interface_name
+
+        if not network_to_interface:
+            logger.debug(f"No OVS networks found for lab {lab_id}")
+            return result
+
+        # Check if we need to reconnect networks (OVS has no ports for this lab)
+        bridge_name = f"ovs-{lab_id[:12]}"
+        proc = await asyncio.create_subprocess_exec(
+            "ovs-vsctl", "list-ports", bridge_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        ovs_ports = stdout.decode().strip().split("\n") if proc.returncode == 0 else []
+        ovs_ports = [p for p in ovs_ports if p]  # Filter empty
+
+        # If no OVS ports but container has network attachments, reconnect to force endpoint creation
+        if not ovs_ports and networks:
+            logger.info(f"No OVS ports found for {container_name}, reconnecting networks...")
+            for network_name in list(networks.keys()):
+                network_id = networks[network_name].get("NetworkID", "")
+                if network_id not in network_to_interface:
+                    continue  # Skip non-OVS networks
+
+                try:
+                    # Disconnect
+                    docker_network = await asyncio.to_thread(self.docker.networks.get, network_name)
+                    await asyncio.to_thread(docker_network.disconnect, container_name)
+                    # Reconnect
+                    await asyncio.to_thread(docker_network.connect, container_name)
+                    result["reconnected"] += 1
+                    logger.info(f"Reconnected {container_name} to {network_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to reconnect {network_name}: {e}")
+                    result["errors"].append(f"Failed to reconnect {network_name}: {e}")
+
+            # Refresh container info after reconnection
+            if result["reconnected"] > 0:
+                await asyncio.sleep(1)  # Give Docker time to process
+                container = await asyncio.to_thread(self.docker.containers.get, container_name)
+                pid = container.attrs["State"]["Pid"]
+                networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+
+        # For each network attachment, check if the interface name is correct
+        for network_name, network_info in networks.items():
+            try:
+                network_id = network_info.get("NetworkID", "")
+                if network_id not in network_to_interface:
+                    continue  # Not an OVS network
+
+                intended_name = network_to_interface[network_id]
+                endpoint_id = network_info.get("EndpointID", "")
+                if not endpoint_id:
+                    continue
+
+                # Find the veth for this endpoint by checking OVS ports
+                # Endpoint IDs from Docker are used to generate veth names
+                # Format: vh{endpoint_id[:5]}{random}
+                host_veth = None
+                net_bridge = plugin.networks[network_id].bridge_name
+
+                # List ports on the OVS bridge
+                proc = await asyncio.create_subprocess_exec(
+                    "ovs-vsctl", "list-ports", net_bridge,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await proc.communicate()
+                if proc.returncode == 0:
+                    ports = stdout.decode().strip().split("\n")
+                    # Find port that matches endpoint prefix
+                    for port in ports:
+                        if port.startswith(f"vh{endpoint_id[:5]}"):
+                            host_veth = port
+                            break
+
+                if not host_veth:
+                    # Try finding by checking all ports' peer indexes
+                    continue
+
+                # Get the host veth's peer ifindex (the interface inside the container)
+                proc = await asyncio.create_subprocess_exec(
+                    "cat", f"/sys/class/net/{host_veth}/iflink",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await proc.communicate()
+                if proc.returncode != 0:
+                    continue
+
+                peer_ifindex = stdout.decode().strip()
+
+                # Find what name this interface has inside the container
+                actual_name = await self._find_interface_by_ifindex(pid, peer_ifindex)
+                if not actual_name:
+                    continue
+
+                if actual_name == intended_name:
+                    result["already_correct"] += 1
+                    continue
+
+                # Rename interface inside container
+                await self._rename_container_interface(
+                    pid, actual_name, intended_name, container_name, result
+                )
+
+            except Exception as e:
+                result["errors"].append(f"Error processing network {network_name}: {e}")
+
+        if result["fixed"] > 0:
+            logger.info(
+                f"Fixed {result['fixed']} interface names in {container_name}"
+            )
+
+        return result
+
+    async def _find_interface_by_ifindex(self, pid: int, ifindex: str) -> str | None:
+        """Find interface name in container by its ifindex.
+
+        Uses `ip link show` which is network-namespace aware, unlike
+        /sys/class/net which is mount-namespace based.
+        """
+        proc = await asyncio.create_subprocess_exec(
+            "nsenter", "-t", str(pid), "-n",
+            "ip", "-o", "link", "show",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return None
+
+        # Parse output like: "4207: eth6@if4208: <BROADCAST,..."
+        for line in stdout.decode().strip().split("\n"):
+            parts = line.split(":", 2)
+            if len(parts) >= 2:
+                idx = parts[0].strip()
+                name = parts[1].strip().split("@")[0]  # Remove @ifXXX suffix
+                if idx == ifindex:
+                    return name
+        return None
+
+    async def _rename_container_interface(
+        self,
+        pid: int,
+        actual_name: str,
+        intended_name: str,
+        container_name: str,
+        result: dict[str, Any],
+    ) -> None:
+        """Rename an interface inside a container."""
+        logger.info(f"Renaming {actual_name} -> {intended_name} in {container_name}")
+
+        # First bring interface down
+        proc = await asyncio.create_subprocess_exec(
+            "nsenter", "-t", str(pid), "-n",
+            "ip", "link", "set", actual_name, "down",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+        # Rename
+        proc = await asyncio.create_subprocess_exec(
+            "nsenter", "-t", str(pid), "-n",
+            "ip", "link", "set", actual_name, "name", intended_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            error_msg = stderr.decode().strip()
+            # Interface may already exist with that name (from docker_gwbridge)
+            if "File exists" in error_msg:
+                # Need to rename the conflicting interface first
+                temp_name = f"_old_{intended_name}"
+                await asyncio.create_subprocess_exec(
+                    "nsenter", "-t", str(pid), "-n",
+                    "ip", "link", "set", intended_name, "down",
+                )
+                await asyncio.create_subprocess_exec(
+                    "nsenter", "-t", str(pid), "-n",
+                    "ip", "link", "set", intended_name, "name", temp_name,
+                )
+                # Now try the rename again
+                proc = await asyncio.create_subprocess_exec(
+                    "nsenter", "-t", str(pid), "-n",
+                    "ip", "link", "set", actual_name, "name", intended_name,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    result["errors"].append(
+                        f"Failed to rename {actual_name} -> {intended_name}: {stderr.decode()}"
+                    )
+                    return
+            else:
+                result["errors"].append(
+                    f"Failed to rename {actual_name} -> {intended_name}: {error_msg}"
+                )
+                return
+
+        # Bring interface back up
+        proc = await asyncio.create_subprocess_exec(
+            "nsenter", "-t", str(pid), "-n",
+            "ip", "link", "set", intended_name, "up",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+        result["fixed"] += 1
 
     async def _plugin_hot_connect(
         self,
