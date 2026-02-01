@@ -10,34 +10,32 @@ from datetime import datetime, timezone
 from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.db import SessionLocal
-from app.services.topology import TopologyService
-from app.topology import graph_to_containerlab_yaml, yaml_to_graph
+from app.services.topology import TopologyService, graph_to_deploy_topology
 from app.utils.lab import update_lab_state
 
 logger = logging.getLogger(__name__)
 
 
-def _get_node_display_name(topology_yaml: str | None, node_name: str) -> str | None:
-    """Get display name for a node from topology YAML.
+def _get_node_display_name_from_db(session, lab_id: str, node_name: str) -> str | None:
+    """Get display name for a node from the database.
 
     Args:
-        topology_yaml: The topology YAML content
-        node_name: The internal node name (container_name / YAML key)
+        session: Database session
+        lab_id: Lab identifier
+        node_name: The internal node name (container_name)
 
     Returns:
         The display name if found, None otherwise
     """
-    if not topology_yaml:
-        return None
-    try:
-        graph = yaml_to_graph(topology_yaml)
-        for node in graph.nodes:
-            # Match by container_name (YAML key) which is the internal ID
-            if node.container_name == node_name:
-                return node.name  # This is the display name
-        return None
-    except Exception:
-        return None
+    node = (
+        session.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name == node_name,
+        )
+        .first()
+    )
+    return node.display_name if node else None
 
 
 def _get_node_info_for_webhook(session, lab_id: str) -> list[dict]:
@@ -251,7 +249,6 @@ async def run_agent_job(
     job_id: str,
     lab_id: str,
     action: str,
-    topology_yaml: str | None = None,
     node_name: str | None = None,
     provider: str = "docker",
 ):
@@ -260,11 +257,12 @@ async def run_agent_job(
     Handles errors gracefully and provides detailed error messages.
     Updates lab state based on job outcome.
 
+    For deploy actions, topology is built from the database (source of truth).
+
     Args:
         job_id: The job ID
         lab_id: The lab ID
         action: Action to perform (up, down, node:start:name, etc.)
-        topology_yaml: Topology YAML for deploy actions
         node_name: Node name for node actions
         provider: Provider for the job (default: docker)
     """
@@ -354,9 +352,12 @@ async def run_agent_job(
 
         try:
             if action == "up":
+                # Build JSON topology from database (source of truth)
+                topo_service = TopologyService(session)
+                topology_json = topo_service.build_deploy_topology(lab_id, agent.id)
                 result = await agent_client.deploy_to_agent(
                     agent, job_id, lab_id,
-                    topology_yaml=topology_yaml or "",
+                    topology=topology_json,  # Use JSON, not YAML
                     provider=provider,
                 )
             elif action == "down":
@@ -366,7 +367,7 @@ async def run_agent_job(
                 parts = action.split(":", 2)
                 node_action_type = parts[1] if len(parts) > 1 else ""
                 node = parts[2] if len(parts) > 2 else ""
-                display_name = _get_node_display_name(topology_yaml, node)
+                display_name = _get_node_display_name_from_db(session, lab_id, node)
                 result = await agent_client.node_action_on_agent(
                     agent, job_id, lab_id, node, node_action_type, display_name
                 )
@@ -478,13 +479,12 @@ async def run_agent_job(
 async def run_multihost_deploy(
     job_id: str,
     lab_id: str,
-    topology_yaml: str,
     provider: str = "docker",
 ):
     """Deploy a lab across multiple hosts.
 
     This function uses the database `nodes.host_id` as the authoritative source
-    for host assignments, replacing the previous YAML-based `host:` field approach.
+    for host assignments.
 
     Steps:
     1. Analyze placements using TopologyService (reads from database)
@@ -495,7 +495,6 @@ async def run_multihost_deploy(
     Args:
         job_id: The job ID
         lab_id: The lab ID
-        topology_yaml: Full topology YAML (kept for backward compat, but DB is source of truth)
         provider: Provider for the job
     """
     session = SessionLocal()
@@ -787,7 +786,6 @@ async def run_multihost_deploy(
 async def run_multihost_destroy(
     job_id: str,
     lab_id: str,
-    topology_yaml: str,
     provider: str = "docker",
 ):
     """Destroy a multi-host lab.
@@ -803,7 +801,6 @@ async def run_multihost_destroy(
     Args:
         job_id: The job ID
         lab_id: The lab ID
-        topology_yaml: Full topology YAML (kept for compat, but DB is source of truth)
         provider: Provider for the job
     """
     session = SessionLocal()
@@ -958,8 +955,6 @@ async def run_node_sync(
         node_ids: List of node IDs to sync
         provider: Provider for the job (default: docker)
     """
-    from app.storage import topology_path
-
     session = SessionLocal()
     try:
         job = session.get(models.Job, job_id)
@@ -1004,203 +999,157 @@ async def run_node_sync(
         # Check if nodes have specific host placement in topology
         # This takes precedence over NodePlacement records and lab.agent_id
         target_agent_id = None
-        graph = None  # Initialize graph - used later for explicit host placement checks
-        topo_path = topology_path(lab.id)
-        if topo_path.exists():
-            try:
-                topology_yaml = topo_path.read_text(encoding="utf-8")
-                graph = yaml_to_graph(topology_yaml)
 
-                # Build node_id -> graph node mapping for placeholder resolution
-                graph_nodes_by_id = {n.id: n for n in graph.nodes}
+        # Fix node_name placeholders from lazy initialization using database
+        # When NodeState is created lazily (before topology sync), node_name=node_id.
+        # We need to resolve this to the actual container_name for operations to work.
+        topo_service = TopologyService(session)
+        db_nodes_all = topo_service.get_nodes(lab_id)
+        db_nodes_by_gui_id = {n.gui_id: n for n in db_nodes_all}
 
-                # Fix node_name placeholders from lazy initialization.
-                # When NodeState is created lazily (before topology sync), node_name=node_id.
-                # We need to resolve this to the actual container_name for operations to work.
-                for ns in node_states:
-                    if ns.node_name == ns.node_id and ns.node_id in graph_nodes_by_id:
-                        graph_node = graph_nodes_by_id[ns.node_id]
-                        correct_name = graph_node.container_name or graph_node.name
-                        if correct_name != ns.node_name:
-                            logger.info(f"Fixing placeholder node_name: {ns.node_name} -> {correct_name}")
-                            ns.node_name = correct_name
-                            session.commit()
+        for ns in node_states:
+            if ns.node_name == ns.node_id and ns.node_id in db_nodes_by_gui_id:
+                db_node = db_nodes_by_gui_id[ns.node_id]
+                if db_node.container_name != ns.node_name:
+                    logger.info(f"Fixing placeholder node_name: {ns.node_name} -> {db_node.container_name}")
+                    ns.node_name = db_node.container_name
+                    session.commit()
 
-                # Get the node names we're syncing
-                node_names_to_sync = {ns.node_name for ns in node_states}
+        # Get the node names we're syncing
+        node_names_to_sync = {ns.node_name for ns in node_states}
 
-                # Determine target agent for ALL nodes
-                # Priority: 1. nodes.host_id (database), 2. YAML host field, 3. NodePlacement, 4. default
-                all_node_agents: dict[str, str] = {}  # node_name -> agent_id
+        # Determine target agent for ALL nodes
+        # Priority: 1. nodes.host_id (database source of truth), 2. NodePlacement, 3. default
+        all_node_agents: dict[str, str] = {}  # node_name -> agent_id
 
-                # First, check database nodes.host_id (source of truth for placement)
-                db_nodes = (
-                    session.query(models.Node)
-                    .filter(
-                        models.Node.lab_id == lab_id,
-                        models.Node.container_name.in_(node_names_to_sync),
+        # Check database nodes.host_id (source of truth for placement)
+        db_nodes = (
+            session.query(models.Node)
+            .filter(
+                models.Node.lab_id == lab_id,
+                models.Node.container_name.in_(node_names_to_sync),
+            )
+            .all()
+        )
+        # Track nodes with explicit placement that failed
+        explicit_placement_failures = []
+
+        for db_node in db_nodes:
+            if db_node.host_id:
+                # Explicit placement - MUST deploy to this agent or error
+                host_agent = session.get(models.Host, db_node.host_id)
+                if not host_agent:
+                    explicit_placement_failures.append(
+                        f"{db_node.container_name}: assigned host {db_node.host_id} not found"
                     )
-                    .all()
+                elif not agent_client.is_agent_online(host_agent):
+                    explicit_placement_failures.append(
+                        f"{db_node.container_name}: assigned host {host_agent.name} is offline"
+                    )
+                else:
+                    all_node_agents[db_node.container_name] = db_node.host_id
+                    logger.info(f"Node {db_node.container_name} -> host {host_agent.name} (explicit placement)")
+
+        # Fail fast if any explicit placements can't be honored
+        if explicit_placement_failures:
+            error_msg = "Cannot deploy - explicit host assignments failed:\n" + "\n".join(explicit_placement_failures)
+            job.status = "failed"
+            job.completed_at = datetime.utcnow()
+            job.log_path = error_msg
+            for ns in node_states:
+                if ns.node_name in [f.split(":")[0] for f in explicit_placement_failures]:
+                    ns.actual_state = "error"
+                    ns.error_message = "Assigned host unavailable"
+            session.commit()
+            logger.error(f"Sync job {job_id} failed: {error_msg}")
+            return
+
+        # Then, determine agent for remaining auto-placed nodes
+        auto_placed_nodes = [ns for ns in node_states if ns.node_name not in all_node_agents]
+        if auto_placed_nodes:
+            # Check existing placements
+            auto_node_names = {ns.node_name for ns in auto_placed_nodes}
+            existing_placements = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name.in_(auto_node_names),
                 )
-                # Track nodes with explicit placement that failed
-                explicit_placement_failures = []
+                .all()
+            )
+            placement_map = {p.node_name: p.host_id for p in existing_placements}
 
-                for db_node in db_nodes:
-                    if db_node.host_id:
-                        # Explicit placement - MUST deploy to this agent or error
-                        host_agent = session.get(models.Host, db_node.host_id)
-                        if not host_agent:
-                            explicit_placement_failures.append(
-                                f"{db_node.container_name}: assigned host {db_node.host_id} not found"
-                            )
-                        elif not agent_client.is_agent_online(host_agent):
-                            explicit_placement_failures.append(
-                                f"{db_node.container_name}: assigned host {host_agent.name} is offline"
-                            )
-                        else:
-                            all_node_agents[db_node.container_name] = db_node.host_id
-                            logger.info(f"Node {db_node.container_name} -> host {host_agent.name} (explicit placement)")
+            # Find default agent for nodes without existing placement
+            default_agent_id = None
+            if lab.agent_id:
+                default_agent = session.get(models.Host, lab.agent_id)
+                if default_agent and agent_client.is_agent_online(default_agent):
+                    default_agent_id = lab.agent_id
+            if not default_agent_id:
+                healthy_agent = await agent_client.get_healthy_agent(session, required_provider=provider)
+                if healthy_agent:
+                    default_agent_id = healthy_agent.id
 
-                # Fail fast if any explicit placements can't be honored
-                if explicit_placement_failures:
-                    error_msg = "Cannot deploy - explicit host assignments failed:\n" + "\n".join(explicit_placement_failures)
-                    job.status = "failed"
-                    job.completed_at = datetime.utcnow()
-                    job.log_path = error_msg
-                    for ns in node_states:
-                        if ns.node_name in [f.split(":")[0] for f in explicit_placement_failures]:
-                            ns.actual_state = "error"
-                            ns.error_message = "Assigned host unavailable"
-                    session.commit()
-                    logger.error(f"Sync job {job_id} failed: {error_msg}")
-                    return
+            for ns in auto_placed_nodes:
+                if ns.node_name in placement_map:
+                    # Use existing placement
+                    all_node_agents[ns.node_name] = placement_map[ns.node_name]
+                elif default_agent_id:
+                    # Use default agent
+                    all_node_agents[ns.node_name] = default_agent_id
+                # else: will be handled by fallback logic later
 
-                # For nodes without database host_id, check YAML topology
-                # YAML host field is also explicit - must honor or error
-                nodes_without_db_host = node_names_to_sync - set(all_node_agents.keys())
-                if nodes_without_db_host:
-                    for node in graph.nodes:
-                        node_key = node.container_name or node.name
-                        if node_key in nodes_without_db_host and node.host:
-                            # Explicit YAML placement - try lookup by name first, then by ID
-                            host_agent = await agent_client.get_agent_by_name(session, node.host, required_provider=provider)
-                            if not host_agent:
-                                host_agent = session.get(models.Host, node.host)
+        # Group nodes by their target agent
+        nodes_by_agent: dict[str, list] = {}
+        nodes_without_agent = []
+        for ns in node_states:
+            agent_id = all_node_agents.get(ns.node_name)
+            if agent_id:
+                if agent_id not in nodes_by_agent:
+                    nodes_by_agent[agent_id] = []
+                nodes_by_agent[agent_id].append(ns)
+            else:
+                nodes_without_agent.append(ns)
 
-                            if not host_agent:
-                                explicit_placement_failures.append(
-                                    f"{node_key}: YAML host '{node.host}' not found"
-                                )
-                            elif not agent_client.is_agent_online(host_agent):
-                                explicit_placement_failures.append(
-                                    f"{node_key}: YAML host {host_agent.name} is offline"
-                                )
-                            else:
-                                all_node_agents[node_key] = host_agent.id
-                                logger.info(f"Node {node_key} -> host {host_agent.name} (from YAML)")
+        if nodes_by_agent:
+            # Pick the first agent to handle in this job
+            agent_ids = list(nodes_by_agent.keys())
+            target_agent_id = agent_ids[0]
+            node_states = nodes_by_agent[target_agent_id]
+            logger.info(f"Processing {len(node_states)} node(s) on agent {target_agent_id}")
 
-                # Check again for YAML placement failures
-                if explicit_placement_failures:
-                    error_msg = "Cannot deploy - explicit host assignments failed:\n" + "\n".join(explicit_placement_failures)
-                    job.status = "failed"
-                    job.completed_at = datetime.utcnow()
-                    job.log_path = error_msg
-                    for ns in node_states:
-                        if ns.node_name in [f.split(":")[0] for f in explicit_placement_failures]:
-                            ns.actual_state = "error"
-                            ns.error_message = "Assigned host unavailable"
-                    session.commit()
-                    logger.error(f"Sync job {job_id} failed: {error_msg}")
-                    return
+            # Spawn separate jobs for other agents
+            for other_agent_id in agent_ids[1:]:
+                other_nodes = nodes_by_agent[other_agent_id]
+                other_node_ids = [ns.node_id for ns in other_nodes]
+                logger.info(f"Spawning sync job for {len(other_node_ids)} node(s) on agent {other_agent_id}")
+                other_job = models.Job(
+                    lab_id=lab_id,
+                    user_id=job.user_id,
+                    action=f"sync:agent:{other_agent_id}:{','.join(other_node_ids)}",
+                    status="queued",
+                )
+                session.add(other_job)
+                session.commit()
+                session.refresh(other_job)
+                asyncio.create_task(run_node_sync(other_job.id, lab_id, other_node_ids, provider=provider))
 
-                # Then, determine agent for remaining auto-placed nodes
-                auto_placed_nodes = [ns for ns in node_states if ns.node_name not in all_node_agents]
-                if auto_placed_nodes:
-                    # Check existing placements
-                    auto_node_names = {ns.node_name for ns in auto_placed_nodes}
-                    existing_placements = (
-                        session.query(models.NodePlacement)
-                        .filter(
-                            models.NodePlacement.lab_id == lab_id,
-                            models.NodePlacement.node_name.in_(auto_node_names),
-                        )
-                        .all()
-                    )
-                    placement_map = {p.node_name: p.host_id for p in existing_placements}
-
-                    # Find default agent for nodes without existing placement
-                    default_agent_id = None
-                    if lab.agent_id:
-                        default_agent = session.get(models.Host, lab.agent_id)
-                        if default_agent and agent_client.is_agent_online(default_agent):
-                            default_agent_id = lab.agent_id
-                    if not default_agent_id:
-                        healthy_agent = await agent_client.get_healthy_agent(session, required_provider=provider)
-                        if healthy_agent:
-                            default_agent_id = healthy_agent.id
-
-                    for ns in auto_placed_nodes:
-                        if ns.node_name in placement_map:
-                            # Use existing placement
-                            all_node_agents[ns.node_name] = placement_map[ns.node_name]
-                        elif default_agent_id:
-                            # Use default agent
-                            all_node_agents[ns.node_name] = default_agent_id
-                        # else: will be handled by fallback logic later
-
-                # Group nodes by their target agent
-                nodes_by_agent: dict[str, list] = {}
-                nodes_without_agent = []
-                for ns in node_states:
-                    agent_id = all_node_agents.get(ns.node_name)
-                    if agent_id:
-                        if agent_id not in nodes_by_agent:
-                            nodes_by_agent[agent_id] = []
-                        nodes_by_agent[agent_id].append(ns)
-                    else:
-                        nodes_without_agent.append(ns)
-
-                if nodes_by_agent:
-                    # Pick the first agent to handle in this job
-                    agent_ids = list(nodes_by_agent.keys())
-                    target_agent_id = agent_ids[0]
-                    node_states = nodes_by_agent[target_agent_id]
-                    logger.info(f"Processing {len(node_states)} node(s) on agent {target_agent_id}")
-
-                    # Spawn separate jobs for other agents
-                    for other_agent_id in agent_ids[1:]:
-                        other_nodes = nodes_by_agent[other_agent_id]
-                        other_node_ids = [ns.node_id for ns in other_nodes]
-                        logger.info(f"Spawning sync job for {len(other_node_ids)} node(s) on agent {other_agent_id}")
-                        other_job = models.Job(
-                            lab_id=lab_id,
-                            user_id=job.user_id,
-                            action=f"sync:agent:{other_agent_id}:{','.join(other_node_ids)}",
-                            status="queued",
-                        )
-                        session.add(other_job)
-                        session.commit()
-                        session.refresh(other_job)
-                        asyncio.create_task(run_node_sync(other_job.id, lab_id, other_node_ids, provider=provider))
-
-                # Handle nodes that couldn't be assigned an agent
-                # DON'T spawn separate jobs - that can cause infinite loops if agent lookup keeps failing
-                if nodes_without_agent:
-                    if not node_states:
-                        # No other nodes with agents, try to handle these with fallback logic
-                        node_states = nodes_without_agent
-                    else:
-                        # We have nodes with assigned agents - mark unassigned nodes as error
-                        # Don't spawn a job that might loop indefinitely
-                        logger.warning(
-                            f"Cannot assign agent for {len(nodes_without_agent)} node(s), marking as error"
-                        )
-                        for ns in nodes_without_agent:
-                            ns.actual_state = "error"
-                            ns.error_message = "No agent available for explicit host placement"
-                        session.commit()
-            except Exception as e:
-                logger.warning(f"Failed to parse topology for host placement: {e}")
+        # Handle nodes that couldn't be assigned an agent
+        # DON'T spawn separate jobs - that can cause infinite loops if agent lookup keeps failing
+        if nodes_without_agent:
+            if not node_states:
+                # No other nodes with agents, try to handle these with fallback logic
+                node_states = nodes_without_agent
+            else:
+                # We have nodes with assigned agents - mark unassigned nodes as error
+                # Don't spawn a job that might loop indefinitely
+                logger.warning(
+                    f"Cannot assign agent for {len(nodes_without_agent)} node(s), marking as error"
+                )
+                for ns in nodes_without_agent:
+                    ns.actual_state = "error"
+                    ns.error_message = "No agent available for explicit host placement"
+                session.commit()
 
         # Find the agent - either from explicit placement or for non-placed nodes
         if target_agent_id:
@@ -1469,10 +1418,9 @@ async def run_node_sync(
         if nodes_need_deploy:
             log_parts.append("=== Phase 1: Deploy Topology ===")
 
-            # Read topology YAML
-            topo_path = topology_path(lab.id)
-            if not topo_path.exists():
-                error_msg = "No topology file found"
+            # Get topology from database (source of truth)
+            if not topo_service.has_nodes(lab_id):
+                error_msg = "No topology defined in database"
                 job.status = "failed"
                 job.completed_at = datetime.utcnow()
                 job.log_path = f"ERROR: {error_msg}"
@@ -1482,10 +1430,8 @@ async def run_node_sync(
                 session.commit()
                 return
 
-            topology_yaml = topo_path.read_text(encoding="utf-8")
-
-            # Convert to containerlab format
-            graph = yaml_to_graph(topology_yaml)
+            # Get graph from database
+            graph = topo_service.export_to_graph(lab_id)
 
             # Get the names of nodes we're actually trying to deploy
             nodes_to_deploy_names = {ns.node_name for ns in nodes_need_deploy}
@@ -1495,14 +1441,22 @@ async def run_node_sync(
             # So we must include running nodes to prevent them from being removed.
             from app.topology import TopologyGraph
 
-            # Get all nodes that should be on this agent
+            # Get all nodes that should be on this agent using database Node.host_id
             all_agent_node_names = set()
             for n in graph.nodes:
                 node_key = n.container_name or n.name
-                # Check if this node belongs on this agent
-                if n.host:
-                    # Explicit host - check if it matches this agent (by name or ID)
-                    if n.host == agent.name or n.host == agent.id:
+                # Check if this node belongs on this agent using host_id from database
+                db_node = (
+                    session.query(models.Node)
+                    .filter(
+                        models.Node.lab_id == lab_id,
+                        models.Node.container_name == node_key,
+                    )
+                    .first()
+                )
+                if db_node and db_node.host_id:
+                    # Explicit host - check if it matches this agent
+                    if db_node.host_id == agent.id:
                         all_agent_node_names.add(node_key)
                 else:
                     # Auto-placed node - include if it's one we're deploying
@@ -1582,13 +1536,14 @@ async def run_node_sync(
                 session.commit()
                 nodes_need_deploy = []
             else:
-                clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
+                # Convert filtered graph to JSON deploy topology
+                topology_json = graph_to_deploy_topology(filtered_graph)
                 log_parts.append(f"Deploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
 
                 try:
                     result = await agent_client.deploy_to_agent(
                         agent, job_id, lab_id,
-                        topology_yaml=clab_yaml,
+                        topology=topology_json,  # Use JSON, not YAML
                         provider=provider,
                     )
 
@@ -1687,18 +1642,16 @@ async def run_node_sync(
             log_parts.append("=== Phase 2: Start Nodes (via redeploy) ===")
             log_parts.append("Note: Full redeploy required to recreate network interfaces")
 
-            # Read topology YAML
-            topo_path = topology_path(lab.id)
-            if not topo_path.exists():
-                error_msg = "No topology file found"
+            # Get topology from database (source of truth)
+            if not topo_service.has_nodes(lab_id):
+                error_msg = "No topology defined in database"
                 for ns in nodes_need_start:
                     ns.actual_state = "error"
                     ns.error_message = error_msg
                 session.commit()
                 log_parts.append(f"Redeploy FAILED: {error_msg}")
             else:
-                topology_yaml = topo_path.read_text(encoding="utf-8")
-                graph = yaml_to_graph(topology_yaml)
+                graph = topo_service.export_to_graph(lab_id)
 
                 # Get the names of nodes we're actually trying to start
                 nodes_to_start_names = {ns.node_name for ns in nodes_need_start}
@@ -1707,12 +1660,21 @@ async def run_node_sync(
                 # Containerlab's --reconfigure will DESTROY nodes not in the topology!
                 from app.topology import TopologyGraph
 
-                # Get all nodes that should be on this agent
+                # Get all nodes that should be on this agent using database Node.host_id
                 all_agent_node_names = set()
                 for n in graph.nodes:
                     node_key = n.container_name or n.name
-                    if n.host:
-                        if n.host == agent.name or n.host == agent.id:
+                    # Check if this node belongs on this agent using host_id from database
+                    db_node = (
+                        session.query(models.Node)
+                        .filter(
+                            models.Node.lab_id == lab_id,
+                            models.Node.container_name == node_key,
+                        )
+                        .first()
+                    )
+                    if db_node and db_node.host_id:
+                        if db_node.host_id == agent.id:
                             all_agent_node_names.add(node_key)
                     else:
                         if node_key in nodes_to_start_names:
@@ -1785,13 +1747,14 @@ async def run_node_sync(
                     session.commit()
                     nodes_need_start = []
                 else:
-                    clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
+                    # Convert filtered graph to JSON deploy topology
+                    topology_json = graph_to_deploy_topology(filtered_graph)
                     log_parts.append(f"Redeploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
 
                     try:
                         result = await agent_client.deploy_to_agent(
                             agent, job_id, lab_id,
-                            topology_yaml=clab_yaml,
+                            topology=topology_json,  # Use JSON, not YAML
                             provider=provider,
                         )
 

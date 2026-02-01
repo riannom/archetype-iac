@@ -9,8 +9,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app import agent_client, models
 from app.db import SessionLocal
 from app.services.topology import TopologyService
-from app.storage import topology_path
-from app.topology import analyze_topology, yaml_to_graph
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,7 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
         # Use TopologyService to look up node and its host from database
         topology_service = TopologyService(database)
 
-        # First try database lookup (new source of truth)
+        # Use database as source of truth for node lookup
         node_def = topology_service.get_node_by_any_id(lab.id, node)
         if node_def:
             node_name = node_def.container_name
@@ -50,37 +48,6 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
                     agent = None  # Agent offline, will fall back below
                 else:
                     logger.debug(f"Console: using host_id {node_def.host_id} from topology")
-        else:
-            # Fall back to YAML parsing for labs not yet migrated to DB
-            topo_path = topology_path(lab.id)
-            if topo_path.exists():
-                try:
-                    topology_yaml = topo_path.read_text(encoding="utf-8")
-                    graph = yaml_to_graph(topology_yaml)
-                    analysis = analyze_topology(graph)
-
-                    # Resolve GUI ID to containerlab node name
-                    for n in graph.nodes:
-                        if n.id == node:
-                            node_name = n.container_name or n.name
-                            logger.debug(f"Console: resolved GUI ID {node} to container name {node_name} via YAML")
-                            break
-
-                    # Get the provider for this lab
-                    lab_provider = lab.provider if lab.provider else "docker"
-
-                    # Check if this node has explicit host placement
-                    for host_id, placements in analysis.placements.items():
-                        for p in placements:
-                            if p.node_name == node_name:
-                                agent = await agent_client.get_agent_by_name(
-                                    database, host_id, required_provider=lab_provider
-                                )
-                                break
-                        if agent:
-                            break
-                except Exception as e:
-                    logger.warning(f"Console: topology parsing failed for {lab_id}: {e}")
 
         # If no agent from topology, check NodePlacement (runtime placement records)
         if not agent:

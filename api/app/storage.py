@@ -18,23 +18,9 @@ def lab_workspace(lab_id: str) -> Path:
     return workspace_root() / lab_id
 
 
-def topology_path(lab_id: str) -> Path:
-    return lab_workspace(lab_id) / "topology.yml"
-
-
 def layout_path(lab_id: str) -> Path:
     """Get the path to a lab's layout.json file."""
     return lab_workspace(lab_id) / "layout.json"
-
-
-def ensure_topology_file(lab_id: str) -> Path:
-    path = topology_path(lab_id)
-    if not path.exists():
-        path.write_text(
-            "defaults:\\n  device: iosv\\nnodes: {}\\nlinks: []\\n",
-            encoding="utf-8",
-        )
-    return path
 
 
 def read_layout(lab_id: str) -> "LabLayout | None":

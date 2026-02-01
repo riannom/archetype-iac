@@ -160,6 +160,7 @@ async def register_agent(
         existing.version = agent.version
         existing.started_at = agent.started_at
         existing.is_local = agent.is_local
+        existing.deployment_mode = getattr(agent, 'deployment_mode', None) or existing.deployment_mode
         existing.last_heartbeat = datetime.now(timezone.utc)
         database.commit()
         host_id = agent.agent_id
@@ -195,6 +196,7 @@ async def register_agent(
             existing_duplicate.version = agent.version
             existing_duplicate.started_at = agent.started_at
             existing_duplicate.is_local = agent.is_local
+            existing_duplicate.deployment_mode = getattr(agent, 'deployment_mode', None) or existing_duplicate.deployment_mode
             existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
             database.commit()
             host_id = existing_duplicate.id
@@ -216,6 +218,7 @@ async def register_agent(
                 version=agent.version,
                 started_at=agent.started_at,
                 is_local=agent.is_local,
+                deployment_mode=getattr(agent, 'deployment_mode', None) or "unknown",
                 last_heartbeat=datetime.now(timezone.utc),
             )
             database.add(host)

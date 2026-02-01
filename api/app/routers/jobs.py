@@ -14,9 +14,9 @@ from app.auth import get_current_user
 from app.db import SessionLocal
 from app.netlab import run_netlab_command
 from app.services.topology import TopologyService
-from app.storage import lab_workspace, topology_path
+from app.storage import lab_workspace
 from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
-from app.topology import analyze_topology, graph_to_containerlab_yaml, yaml_to_graph
+from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.utils.lab import get_lab_or_404, get_lab_provider
@@ -222,52 +222,27 @@ async def lab_up(
     analysis = None
     has_explicit_placements = False
 
-    # Try database first (source of truth)
-    if service.has_nodes(lab.id):
-        try:
-            db_analysis = service.analyze_placements(lab.id)
-            has_explicit_placements = bool(db_analysis.placements)
-            is_multihost = not db_analysis.single_host or has_explicit_placements
-            clab_yaml = service.to_containerlab_yaml(lab.id)
-            graph = service.export_to_graph(lab.id)
-            # Convert to legacy analysis format for compatibility
-            analysis = analyze_topology(graph)
-            logger.info(
-                f"Lab {lab_id} topology analysis (from DB): "
-                f"single_host={db_analysis.single_host}, "
-                f"hosts={list(db_analysis.placements.keys())}, "
-                f"cross_host_links={len(db_analysis.cross_host_links)}, "
-                f"has_explicit_placements={has_explicit_placements}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to analyze topology from DB for lab {lab_id}: {e}")
-    else:
-        # Fall back to YAML file for unmigrated labs
-        topo_path = topology_path(lab.id)
-        topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
+    if not service.has_nodes(lab.id):
+        raise HTTPException(status_code=400, detail="No topology defined for this lab")
 
-        if topology_yaml:
-            try:
-                graph = yaml_to_graph(topology_yaml)
-                analysis = analyze_topology(graph)
-
-                # Check if ANY node has explicit host placement
-                has_explicit_placements = bool(analysis.placements)
-
-                # If there are explicit placements, we must respect them
-                is_multihost = not analysis.single_host or has_explicit_placements
-
-                # Convert to containerlab format for deployment
-                clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
-                logger.info(
-                    f"Lab {lab_id} topology analysis (from YAML): "
-                    f"single_host={analysis.single_host}, "
-                    f"hosts={list(analysis.placements.keys())}, "
-                    f"cross_host_links={len(analysis.cross_host_links)}, "
-                    f"has_explicit_placements={has_explicit_placements}"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+    try:
+        db_analysis = service.analyze_placements(lab.id)
+        has_explicit_placements = bool(db_analysis.placements)
+        is_multihost = not db_analysis.single_host or has_explicit_placements
+        clab_yaml = service.to_containerlab_yaml(lab.id)
+        graph = service.export_to_graph(lab.id)
+        # Convert to legacy analysis format for compatibility
+        analysis = analyze_topology(graph)
+        logger.info(
+            f"Lab {lab_id} topology analysis: "
+            f"single_host={db_analysis.single_host}, "
+            f"hosts={list(db_analysis.placements.keys())}, "
+            f"cross_host_links={len(db_analysis.cross_host_links)}, "
+            f"has_explicit_placements={has_explicit_placements}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze topology: {e}")
 
     # Get the provider for this lab
     lab_provider = get_lab_provider(lab)
@@ -366,14 +341,14 @@ async def lab_up(
     database.refresh(job)
 
     # Start background task - choose deployment method based on topology
-    # Use containerlab-formatted YAML for deployment
+    # Deploy functions build topology from database (source of truth)
     if is_multihost:
         asyncio.create_task(run_multihost_deploy(
-            job.id, lab.id, clab_yaml, provider=lab_provider
+            job.id, lab.id, provider=lab_provider
         ))
     else:
         asyncio.create_task(run_agent_job(
-            job.id, lab.id, "up", topology_yaml=clab_yaml, provider=lab_provider
+            job.id, lab.id, "up", provider=lab_provider
         ))
 
     # Build response with image sync events
@@ -401,28 +376,7 @@ async def lab_down(
 
     # Use TopologyService for analysis (database is source of truth)
     service = TopologyService(database)
-    is_multihost = False
-    topology_yaml = ""
-
-    # Try database first
-    if service.has_nodes(lab.id):
-        try:
-            is_multihost = service.is_multihost(lab.id)
-            topology_yaml = service.export_to_yaml(lab.id)
-        except Exception as e:
-            logger.warning(f"Failed to analyze topology from DB for lab {lab_id}: {e}")
-    else:
-        # Fall back to YAML file for unmigrated labs
-        topo_path = topology_path(lab.id)
-        topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
-
-        if topology_yaml:
-            try:
-                graph = yaml_to_graph(topology_yaml)
-                analysis = analyze_topology(graph)
-                is_multihost = not analysis.single_host
-            except Exception as e:
-                logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+    is_multihost = service.is_multihost(lab.id) if service.has_nodes(lab.id) else False
 
     # Get the provider for this lab
     lab_provider = get_lab_provider(lab)
@@ -440,9 +394,10 @@ async def lab_down(
     database.refresh(job)
 
     # Start background task - choose destroy method based on topology
+    # Destroy functions use database for host analysis (source of truth)
     if is_multihost:
         asyncio.create_task(run_multihost_destroy(
-            job.id, lab.id, topology_yaml, provider=lab_provider
+            job.id, lab.id, provider=lab_provider
         ))
     else:
         asyncio.create_task(run_agent_job(
@@ -476,15 +431,13 @@ async def lab_restart(
     if not agent:
         raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
-    # Validate and convert topology BEFORE creating jobs
-    topo_path = topology_path(lab.id)
-    if not topo_path.exists():
-        raise HTTPException(status_code=400, detail="No topology file found for this lab")
+    # Validate and convert topology from database (source of truth)
+    service = TopologyService(database)
+    if not service.has_nodes(lab.id):
+        raise HTTPException(status_code=400, detail="No topology defined for this lab")
 
     try:
-        topology_yaml = topo_path.read_text(encoding="utf-8")
-        graph = yaml_to_graph(topology_yaml)
-        clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
+        clab_yaml = service.to_containerlab_yaml(lab.id)
     except Exception as e:
         logger.error(f"Failed to convert topology for restart of lab {lab.id}: {e}")
         raise HTTPException(status_code=400, detail=f"Failed to convert topology: {str(e)}")
@@ -518,8 +471,8 @@ async def lab_restart(
                     uj.log = "Cancelled: down phase failed"
                     session.commit()
                 return
-            # Proceed with up phase
-            await run_agent_job(up_job.id, lab.id, "up", topology_yaml=clab_yaml, provider=lab_provider)
+            # Proceed with up phase (topology is built from database)
+            await run_agent_job(up_job.id, lab.id, "up", provider=lab_provider)
         finally:
             session.close()
 

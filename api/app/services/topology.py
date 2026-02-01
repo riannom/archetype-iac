@@ -49,6 +49,72 @@ class TopologyAnalysisResult:
     single_host: bool
 
 
+def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
+    """Convert a TopologyGraph to deploy topology JSON format.
+
+    This function converts the internal graph representation to the JSON
+    format expected by the agent's DeployTopology schema. Used for partial
+    deploys in run_node_sync where a filtered graph needs to be deployed.
+
+    Args:
+        graph: TopologyGraph to convert
+
+    Returns:
+        Dict with 'nodes' and 'links' lists suitable for DeployTopology schema
+    """
+    nodes = []
+    for n in graph.nodes:
+        # Skip external network nodes - they're not containers
+        if n.node_type == "external":
+            continue
+
+        # Extract env, binds, etc. from vars if present
+        env = {}
+        binds = []
+        ports = []
+        exec_cmds = []
+        startup_config = None
+
+        if n.vars:
+            env = n.vars.get("env", {})
+            binds = n.vars.get("binds", [])
+            ports = n.vars.get("ports", [])
+            exec_cmds = n.vars.get("exec", [])
+            startup_config = n.vars.get("startup-config")
+
+        nodes.append({
+            "name": n.container_name or n.name,
+            "display_name": n.name,
+            "kind": n.device or "linux",
+            "image": n.image,
+            "binds": binds,
+            "env": env,
+            "ports": ports,
+            "startup_config": startup_config,
+            "exec_cmds": exec_cmds,
+        })
+
+    # Build node ID to container_name mapping for link resolution
+    node_id_to_name = {n.id: (n.container_name or n.name) for n in graph.nodes}
+
+    links = []
+    for link in graph.links:
+        if len(link.endpoints) != 2:
+            continue
+        ep1, ep2 = link.endpoints
+        # Resolve node references - could be GUI ID or container name
+        source = node_id_to_name.get(ep1.node, ep1.node)
+        target = node_id_to_name.get(ep2.node, ep2.node)
+        links.append({
+            "source_node": source,
+            "source_interface": ep1.ifname or "",
+            "target_node": target,
+            "target_interface": ep2.ifname or "",
+        })
+
+    return {"nodes": nodes, "links": links}
+
+
 class TopologyService:
     """Service for topology operations.
 
@@ -210,7 +276,22 @@ class TopologyService:
             if host_a and host_b and host_a != host_b:
                 node_a = node_names.get(link.source_node_id, "")
                 node_b = node_names.get(link.target_node_id, "")
-                link_id = f"{node_a}:{link.source_interface}-{node_b}:{link.target_interface}"
+                interface_a = link.source_interface
+                interface_b = link.target_interface
+
+                # Generate canonical link_id (sorted alphabetically) for consistency
+                # This ensures the same link always gets the same ID regardless of
+                # source/target ordering in the database
+                ep_a = f"{node_a}:{interface_a}"
+                ep_b = f"{node_b}:{interface_b}"
+                if ep_a <= ep_b:
+                    link_id = f"{ep_a}-{ep_b}"
+                else:
+                    link_id = f"{ep_b}-{ep_a}"
+                    # Swap all assignments to match canonical order
+                    node_a, node_b = node_b, node_a
+                    interface_a, interface_b = interface_b, interface_a
+                    host_a, host_b = host_b, host_a
 
                 # Get IP addresses from link config if present
                 ip_a = None
@@ -220,17 +301,20 @@ class TopologyService:
                         config = json.loads(link.config_json)
                         ip_a = config.get("ip_a")
                         ip_b = config.get("ip_b")
+                        # Swap IPs if we swapped the endpoints
+                        if ep_a > ep_b:
+                            ip_a, ip_b = ip_b, ip_a
                     except json.JSONDecodeError:
                         pass
 
                 cross_host_links.append(CrossHostLink(
                     link_id=link_id,
                     node_a=node_a,
-                    interface_a=link.source_interface,
+                    interface_a=interface_a,
                     host_a=host_a,
                     ip_a=ip_a,
                     node_b=node_b,
-                    interface_b=link.target_interface,
+                    interface_b=interface_b,
                     host_b=host_b,
                     ip_b=ip_b,
                 ))

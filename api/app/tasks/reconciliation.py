@@ -98,66 +98,20 @@ def _generate_link_name(
     return f"{ep_b}-{ep_a}"
 
 
-def _ensure_link_states_for_lab(session, lab_id: str, topology_yaml: str | None = None) -> int:
+def _ensure_link_states_for_lab(session, lab_id: str) -> int:
     """Ensure LinkState records exist for all links in a lab's topology.
 
     This is called during reconciliation to create missing link state records
     for labs that may have been deployed before link state tracking was added.
 
-    Tries database first (source of truth), falls back to YAML if provided.
+    Uses database as source of truth.
 
     Returns the number of link states created.
     """
-    from app.topology import yaml_to_graph
-
-    # Try to get links from database first
     service = TopologyService(session)
     db_links = service.get_links(lab_id)
 
-    if db_links:
-        # Use database as source of truth
-        # Get existing link states
-        existing = (
-            session.query(models.LinkState)
-            .filter(models.LinkState.lab_id == lab_id)
-            .all()
-        )
-        existing_names = {ls.link_name for ls in existing}
-
-        created_count = 0
-        for link in db_links:
-            if link.link_name not in existing_names:
-                # Get node container names for the link state record
-                source_node = session.get(models.Node, link.source_node_id)
-                target_node = session.get(models.Node, link.target_node_id)
-                if not source_node or not target_node:
-                    continue
-
-                new_state = models.LinkState(
-                    lab_id=lab_id,
-                    link_name=link.link_name,
-                    link_definition_id=link.id,
-                    source_node=source_node.container_name,
-                    source_interface=link.source_interface,
-                    target_node=target_node.container_name,
-                    target_interface=link.target_interface,
-                    desired_state="up",
-                    actual_state="unknown",
-                )
-                session.add(new_state)
-                existing_names.add(link.link_name)
-                created_count += 1
-
-        return created_count
-
-    # Fall back to YAML parsing for unmigrated labs
-    if not topology_yaml:
-        return 0
-
-    try:
-        graph = yaml_to_graph(topology_yaml)
-    except Exception as e:
-        logger.debug(f"Failed to parse topology for lab {lab_id}: {e}")
+    if not db_links:
         return 0
 
     # Get existing link states
@@ -168,53 +122,28 @@ def _ensure_link_states_for_lab(session, lab_id: str, topology_yaml: str | None 
     )
     existing_names = {ls.link_name for ls in existing}
 
-    # Build node ID to name mapping
-    node_id_to_name: dict[str, str] = {}
-    for node in graph.nodes:
-        node_id_to_name[node.id] = node.container_name or node.name
-
     created_count = 0
-
-    for link in graph.links:
-        if len(link.endpoints) != 2:
-            continue
-
-        ep_a, ep_b = link.endpoints
-
-        # Skip external endpoints
-        if ep_a.type != "node" or ep_b.type != "node":
-            continue
-
-        source_node = node_id_to_name.get(ep_a.node, ep_a.node)
-        target_node = node_id_to_name.get(ep_b.node, ep_b.node)
-        source_interface = ep_a.ifname or "eth0"
-        target_interface = ep_b.ifname or "eth0"
-
-        link_name = _generate_link_name(
-            source_node, source_interface, target_node, target_interface
-        )
-
-        if link_name not in existing_names:
-            # Ensure canonical ordering
-            if f"{source_node}:{source_interface}" <= f"{target_node}:{target_interface}":
-                src_n, src_i = source_node, source_interface
-                tgt_n, tgt_i = target_node, target_interface
-            else:
-                src_n, src_i = target_node, target_interface
-                tgt_n, tgt_i = source_node, source_interface
+    for link in db_links:
+        if link.link_name not in existing_names:
+            # Get node container names for the link state record
+            source_node = session.get(models.Node, link.source_node_id)
+            target_node = session.get(models.Node, link.target_node_id)
+            if not source_node or not target_node:
+                continue
 
             new_state = models.LinkState(
                 lab_id=lab_id,
-                link_name=link_name,
-                source_node=src_n,
-                source_interface=src_i,
-                target_node=tgt_n,
-                target_interface=tgt_i,
+                link_name=link.link_name,
+                link_definition_id=link.id,
+                source_node=source_node.container_name,
+                source_interface=link.source_interface,
+                target_node=target_node.container_name,
+                target_interface=link.target_interface,
                 desired_state="up",
                 actual_state="unknown",
             )
             session.add(new_state)
-            existing_names.add(link_name)
+            existing_names.add(link.link_name)
             created_count += 1
 
     return created_count
@@ -421,7 +350,6 @@ async def _check_readiness_for_nodes(session, nodes: list):
 
 async def _reconcile_single_lab(session, lab_id: str):
     """Reconcile a single lab's state with actual container status."""
-    from app.storage import topology_path
     from app.utils.lab import get_lab_provider
 
     lab = session.get(models.Lab, lab_id)
@@ -472,19 +400,15 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
     This is called by _reconcile_single_lab after acquiring the lock.
     """
-    from app.storage import topology_path
     from app.utils.lab import get_lab_provider
 
-    # Ensure link states exist for this lab (for backwards compatibility)
-    topo_path = topology_path(lab_id)
-    if topo_path.exists():
-        try:
-            topology_yaml = topo_path.read_text(encoding="utf-8")
-            links_created = _ensure_link_states_for_lab(session, lab_id, topology_yaml)
-            if links_created > 0:
-                logger.info(f"Created {links_created} link state(s) for lab {lab_id}")
-        except Exception as e:
-            logger.debug(f"Failed to ensure link states for lab {lab_id}: {e}")
+    # Ensure link states exist for this lab using database (source of truth)
+    try:
+        links_created = _ensure_link_states_for_lab(session, lab_id)
+        if links_created > 0:
+            logger.info(f"Created {links_created} link state(s) for lab {lab_id}")
+    except Exception as e:
+        logger.debug(f"Failed to ensure link states for lab {lab_id}: {e}")
 
     # Backfill node_definition_id for placements (gradual migration)
     try:

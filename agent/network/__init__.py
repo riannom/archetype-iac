@@ -1,6 +1,7 @@
 """Network module for lab connectivity.
 
 This module provides networking capabilities for labs:
+- Docker OVS plugin for pre-boot interface provisioning
 - Overlay (VXLAN) networking for multi-host connectivity
 - Local networking (veth pairs) for intra-host container links
 - VLAN management for external network connectivity
@@ -20,8 +21,17 @@ from agent.network.vlan import (
     setup_external_networks,
     cleanup_external_networks,
 )
+from agent.network.docker_plugin import (
+    DockerOVSPlugin,
+    get_docker_ovs_plugin,
+    run_plugin_standalone,
+)
 
 __all__ = [
+    # Docker OVS plugin (pre-boot interface provisioning)
+    "DockerOVSPlugin",
+    "get_docker_ovs_plugin",
+    "run_plugin_standalone",
     # Overlay networking (VXLAN for cross-host)
     "OverlayManager",
     "VxlanTunnel",

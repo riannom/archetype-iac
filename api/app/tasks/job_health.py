@@ -149,8 +149,7 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
     This imports and calls the appropriate task runner based on the job action.
     """
     from app.tasks.jobs import run_agent_job, run_node_sync
-    from app.topology import graph_to_containerlab_yaml, yaml_to_graph
-    from app.storage import topology_path
+    from app.services.topology import TopologyService
     from app.utils.lab import get_lab_provider
 
     lab = session.get(models.Lab, job.lab_id) if job.lab_id else None
@@ -180,25 +179,16 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
 
     # Trigger the appropriate task based on action
     if job.action == "up":
-        # Need topology YAML for deploy
-        topo_path = topology_path(lab.id)
-        if topo_path.exists():
-            topology_yaml = topo_path.read_text(encoding="utf-8")
-            try:
-                graph = yaml_to_graph(topology_yaml)
-                clab_yaml = graph_to_containerlab_yaml(graph, lab.id)
-                asyncio.create_task(run_agent_job(
-                    job.id, lab.id, "up", topology_yaml=clab_yaml, provider=provider
-                ))
-            except Exception as e:
-                logger.error(f"Cannot retry deploy job {job.id}: topology conversion failed: {e}")
-                job.status = "failed"
-                job.log_path = f"Retry failed: topology conversion error: {e}"
-                session.commit()
+        # run_agent_job builds topology from database internally
+        topo_service = TopologyService(session)
+        if topo_service.has_nodes(lab.id):
+            asyncio.create_task(run_agent_job(
+                job.id, lab.id, "up", provider=provider
+            ))
         else:
-            logger.error(f"Cannot retry deploy job {job.id}: no topology file")
+            logger.error(f"Cannot retry deploy job {job.id}: no topology in database")
             job.status = "failed"
-            job.log_path = "Retry failed: topology file not found"
+            job.log_path = "Retry failed: no topology defined"
             session.commit()
 
     elif job.action == "down":

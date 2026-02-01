@@ -17,15 +17,13 @@ from app.auth import get_current_user
 from app.services.topology import TopologyService
 from app.storage import (
     delete_layout,
-    ensure_topology_file,
     lab_workspace,
     layout_path,
     read_layout,
-    topology_path,
     write_layout,
 )
 from app.tasks.jobs import run_agent_job, run_multihost_destroy
-from app.topology import analyze_topology, graph_to_yaml, yaml_to_graph
+from app.topology import analyze_topology
 from app.utils.lab import get_lab_or_404, get_lab_provider
 from app.jobs import has_conflicting_job
 
@@ -166,12 +164,12 @@ def _ensure_node_states_exist(
 ) -> None:
     """Ensure NodeState records exist for all nodes in the topology.
 
-    Reads topology file and calls _upsert_node_states if topology exists.
+    Uses database as source of truth.
     Safe to call multiple times - idempotent operation.
     """
-    topo_path = topology_path(lab_id)
-    if topo_path.exists():
-        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+    service = TopologyService(database)
+    if service.has_nodes(lab_id):
+        graph = service.export_to_graph(lab_id)
         _upsert_node_states(database, lab_id, graph)
         database.commit()
 
@@ -211,7 +209,6 @@ def create_lab(
     workspace = lab_workspace(lab.id)
     workspace.mkdir(parents=True, exist_ok=True)
     lab.workspace_path = str(workspace)
-    ensure_topology_file(lab.id)
     database.commit()
     database.refresh(lab)
     return schemas.LabOut.model_validate(lab)
@@ -258,26 +255,9 @@ async def delete_lab(
     if lab.state in ("running", "starting", "stopping"):
         logger.info(f"Lab {lab_id} has state '{lab.state}', destroying infrastructure before deletion")
 
-        # Check for multi-host deployment (database first, then YAML fallback)
+        # Check for multi-host deployment using database
         service = TopologyService(database)
-        is_multihost = False
-        topology_yaml = ""
-
-        if service.has_nodes(lab.id):
-            # Use database for analysis
-            is_multihost = service.is_multihost(lab.id)
-            topology_yaml = service.export_to_yaml(lab.id)
-        else:
-            # Fall back to YAML file for unmigrated labs
-            topo_path = topology_path(lab.id)
-            topology_yaml = topo_path.read_text(encoding="utf-8") if topo_path.exists() else ""
-            if topology_yaml:
-                try:
-                    graph = yaml_to_graph(topology_yaml)
-                    analysis = analyze_topology(graph)
-                    is_multihost = not analysis.single_host
-                except Exception as e:
-                    logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+        is_multihost = service.is_multihost(lab.id) if service.has_nodes(lab.id) else False
 
         # Get the provider for this lab
         lab_provider = get_lab_provider(lab)
@@ -297,7 +277,7 @@ async def delete_lab(
         try:
             if is_multihost:
                 await run_multihost_destroy(
-                    destroy_job.id, lab.id, topology_yaml, provider=lab_provider
+                    destroy_job.id, lab.id, provider=lab_provider
                 )
             else:
                 # Check for healthy agent
@@ -381,11 +361,8 @@ def import_yaml(
     service = TopologyService(database)
     service.import_from_yaml(lab.id, payload.content)
 
-    # Also write YAML file for backup/version control
-    topology_path(lab.id).write_text(payload.content, encoding="utf-8")
-
-    # Sync NodeState/LinkState records
-    graph = yaml_to_graph(payload.content)
+    # Sync NodeState/LinkState records from database
+    graph = service.export_to_graph(lab.id)
     _upsert_node_states(database, lab.id, graph)
     _upsert_link_states(database, lab.id, graph)
 
@@ -401,16 +378,10 @@ def export_yaml(
 ) -> schemas.LabYamlOut:
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Try database first (source of truth)
     service = TopologyService(database)
-    if service.has_nodes(lab.id):
-        return schemas.LabYamlOut(content=service.export_to_yaml(lab.id))
-
-    # Fall back to YAML file for unmigrated labs
-    topo_path = topology_path(lab.id)
-    if not topo_path.exists():
+    if not service.has_nodes(lab.id):
         raise HTTPException(status_code=404, detail="Topology not found")
-    return schemas.LabYamlOut(content=topo_path.read_text(encoding="utf-8"))
+    return schemas.LabYamlOut(content=service.export_to_yaml(lab.id))
 
 
 @router.post("/labs/{lab_id}/import-graph")
@@ -427,10 +398,6 @@ def import_graph(
     # Store topology in database (source of truth)
     service = TopologyService(database)
     service.import_from_graph(lab.id, payload)
-
-    # Also write YAML file for backup/version control
-    yaml_content = graph_to_yaml(payload)
-    topology_path(lab.id).write_text(yaml_content, encoding="utf-8")
 
     # Create/update NodeState records for all nodes in the topology
     _upsert_node_states(database, lab.id, payload)
@@ -458,16 +425,10 @@ def export_graph(
 ) -> schemas.TopologyGraph | TopologyGraphWithLayout:
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Try database first (source of truth)
     service = TopologyService(database)
-    if service.has_nodes(lab.id):
-        graph = service.export_to_graph(lab.id)
-    else:
-        # Fall back to YAML file for unmigrated labs
-        topo_path = topology_path(lab.id)
-        if not topo_path.exists():
-            raise HTTPException(status_code=404, detail="Topology not found")
-        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+    if not service.has_nodes(lab.id):
+        raise HTTPException(status_code=404, detail="Topology not found")
+    graph = service.export_to_graph(lab.id)
 
     if include_layout:
         layout = read_layout(lab.id)
@@ -538,10 +499,10 @@ async def list_node_states(
 
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Check if topology exists and sync NodeState records
-    topo_path = topology_path(lab.id)
-    if topo_path.exists():
-        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+    # Sync NodeState records from database topology
+    service = TopologyService(database)
+    if service.has_nodes(lab.id):
+        graph = service.export_to_graph(lab.id)
         _upsert_node_states(database, lab.id, graph)
         database.commit()
 
@@ -1239,11 +1200,11 @@ async def export_inventory(
     )
 
     # Get topology for device info
-    topo_path = topology_path(lab.id)
+    service = TopologyService(database)
     device_info = {}
-    if topo_path.exists():
+    if service.has_nodes(lab.id):
         try:
-            graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+            graph = service.export_to_graph(lab.id)
             for node in graph.nodes:
                 node_name = node.container_name or node.name
                 device_info[node_name] = {
@@ -1500,12 +1461,12 @@ def _ensure_link_states_exist(
 ) -> None:
     """Ensure LinkState records exist for all links in the topology.
 
-    Reads topology file and calls _upsert_link_states if topology exists.
+    Uses database as source of truth.
     Safe to call multiple times - idempotent operation.
     """
-    topo_path = topology_path(lab_id)
-    if topo_path.exists():
-        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+    service = TopologyService(database)
+    if service.has_nodes(lab_id):
+        graph = service.export_to_graph(lab_id)
         _upsert_link_states(database, lab_id, graph)
         database.commit()
 
@@ -1523,10 +1484,10 @@ def list_link_states(
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Check if topology exists and sync LinkState records
-    topo_path = topology_path(lab.id)
-    if topo_path.exists():
-        graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
+    # Sync LinkState records from database topology
+    service = TopologyService(database)
+    if service.has_nodes(lab.id):
+        graph = service.export_to_graph(lab.id)
         _upsert_link_states(database, lab.id, graph)
         database.commit()
 
@@ -1645,16 +1606,17 @@ def sync_link_states(
 ) -> schemas.LinkStateSyncResponse:
     """Sync link states from the current topology.
 
-    This refreshes the LinkState records to match the current topology file.
+    This refreshes the LinkState records to match the current topology.
     New links are created, removed links are deleted.
+    Uses database as source of truth.
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    topo_path = topology_path(lab.id)
-    if not topo_path.exists():
+    service = TopologyService(database)
+    if not service.has_nodes(lab.id):
         raise HTTPException(status_code=404, detail="Topology not found")
+    graph = service.export_to_graph(lab.id)
 
-    graph = yaml_to_graph(topo_path.read_text(encoding="utf-8"))
     created, updated = _upsert_link_states(database, lab.id, graph)
     database.commit()
 
