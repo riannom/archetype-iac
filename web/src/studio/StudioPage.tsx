@@ -38,7 +38,7 @@ interface NodeStateEntry {
   node_id: string;
   node_name: string;
   desired_state: 'stopped' | 'running';
-  actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'error';
+  actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'stopping' | 'error';
   error_message?: string | null;
   is_ready?: boolean;
   boot_started_at?: string | null;
@@ -600,8 +600,10 @@ const StudioPage: React.FC = () => {
         // Convert actual_state to RuntimeStatus for display
         if (state.actual_state === 'running') {
           runtimeByNodeId[state.node_id] = 'running';
+        } else if (state.actual_state === 'stopping') {
+          runtimeByNodeId[state.node_id] = 'stopping';
         } else if (state.actual_state === 'pending') {
-          // Check desired_state to determine if booting (starting) or stopping
+          // Check desired_state to determine if booting (starting)
           runtimeByNodeId[state.node_id] = state.desired_state === 'running' ? 'booting' : 'stopped';
         } else if (state.actual_state === 'error') {
           runtimeByNodeId[state.node_id] = 'error';

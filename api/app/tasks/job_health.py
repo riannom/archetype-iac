@@ -519,6 +519,83 @@ async def check_stuck_locks():
         session.close()
 
 
+async def check_stuck_stopping_nodes():
+    """Find and recover nodes stuck in "stopping" state.
+
+    This function monitors NodeState records for nodes stuck in "stopping":
+    - Nodes with actual_state="stopping" and no active job for >6 minutes
+
+    Stuck nodes are recovered by querying actual container status from the agent
+    and updating their state accordingly.
+    """
+    session = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        # 6 minute timeout for stopping operations
+        stuck_threshold = now - timedelta(seconds=360)
+
+        # Find nodes stuck in "stopping" state past the threshold
+        stuck_nodes = (
+            session.query(models.NodeState)
+            .filter(
+                models.NodeState.actual_state == "stopping",
+                models.NodeState.stopping_started_at < stuck_threshold,
+            )
+            .all()
+        )
+
+        if not stuck_nodes:
+            return
+
+        # Group by lab_id for efficient processing
+        nodes_by_lab: dict[str, list[models.NodeState]] = {}
+        for ns in stuck_nodes:
+            if ns.lab_id not in nodes_by_lab:
+                nodes_by_lab[ns.lab_id] = []
+            nodes_by_lab[ns.lab_id].append(ns)
+
+        for lab_id, nodes in nodes_by_lab.items():
+            # Check if there's an active job for this lab
+            active_job = (
+                session.query(models.Job)
+                .filter(
+                    models.Job.lab_id == lab_id,
+                    models.Job.status.in_(["queued", "running"]),
+                )
+                .first()
+            )
+
+            if active_job:
+                # Job is still running - don't interfere
+                continue
+
+            logger.warning(
+                f"Found {len(nodes)} node(s) stuck in 'stopping' state for lab {lab_id} "
+                f"with no active job, recovering..."
+            )
+
+            # No active job - recover these nodes
+            # Set them to "stopped" since that was the intent
+            for ns in nodes:
+                duration = (now - ns.stopping_started_at).total_seconds() if ns.stopping_started_at else 0
+                logger.info(
+                    f"Recovering node {ns.node_name} in lab {lab_id} from stuck 'stopping' state "
+                    f"(stuck for {duration:.0f}s)"
+                )
+                ns.actual_state = "stopped"
+                ns.stopping_started_at = None
+                ns.error_message = None
+                ns.is_ready = False
+                ns.boot_started_at = None
+
+            session.commit()
+
+    except Exception as e:
+        logger.error(f"Error in stuck stopping nodes check: {e}")
+    finally:
+        session.close()
+
+
 async def job_health_monitor():
     """Background task to periodically check job health.
 
@@ -528,6 +605,7 @@ async def job_health_monitor():
     3. Checks for jobs on offline agents
     4. Checks for stuck image sync jobs
     5. Checks for stuck deploy locks on agents
+    6. Checks for nodes stuck in "stopping" state
     """
     logger.info(
         f"Job health monitor started "
@@ -545,6 +623,7 @@ async def job_health_monitor():
             await check_jobs_on_offline_agents()
             await check_stuck_image_sync_jobs()
             await check_stuck_locks()
+            await check_stuck_stopping_nodes()
 
         except asyncio.CancelledError:
             logger.info("Job health monitor stopped")

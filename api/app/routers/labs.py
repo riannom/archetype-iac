@@ -632,6 +632,13 @@ def set_node_desired_state(
     _ensure_node_states_exist(database, lab.id)
     state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state=payload.state)
 
+    # Block start if this node is currently stopping
+    if payload.state == "running" and state.actual_state == "stopping":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot start: node is currently stopping"
+        )
+
     # Update desired state (may differ from initial if record already existed)
     if state.desired_state != payload.state:
         state.desired_state = payload.state
@@ -654,6 +661,23 @@ def set_all_nodes_desired_state(
     """
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
+
+    # Block start operations if any nodes are currently stopping
+    if payload.state == "running":
+        stopping_count = (
+            database.query(models.NodeState)
+            .filter(
+                models.NodeState.lab_id == lab_id,
+                models.NodeState.actual_state == "stopping",
+            )
+            .count()
+        )
+        if stopping_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot start: {stopping_count} node(s) are currently stopping"
+            )
+
     states = (
         database.query(models.NodeState)
         .filter(models.NodeState.lab_id == lab_id)

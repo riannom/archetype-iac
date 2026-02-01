@@ -13,7 +13,7 @@ interface NodeStateEntry {
   node_id: string;
   node_name: string;
   desired_state: 'stopped' | 'running';
-  actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'error';
+  actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'stopping' | 'error';
   error_message?: string | null;
   is_ready?: boolean;
   boot_started_at?: string | null;
@@ -354,7 +354,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             <div className="p-4 bg-stone-50/50 dark:bg-stone-950/50 rounded-xl border border-stone-200 dark:border-stone-800">
                <div className="flex items-center justify-between mb-2">
                  <span className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Status</span>
-                 <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${status === 'running' ? 'text-green-600 dark:text-green-500 border-green-500/20 bg-green-500/5' : status === 'booting' ? 'text-yellow-600 dark:text-yellow-500 border-yellow-500/20 bg-yellow-500/5' : 'text-stone-500 border-stone-300 dark:border-stone-700 bg-stone-100 dark:bg-stone-800'}`}>{status}</span>
+                 <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${status === 'running' ? 'text-green-600 dark:text-green-500 border-green-500/20 bg-green-500/5' : status === 'booting' ? 'text-yellow-600 dark:text-yellow-500 border-yellow-500/20 bg-yellow-500/5' : status === 'stopping' ? 'text-orange-600 dark:text-orange-500 border-orange-500/20 bg-orange-500/5' : status === 'error' ? 'text-red-600 dark:text-red-500 border-red-500/20 bg-red-500/5' : 'text-stone-500 border-stone-300 dark:border-stone-700 bg-stone-100 dark:bg-stone-800'}`}>{status}</span>
                </div>
                {/* Image sync status indicator */}
                {imageSyncStatus && (
@@ -385,7 +385,15 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                  </div>
                )}
                <div className="grid grid-cols-2 gap-2 mt-4">
-                  {status === 'stopped' ? (
+                  {status === 'stopping' ? (
+                    <button
+                      disabled
+                      className="flex items-center justify-center gap-2 py-2 bg-orange-600/50 text-white text-[10px] font-bold rounded-lg cursor-not-allowed col-span-2"
+                      title="Stopping..."
+                    >
+                      <i className="fa-solid fa-spinner fa-spin"></i> STOPPING...
+                    </button>
+                  ) : status === 'stopped' ? (
                     <button
                       onClick={() => onUpdateStatus(node.id, 'booting')}
                       className="flex items-center justify-center gap-2 py-2 bg-green-600 hover:bg-green-500 text-white text-[10px] font-bold rounded-lg transition-all"
@@ -396,7 +404,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   ) : (
                     <button onClick={() => onUpdateStatus(node.id, 'stopped')} className="flex items-center justify-center gap-2 py-2 bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold rounded-lg transition-all"><i className="fa-solid fa-power-off"></i> STOP</button>
                   )}
-                  {status !== 'stopped' && (
+                  {status !== 'stopped' && status !== 'stopping' && (
                     <button onClick={() => onUpdateStatus(node.id, 'booting')} className="flex items-center justify-center gap-2 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[10px] font-bold rounded-lg transition-all border border-stone-300 dark:border-stone-700"><i className="fa-solid fa-rotate"></i> RELOAD</button>
                   )}
                </div>
@@ -407,13 +415,13 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               <AgentDropdown
                 value={node.host || ''}
                 onChange={(value) => onUpdateNode(node.id, { host: value || undefined })}
-                disabled={status === 'running' || status === 'booting'}
+                disabled={status === 'running' || status === 'booting' || status === 'stopping'}
                 agents={agents}
               />
             )}
 
-            {/* Running On - show when multiple agents and node is running/booting with a host assigned */}
-            {agents.length > 1 && (status === 'running' || status === 'booting') && nodeState?.host_name && (
+            {/* Running On - show when multiple agents and node is running/booting/stopping with a host assigned */}
+            {agents.length > 1 && (status === 'running' || status === 'booting' || status === 'stopping') && nodeState?.host_name && (
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Running On</label>
                 <div className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg">

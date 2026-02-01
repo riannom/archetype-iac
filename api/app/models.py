@@ -156,10 +156,14 @@ class NodeState(Base):
 
     This model enables per-node control where each node tracks:
     - desired_state: What the user wants (stopped/running)
-    - actual_state: What the node actually is (undeployed/pending/running/stopped/error)
+    - actual_state: What the node actually is (undeployed/pending/running/stopped/stopping/error)
     - is_ready: Whether the node's application has completed boot (for console access)
 
     Nodes default to 'stopped' when added and only boot when user triggers start.
+
+    Transitional states:
+    - pending: Node is being deployed or started (desired_state=running)
+    - stopping: Node is being stopped (desired_state=stopped, tracked by stopping_started_at)
     """
     __tablename__ = "node_states"
     __table_args__ = (UniqueConstraint("lab_id", "node_id", name="uq_node_state_lab_node"),)
@@ -182,6 +186,8 @@ class NodeState(Base):
     is_ready: Mapped[bool] = mapped_column(default=False)
     # Timestamp when container started booting (for tracking boot duration)
     boot_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Timestamp when container started stopping (for tracking stop duration and timeout recovery)
+    stopping_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Image sync status: null (not syncing), "checking", "syncing", "synced", "failed"
     image_sync_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Image sync progress/error message

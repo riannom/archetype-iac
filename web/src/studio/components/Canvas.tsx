@@ -554,13 +554,14 @@ const Canvas: React.FC<CanvasProps> = ({
           if (isRouter) borderRadius = '50%';
           if (isSwitch) borderRadius = '4px';
 
-          // Status indicator: green=running, gray=stopped, yellow=booting, red=error, no dot=undeployed
+          // Status indicator: green=running, gray=stopped, yellow=booting, orange=stopping, red=error, no dot=undeployed
           const getStatusDot = () => {
             if (!status) return null; // No status = undeployed, no indicator
             let dotColor = '#a8a29e'; // stone-400 (stopped)
             let animate = false;
             if (status === 'running') dotColor = '#22c55e'; // green-500
             else if (status === 'booting') { dotColor = '#eab308'; animate = true; } // yellow-500
+            else if (status === 'stopping') { dotColor = '#f97316'; animate = true; } // orange-500
             else if (status === 'error') dotColor = '#ef4444'; // red-500
             return (
               <div

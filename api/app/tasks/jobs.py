@@ -1262,10 +1262,17 @@ async def run_node_sync(
             f"start={len(nodes_need_start)}, stop={len(nodes_need_stop)}"
         )
 
-        # Mark all nodes that need action as pending
-        for ns in nodes_need_deploy + nodes_need_start + nodes_need_stop:
+        # Mark nodes that need deploy/start as pending
+        for ns in nodes_need_deploy + nodes_need_start:
             ns.actual_state = "pending"
             ns.error_message = None
+
+        # Mark nodes that need stop as "stopping" with timestamp for timeout tracking
+        for ns in nodes_need_stop:
+            ns.actual_state = "stopping"
+            ns.stopping_started_at = datetime.now(timezone.utc)
+            ns.error_message = None
+
         session.commit()
 
         # Migration detection: Check if nodes exist on different agents and clean them up
@@ -1609,11 +1616,13 @@ async def run_node_sync(
                                 )
                                 if stop_result.get("success"):
                                     ns.actual_state = "stopped"
+                                    ns.stopping_started_at = None
                                     ns.boot_started_at = None
                                     log_parts.append(f"  {ns.node_name}: stopped")
                                 else:
                                     ns.actual_state = "error"
-                                    ns.error_message = stop_result.get("error", "Stop failed")
+                                    ns.stopping_started_at = None
+                                    ns.error_message = stop_result.get("error") or "Stop failed"
                                     ns.boot_started_at = None
                                     log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
 
@@ -1830,11 +1839,13 @@ async def run_node_sync(
                                     )
                                     if stop_result.get("success"):
                                         ns.actual_state = "stopped"
+                                        ns.stopping_started_at = None
                                         ns.boot_started_at = None
                                         log_parts.append(f"  {ns.node_name}: stopped")
                                     else:
                                         ns.actual_state = "error"
-                                        ns.error_message = stop_result.get("error", "Stop failed")
+                                        ns.stopping_started_at = None
+                                        ns.error_message = stop_result.get("error") or "Stop failed"
                                         ns.boot_started_at = None
                                         log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
                         else:
@@ -1896,12 +1907,14 @@ async def run_node_sync(
                                 )
                     if result.get("success"):
                         ns.actual_state = "stopped"
+                        ns.stopping_started_at = None
                         ns.error_message = None
                         ns.boot_started_at = None
                         log_parts.append(f"  {ns.node_name}: stopped")
                     else:
                         ns.actual_state = "error"
-                        ns.error_message = result.get("error", "Stop failed")
+                        ns.stopping_started_at = None
+                        ns.error_message = result.get("error") or "Stop failed"
                         ns.boot_started_at = None
                         log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
                 except AgentUnavailableError as e:
