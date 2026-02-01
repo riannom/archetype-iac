@@ -362,7 +362,7 @@ async def ensure_images_for_deployment(
     timeout: int | None = None,
     database: Session | None = None,
     lab_id: str | None = None,
-    topology_yaml: str | None = None,
+    image_to_nodes: dict[str, list[str]] | None = None,
 ) -> tuple[bool, list[str], list[str]]:
     """Ensure all required images exist on agent before deployment.
 
@@ -376,7 +376,7 @@ async def ensure_images_for_deployment(
         timeout: Max seconds to wait for sync (default from settings)
         database: Optional database session
         lab_id: Optional lab ID for updating NodeState records
-        topology_yaml: Optional topology YAML for mapping images to nodes
+        image_to_nodes: Optional mapping from image refs to node names
 
     Returns:
         Tuple of (all_ready, missing_images, log_entries)
@@ -396,10 +396,9 @@ async def ensure_images_for_deployment(
     if own_session:
         database = SessionLocal()
 
-    # Get image-to-nodes mapping if we have lab context
-    image_to_nodes: dict[str, list[str]] = {}
-    if lab_id and topology_yaml:
-        image_to_nodes = get_image_to_nodes_map(topology_yaml)
+    # Use provided mapping or empty dict
+    if image_to_nodes is None:
+        image_to_nodes = {}
 
     def update_nodes_for_images(images: list[str], status: str | None, message: str | None = None):
         """Helper to update NodeState for nodes using given images."""

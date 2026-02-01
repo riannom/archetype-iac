@@ -219,6 +219,63 @@ class TopologyService:
             .first()
         ) is not None
 
+    def get_required_images(self, lab_id: str) -> list[str]:
+        """Get unique Docker images required for a lab's topology.
+
+        Uses the same image resolution logic as deployment:
+        1. Explicit node.image if set
+        2. Image from manifest via find_image_reference()
+        3. Vendor default via get_default_image()
+
+        Args:
+            lab_id: Lab ID to get images for
+
+        Returns:
+            List of unique image references
+        """
+        nodes = self.get_nodes(lab_id)
+        images: set[str] = set()
+
+        for node in nodes:
+            kind = get_kind_for_device(node.device) if node.device else "linux"
+            image = node.image
+            if not image:
+                image = find_image_reference(node.device or kind, node.version)
+            if not image:
+                image = get_default_image(kind)
+            if image:
+                images.add(image)
+
+        return list(images)
+
+    def get_image_to_nodes_map(self, lab_id: str) -> dict[str, list[str]]:
+        """Get mapping from image references to node names.
+
+        Uses the same image resolution logic as deployment.
+
+        Args:
+            lab_id: Lab ID to get mapping for
+
+        Returns:
+            Dict mapping image references to list of node names using that image
+        """
+        nodes = self.get_nodes(lab_id)
+        image_to_nodes: dict[str, list[str]] = {}
+
+        for node in nodes:
+            kind = get_kind_for_device(node.device) if node.device else "linux"
+            image = node.image
+            if not image:
+                image = find_image_reference(node.device or kind, node.version)
+            if not image:
+                image = get_default_image(kind)
+            if image:
+                if image not in image_to_nodes:
+                    image_to_nodes[image] = []
+                image_to_nodes[image].append(node.container_name)
+
+        return image_to_nodes
+
     # =========================================================================
     # Analysis Methods
     # =========================================================================
