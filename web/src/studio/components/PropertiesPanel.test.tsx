@@ -440,7 +440,9 @@ describe("PropertiesPanel", () => {
         expect(screen.getByText("Auto (any available agent)")).toBeInTheDocument();
       });
 
-      it("shows all agents in dropdown", () => {
+      it("shows all agents in dropdown", async () => {
+        const user = userEvent.setup();
+
         render(
           <PropertiesPanel
             {...defaultProps}
@@ -450,6 +452,9 @@ describe("PropertiesPanel", () => {
             ]}
           />
         );
+
+        // Click the dropdown button to open it
+        await user.click(screen.getByText("Auto (any available agent)"));
 
         expect(screen.getByText("Agent 1")).toBeInTheDocument();
         expect(screen.getByText("Agent 2")).toBeInTheDocument();
@@ -468,8 +473,10 @@ describe("PropertiesPanel", () => {
           />
         );
 
-        const select = screen.getByDisplayValue("Auto (any available agent)");
-        await user.selectOptions(select, "agent-1");
+        // Open the dropdown
+        await user.click(screen.getByText("Auto (any available agent)"));
+        // Select an agent
+        await user.click(screen.getByText("Agent 1"));
 
         expect(mockOnUpdateNode).toHaveBeenCalledWith("node-1", {
           host: "agent-1",
@@ -492,8 +499,9 @@ describe("PropertiesPanel", () => {
           />
         );
 
-        const select = screen.getByDisplayValue("Auto (any available agent)");
-        expect(select).toBeDisabled();
+        // The dropdown button should be disabled
+        const dropdownButton = screen.getByRole("button", { name: /Auto \(any available agent\)/i });
+        expect(dropdownButton).toBeDisabled();
       });
     });
 
