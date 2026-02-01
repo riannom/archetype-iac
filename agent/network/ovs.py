@@ -431,7 +431,7 @@ class OVSNetworkManager:
         code, _, _ = await self._run_cmd(["ip", "link", "show", name])
         return code == 0
 
-    def _get_container_pid(self, container_name: str) -> int | None:
+    async def _get_container_pid(self, container_name: str) -> int | None:
         """Get the PID of a container's init process.
 
         Args:
@@ -440,22 +440,25 @@ class OVSNetworkManager:
         Returns:
             PID if container is running, None otherwise
         """
-        try:
-            container = self.docker.containers.get(container_name)
-            if container.status != "running":
-                logger.warning(f"Container {container_name} is not running")
+        def _sync_get_pid() -> int | None:
+            try:
+                container = self.docker.containers.get(container_name)
+                if container.status != "running":
+                    logger.warning(f"Container {container_name} is not running")
+                    return None
+                pid = container.attrs["State"]["Pid"]
+                if not pid:
+                    logger.warning(f"Could not get PID for container {container_name}")
+                    return None
+                return pid
+            except NotFound:
+                logger.warning(f"Container {container_name} not found")
                 return None
-            pid = container.attrs["State"]["Pid"]
-            if not pid:
-                logger.warning(f"Could not get PID for container {container_name}")
+            except Exception as e:
+                logger.error(f"Error getting container PID: {e}")
                 return None
-            return pid
-        except NotFound:
-            logger.warning(f"Container {container_name} not found")
-            return None
-        except Exception as e:
-            logger.error(f"Error getting container PID: {e}")
-            return None
+
+        return await asyncio.to_thread(_sync_get_pid)
 
     def _generate_port_name(self, container_name: str, interface_name: str) -> str:
         """Generate OVS port name for a container interface.
@@ -522,10 +525,12 @@ class OVSNetworkManager:
             interface_name = None
 
             try:
-                # Get all running archetype containers
-                containers = self.docker.containers.list(
-                    filters={"label": "archetype.lab_id"}
-                )
+                # Get all running archetype containers (wrapped to avoid blocking)
+                def _get_containers():
+                    return self.docker.containers.list(
+                        filters={"label": "archetype.lab_id"}
+                    )
+                containers = await asyncio.to_thread(_get_containers)
                 for container in containers:
                     pid = container.attrs["State"]["Pid"]
                     if not pid:
@@ -572,9 +577,12 @@ class OVSNetworkManager:
             if container_name and interface_name:
                 # Found the owner - reconstruct port tracking
                 port_key = f"{container_name}:{interface_name}"
-                lab_id = self.docker.containers.get(container_name).labels.get(
-                    "archetype.lab_id", "_unknown"
-                )
+                # Get lab_id from container labels (wrapped to avoid blocking)
+                def _get_lab_id():
+                    return self.docker.containers.get(container_name).labels.get(
+                        "archetype.lab_id", "_unknown"
+                    )
+                lab_id = await asyncio.to_thread(_get_lab_id)
 
                 port = OVSPort(
                     port_name=port_name,
@@ -690,7 +698,7 @@ class OVSNetworkManager:
             return self._ports[port_key].vlan_tag
 
         # Get container PID
-        pid = self._get_container_pid(container_name)
+        pid = await self._get_container_pid(container_name)
         if pid is None:
             raise RuntimeError(f"Container {container_name} is not running")
 
@@ -1190,7 +1198,7 @@ class OVSNetworkManager:
             return False
 
         # Get container PID
-        pid = self._get_container_pid(port.container_name)
+        pid = await self._get_container_pid(port.container_name)
         if pid is None:
             # Container not running - can't check, assume not stale
             return False

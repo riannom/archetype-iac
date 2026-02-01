@@ -145,19 +145,22 @@ class NetworkCleanupManager:
 
     async def _get_running_container_pids(self) -> set[int]:
         """Get PIDs of all running containers with archetype labels."""
-        pids = set()
-        try:
-            containers = self.docker.containers.list(
-                filters={"label": "archetype.lab_id"}
-            )
-            for container in containers:
-                if container.status == "running":
-                    pid = container.attrs.get("State", {}).get("Pid")
-                    if pid:
-                        pids.add(pid)
-        except Exception as e:
-            logger.warning(f"Failed to get container PIDs: {e}")
-        return pids
+        def _sync_get_pids() -> set[int]:
+            pids = set()
+            try:
+                containers = self.docker.containers.list(
+                    filters={"label": "archetype.lab_id"}
+                )
+                for container in containers:
+                    if container.status == "running":
+                        pid = container.attrs.get("State", {}).get("Pid")
+                        if pid:
+                            pids.add(pid)
+            except Exception as e:
+                logger.warning(f"Failed to get container PIDs: {e}")
+            return pids
+
+        return await asyncio.to_thread(_sync_get_pids)
 
     async def _get_veth_interfaces(self) -> list[dict[str, Any]]:
         """List all veth interfaces on the host."""
