@@ -106,6 +106,12 @@ from agent.schemas import (
     PluginMgmtNetworkResponse,
     PluginMgmtAttachRequest,
     PluginMgmtAttachResponse,
+    CarrierStateRequest,
+    CarrierStateResponse,
+    PortIsolateResponse,
+    PortRestoreRequest,
+    PortRestoreResponse,
+    PortVlanResponse,
 )
 from agent.version import __version__
 from agent.updater import (
@@ -297,8 +303,8 @@ def get_capabilities() -> AgentCapabilities:
     )
 
 
-def get_resource_usage() -> dict:
-    """Gather system resource metrics for heartbeat."""
+def _sync_get_resource_usage() -> dict:
+    """Gather system resource metrics (synchronous implementation)."""
     import psutil
 
     try:
@@ -389,6 +395,11 @@ def get_resource_usage() -> dict:
         return {}
 
 
+async def get_resource_usage() -> dict:
+    """Gather system resource metrics for heartbeat (async wrapper)."""
+    return await asyncio.to_thread(_sync_get_resource_usage)
+
+
 def get_agent_info() -> AgentInfo:
     """Build agent info for registration."""
     address = f"{settings.agent_host}:{settings.agent_port}"
@@ -457,7 +468,7 @@ async def send_heartbeat() -> HeartbeatResponse | None:
         agent_id=AGENT_ID,
         status=AgentStatus.ONLINE,
         active_jobs=0,  # TODO: track active jobs
-        resource_usage=get_resource_usage(),
+        resource_usage=await get_resource_usage(),
     )
 
     try:
@@ -1344,18 +1355,19 @@ async def start_container(container_name: str) -> dict:
     """Start a stopped container.
 
     Used by the sync system to start individual nodes without redeploying.
+    Uses asyncio.to_thread() to avoid blocking the event loop.
     """
     logger.info(f"Starting container: {container_name}")
 
     try:
         import docker
         client = docker.from_env()
-        container = client.containers.get(container_name)
+        container = await asyncio.to_thread(client.containers.get, container_name)
 
         if container.status == "running":
             return {"success": True, "message": "Container already running"}
 
-        container.start()
+        await asyncio.to_thread(container.start)
         return {"success": True, "message": "Container started"}
 
     except docker.errors.NotFound:
@@ -1373,18 +1385,19 @@ async def stop_container(container_name: str) -> dict:
     """Stop a running container.
 
     Used by the sync system to stop individual nodes without destroying the lab.
+    Uses asyncio.to_thread() to avoid blocking the event loop.
     """
     logger.info(f"Stopping container: {container_name}")
 
     try:
         import docker
         client = docker.from_env()
-        container = client.containers.get(container_name)
+        container = await asyncio.to_thread(client.containers.get, container_name)
 
         if container.status != "running":
             return {"success": True, "message": "Container already stopped"}
 
-        container.stop(timeout=10)
+        await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
         return {"success": True, "message": "Container stopped"}
 
     except docker.errors.NotFound:
@@ -1402,15 +1415,16 @@ async def remove_container(container_name: str, force: bool = False) -> dict:
     """Remove a container.
 
     Used to clean up orphan containers or containers that need to be recreated.
+    Uses asyncio.to_thread() to avoid blocking the event loop.
     """
     logger.info(f"Removing container: {container_name} (force={force})")
 
     try:
         import docker
         client = docker.from_env()
-        container = client.containers.get(container_name)
+        container = await asyncio.to_thread(client.containers.get, container_name)
 
-        container.remove(force=force)
+        await asyncio.to_thread(container.remove, force=force)
         return {"success": True, "message": "Container removed"}
 
     except docker.errors.NotFound:
@@ -2402,6 +2416,234 @@ async def delete_plugin_mgmt_network(lab_id: str) -> PluginMgmtNetworkResponse:
         return PluginMgmtNetworkResponse(success=False, error=str(e))
 
 
+# --- Carrier State and Port Control Endpoints ---
+
+
+@app.post("/labs/{lab_id}/interfaces/{node}/{interface}/carrier")
+async def set_interface_carrier(
+    lab_id: str,
+    node: str,
+    interface: str,
+    request: CarrierStateRequest,
+) -> CarrierStateResponse:
+    """Set the carrier state of a container interface.
+
+    This uses `ip link set carrier on/off` to simulate physical link up/down.
+    When carrier is off, the interface cannot send or receive traffic but
+    remains configured in the container.
+
+    Args:
+        lab_id: Lab identifier
+        node: Node name (container name or node name)
+        interface: Interface name in the container (e.g., "eth1")
+        request: Contains "on" or "off" state
+
+    Returns:
+        CarrierStateResponse with success status
+    """
+    if not settings.enable_ovs_plugin:
+        return CarrierStateResponse(
+            success=False,
+            container=node,
+            interface=interface,
+            state=request.state,
+            error="OVS plugin not enabled",
+        )
+
+    logger.info(f"Set carrier {request.state}: lab={lab_id}, node={node}, interface={interface}")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+
+        # Resolve container name - might be node name or already container name
+        provider = get_provider_for_request()
+        container_name = provider.get_container_name(lab_id, node)
+
+        success = await plugin.set_carrier_state(lab_id, container_name, interface, request.state)
+
+        return CarrierStateResponse(
+            success=success,
+            container=container_name,
+            interface=interface,
+            state=request.state,
+            error=None if success else "Failed to set carrier state",
+        )
+
+    except Exception as e:
+        logger.error(f"Set carrier state failed: {e}")
+        return CarrierStateResponse(
+            success=False,
+            container=node,
+            interface=interface,
+            state=request.state,
+            error=str(e),
+        )
+
+
+@app.post("/labs/{lab_id}/interfaces/{node}/{interface}/isolate")
+async def isolate_interface(
+    lab_id: str,
+    node: str,
+    interface: str,
+) -> PortIsolateResponse:
+    """Isolate a container interface from its L2 domain.
+
+    This assigns the interface a unique VLAN tag and sets carrier off,
+    effectively disconnecting it from any other interface.
+
+    Args:
+        lab_id: Lab identifier
+        node: Node name (container name or node name)
+        interface: Interface name in the container
+
+    Returns:
+        PortIsolateResponse with new VLAN tag
+    """
+    if not settings.enable_ovs_plugin:
+        return PortIsolateResponse(
+            success=False,
+            container=node,
+            interface=interface,
+            error="OVS plugin not enabled",
+        )
+
+    logger.info(f"Isolate port: lab={lab_id}, node={node}, interface={interface}")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+
+        # Resolve container name
+        provider = get_provider_for_request()
+        container_name = provider.get_container_name(lab_id, node)
+
+        vlan_tag = await plugin.isolate_port(lab_id, container_name, interface)
+
+        return PortIsolateResponse(
+            success=vlan_tag is not None,
+            container=container_name,
+            interface=interface,
+            vlan_tag=vlan_tag,
+            error=None if vlan_tag is not None else "Failed to isolate port",
+        )
+
+    except Exception as e:
+        logger.error(f"Port isolation failed: {e}")
+        return PortIsolateResponse(
+            success=False,
+            container=node,
+            interface=interface,
+            error=str(e),
+        )
+
+
+@app.post("/labs/{lab_id}/interfaces/{node}/{interface}/restore")
+async def restore_interface(
+    lab_id: str,
+    node: str,
+    interface: str,
+    request: PortRestoreRequest,
+) -> PortRestoreResponse:
+    """Restore a container interface to a specific VLAN and enable carrier.
+
+    This reconnects the interface to the specified L2 domain (VLAN) and
+    simulates physical link restoration.
+
+    Args:
+        lab_id: Lab identifier
+        node: Node name (container name or node name)
+        interface: Interface name in the container
+        request: Contains target VLAN to restore to
+
+    Returns:
+        PortRestoreResponse with success status
+    """
+    if not settings.enable_ovs_plugin:
+        return PortRestoreResponse(
+            success=False,
+            container=node,
+            interface=interface,
+            vlan_tag=request.target_vlan,
+            error="OVS plugin not enabled",
+        )
+
+    logger.info(f"Restore port: lab={lab_id}, node={node}, interface={interface}, vlan={request.target_vlan}")
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+
+        # Resolve container name
+        provider = get_provider_for_request()
+        container_name = provider.get_container_name(lab_id, node)
+
+        success = await plugin.restore_port(lab_id, container_name, interface, request.target_vlan)
+
+        return PortRestoreResponse(
+            success=success,
+            container=container_name,
+            interface=interface,
+            vlan_tag=request.target_vlan,
+            error=None if success else "Failed to restore port",
+        )
+
+    except Exception as e:
+        logger.error(f"Port restore failed: {e}")
+        return PortRestoreResponse(
+            success=False,
+            container=node,
+            interface=interface,
+            vlan_tag=request.target_vlan,
+            error=str(e),
+        )
+
+
+@app.get("/labs/{lab_id}/interfaces/{node}/{interface}/vlan")
+async def get_interface_vlan(
+    lab_id: str,
+    node: str,
+    interface: str,
+) -> PortVlanResponse:
+    """Get the current VLAN tag for a container interface.
+
+    Args:
+        lab_id: Lab identifier
+        node: Node name (container name or node name)
+        interface: Interface name in the container
+
+    Returns:
+        PortVlanResponse with current VLAN tag
+    """
+    if not settings.enable_ovs_plugin:
+        return PortVlanResponse(
+            container=node,
+            interface=interface,
+            error="OVS plugin not enabled",
+        )
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+
+        # Resolve container name
+        provider = get_provider_for_request()
+        container_name = provider.get_container_name(lab_id, node)
+
+        vlan_tag = await plugin.get_endpoint_vlan(lab_id, container_name, interface)
+
+        return PortVlanResponse(
+            container=container_name,
+            interface=interface,
+            vlan_tag=vlan_tag,
+            error=None if vlan_tag is not None else "Endpoint not found",
+        )
+
+    except Exception as e:
+        logger.error(f"Get VLAN failed: {e}")
+        return PortVlanResponse(
+            container=node,
+            interface=interface,
+            error=str(e),
+        )
+
+
 # --- External Connectivity Endpoints ---
 
 @app.post("/labs/{lab_id}/external/connect")
@@ -2697,113 +2939,12 @@ async def list_interfaces() -> dict:
     """
     import subprocess
 
-    interfaces = []
-
-    try:
-        # Get list of interfaces using ip command
-        result = subprocess.run(
-            ["ip", "-j", "link", "show"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        if result.returncode == 0:
-            import json
-            link_data = json.loads(result.stdout)
-
-            for link in link_data:
-                name = link.get("ifname", "")
-                # Skip loopback, docker, and veth interfaces
-                if name in ("lo",) or name.startswith(("docker", "veth", "br-", "clab")):
-                    continue
-
-                # Get interface state and type
-                operstate = link.get("operstate", "unknown")
-                link_type = link.get("link_type", "")
-
-                # Get IP addresses for this interface
-                addr_result = subprocess.run(
-                    ["ip", "-j", "addr", "show", name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                ipv4_addresses = []
-                if addr_result.returncode == 0:
-                    addr_data = json.loads(addr_result.stdout)
-                    for iface in addr_data:
-                        for addr_info in iface.get("addr_info", []):
-                            if addr_info.get("family") == "inet":
-                                ipv4_addresses.append(f"{addr_info['local']}/{addr_info.get('prefixlen', 24)}")
-
-                interfaces.append({
-                    "name": name,
-                    "state": operstate,
-                    "type": link_type,
-                    "ipv4_addresses": ipv4_addresses,
-                    "mac": link.get("address"),
-                    # Indicate if this is a VLAN sub-interface
-                    "is_vlan": "." in name,
-                })
-
-    except Exception as e:
-        logger.error(f"Error listing interfaces: {e}")
-        return {"interfaces": [], "error": str(e)}
-
-    return {"interfaces": interfaces}
-
-
-@app.get("/bridges")
-async def list_bridges() -> dict:
-    """List available Linux bridges on this host.
-
-    Returns bridges that can be used for external network connections.
-    """
-    import subprocess
-
-    bridges = []
-
-    try:
-        # Get list of bridges using bridge command
-        result = subprocess.run(
-            ["bridge", "-j", "link", "show"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        if result.returncode == 0:
-            import json
-            bridge_data = json.loads(result.stdout)
-
-            # Extract unique bridge names (master field)
-            seen_bridges = set()
-            for link in bridge_data:
-                master = link.get("master")
-                if master and master not in seen_bridges:
-                    seen_bridges.add(master)
-
-            # Get details for each bridge
-            for bridge_name in sorted(seen_bridges):
-                # Skip containerlab and docker bridges
-                if bridge_name.startswith(("clab", "docker", "br-")):
-                    continue
-
-                bridge_info = {"name": bridge_name, "interfaces": []}
-
-                # Get interfaces attached to this bridge
-                for link in bridge_data:
-                    if link.get("master") == bridge_name:
-                        bridge_info["interfaces"].append(link.get("ifname"))
-
-                bridges.append(bridge_info)
-
-    except FileNotFoundError:
-        # bridge command not available, try ip command
+    def _sync_list_interfaces() -> dict:
+        interfaces = []
         try:
+            # Get list of interfaces using ip command
             result = subprocess.run(
-                ["ip", "-j", "link", "show", "type", "bridge"],
+                ["ip", "-j", "link", "show"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -2815,25 +2956,130 @@ async def list_bridges() -> dict:
 
                 for link in link_data:
                     name = link.get("ifname", "")
-                    # Skip containerlab and docker bridges
-                    if name.startswith(("clab", "docker", "br-")):
+                    # Skip loopback, docker, and veth interfaces
+                    if name in ("lo",) or name.startswith(("docker", "veth", "br-", "clab")):
                         continue
 
-                    bridges.append({
+                    # Get interface state and type
+                    operstate = link.get("operstate", "unknown")
+                    link_type = link.get("link_type", "")
+
+                    # Get IP addresses for this interface
+                    addr_result = subprocess.run(
+                        ["ip", "-j", "addr", "show", name],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    ipv4_addresses = []
+                    if addr_result.returncode == 0:
+                        addr_data = json.loads(addr_result.stdout)
+                        for iface in addr_data:
+                            for addr_info in iface.get("addr_info", []):
+                                if addr_info.get("family") == "inet":
+                                    ipv4_addresses.append(f"{addr_info['local']}/{addr_info.get('prefixlen', 24)}")
+
+                    interfaces.append({
                         "name": name,
-                        "state": link.get("operstate", "unknown"),
-                        "interfaces": [],  # Would need additional queries
+                        "state": operstate,
+                        "type": link_type,
+                        "ipv4_addresses": ipv4_addresses,
+                        "mac": link.get("address"),
+                        # Indicate if this is a VLAN sub-interface
+                        "is_vlan": "." in name,
                     })
+
+        except Exception as e:
+            logger.error(f"Error listing interfaces: {e}")
+            return {"interfaces": [], "error": str(e)}
+
+        return {"interfaces": interfaces}
+
+    return await asyncio.to_thread(_sync_list_interfaces)
+
+
+@app.get("/bridges")
+async def list_bridges() -> dict:
+    """List available Linux bridges on this host.
+
+    Returns bridges that can be used for external network connections.
+    """
+    import subprocess
+
+    def _sync_list_bridges() -> dict:
+        bridges = []
+        try:
+            # Get list of bridges using bridge command
+            result = subprocess.run(
+                ["bridge", "-j", "link", "show"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                import json
+                bridge_data = json.loads(result.stdout)
+
+                # Extract unique bridge names (master field)
+                seen_bridges = set()
+                for link in bridge_data:
+                    master = link.get("master")
+                    if master and master not in seen_bridges:
+                        seen_bridges.add(master)
+
+                # Get details for each bridge
+                for bridge_name in sorted(seen_bridges):
+                    # Skip containerlab and docker bridges
+                    if bridge_name.startswith(("clab", "docker", "br-")):
+                        continue
+
+                    bridge_info = {"name": bridge_name, "interfaces": []}
+
+                    # Get interfaces attached to this bridge
+                    for link in bridge_data:
+                        if link.get("master") == bridge_name:
+                            bridge_info["interfaces"].append(link.get("ifname"))
+
+                    bridges.append(bridge_info)
+
+        except FileNotFoundError:
+            # bridge command not available, try ip command
+            try:
+                result = subprocess.run(
+                    ["ip", "-j", "link", "show", "type", "bridge"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+
+                if result.returncode == 0:
+                    import json
+                    link_data = json.loads(result.stdout)
+
+                    for link in link_data:
+                        name = link.get("ifname", "")
+                        # Skip containerlab and docker bridges
+                        if name.startswith(("clab", "docker", "br-")):
+                            continue
+
+                        bridges.append({
+                            "name": name,
+                            "state": link.get("operstate", "unknown"),
+                            "interfaces": [],  # Would need additional queries
+                        })
+
+            except Exception as e:
+                logger.error(f"Error listing bridges: {e}")
+                return {"bridges": [], "error": str(e)}
 
         except Exception as e:
             logger.error(f"Error listing bridges: {e}")
             return {"bridges": [], "error": str(e)}
 
-    except Exception as e:
-        logger.error(f"Error listing bridges: {e}")
-        return {"bridges": [], "error": str(e)}
+        return {"bridges": bridges}
 
-    return {"bridges": bridges}
+    return await asyncio.to_thread(_sync_list_bridges)
 
 
 # --- Image Synchronization Endpoints ---
@@ -2991,13 +3237,16 @@ async def receive_image(
                 total_bytes=total_bytes,
             )
 
-        # Load into Docker
-        result = subprocess.run(
-            ["docker", "load", "-i", tmp_path],
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minute timeout for large images
-        )
+        # Load into Docker (wrapped in thread to avoid blocking)
+        def _sync_docker_load():
+            return subprocess.run(
+                ["docker", "load", "-i", tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout for large images
+            )
+
+        result = await asyncio.to_thread(_sync_docker_load)
 
         # Clean up temp file
         os.unlink(tmp_path)
@@ -3166,13 +3415,16 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
             total_bytes=total_bytes,
         )
 
-        # Load into Docker
-        result = subprocess.run(
-            ["docker", "load", "-i", tmp_path],
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
+        # Load into Docker (wrapped in thread to avoid blocking)
+        def _sync_docker_load():
+            return subprocess.run(
+                ["docker", "load", "-i", tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+
+        result = await asyncio.to_thread(_sync_docker_load)
 
         os.unlink(tmp_path)
 
@@ -3236,7 +3488,7 @@ def get_pull_progress(job_id: str) -> ImagePullProgress:
 from agent.vendors import get_console_shell, get_console_method, get_console_credentials
 
 
-def _get_console_config(container_name: str) -> tuple[str, str, str, str]:
+async def _get_console_config(container_name: str) -> tuple[str, str, str, str]:
     """Get console configuration based on container's node kind.
 
     Returns:
@@ -3245,37 +3497,43 @@ def _get_console_config(container_name: str) -> tuple[str, str, str, str]:
         shell: Shell command for docker_exec
         username/password: Credentials for SSH
     """
-    try:
-        import docker
-        client = docker.from_env()
-        container = client.containers.get(container_name)
-        # Try new archetype labels first, fall back to containerlab labels
-        kind = container.labels.get("archetype.node_kind") or container.labels.get("clab-node-kind", "")
-        method = get_console_method(kind)
-        shell = get_console_shell(kind)
-        username, password = get_console_credentials(kind)
-        return (method, shell, username, password)
-    except Exception:
-        return ("docker_exec", "/bin/sh", "admin", "admin")
+    def _sync_get_config() -> tuple[str, str, str, str]:
+        try:
+            import docker
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            # Try new archetype labels first, fall back to containerlab labels
+            kind = container.labels.get("archetype.node_kind") or container.labels.get("clab-node-kind", "")
+            method = get_console_method(kind)
+            shell = get_console_shell(kind)
+            username, password = get_console_credentials(kind)
+            return (method, shell, username, password)
+        except Exception:
+            return ("docker_exec", "/bin/sh", "admin", "admin")
+
+    return await asyncio.to_thread(_sync_get_config)
 
 
-def _get_container_ip(container_name: str) -> str | None:
+async def _get_container_ip(container_name: str) -> str | None:
     """Get the container's IP address for SSH access."""
-    try:
-        import docker
-        client = docker.from_env()
-        container = client.containers.get(container_name)
-        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
-        for net_name, net_config in networks.items():
-            ip = net_config.get("IPAddress")
-            if ip:
-                return ip
-        return None
-    except Exception:
-        return None
+    def _sync_get_ip() -> str | None:
+        try:
+            import docker
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+            for net_name, net_config in networks.items():
+                ip = net_config.get("IPAddress")
+                if ip:
+                    return ip
+            return None
+        except Exception:
+            return None
+
+    return await asyncio.to_thread(_sync_get_ip)
 
 
-def _get_container_boot_logs(container_name: str, tail_lines: int = 50) -> str | None:
+async def _get_container_boot_logs(container_name: str, tail_lines: int = 50) -> str | None:
     """Get recent boot logs from a container.
 
     Args:
@@ -3285,14 +3543,17 @@ def _get_container_boot_logs(container_name: str, tail_lines: int = 50) -> str |
     Returns:
         Log output as string, or None if unavailable
     """
-    try:
-        import docker
-        client = docker.from_env()
-        container = client.containers.get(container_name)
-        logs = container.logs(tail=tail_lines, timestamps=False).decode("utf-8", errors="replace")
-        return logs if logs.strip() else None
-    except Exception:
-        return None
+    def _sync_get_logs() -> str | None:
+        try:
+            import docker
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            logs = container.logs(tail=tail_lines, timestamps=False).decode("utf-8", errors="replace")
+            return logs if logs.strip() else None
+        except Exception:
+            return None
+
+    return await asyncio.to_thread(_sync_get_logs)
 
 
 @app.websocket("/console/{lab_id}/{node_name}")
@@ -3310,7 +3571,7 @@ async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
     container_name = provider.get_container_name(lab_id, node_name)
 
     # Get console configuration based on node kind
-    method, shell_cmd, username, password = _get_console_config(container_name)
+    method, shell_cmd, username, password = await _get_console_config(container_name)
 
     if method == "ssh":
         # SSH-based console for vrnetlab/VM containers
@@ -3333,7 +3594,7 @@ async def _console_websocket_ssh(
     from agent.console.ssh_console import SSHConsole
 
     # Send boot logs before connecting to CLI
-    boot_logs = _get_container_boot_logs(container_name)
+    boot_logs = await _get_container_boot_logs(container_name)
     if boot_logs:
         await websocket.send_text("\r\n\x1b[90m--- Boot Log ---\x1b[0m\r\n")
         for line in boot_logs.splitlines():
@@ -3341,7 +3602,7 @@ async def _console_websocket_ssh(
         await websocket.send_text("\x1b[90m--- Connecting to CLI ---\x1b[0m\r\n\r\n")
 
     # Get container IP
-    container_ip = _get_container_ip(container_name)
+    container_ip = await _get_container_ip(container_name)
     if not container_ip:
         await websocket.send_text(f"\r\nError: Could not get IP for {node_name}\r\n")
         await websocket.send_text(f"Container '{container_name}' may not be running.\r\n")
@@ -3453,7 +3714,7 @@ async def _console_websocket_docker(
     from agent.console.docker_exec import DockerConsole
 
     # Send boot logs before connecting to CLI
-    boot_logs = _get_container_boot_logs(container_name)
+    boot_logs = await _get_container_boot_logs(container_name)
     if boot_logs:
         await websocket.send_text("\r\n\x1b[90m--- Boot Log ---\x1b[0m\r\n")
         for line in boot_logs.splitlines():
@@ -3462,14 +3723,14 @@ async def _console_websocket_docker(
 
     console = DockerConsole(container_name)
 
-    # Try to start console session with appropriate shell
-    if not console.start(shell=shell_cmd):
+    # Try to start console session with appropriate shell (using async version)
+    if not await console.start_async(shell=shell_cmd):
         await websocket.send_text(f"\r\nError: Could not connect to {node_name}\r\n")
         await websocket.send_text(f"Container '{container_name}' may not be running.\r\n")
         await websocket.close(code=1011)
         return
 
-    # Set initial terminal size
+    # Set initial terminal size (resize is fast, no need to wrap)
     console.resize(rows=24, cols=80)
 
     # Input buffer for data from WebSocket

@@ -146,12 +146,12 @@ class LibvirtProvider(Provider):
 
         return None
 
-    def _create_overlay_disk(
+    def _create_overlay_disk_sync(
         self,
         base_image: str,
         overlay_path: Path,
     ) -> bool:
-        """Create a qcow2 overlay disk backed by a base image.
+        """Create a qcow2 overlay disk backed by a base image (sync version).
 
         Args:
             base_image: Path to the base qcow2 image
@@ -180,12 +180,25 @@ class LibvirtProvider(Provider):
         logger.info(f"Created overlay disk: {overlay_path}")
         return True
 
-    def _create_data_volume(
+    async def _create_overlay_disk(
+        self,
+        base_image: str,
+        overlay_path: Path,
+    ) -> bool:
+        """Create a qcow2 overlay disk backed by a base image (async version).
+
+        Wraps the sync version in asyncio.to_thread to avoid blocking.
+        """
+        return await asyncio.to_thread(
+            self._create_overlay_disk_sync, base_image, overlay_path
+        )
+
+    def _create_data_volume_sync(
         self,
         path: Path,
         size_gb: int,
     ) -> bool:
-        """Create an empty qcow2 data volume.
+        """Create an empty qcow2 data volume (sync version).
 
         Args:
             path: Path for the data volume
@@ -212,6 +225,17 @@ class LibvirtProvider(Provider):
 
         logger.info(f"Created data volume: {path} ({size_gb}GB)")
         return True
+
+    async def _create_data_volume(
+        self,
+        path: Path,
+        size_gb: int,
+    ) -> bool:
+        """Create an empty qcow2 data volume (async version).
+
+        Wraps the sync version in asyncio.to_thread to avoid blocking.
+        """
+        return await asyncio.to_thread(self._create_data_volume_sync, path, size_gb)
 
     def _generate_domain_xml(
         self,
@@ -486,7 +510,7 @@ class LibvirtProvider(Provider):
 
         # Create overlay disk
         overlay_path = disks_dir / f"{node_name}.qcow2"
-        if not self._create_overlay_disk(base_image, overlay_path):
+        if not await self._create_overlay_disk(base_image, overlay_path):
             raise RuntimeError(f"Failed to create overlay disk for {node_name}")
 
         # Check if data volume is needed
@@ -494,7 +518,7 @@ class LibvirtProvider(Provider):
         data_volume_size = node_config.get("data_volume_gb")
         if data_volume_size:
             data_volume_path = disks_dir / f"{node_name}-data.qcow2"
-            if not self._create_data_volume(data_volume_path, data_volume_size):
+            if not await self._create_data_volume(data_volume_path, data_volume_size):
                 raise RuntimeError(f"Failed to create data volume for {node_name}")
 
         # Generate domain XML

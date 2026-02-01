@@ -13,6 +13,7 @@ patterns in container logs or via CLI commands.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -83,51 +84,54 @@ class LogPatternProbe(ReadinessProbe):
 
     async def check(self, container_name: str) -> ReadinessResult:
         """Check container logs for readiness pattern."""
-        try:
-            client = docker.from_env()
-            container = client.containers.get(container_name)
+        def _sync_check() -> ReadinessResult:
+            try:
+                client = docker.from_env()
+                container = client.containers.get(container_name)
 
-            if container.status != "running":
+                if container.status != "running":
+                    return ReadinessResult(
+                        is_ready=False,
+                        message=f"Container not running: {container.status}",
+                        progress_percent=0,
+                    )
+
+                # Get recent logs (last 500 lines should be enough)
+                logs = container.logs(tail=500, timestamps=False).decode("utf-8", errors="replace")
+
+                # Check for completion pattern
+                if self.pattern.search(logs):
+                    return ReadinessResult(
+                        is_ready=True,
+                        message="Boot complete",
+                        progress_percent=100,
+                    )
+
+                # Check for progress patterns
+                max_progress = 0
+                for compiled_pattern, progress in self._compiled_progress.items():
+                    if compiled_pattern.search(logs):
+                        max_progress = max(max_progress, progress)
+
                 return ReadinessResult(
                     is_ready=False,
-                    message=f"Container not running: {container.status}",
+                    message="Boot in progress",
+                    progress_percent=max_progress if max_progress > 0 else None,
+                )
+
+            except docker.errors.NotFound:
+                return ReadinessResult(
+                    is_ready=False,
+                    message="Container not found",
                     progress_percent=0,
                 )
-
-            # Get recent logs (last 500 lines should be enough)
-            logs = container.logs(tail=500, timestamps=False).decode("utf-8", errors="replace")
-
-            # Check for completion pattern
-            if self.pattern.search(logs):
+            except Exception as e:
                 return ReadinessResult(
-                    is_ready=True,
-                    message="Boot complete",
-                    progress_percent=100,
+                    is_ready=False,
+                    message=f"Probe error: {str(e)}",
                 )
 
-            # Check for progress patterns
-            max_progress = 0
-            for compiled_pattern, progress in self._compiled_progress.items():
-                if compiled_pattern.search(logs):
-                    max_progress = max(max_progress, progress)
-
-            return ReadinessResult(
-                is_ready=False,
-                message="Boot in progress",
-                progress_percent=max_progress if max_progress > 0 else None,
-            )
-
-        except docker.errors.NotFound:
-            return ReadinessResult(
-                is_ready=False,
-                message="Container not found",
-                progress_percent=0,
-            )
-        except Exception as e:
-            return ReadinessResult(
-                is_ready=False,
-                message=f"Probe error: {str(e)}",
-            )
+        return await asyncio.to_thread(_sync_check)
 
 
 class CliProbe(ReadinessProbe):
@@ -150,48 +154,51 @@ class CliProbe(ReadinessProbe):
 
     async def check(self, container_name: str) -> ReadinessResult:
         """Execute CLI command and check output."""
-        try:
-            client = docker.from_env()
-            container = client.containers.get(container_name)
+        def _sync_check() -> ReadinessResult:
+            try:
+                client = docker.from_env()
+                container = client.containers.get(container_name)
 
-            if container.status != "running":
+                if container.status != "running":
+                    return ReadinessResult(
+                        is_ready=False,
+                        message=f"Container not running: {container.status}",
+                        progress_percent=0,
+                    )
+
+                # Execute command with short timeout
+                exit_code, output = container.exec_run(
+                    self.cli_command,
+                    demux=False,
+                )
+
+                output_str = output.decode("utf-8", errors="replace") if output else ""
+
+                if exit_code == 0 and self.expected_pattern.search(output_str):
+                    return ReadinessResult(
+                        is_ready=True,
+                        message="CLI probe successful",
+                        progress_percent=100,
+                    )
+
                 return ReadinessResult(
                     is_ready=False,
-                    message=f"Container not running: {container.status}",
+                    message="CLI not ready",
+                )
+
+            except docker.errors.NotFound:
+                return ReadinessResult(
+                    is_ready=False,
+                    message="Container not found",
                     progress_percent=0,
                 )
-
-            # Execute command with short timeout
-            exit_code, output = container.exec_run(
-                self.cli_command,
-                demux=False,
-            )
-
-            output_str = output.decode("utf-8", errors="replace") if output else ""
-
-            if exit_code == 0 and self.expected_pattern.search(output_str):
+            except Exception as e:
                 return ReadinessResult(
-                    is_ready=True,
-                    message="CLI probe successful",
-                    progress_percent=100,
+                    is_ready=False,
+                    message=f"CLI probe error: {str(e)}",
                 )
 
-            return ReadinessResult(
-                is_ready=False,
-                message="CLI not ready",
-            )
-
-        except docker.errors.NotFound:
-            return ReadinessResult(
-                is_ready=False,
-                message="Container not found",
-                progress_percent=0,
-            )
-        except Exception as e:
-            return ReadinessResult(
-                is_ready=False,
-                message=f"CLI probe error: {str(e)}",
-            )
+        return await asyncio.to_thread(_sync_check)
 
 
 # Progress patterns for cEOS boot sequence

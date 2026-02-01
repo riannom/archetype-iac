@@ -12,6 +12,12 @@ from docker.errors import NotFound, APIError
 from agent.config import settings
 
 
+async def _run_in_thread(func, *args, **kwargs):
+    """Run a blocking function in a thread pool."""
+    import functools
+    return await asyncio.to_thread(functools.partial(func, *args, **kwargs))
+
+
 class DockerConsole:
     """Manage an interactive console session to a Docker container.
 
@@ -33,9 +39,11 @@ class DockerConsole:
         return self._docker
 
     def start(self, shell: str = "/bin/sh") -> bool:
-        """Start an exec session with PTY.
+        """Start an exec session with PTY (synchronous version).
 
         Returns True if session started successfully.
+
+        Note: For async contexts, use start_async() instead to avoid blocking.
         """
         try:
             container = self.docker.containers.get(self.container_name)
@@ -68,6 +76,16 @@ class DockerConsole:
             return False
         except Exception:
             return False
+
+    async def start_async(self, shell: str = "/bin/sh") -> bool:
+        """Start an exec session with PTY (async version).
+
+        Wraps the blocking Docker calls in asyncio.to_thread() to avoid
+        blocking the event loop.
+
+        Returns True if session started successfully.
+        """
+        return await asyncio.to_thread(self.start, shell)
 
     def resize(self, rows: int, cols: int) -> bool:
         """Resize the PTY."""
