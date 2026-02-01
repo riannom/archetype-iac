@@ -13,7 +13,7 @@ an agent, use mocking.
 
 import asyncio
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -170,13 +170,13 @@ async def test_update_stale_agents():
     stale_agent.id = "stale-agent"
     stale_agent.name = "stale"
     stale_agent.status = "online"
-    stale_agent.last_heartbeat = datetime.utcnow() - timedelta(seconds=120)
+    stale_agent.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=120)
 
     # Create mock healthy agent
     healthy_agent = MagicMock()
     healthy_agent.id = "healthy-agent"
     healthy_agent.status = "online"
-    healthy_agent.last_heartbeat = datetime.utcnow() - timedelta(seconds=10)
+    healthy_agent.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=10)
 
     # Mock query to return stale agent
     mock_query = MagicMock()
@@ -232,11 +232,11 @@ class MockAgent:
         self.id = agent_id
         self.address = address
         self.status = status
-        self.last_heartbeat = datetime.utcnow()
+        self.last_heartbeat = datetime.now(timezone.utc)
         self.name = f"agent-{agent_id}"
         self.capabilities = capabilities or '{"providers": ["docker"], "max_concurrent_jobs": 4}'
         self.version = "0.1.0"
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
 
 
 class MockLab:

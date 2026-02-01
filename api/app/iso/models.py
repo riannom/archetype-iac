@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
@@ -196,11 +196,11 @@ class ISOSession(BaseModel):
         if error_message:
             progress.error_message = error_message
         if status == "extracting" and not progress.started_at:
-            progress.started_at = datetime.utcnow()
+            progress.started_at = datetime.now(timezone.utc)
         if status in ("completed", "failed"):
-            progress.completed_at = datetime.utcnow()
+            progress.completed_at = datetime.now(timezone.utc)
 
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def calculate_overall_progress(self) -> int:
         """Calculate overall progress based on individual image progress."""

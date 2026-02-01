@@ -14,7 +14,7 @@ import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -154,6 +154,26 @@ _event_listener = None
 
 # Docker OVS plugin runner (initialized on startup if enabled)
 _docker_plugin_runner = None
+
+# Active job counter for heartbeat reporting
+_active_jobs = 0
+
+
+def get_active_jobs() -> int:
+    """Get the current count of active jobs."""
+    return _active_jobs
+
+
+def _increment_active_jobs():
+    """Increment the active jobs counter."""
+    global _active_jobs
+    _active_jobs += 1
+
+
+def _decrement_active_jobs():
+    """Decrement the active jobs counter."""
+    global _active_jobs
+    _active_jobs = max(0, _active_jobs - 1)
 
 
 def get_overlay_manager():
@@ -468,7 +488,7 @@ async def send_heartbeat() -> HeartbeatResponse | None:
     request = HeartbeatRequest(
         agent_id=AGENT_ID,
         status=AgentStatus.ONLINE,
-        active_jobs=0,  # TODO: track active jobs
+        active_jobs=get_active_jobs(),
         resource_usage=await get_resource_usage(),
     )
 
@@ -668,7 +688,7 @@ def health():
         "status": "ok",
         "agent_id": AGENT_ID,
         "registered": _registered,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -969,83 +989,87 @@ async def _execute_deploy_with_callback(
     from agent.locks import LockAcquisitionTimeout
     from datetime import datetime, timezone
 
-    started_at = datetime.now(timezone.utc)
-    lock_manager = get_lock_manager()
-
-    if lock_manager is None:
-        logger.error(f"Lock manager not initialized for async deploy of lab {lab_id}")
-        payload = CallbackPayload(
-            job_id=job_id,
-            agent_id=AGENT_ID,
-            status="failed",
-            error_message="Lock manager not initialized",
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc),
-        )
-        await deliver_callback(callback_url, payload)
-        return
-
+    _increment_active_jobs()
     try:
-        async with lock_manager.acquire_with_heartbeat(
-            lab_id,
-            timeout=settings.lock_acquire_timeout,
-            extend_interval=settings.lock_extend_interval,
-        ):
-            try:
-                from agent.callbacks import HeartbeatSender
+        started_at = datetime.now(timezone.utc)
+        lock_manager = get_lock_manager()
 
-                provider = get_provider_for_request(provider_name)
-                workspace = get_workspace(lab_id)
-                logger.info(f"Async deploy starting: lab={lab_id}, workspace={workspace}")
+        if lock_manager is None:
+            logger.error(f"Lock manager not initialized for async deploy of lab {lab_id}")
+            payload = CallbackPayload(
+                job_id=job_id,
+                agent_id=AGENT_ID,
+                status="failed",
+                error_message="Lock manager not initialized",
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+            await deliver_callback(callback_url, payload)
+            return
 
-                # Send heartbeats during deploy to prove job is active
-                async with HeartbeatSender(callback_url, job_id, interval=30.0):
-                    result = await provider.deploy(
-                        lab_id=lab_id,
-                        topology=topology,
-                        topology_yaml=topology_yaml,
-                        workspace=workspace,
+        try:
+            async with lock_manager.acquire_with_heartbeat(
+                lab_id,
+                timeout=settings.lock_acquire_timeout,
+                extend_interval=settings.lock_extend_interval,
+            ):
+                try:
+                    from agent.callbacks import HeartbeatSender
+
+                    provider = get_provider_for_request(provider_name)
+                    workspace = get_workspace(lab_id)
+                    logger.info(f"Async deploy starting: lab={lab_id}, workspace={workspace}")
+
+                    # Send heartbeats during deploy to prove job is active
+                    async with HeartbeatSender(callback_url, job_id, interval=30.0):
+                        result = await provider.deploy(
+                            lab_id=lab_id,
+                            topology=topology,
+                            topology_yaml=topology_yaml,
+                            workspace=workspace,
+                        )
+
+                    logger.info(f"Async deploy finished: lab={lab_id}, success={result.success}")
+
+                    # Build callback payload
+                    payload = CallbackPayload(
+                        job_id=job_id,
+                        agent_id=AGENT_ID,
+                        status="completed" if result.success else "failed",
+                        stdout=result.stdout or "",
+                        stderr=result.stderr or "",
+                        error_message=result.error if not result.success else None,
+                        started_at=started_at,
+                        completed_at=datetime.now(timezone.utc),
                     )
 
-                logger.info(f"Async deploy finished: lab={lab_id}, success={result.success}")
+                except Exception as e:
+                    logger.error(f"Async deploy error for lab {lab_id}: {e}", exc_info=True)
 
-                # Build callback payload
-                payload = CallbackPayload(
-                    job_id=job_id,
-                    agent_id=AGENT_ID,
-                    status="completed" if result.success else "failed",
-                    stdout=result.stdout or "",
-                    stderr=result.stderr or "",
-                    error_message=result.error if not result.success else None,
-                    started_at=started_at,
-                    completed_at=datetime.now(timezone.utc),
-                )
+                    payload = CallbackPayload(
+                        job_id=job_id,
+                        agent_id=AGENT_ID,
+                        status="failed",
+                        error_message=str(e),
+                        started_at=started_at,
+                        completed_at=datetime.now(timezone.utc),
+                    )
 
-            except Exception as e:
-                logger.error(f"Async deploy error for lab {lab_id}: {e}", exc_info=True)
+        except LockAcquisitionTimeout:
+            logger.warning(f"Async deploy timeout waiting for lock on lab {lab_id}")
+            payload = CallbackPayload(
+                job_id=job_id,
+                agent_id=AGENT_ID,
+                status="failed",
+                error_message=f"Deploy already in progress for lab {lab_id}, timed out waiting for lock",
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
 
-                payload = CallbackPayload(
-                    job_id=job_id,
-                    agent_id=AGENT_ID,
-                    status="failed",
-                    error_message=str(e),
-                    started_at=started_at,
-                    completed_at=datetime.now(timezone.utc),
-                )
-
-    except LockAcquisitionTimeout:
-        logger.warning(f"Async deploy timeout waiting for lock on lab {lab_id}")
-        payload = CallbackPayload(
-            job_id=job_id,
-            agent_id=AGENT_ID,
-            status="failed",
-            error_message=f"Deploy already in progress for lab {lab_id}, timed out waiting for lock",
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc),
-        )
-
-    # Deliver callback (outside the lock)
-    await deliver_callback(callback_url, payload)
+        # Deliver callback (outside the lock)
+        await deliver_callback(callback_url, payload)
+    finally:
+        _decrement_active_jobs()
 
 
 async def _cleanup_deploy_cache(lab_id: str, delay: float = 5.0):
@@ -1138,76 +1162,80 @@ async def _execute_destroy_with_callback(
     from agent.locks import LockAcquisitionTimeout
     from datetime import datetime, timezone
 
-    started_at = datetime.now(timezone.utc)
-    lock_manager = get_lock_manager()
-
-    if lock_manager is None:
-        logger.error(f"Lock manager not initialized for async destroy of lab {lab_id}")
-        payload = CallbackPayload(
-            job_id=job_id,
-            agent_id=AGENT_ID,
-            status="failed",
-            error_message="Lock manager not initialized",
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc),
-        )
-        await deliver_callback(callback_url, payload)
-        return
-
+    _increment_active_jobs()
     try:
-        async with lock_manager.acquire_with_heartbeat(
-            lab_id,
-            timeout=settings.lock_acquire_timeout,
-            extend_interval=settings.lock_extend_interval,
-        ):
-            provider = get_provider_for_request(provider_name)
-            workspace = get_workspace(lab_id)
-            logger.info(f"Async destroy starting: lab={lab_id}, workspace={workspace}")
+        started_at = datetime.now(timezone.utc)
+        lock_manager = get_lock_manager()
 
-            # Send heartbeats during destroy to prove job is active
-            async with HeartbeatSender(callback_url, job_id, interval=30.0):
-                result = await provider.destroy(
-                    lab_id=lab_id,
-                    workspace=workspace,
-                )
-
-            logger.info(f"Async destroy finished: lab={lab_id}, success={result.success}")
-
+        if lock_manager is None:
+            logger.error(f"Lock manager not initialized for async destroy of lab {lab_id}")
             payload = CallbackPayload(
                 job_id=job_id,
                 agent_id=AGENT_ID,
-                status="completed" if result.success else "failed",
-                stdout=result.stdout or "",
-                stderr=result.stderr or "",
-                error_message=result.error if not result.success else None,
+                status="failed",
+                error_message="Lock manager not initialized",
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+            await deliver_callback(callback_url, payload)
+            return
+
+        try:
+            async with lock_manager.acquire_with_heartbeat(
+                lab_id,
+                timeout=settings.lock_acquire_timeout,
+                extend_interval=settings.lock_extend_interval,
+            ):
+                provider = get_provider_for_request(provider_name)
+                workspace = get_workspace(lab_id)
+                logger.info(f"Async destroy starting: lab={lab_id}, workspace={workspace}")
+
+                # Send heartbeats during destroy to prove job is active
+                async with HeartbeatSender(callback_url, job_id, interval=30.0):
+                    result = await provider.destroy(
+                        lab_id=lab_id,
+                        workspace=workspace,
+                    )
+
+                logger.info(f"Async destroy finished: lab={lab_id}, success={result.success}")
+
+                payload = CallbackPayload(
+                    job_id=job_id,
+                    agent_id=AGENT_ID,
+                    status="completed" if result.success else "failed",
+                    stdout=result.stdout or "",
+                    stderr=result.stderr or "",
+                    error_message=result.error if not result.success else None,
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc),
+                )
+
+        except LockAcquisitionTimeout:
+            logger.warning(f"Lock timeout for async destroy of lab {lab_id}")
+            payload = CallbackPayload(
+                job_id=job_id,
+                agent_id=AGENT_ID,
+                status="failed",
+                error_message=f"Another operation is in progress for lab {lab_id}",
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
             )
 
-    except LockAcquisitionTimeout:
-        logger.warning(f"Lock timeout for async destroy of lab {lab_id}")
-        payload = CallbackPayload(
-            job_id=job_id,
-            agent_id=AGENT_ID,
-            status="failed",
-            error_message=f"Another operation is in progress for lab {lab_id}",
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc),
-        )
+        except Exception as e:
+            logger.error(f"Async destroy error for lab {lab_id}: {e}", exc_info=True)
 
-    except Exception as e:
-        logger.error(f"Async destroy error for lab {lab_id}: {e}", exc_info=True)
+            payload = CallbackPayload(
+                job_id=job_id,
+                agent_id=AGENT_ID,
+                status="failed",
+                error_message=str(e),
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
 
-        payload = CallbackPayload(
-            job_id=job_id,
-            agent_id=AGENT_ID,
-            status="failed",
-            error_message=str(e),
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc),
-        )
-
-    await deliver_callback(callback_url, payload)
+        await deliver_callback(callback_url, payload)
+    finally:
+        _decrement_active_jobs()
 
 
 @app.post("/jobs/node-action")

@@ -1,7 +1,7 @@
 """Shared lab utility functions."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -49,7 +49,7 @@ def update_lab_state(
     lab = session.get(models.Lab, lab_id)
     if lab:
         lab.state = state
-        lab.state_updated_at = datetime.utcnow()
+        lab.state_updated_at = datetime.now(timezone.utc)
         if agent_id is not None:
             lab.agent_id = agent_id
         if error is not None:

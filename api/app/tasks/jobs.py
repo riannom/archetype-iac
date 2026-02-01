@@ -288,7 +288,7 @@ async def run_agent_job(
         if not lab:
             logger.error(f"Lab {lab_id} not found in database")
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = f"ERROR: Lab {lab_id} not found"
             session.commit()
             return
@@ -320,7 +320,7 @@ async def run_agent_job(
             )
         if not agent:
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = (
                 f"ERROR: No healthy agent available.\n\n"
                 f"Required provider: {provider}\n\n"
@@ -339,7 +339,7 @@ async def run_agent_job(
         # Update job with agent assignment and start time
         job.status = "running"
         job.agent_id = agent.id
-        job.started_at = datetime.utcnow()
+        job.started_at = datetime.now(timezone.utc)
         session.commit()
 
         # Update lab state based on action
@@ -390,7 +390,7 @@ async def run_agent_job(
                                 f"node {node} desired_state changed to 'running'"
                             )
                             job.status = "cancelled"
-                            job.completed_at = datetime.utcnow()
+                            job.completed_at = datetime.now(timezone.utc)
                             job.log_path = (
                                 f"Job cancelled: desired_state changed to '{desired}' "
                                 f"before job executed. No action taken."
@@ -403,7 +403,7 @@ async def run_agent_job(
                                 f"node {node} desired_state changed to 'stopped'"
                             )
                             job.status = "cancelled"
-                            job.completed_at = datetime.utcnow()
+                            job.completed_at = datetime.now(timezone.utc)
                             job.log_path = (
                                 f"Job cancelled: desired_state changed to '{desired}' "
                                 f"before job executed. No action taken."
@@ -419,7 +419,7 @@ async def run_agent_job(
                 result = {"status": "failed", "error_message": f"Unknown action: {action}"}
 
             # Update job based on result
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
 
             if result.get("status") == "completed":
                 job.status = "completed"
@@ -465,7 +465,7 @@ async def run_agent_job(
 
         except AgentUnavailableError as e:
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = (
                 f"ERROR: Agent became unavailable during job execution.\n\n"
                 f"Agent ID: {e.agent_id or 'unknown'}\n"
@@ -486,7 +486,7 @@ async def run_agent_job(
 
         except AgentJobError as e:
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             log_content = f"ERROR: Job execution failed on agent.\n\nDetails: {e.message}\n\n"
             if e.stdout:
                 log_content += f"=== STDOUT ===\n{e.stdout}\n\n"
@@ -502,7 +502,7 @@ async def run_agent_job(
 
         except Exception as e:
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = (
                 f"ERROR: Unexpected error during job execution.\n\n"
                 f"Type: {type(e).__name__}\n"
@@ -552,7 +552,7 @@ async def run_multihost_deploy(
         if not lab:
             logger.error(f"Lab {lab_id} not found in database")
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = f"ERROR: Lab {lab_id} not found"
             session.commit()
             return
@@ -583,7 +583,7 @@ async def run_multihost_deploy(
             else:
                 # No default agent available
                 job.status = "failed"
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.log_path = (
                     f"ERROR: {len(unplaced_nodes)} nodes have no host assignment "
                     f"and no default agent is available"
@@ -603,7 +603,7 @@ async def run_multihost_deploy(
 
         # Update job status
         job.status = "running"
-        job.started_at = datetime.utcnow()
+        job.started_at = datetime.now(timezone.utc)
         session.commit()
 
         update_lab_state(session, lab_id, "starting")
@@ -625,7 +625,7 @@ async def run_multihost_deploy(
         if missing_hosts:
             error_msg = f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = f"ERROR: {error_msg}"
             update_lab_state(session, lab_id, "error", error=error_msg)
             session.commit()
@@ -712,7 +712,7 @@ async def run_multihost_deploy(
                 log_parts.append("No hosts to rollback (all failed)")
 
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = "\n".join(log_parts)
             update_lab_state(session, lab_id, "error", error="Deployment failed on one or more hosts")
             session.commit()
@@ -733,7 +733,7 @@ async def run_multihost_deploy(
             log_parts.append(f"Links: {links_ok} OK, {links_failed} failed")
             log_parts.append("\nNote: Containers are deployed but some links failed.")
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = "\n".join(log_parts)
             update_lab_state(session, lab_id, "error", error=f"Link setup failed: {links_failed} link(s)")
             session.commit()
@@ -749,7 +749,7 @@ async def run_multihost_deploy(
 
         # Mark job as completed
         job.status = "completed"
-        job.completed_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
         job.log_path = "\n".join(log_parts)
 
         # Update lab state - use first agent as primary
@@ -777,7 +777,7 @@ async def run_multihost_deploy(
             lab = session.get(models.Lab, lab_id)
             if job:
                 job.status = "failed"
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Unexpected error: {e}"
                 update_lab_state(session, lab_id, "error", error=str(e))
                 session.commit()
@@ -821,7 +821,7 @@ async def run_multihost_destroy(
         if not lab:
             logger.error(f"Lab {lab_id} not found in database")
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = f"ERROR: Lab {lab_id} not found"
             session.commit()
             return
@@ -837,7 +837,7 @@ async def run_multihost_destroy(
 
         # Update job status
         job.status = "running"
-        job.started_at = datetime.utcnow()
+        job.started_at = datetime.now(timezone.utc)
         session.commit()
 
         update_lab_state(session, lab_id, "stopping")
@@ -857,7 +857,7 @@ async def run_multihost_destroy(
             # No agents found, try single-agent destroy as fallback
             error_msg = "No agents found for multi-host destroy"
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = f"ERROR: {error_msg}"
             update_lab_state(session, lab_id, "error", error=error_msg)
             session.commit()
@@ -911,7 +911,7 @@ async def run_multihost_destroy(
             log_parts.append("\nWARNING: Some hosts may have had issues during destroy")
             log_parts.append("Containers may need manual cleanup on failed hosts.")
 
-        job.completed_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
         job.log_path = "\n".join(log_parts)
         session.commit()
 
@@ -926,7 +926,7 @@ async def run_multihost_destroy(
             job = session.get(models.Job, job_id)
             if job:
                 job.status = "failed"
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Unexpected error: {e}"
                 update_lab_state(session, lab_id, "error", error=str(e))
                 session.commit()
@@ -971,7 +971,7 @@ async def run_node_sync(
         if not lab:
             logger.error(f"Lab {lab_id} not found in database")
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = f"ERROR: Lab {lab_id} not found"
             session.commit()
             return
@@ -988,7 +988,7 @@ async def run_node_sync(
 
         if not node_states:
             job.status = "completed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = "No nodes to sync"
             session.commit()
             return
@@ -1059,7 +1059,7 @@ async def run_node_sync(
         if explicit_placement_failures:
             error_msg = "Cannot deploy - explicit host assignments failed:\n" + "\n".join(explicit_placement_failures)
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.log_path = error_msg
             for ns in node_states:
                 if ns.node_name in [f.split(":")[0] for f in explicit_placement_failures]:
@@ -1205,7 +1205,7 @@ async def run_node_sync(
                     )
         if not agent:
             job.status = "failed"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             if target_agent_id:
                 job.log_path = f"ERROR: Target agent {target_agent_id} is offline or unresponsive"
                 error_msg = f"Target agent offline"
@@ -1223,7 +1223,7 @@ async def run_node_sync(
         # Update job with agent assignment
         job.status = "running"
         job.agent_id = agent.id
-        job.started_at = datetime.utcnow()
+        job.started_at = datetime.now(timezone.utc)
         session.commit()
 
         log_parts = []
@@ -1430,7 +1430,7 @@ async def run_node_sync(
             if not topo_service.has_nodes(lab_id):
                 error_msg = "No topology defined in database"
                 job.status = "failed"
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: {error_msg}"
                 for ns in nodes_need_deploy:
                     ns.actual_state = "error"
@@ -1900,7 +1900,7 @@ async def run_node_sync(
             job.status = "completed"
             log_parts.append("\nAll nodes synced successfully")
 
-        job.completed_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
         job.log_path = "\n".join(log_parts)
         session.commit()
 
@@ -1912,7 +1912,7 @@ async def run_node_sync(
             job = session.get(models.Job, job_id)
             if job:
                 job.status = "failed"
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Unexpected error: {e}"
                 session.commit()
         except Exception:
