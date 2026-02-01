@@ -1029,35 +1029,46 @@ async def run_node_sync(
                 # Get the node names we're syncing
                 node_names_to_sync = {ns.node_name for ns in node_states}
 
-                # Find host assignments for these nodes
-                # Use container_name (yaml key like 'ceos_3') not display name ('CEOS-3')
-                node_hosts = {}
-                for node in graph.nodes:
-                    node_key = node.container_name or node.name
-                    if node_key in node_names_to_sync and node.host:
-                        node_hosts[node_key] = node.host
-
-                # Determine target agent for ALL nodes (explicit and auto-placed)
-                # to avoid spawning jobs that race on the same agent
+                # Determine target agent for ALL nodes
+                # Priority: 1. nodes.host_id (database), 2. YAML host field, 3. NodePlacement, 4. default
                 all_node_agents: dict[str, str] = {}  # node_name -> agent_id
 
-                # First, assign explicit placements
-                # Topology host field can be either agent NAME or agent ID
-                for node_name, host_value in node_hosts.items():
-                    # Try lookup by name first
-                    host_agent = await agent_client.get_agent_by_name(session, host_value, required_provider=provider)
-                    if not host_agent:
-                        # Try lookup by ID (topology might store ID instead of name)
-                        host_agent = session.get(models.Host, host_value)
-                        if host_agent and not agent_client.is_agent_online(host_agent):
-                            host_agent = None
-                    if host_agent:
-                        all_node_agents[node_name] = host_agent.id
-                    else:
-                        logger.warning(f"Agent '{host_value}' not found for node {node_name}")
+                # First, check database nodes.host_id (source of truth for placement)
+                db_nodes = (
+                    session.query(models.Node)
+                    .filter(
+                        models.Node.lab_id == lab_id,
+                        models.Node.container_name.in_(node_names_to_sync),
+                    )
+                    .all()
+                )
+                for db_node in db_nodes:
+                    if db_node.host_id:
+                        host_agent = session.get(models.Host, db_node.host_id)
+                        if host_agent and agent_client.is_agent_online(host_agent):
+                            all_node_agents[db_node.container_name] = db_node.host_id
+                            logger.debug(f"Node {db_node.container_name} -> host {host_agent.name} (from nodes.host_id)")
 
-                # Then, determine agent for auto-placed nodes
-                auto_placed_nodes = [ns for ns in node_states if ns.node_name not in node_hosts]
+                # For nodes without database host_id, check YAML topology
+                nodes_without_db_host = node_names_to_sync - set(all_node_agents.keys())
+                if nodes_without_db_host:
+                    for node in graph.nodes:
+                        node_key = node.container_name or node.name
+                        if node_key in nodes_without_db_host and node.host:
+                            # Try lookup by name first, then by ID
+                            host_agent = await agent_client.get_agent_by_name(session, node.host, required_provider=provider)
+                            if not host_agent:
+                                host_agent = session.get(models.Host, node.host)
+                                if host_agent and not agent_client.is_agent_online(host_agent):
+                                    host_agent = None
+                            if host_agent:
+                                all_node_agents[node_key] = host_agent.id
+                                logger.debug(f"Node {node_key} -> host {host_agent.name} (from YAML)")
+                            else:
+                                logger.warning(f"Agent '{node.host}' not found for node {node_key}")
+
+                # Then, determine agent for remaining auto-placed nodes
+                auto_placed_nodes = [ns for ns in node_states if ns.node_name not in all_node_agents]
                 if auto_placed_nodes:
                     # Check existing placements
                     auto_node_names = {ns.node_name for ns in auto_placed_nodes}
