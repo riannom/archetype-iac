@@ -544,6 +544,32 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                         f"timestamp or active job, recovering via reconciliation"
                     )
 
+            # Skip "starting" nodes - they're being handled by an active job
+            # or need timeout recovery (handled by job_health monitor)
+            if ns.actual_state == "starting":
+                if active_stop_job:
+                    # Active job is handling this - don't interfere
+                    running_count += 1  # Count as running for lab state calculation
+                    continue
+                # Check timeout: if starting > 6 min with no job, recover from container status
+                if ns.starting_started_at:
+                    starting_duration = datetime.now(timezone.utc) - ns.starting_started_at
+                    if starting_duration.total_seconds() < 360:  # 6 minutes
+                        # Still within timeout window, don't interfere
+                        running_count += 1
+                        continue
+                    # Timeout exceeded - fall through to normal reconciliation
+                    logger.warning(
+                        f"Node {ns.node_name} in lab {lab_id} stuck in 'starting' for "
+                        f"{starting_duration.total_seconds():.0f}s, recovering via reconciliation"
+                    )
+                else:
+                    # No timestamp but no job - something is wrong, recover
+                    logger.warning(
+                        f"Node {ns.node_name} in lab {lab_id} in 'starting' state without "
+                        f"timestamp or active job, recovering via reconciliation"
+                    )
+
             container_status = container_status_map.get(ns.node_name)
             old_state = ns.actual_state
             old_is_ready = ns.is_ready
@@ -552,6 +578,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 if container_status == "running":
                     ns.actual_state = "running"
                     ns.stopping_started_at = None  # Clear if recovering from stuck stopping
+                    ns.starting_started_at = None  # Clear if recovering from stuck starting
                     ns.error_message = None
                     running_count += 1
 
@@ -577,6 +604,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 elif container_status in ("stopped", "exited"):
                     ns.actual_state = "stopped"
                     ns.stopping_started_at = None  # Clear if recovering from stuck stopping
+                    ns.starting_started_at = None  # Clear if recovering from stuck starting
                     ns.error_message = None
                     ns.is_ready = False
                     ns.boot_started_at = None
@@ -584,6 +612,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 elif container_status in ("error", "dead"):
                     ns.actual_state = "error"
                     ns.stopping_started_at = None  # Clear if recovering from stuck stopping
+                    ns.starting_started_at = None  # Clear if recovering from stuck starting
                     ns.error_message = f"Container status: {container_status}"
                     ns.is_ready = False
                     ns.boot_started_at = None

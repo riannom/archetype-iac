@@ -230,21 +230,27 @@ class TestJobHealthMonitor:
             with patch("app.tasks.job_health.check_orphaned_queued_jobs", new_callable=AsyncMock) as mock_orphaned:
                 with patch("app.tasks.job_health.check_jobs_on_offline_agents", new_callable=AsyncMock) as mock_offline:
                     with patch("app.tasks.job_health.check_stuck_image_sync_jobs", new_callable=AsyncMock) as mock_sync:
-                        with patch("app.tasks.job_health.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-                            call_count = 0
-                            async def sleep_and_cancel(seconds):
-                                nonlocal call_count
-                                call_count += 1
-                                if call_count > 1:
-                                    raise asyncio.CancelledError()
-                            mock_sleep.side_effect = sleep_and_cancel
+                        with patch("app.tasks.job_health.check_stuck_locks", new_callable=AsyncMock) as mock_locks:
+                            with patch("app.tasks.job_health.check_stuck_stopping_nodes", new_callable=AsyncMock) as mock_stopping:
+                                with patch("app.tasks.job_health.check_stuck_starting_nodes", new_callable=AsyncMock) as mock_starting:
+                                    with patch("app.tasks.job_health.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                                        call_count = 0
+                                        async def sleep_and_cancel(seconds):
+                                            nonlocal call_count
+                                            call_count += 1
+                                            if call_count > 1:
+                                                raise asyncio.CancelledError()
+                                        mock_sleep.side_effect = sleep_and_cancel
 
-                            await job_health_monitor()
+                                        await job_health_monitor()
 
-                            mock_stuck.assert_called_once()
-                            mock_orphaned.assert_called_once()
-                            mock_offline.assert_called_once()
-                            mock_sync.assert_called_once()
+                                        mock_stuck.assert_called_once()
+                                        mock_orphaned.assert_called_once()
+                                        mock_offline.assert_called_once()
+                                        mock_sync.assert_called_once()
+                                        mock_locks.assert_called_once()
+                                        mock_stopping.assert_called_once()
+                                        mock_starting.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_stops_on_cancelled_error(self):
@@ -273,16 +279,19 @@ class TestJobHealthMonitor:
             with patch("app.tasks.job_health.check_orphaned_queued_jobs", new_callable=AsyncMock):
                 with patch("app.tasks.job_health.check_jobs_on_offline_agents", new_callable=AsyncMock):
                     with patch("app.tasks.job_health.check_stuck_image_sync_jobs", new_callable=AsyncMock):
-                        with patch("app.tasks.job_health.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-                            sleep_count = 0
-                            async def sleep_and_cancel(seconds):
-                                nonlocal sleep_count
-                                sleep_count += 1
-                                if sleep_count > 2:
-                                    raise asyncio.CancelledError()
-                            mock_sleep.side_effect = sleep_and_cancel
+                        with patch("app.tasks.job_health.check_stuck_locks", new_callable=AsyncMock):
+                            with patch("app.tasks.job_health.check_stuck_stopping_nodes", new_callable=AsyncMock):
+                                with patch("app.tasks.job_health.check_stuck_starting_nodes", new_callable=AsyncMock):
+                                    with patch("app.tasks.job_health.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                                        sleep_count = 0
+                                        async def sleep_and_cancel(seconds):
+                                            nonlocal sleep_count
+                                            sleep_count += 1
+                                            if sleep_count > 2:
+                                                raise asyncio.CancelledError()
+                                        mock_sleep.side_effect = sleep_and_cancel
 
-                            await job_health_monitor()
+                                        await job_health_monitor()
 
 
 class TestRetryJob:
