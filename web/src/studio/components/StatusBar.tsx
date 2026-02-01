@@ -8,7 +8,7 @@ interface NodeStateEntry {
   node_id: string;
   node_name: string;
   desired_state: 'stopped' | 'running';
-  actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'error';
+  actual_state: 'undeployed' | 'pending' | 'running' | 'stopped' | 'stopping' | 'error';
   error_message?: string | null;
   is_ready?: boolean;
   boot_started_at?: string | null;

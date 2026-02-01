@@ -3,7 +3,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { DeviceModel, Node, isDeviceNode, DeviceNode } from '../types';
 import { getAgentColor } from '../../utils/agentColors';
 
-export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'error';
+export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'stopping' | 'error';
 
 // Track pending operations to prevent race conditions from rapid clicks
 type PendingOp = 'bulk' | string; // 'bulk' for bulk actions, node ID for per-node actions
@@ -52,15 +52,16 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     switch (status) {
       case 'running': return 'text-green-500 bg-green-500/10 border-green-500/20';
       case 'booting': return 'text-yellow-500 bg-yellow-500/10 border-yellow-500/20';
+      case 'stopping': return 'text-orange-500 bg-orange-500/10 border-orange-500/20';
       case 'error': return 'text-red-500 bg-red-500/10 border-red-500/20';
       default: return 'text-stone-500 bg-stone-500/10 border-stone-500/20';
     }
   };
 
-  // Check if any nodes are currently running or booting
+  // Check if any nodes are currently running, booting, or stopping
   const hasRunningNodes = deviceNodes.some(node => {
     const status = runtimeStates[node.id];
-    return status === 'running' || status === 'booting';
+    return status === 'running' || status === 'booting' || status === 'stopping';
   });
 
   // Check if all nodes are currently running
@@ -86,7 +87,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
 
       // Optimistically update UI (without triggering API calls)
       nodes.forEach(node => {
-        onSetRuntimeStatus(node.id, action === 'running' ? 'booting' : 'stopped');
+        onSetRuntimeStatus(node.id, action === 'running' ? 'booting' : 'stopping');
       });
 
       // Trigger sync for all nodes
@@ -242,7 +243,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                           <select
                             value={node.host || ''}
                             onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
-                            disabled={status === 'running' || status === 'booting'}
+                            disabled={status === 'running' || status === 'booting' || status === 'stopping'}
                             className="bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <option value="">Auto</option>
@@ -260,8 +261,8 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                         ) : (
                           <span className="text-stone-400 dark:text-stone-600 text-xs">Auto</span>
                         )}
-                        {/* Show running host indicator when multi-agent and node is running */}
-                        {agents.length > 1 && (status === 'running' || status === 'booting') && hostName && (
+                        {/* Show running host indicator when multi-agent and node is running/booting/stopping */}
+                        {agents.length > 1 && (status === 'running' || status === 'booting' || status === 'stopping') && hostName && (
                           <div className="flex items-center gap-1.5 text-[10px] text-stone-500 dark:text-stone-400">
                             <div
                               className="w-2 h-2 rounded-full flex-shrink-0"
@@ -280,7 +281,15 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                     <td className="px-6 py-4 text-right">
                       <div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                         <>
-                            {status === 'stopped' ? (
+                            {status === 'stopping' ? (
+                              <button
+                                disabled
+                                className="p-2 text-orange-500 rounded-lg"
+                                title="Stopping..."
+                              >
+                                <i className="fa-solid fa-spinner fa-spin"></i>
+                              </button>
+                            ) : status === 'stopped' ? (
                               <button
                                 onClick={() => onUpdateStatus(node.id, 'booting')}
                                 disabled={isOperationPending(node.id)}
@@ -290,24 +299,24 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                                 <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : (isLabDeployed ? 'fa-play' : 'fa-rocket')}`}></i>
                               </button>
                             ) : (
-                              <button
-                                onClick={() => onUpdateStatus(node.id, 'stopped')}
-                                disabled={isOperationPending(node.id)}
-                                className="p-2 text-red-500 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
-                                title="Stop this node"
-                              >
-                                <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-power-off'}`}></i>
-                              </button>
-                            )}
-                            {status !== 'stopped' && (
-                              <button
-                                onClick={() => onUpdateStatus(node.id, 'booting')}
-                                disabled={isOperationPending(node.id)}
-                                className="p-2 text-stone-400 hover:bg-stone-400/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
-                                title="Restart this node"
-                              >
-                                <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-rotate'}`}></i>
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => onUpdateStatus(node.id, 'stopped')}
+                                  disabled={isOperationPending(node.id)}
+                                  className="p-2 text-red-500 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
+                                  title="Stop this node"
+                                >
+                                  <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-power-off'}`}></i>
+                                </button>
+                                <button
+                                  onClick={() => onUpdateStatus(node.id, 'booting')}
+                                  disabled={isOperationPending(node.id)}
+                                  className="p-2 text-stone-400 hover:bg-stone-400/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
+                                  title="Restart this node"
+                                >
+                                  <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-rotate'}`}></i>
+                                </button>
+                              </>
                             )}
                             {onOpenNodeConfig && (
                               <button
