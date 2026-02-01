@@ -1887,29 +1887,43 @@ username admin privilege 15 role network-admin nopassword
         nodes: list[NodeInfo] = []
 
         try:
-            # Find containers by label - run in thread to avoid blocking
-            containers = await asyncio.to_thread(
-                self.docker.containers.list,
-                all=True,
-                filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
-            )
+            all_containers: dict[str, Any] = {}
 
-            # Also find by prefix (fallback)
+            # Find containers by label - may fail if Docker has stale container references
+            try:
+                containers = await asyncio.to_thread(
+                    self.docker.containers.list,
+                    all=True,
+                    filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
+                )
+                for c in containers:
+                    all_containers[c.id] = c
+            except Exception as e:
+                # Label query failed (possibly due to ghost container references)
+                # Log and continue with prefix-based fallback
+                logger.warning(f"Label-based container query failed for lab {lab_id}: {e}")
+
+            # Also find by prefix (fallback) - more resilient to Docker state issues
             prefix = self._lab_prefix(lab_id)
-            prefix_containers = await asyncio.to_thread(
-                self.docker.containers.list,
-                all=True,
-                filters={"name": prefix},
-            )
-
-            all_containers = {c.id: c for c in containers}
-            for c in prefix_containers:
-                all_containers[c.id] = c
+            try:
+                prefix_containers = await asyncio.to_thread(
+                    self.docker.containers.list,
+                    all=True,
+                    filters={"name": prefix},
+                )
+                for c in prefix_containers:
+                    all_containers[c.id] = c
+            except Exception as e:
+                logger.warning(f"Prefix-based container query failed for lab {lab_id}: {e}")
 
             for container in all_containers.values():
-                node = self._node_from_container(container)
-                if node:
-                    nodes.append(node)
+                try:
+                    node = self._node_from_container(container)
+                    if node:
+                        nodes.append(node)
+                except Exception as e:
+                    # Skip containers that can't be inspected (stale references)
+                    logger.warning(f"Failed to get node info from container {container.id}: {e}")
 
             return StatusResult(
                 lab_exists=len(nodes) > 0,

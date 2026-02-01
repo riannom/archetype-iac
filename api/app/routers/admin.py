@@ -161,16 +161,36 @@ async def refresh_lab_status(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
-    """Refresh a single lab's status from the agent.
+    """Refresh a single lab's status from all agents that have nodes for it.
 
     This updates both the lab state and individual NodeState records
-    in the database based on actual container status.
+    in the database based on actual container status. Queries all agents
+    with NodePlacement records for multi-host lab support.
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Try to get status from agent
-    agent = await agent_client.get_healthy_agent(database)
-    if not agent:
+    # Get ALL agents that have nodes for this lab (multi-host support)
+    # Same pattern as reconciliation.py
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id)
+        .all()
+    )
+    agent_ids = {p.host_id for p in placements}
+    # Map node names to their expected agent for safer state updates
+    node_expected_agent: dict[str, str] = {p.node_name: p.host_id for p in placements}
+
+    # Also include the lab's default agent if set
+    if lab.agent_id:
+        agent_ids.add(lab.agent_id)
+
+    # If no placements and no default, find any healthy agent
+    if not agent_ids:
+        fallback_agent = await agent_client.get_healthy_agent(database)
+        if fallback_agent:
+            agent_ids.add(fallback_agent.id)
+
+    if not agent_ids:
         return {
             "lab_id": lab_id,
             "state": lab.state,
@@ -178,84 +198,110 @@ async def refresh_lab_status(
             "error": "No healthy agent available",
         }
 
-    try:
-        result = await agent_client.get_lab_status_from_agent(agent, lab.id)
-        nodes = result.get("nodes", [])
+    # Query actual container status from ALL agents
+    container_status_map: dict[str, str] = {}
+    all_nodes: list[dict] = []
+    agents_successfully_queried: set[str] = set()
+    agents_queried_ids: list[str] = []
+    errors: list[str] = []
 
-        # Build a map of container status by node name
-        # Node names from agent include the lab prefix, extract just the node part
-        container_status_map = {}
-        for node in nodes:
-            # Container names are like "clab-{lab_id_prefix}-{node_name}"
-            # The node name in the response should match our node_name
-            node_name = node.get("name", "")
-            container_status_map[node_name] = node.get("status", "unknown")
+    for agent_id in agent_ids:
+        agent = database.get(models.Host, agent_id)
+        if not agent or not agent_client.is_agent_online(agent):
+            continue
 
-        # Update NodeState records based on actual container status
-        node_states = (
-            database.query(models.NodeState)
-            .filter(models.NodeState.lab_id == lab_id)
-            .all()
-        )
+        try:
+            result = await agent_client.get_lab_status_from_agent(agent, lab.id)
+            agents_successfully_queried.add(agent_id)
+            agents_queried_ids.append(agent_id)
+            nodes = result.get("nodes", [])
+            all_nodes.extend(nodes)
+            # Merge container status from this agent
+            for node in nodes:
+                node_name = node.get("name", "")
+                if node_name:
+                    container_status_map[node_name] = node.get("status", "unknown")
+        except Exception as e:
+            errors.append(f"Agent {agent.name}: {e}")
+            logger.warning(f"Failed to query agent {agent.name} for lab {lab_id}: {e}")
 
-        updated_nodes = []
-        for ns in node_states:
-            # Try to find matching container status
-            container_status = container_status_map.get(ns.node_name)
-            if container_status:
-                # Map container status to our actual_state
-                if container_status == "running":
-                    ns.actual_state = "running"
-                    ns.error_message = None
-                    if not ns.boot_started_at:
-                        ns.boot_started_at = datetime.now(timezone)
-                elif container_status in ("stopped", "exited"):
-                    ns.actual_state = "stopped"
-                    ns.error_message = None
-                    ns.boot_started_at = None
-                else:
-                    # Unknown status, leave as-is but clear error
-                    ns.error_message = None
-                updated_nodes.append({
-                    "node_id": ns.node_id,
-                    "node_name": ns.node_name,
-                    "actual_state": ns.actual_state,
-                    "container_status": container_status,
-                })
-
-        # Determine lab state from node states
-        if not nodes:
-            new_state = "stopped"
-        elif all(n.get("status") == "running" for n in nodes):
-            new_state = "running"
-        elif any(n.get("status") == "running" for n in nodes):
-            new_state = "running"
-        else:
-            new_state = "stopped"
-
-        # Update lab if state changed
-        if lab.state != new_state:
-            lab.state = new_state
-            lab.state_updated_at = datetime.now(timezone.utc)
-            lab.agent_id = agent.id
-
-        database.commit()
-
-        return {
-            "lab_id": lab_id,
-            "state": new_state,
-            "nodes": nodes,
-            "updated_node_states": updated_nodes,
-            "agent_id": agent.id,
-        }
-
-    except Exception as e:
+    if not agents_successfully_queried:
         return {
             "lab_id": lab_id,
             "state": lab.state,
             "nodes": [],
-            "error": str(e),
+            "error": "Failed to reach any agent for this lab",
         }
+
+    # Update NodeState records based on actual container status
+    node_states = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab_id)
+        .all()
+    )
+
+    updated_nodes = []
+    for ns in node_states:
+        container_status = container_status_map.get(ns.node_name)
+        if container_status:
+            # Map container status to our actual_state
+            if container_status == "running":
+                ns.actual_state = "running"
+                ns.error_message = None
+                if not ns.boot_started_at:
+                    ns.boot_started_at = datetime.now(timezone.utc)
+            elif container_status in ("stopped", "exited"):
+                ns.actual_state = "stopped"
+                ns.error_message = None
+                ns.boot_started_at = None
+            else:
+                # Unknown status, leave as-is but clear error
+                ns.error_message = None
+            updated_nodes.append({
+                "node_id": ns.node_id,
+                "node_name": ns.node_name,
+                "actual_state": ns.actual_state,
+                "container_status": container_status,
+            })
+        else:
+            # Container not found - only update if the relevant agent was queried
+            expected_agent = node_expected_agent.get(ns.node_name)
+            agent_was_queried = (
+                expected_agent in agents_successfully_queried
+                if expected_agent
+                else len(agents_successfully_queried) > 0
+            )
+            # If agent was queried but container not found, preserve existing state
+            # (don't mark as undeployed - that's reconciliation's job)
+
+    # Determine lab state from node states
+    if not all_nodes:
+        new_state = "stopped"
+    elif all(n.get("status") == "running" for n in all_nodes):
+        new_state = "running"
+    elif any(n.get("status") == "running" for n in all_nodes):
+        new_state = "running"
+    else:
+        new_state = "stopped"
+
+    # Update lab if state changed
+    if lab.state != new_state:
+        lab.state = new_state
+        lab.state_updated_at = datetime.now(timezone.utc)
+
+    database.commit()
+
+    result = {
+        "lab_id": lab_id,
+        "state": new_state,
+        "nodes": all_nodes,
+        "updated_node_states": updated_nodes,
+        "agents_queried": agents_queried_ids,
+    }
+    if errors:
+        result["partial_errors"] = errors
+
+    return result
 
 
 # --- System Logs Endpoint ---
