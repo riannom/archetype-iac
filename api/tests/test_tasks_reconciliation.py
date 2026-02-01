@@ -395,3 +395,325 @@ class TestLinkStateReconciliation:
 
                 test_db.refresh(link)
                 assert link.actual_state == "down"
+
+    @pytest.mark.asyncio
+    async def test_link_state_down_when_carrier_off(self, test_db: Session, sample_lab: models.Lab):
+        """Link should be 'down' when carrier state is off on either endpoint."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        # Create node states
+        node1 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            actual_state="running",
+        )
+        node2 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n2",
+            node_name="R2",
+            actual_state="running",
+        )
+        test_db.add_all([node1, node2])
+
+        # Create link state with carrier off on source
+        link = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node="R1",
+            source_interface="eth1",
+            target_node="R2",
+            target_interface="eth1",
+            actual_state="up",
+            source_carrier_state="off",  # Carrier off on source
+            target_carrier_state="on",
+        )
+        test_db.add(link)
+        test_db.commit()
+
+        mock_agent = MagicMock()
+
+        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
+            mock_get_agent.return_value = mock_agent
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [
+                        {"name": "R1", "status": "running"},
+                        {"name": "R2", "status": "running"},
+                    ]
+                }
+                with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                    mock_ready.return_value = {"is_ready": True}
+
+                    await _reconcile_single_lab(test_db, sample_lab.id)
+
+                    test_db.refresh(link)
+                    # Link should be down when carrier is off
+                    assert link.actual_state == "down"
+
+    @pytest.mark.asyncio
+    async def test_cross_host_link_state_verification(self, test_db: Session, sample_lab: models.Lab):
+        """Cross-host link should verify VXLAN tunnel is active."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+        import json
+
+        # Create hosts
+        host1 = models.Host(
+            id="host-1",
+            name="Host 1",
+            address="192.168.1.1:8080",
+            status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+        )
+        host2 = models.Host(
+            id="host-2",
+            name="Host 2",
+            address="192.168.1.2:8080",
+            status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+        )
+        test_db.add_all([host1, host2])
+
+        # Create node states on different hosts
+        node1 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            actual_state="running",
+        )
+        node2 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n2",
+            node_name="R3",
+            actual_state="running",
+        )
+        test_db.add_all([node1, node2])
+
+        # Create cross-host link state with VXLAN
+        link = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R3:eth1",
+            source_node="R1",
+            source_interface="eth1",
+            target_node="R3",
+            target_interface="eth1",
+            actual_state="up",
+            is_cross_host=True,
+            vni=12345,
+            vlan_tag=200,
+            source_host_id="host-1",
+            target_host_id="host-2",
+            source_carrier_state="on",
+            target_carrier_state="on",
+        )
+        test_db.add(link)
+        test_db.flush()
+
+        # Create VXLAN tunnel record
+        tunnel = models.VxlanTunnel(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_state_id=link.id,
+            vni=12345,
+            vlan_tag=200,
+            agent_a_id="host-1",
+            agent_a_ip="192.168.1.1",
+            agent_b_id="host-2",
+            agent_b_ip="192.168.1.2",
+            status="active",
+        )
+        test_db.add(tunnel)
+        test_db.commit()
+
+        mock_agent = MagicMock()
+
+        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
+            mock_get_agent.return_value = mock_agent
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [
+                        {"name": "R1", "status": "running"},
+                        {"name": "R3", "status": "running"},
+                    ]
+                }
+                with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                    mock_ready.return_value = {"is_ready": True}
+
+                    await _reconcile_single_lab(test_db, sample_lab.id)
+
+                    test_db.refresh(link)
+                    # Cross-host link with active tunnel should be up
+                    assert link.actual_state == "up"
+
+
+class TestLinkStateCarrierReconciliation:
+    """Tests for carrier state tracking during reconciliation."""
+
+    @pytest.mark.asyncio
+    async def test_carrier_state_preserved_during_reconciliation(
+        self, test_db: Session, sample_lab: models.Lab
+    ):
+        """Carrier state should be preserved during reconciliation."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        # Create node states
+        node1 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            actual_state="running",
+        )
+        node2 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n2",
+            node_name="R2",
+            actual_state="running",
+        )
+        test_db.add_all([node1, node2])
+
+        # Create link state with specific carrier states
+        link = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node="R1",
+            source_interface="eth1",
+            target_node="R2",
+            target_interface="eth1",
+            actual_state="up",
+            source_carrier_state="on",
+            target_carrier_state="off",  # Intentionally off
+        )
+        test_db.add(link)
+        test_db.commit()
+
+        mock_agent = MagicMock()
+
+        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
+            mock_get_agent.return_value = mock_agent
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [
+                        {"name": "R1", "status": "running"},
+                        {"name": "R2", "status": "running"},
+                    ]
+                }
+                with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                    mock_ready.return_value = {"is_ready": True}
+
+                    await _reconcile_single_lab(test_db, sample_lab.id)
+
+                    test_db.refresh(link)
+                    # Carrier states should be unchanged
+                    assert link.source_carrier_state == "on"
+                    assert link.target_carrier_state == "off"
+                    # But link should be down since target carrier is off
+                    assert link.actual_state == "down"
+
+    @pytest.mark.asyncio
+    async def test_link_state_updates_on_vxlan_tunnel_failure(
+        self, test_db: Session, sample_lab: models.Lab
+    ):
+        """Cross-host link should be 'down' if VXLAN tunnel is failed."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+        import json
+
+        # Create hosts
+        host1 = models.Host(
+            id="host-a",
+            name="Host A",
+            address="192.168.1.10:8080",
+            status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+        )
+        host2 = models.Host(
+            id="host-b",
+            name="Host B",
+            address="192.168.1.20:8080",
+            status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+        )
+        test_db.add_all([host1, host2])
+
+        # Create node states
+        node1 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            actual_state="running",
+        )
+        node2 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n2",
+            node_name="R3",
+            actual_state="running",
+        )
+        test_db.add_all([node1, node2])
+
+        # Create cross-host link state
+        link = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R3:eth1",
+            source_node="R1",
+            source_interface="eth1",
+            target_node="R3",
+            target_interface="eth1",
+            actual_state="up",
+            is_cross_host=True,
+            vni=99999,
+            vlan_tag=300,
+            source_host_id="host-a",
+            target_host_id="host-b",
+            source_carrier_state="on",
+            target_carrier_state="on",
+        )
+        test_db.add(link)
+        test_db.flush()
+
+        # Create VXLAN tunnel with 'failed' status
+        tunnel = models.VxlanTunnel(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_state_id=link.id,
+            vni=99999,
+            vlan_tag=300,
+            agent_a_id="host-a",
+            agent_a_ip="192.168.1.10",
+            agent_b_id="host-b",
+            agent_b_ip="192.168.1.20",
+            status="failed",  # Tunnel failed
+            error_message="VXLAN port creation failed",
+        )
+        test_db.add(tunnel)
+        test_db.commit()
+
+        mock_agent = MagicMock()
+
+        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
+            mock_get_agent.return_value = mock_agent
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [
+                        {"name": "R1", "status": "running"},
+                        {"name": "R3", "status": "running"},
+                    ]
+                }
+                with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                    mock_ready.return_value = {"is_ready": True}
+
+                    await _reconcile_single_lab(test_db, sample_lab.id)
+
+                    test_db.refresh(link)
+                    # Link should be down because tunnel failed
+                    assert link.actual_state == "down"

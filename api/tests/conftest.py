@@ -399,3 +399,132 @@ def sample_link_state(test_db: Session, sample_lab: models.Lab) -> models.LinkSt
     test_db.commit()
     test_db.refresh(link)
     return link
+
+
+@pytest.fixture(scope="function")
+def sample_cross_host_link_state(
+    test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+) -> models.LinkState:
+    """Create a sample cross-host LinkState for testing."""
+    link = models.LinkState(
+        id="cross-host-link-1",
+        lab_id=sample_lab.id,
+        link_name="R1:eth1-R3:eth1",
+        source_node="R1",
+        source_interface="eth1",
+        target_node="R3",
+        target_interface="eth1",
+        desired_state="up",
+        actual_state="pending",
+        is_cross_host=True,
+        source_host_id=multiple_hosts[0].id,
+        target_host_id=multiple_hosts[1].id,
+    )
+    test_db.add(link)
+    test_db.commit()
+    test_db.refresh(link)
+    return link
+
+
+@pytest.fixture(scope="function")
+def sample_vxlan_tunnel(
+    test_db: Session, sample_lab: models.Lab, sample_cross_host_link_state: models.LinkState,
+    multiple_hosts: list[models.Host]
+) -> models.VxlanTunnel:
+    """Create a sample VxlanTunnel for testing."""
+    tunnel = models.VxlanTunnel(
+        id="tunnel-1",
+        lab_id=sample_lab.id,
+        link_state_id=sample_cross_host_link_state.id,
+        vni=12345,
+        vlan_tag=200,
+        agent_a_id=multiple_hosts[0].id,
+        agent_a_ip="192.168.1.1",
+        agent_b_id=multiple_hosts[1].id,
+        agent_b_ip="192.168.1.2",
+        status="active",
+    )
+    test_db.add(tunnel)
+    test_db.commit()
+    test_db.refresh(tunnel)
+    return tunnel
+
+
+@pytest.fixture(scope="function")
+def sample_node_definitions(
+    test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+) -> list[models.Node]:
+    """Create sample Node definitions for testing."""
+    nodes = [
+        models.Node(
+            id="node-def-1",
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="R1",
+            container_name="archetype-test-r1",
+            device="linux",
+            host_id=sample_host.id,
+        ),
+        models.Node(
+            id="node-def-2",
+            lab_id=sample_lab.id,
+            gui_id="n2",
+            display_name="R2",
+            container_name="archetype-test-r2",
+            device="linux",
+            host_id=sample_host.id,
+        ),
+    ]
+    for node in nodes:
+        test_db.add(node)
+    test_db.commit()
+    for node in nodes:
+        test_db.refresh(node)
+    return nodes
+
+
+@pytest.fixture(scope="function")
+def sample_link_definition(
+    test_db: Session, sample_lab: models.Lab, sample_node_definitions: list[models.Node]
+) -> models.Link:
+    """Create a sample Link definition for testing."""
+    link = models.Link(
+        id="link-def-1",
+        lab_id=sample_lab.id,
+        link_name="R1:eth1-R2:eth1",
+        source_node_id=sample_node_definitions[0].id,
+        source_interface="eth1",
+        target_node_id=sample_node_definitions[1].id,
+        target_interface="eth1",
+    )
+    test_db.add(link)
+    test_db.commit()
+    test_db.refresh(link)
+    return link
+
+
+@pytest.fixture(scope="function")
+def active_link_state_with_carrier(
+    test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+) -> models.LinkState:
+    """Create an active LinkState with carrier states for testing."""
+    link = models.LinkState(
+        id="active-link-with-carrier",
+        lab_id=sample_lab.id,
+        link_name="R1:eth1-R2:eth1",
+        source_node="archetype-test-r1",
+        source_interface="eth1",
+        target_node="archetype-test-r2",
+        target_interface="eth1",
+        desired_state="up",
+        actual_state="up",
+        vlan_tag=100,
+        source_host_id=sample_host.id,
+        target_host_id=sample_host.id,
+        source_carrier_state="on",
+        target_carrier_state="on",
+    )
+    test_db.add(link)
+    test_db.commit()
+    test_db.refresh(link)
+    return link
