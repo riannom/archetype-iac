@@ -153,7 +153,7 @@ class LocalNetworkManager:
         code, _, _ = await self._run_cmd(["ip", "link", "show", name])
         return code == 0
 
-    def _get_container_pid(self, container_name: str) -> int | None:
+    async def _get_container_pid(self, container_name: str) -> int | None:
         """Get the PID of a container's init process.
 
         Args:
@@ -162,22 +162,25 @@ class LocalNetworkManager:
         Returns:
             PID if container is running, None otherwise
         """
-        try:
-            container = self.docker.containers.get(container_name)
-            if container.status != "running":
-                logger.warning(f"Container {container_name} is not running")
+        def _sync_get_pid() -> int | None:
+            try:
+                container = self.docker.containers.get(container_name)
+                if container.status != "running":
+                    logger.warning(f"Container {container_name} is not running")
+                    return None
+                pid = container.attrs["State"]["Pid"]
+                if not pid:
+                    logger.warning(f"Could not get PID for container {container_name}")
+                    return None
+                return pid
+            except NotFound:
+                logger.warning(f"Container {container_name} not found")
                 return None
-            pid = container.attrs["State"]["Pid"]
-            if not pid:
-                logger.warning(f"Could not get PID for container {container_name}")
+            except Exception as e:
+                logger.error(f"Error getting container PID: {e}")
                 return None
-            return pid
-        except NotFound:
-            logger.warning(f"Container {container_name} not found")
-            return None
-        except Exception as e:
-            logger.error(f"Error getting container PID: {e}")
-            return None
+
+        return await asyncio.to_thread(_sync_get_pid)
 
     def _generate_veth_name(self, lab_id: str) -> str:
         """Generate a unique veth interface name.
@@ -189,7 +192,7 @@ class LocalNetworkManager:
         # arch = 4 chars, suffix = 8 chars, total = 12 chars (within 15 limit)
         return f"{VETH_PREFIX}{suffix}"
 
-    def _check_subnet_conflict(self, requested_subnet: str) -> str | None:
+    async def _check_subnet_conflict(self, requested_subnet: str) -> str | None:
         """Check if a subnet conflicts with existing Docker networks.
 
         Args:
@@ -198,33 +201,36 @@ class LocalNetworkManager:
         Returns:
             Name of conflicting network, or None if no conflict
         """
-        try:
-            import ipaddress
-            requested_net = ipaddress.ip_network(requested_subnet, strict=False)
+        def _sync_check() -> str | None:
+            try:
+                import ipaddress
+                requested_net = ipaddress.ip_network(requested_subnet, strict=False)
 
-            # Get all existing Docker networks
-            networks = self.docker.networks.list()
+                # Get all existing Docker networks
+                networks = self.docker.networks.list()
 
-            for network in networks:
-                # Get IPAM config for this network
-                ipam = network.attrs.get("IPAM", {})
-                configs = ipam.get("Config", [])
+                for network in networks:
+                    # Get IPAM config for this network
+                    ipam = network.attrs.get("IPAM", {})
+                    configs = ipam.get("Config", [])
 
-                for config in configs:
-                    existing_subnet = config.get("Subnet")
-                    if not existing_subnet:
-                        continue
+                    for config in configs:
+                        existing_subnet = config.get("Subnet")
+                        if not existing_subnet:
+                            continue
 
-                    existing_net = ipaddress.ip_network(existing_subnet, strict=False)
+                        existing_net = ipaddress.ip_network(existing_subnet, strict=False)
 
-                    # Check for overlap
-                    if requested_net.overlaps(existing_net):
-                        return network.name
+                        # Check for overlap
+                        if requested_net.overlaps(existing_net):
+                            return network.name
 
-        except Exception as e:
-            logger.warning(f"Error checking subnet conflict: {e}")
+            except Exception as e:
+                logger.warning(f"Error checking subnet conflict: {e}")
 
-        return None
+            return None
+
+        return await asyncio.to_thread(_sync_check)
 
     async def create_management_network(
         self,
@@ -253,15 +259,22 @@ class LocalNetworkManager:
 
         network_name = f"{MGMT_NETWORK_PREFIX}-{lab_id[:20]}"
 
-        try:
+        # Wrap Docker network operations to avoid blocking
+        def _sync_get_or_create_network():
             # Check if Docker network already exists
             existing_networks = self.docker.networks.list(names=[network_name])
             if existing_networks:
-                network = existing_networks[0]
+                return existing_networks[0], True  # network, is_existing
+            return None, False
+
+        try:
+            existing_network, is_existing = await asyncio.to_thread(_sync_get_or_create_network)
+
+            if existing_network:
                 logger.info(f"Using existing management network: {network_name}")
                 managed = ManagedNetwork(
                     lab_id=lab_id,
-                    network_id=network.id,
+                    network_id=existing_network.id,
                     network_name=network_name,
                 )
                 self._networks[lab_id] = managed
@@ -269,29 +282,33 @@ class LocalNetworkManager:
 
             # Check for subnet conflicts before creating
             if subnet:
-                conflicting_network = self._check_subnet_conflict(subnet)
+                conflicting_network = await self._check_subnet_conflict(subnet)
                 if conflicting_network:
                     raise RuntimeError(
                         f"Subnet {subnet} conflicts with existing network '{conflicting_network}'. "
                         f"Choose a different subnet or delete the conflicting network."
                     )
 
-            # Create IPAM config if subnet specified
-            ipam_config = None
-            if subnet:
-                ipam_pool = docker.types.IPAMPool(subnet=subnet)
-                ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
+            # Create network in thread to avoid blocking
+            def _sync_create_network():
+                # Create IPAM config if subnet specified
+                ipam_config = None
+                if subnet:
+                    ipam_pool = docker.types.IPAMPool(subnet=subnet)
+                    ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
 
-            # Create Docker bridge network
-            network = self.docker.networks.create(
-                name=network_name,
-                driver="bridge",
-                ipam=ipam_config,
-                labels={
-                    "archetype.lab_id": lab_id,
-                    "archetype.type": "management",
-                },
-            )
+                # Create Docker bridge network
+                return self.docker.networks.create(
+                    name=network_name,
+                    driver="bridge",
+                    ipam=ipam_config,
+                    labels={
+                        "archetype.lab_id": lab_id,
+                        "archetype.type": "management",
+                    },
+                )
+
+            network = await asyncio.to_thread(_sync_create_network)
 
             managed = ManagedNetwork(
                 lab_id=lab_id,
@@ -385,8 +402,8 @@ class LocalNetworkManager:
             return self._links[key]
 
         # Get container PIDs
-        pid_a = self._get_container_pid(container_a)
-        pid_b = self._get_container_pid(container_b)
+        pid_a = await self._get_container_pid(container_a)
+        pid_b = await self._get_container_pid(container_b)
 
         if pid_a is None:
             raise RuntimeError(f"Container {container_a} is not running or not found")
@@ -542,7 +559,7 @@ class LocalNetworkManager:
         """
         try:
             # Get PID of one container (either will work)
-            pid = self._get_container_pid(link.container_a)
+            pid = await self._get_container_pid(link.container_a)
             if pid:
                 # Delete interface from within container namespace
                 # Deleting one end of veth pair deletes both
@@ -552,7 +569,7 @@ class LocalNetworkManager:
                 ])
             else:
                 # Container might be stopped, try other container
-                pid = self._get_container_pid(link.container_b)
+                pid = await self._get_container_pid(link.container_b)
                 if pid:
                     await self._run_cmd([
                         "nsenter", "-t", str(pid), "-n",
@@ -591,7 +608,7 @@ class LocalNetworkManager:
         Returns:
             True if attached successfully
         """
-        pid = self._get_container_pid(container_name)
+        pid = await self._get_container_pid(container_name)
         if pid is None:
             logger.error(f"Container {container_name} not running")
             return False
@@ -741,7 +758,7 @@ class LocalNetworkManager:
         Returns:
             Number of interfaces successfully created
         """
-        pid = self._get_container_pid(container_name)
+        pid = await self._get_container_pid(container_name)
         if pid is None:
             logger.error(f"Container {container_name} not running for interface provisioning")
             return 0

@@ -370,15 +370,19 @@ class OverlayManager:
             True if attached successfully
         """
         try:
-            # Get container PID for network namespace
-            container = self.docker.containers.get(container_name)
-            if container.status != "running":
-                logger.error(f"Container {container_name} is not running")
-                return False
+            # Get container PID for network namespace (wrapped to avoid blocking)
+            def _sync_get_container_info():
+                container = self.docker.containers.get(container_name)
+                if container.status != "running":
+                    return None, "not running"
+                pid = container.attrs["State"]["Pid"]
+                if not pid:
+                    return None, "no PID"
+                return pid, None
 
-            pid = container.attrs["State"]["Pid"]
-            if not pid:
-                logger.error(f"Could not get PID for container {container_name}")
+            pid, error = await asyncio.to_thread(_sync_get_container_info)
+            if pid is None:
+                logger.error(f"Container {container_name}: {error}")
                 return False
 
             # Create unique veth names with random suffix to ensure unique MACs
