@@ -672,7 +672,7 @@ username admin privilege 15 role network-admin nopassword
 
             for network in lab_networks:
                 try:
-                    network.remove()
+                    await asyncio.to_thread(network.remove)
                     deleted += 1
                     logger.debug(f"Deleted network {network.name}")
                 except APIError as e:
