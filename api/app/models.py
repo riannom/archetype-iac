@@ -210,6 +210,9 @@ class LinkState(Base):
     - "down": Link is administratively disabled
     - "unknown": Link state cannot be determined
     - "error": Link is in an error state
+
+    For cross-host links (nodes on different agents), additional fields
+    track the VXLAN tunnel used for L2 connectivity.
     """
     __tablename__ = "link_states"
     __table_args__ = (UniqueConstraint("lab_id", "link_name", name="uq_link_state_lab_link"),)
@@ -234,6 +237,61 @@ class LinkState(Base):
     actual_state: Mapped[str] = mapped_column(String(50), default="unknown")
     # Error message if actual_state is "error"
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Cross-host VXLAN support
+    is_cross_host: Mapped[bool] = mapped_column(default=False)
+    vni: Mapped[int | None] = mapped_column(nullable=True)  # VXLAN Network Identifier
+    vlan_tag: Mapped[int | None] = mapped_column(nullable=True)  # Shared VLAN tag for this link
+    source_host_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("hosts.id"), nullable=True)
+    target_host_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("hosts.id"), nullable=True)
+
+    # Per-endpoint carrier state for port-down simulation
+    source_carrier_state: Mapped[str] = mapped_column(String(10), default="on")
+    target_carrier_state: Mapped[str] = mapped_column(String(10), default="on")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class VxlanTunnel(Base):
+    """Tracks VXLAN tunnels for cross-host links.
+
+    Each VXLAN tunnel connects two agents for a specific link in a lab.
+    The tunnel uses a unique VNI (VXLAN Network Identifier) and is
+    associated with a VLAN tag on the OVS bridge.
+
+    Status values:
+    - pending: Tunnel setup initiated
+    - active: Tunnel established on both agents
+    - failed: Tunnel setup failed
+    - cleanup: Tunnel being torn down
+    """
+    __tablename__ = "vxlan_tunnels"
+    __table_args__ = (UniqueConstraint("lab_id", "vni", name="uq_vxlan_tunnel_lab_vni"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+    link_state_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("link_states.id", ondelete="SET NULL"), nullable=True
+    )
+    # VXLAN Network Identifier (unique per tunnel in lab)
+    vni: Mapped[int] = mapped_column(index=True)
+    # Shared VLAN tag used on both agent's OVS bridges
+    vlan_tag: Mapped[int] = mapped_column()
+
+    # Endpoint A (source side)
+    agent_a_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id"), index=True)
+    agent_a_ip: Mapped[str] = mapped_column(String(45))  # IPv4 or IPv6
+
+    # Endpoint B (target side)
+    agent_b_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id"), index=True)
+    agent_b_ip: Mapped[str] = mapped_column(String(45))  # IPv4 or IPv6
+
+    # Tunnel status: pending, active, failed, cleanup
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    # Error message if status is 'failed'
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

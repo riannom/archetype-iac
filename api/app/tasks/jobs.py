@@ -686,62 +686,25 @@ async def run_multihost_deploy(
             logger.error(f"Job {job_id} failed: deployment error on one or more hosts (rollback completed)")
             return
 
-        # Set up cross-host links via VXLAN overlay
-        # CrossHostLink from TopologyService uses host_id (database) instead of host_name (YAML)
-        link_failures = []
-        if analysis.cross_host_links:
-            log_parts.append("\n=== Cross-Host Links ===")
-            logger.info(f"Setting up {len(analysis.cross_host_links)} cross-host links")
+        # Create all links (same-host via OVS hot_connect, cross-host via VXLAN)
+        # This handles both link types and creates/updates LinkState records
+        from app.tasks.link_orchestration import create_deployment_links
 
-            for chl in analysis.cross_host_links:
-                # host_a and host_b are now host_id from database
-                agent_a = host_to_agent.get(chl.host_a)
-                agent_b = host_to_agent.get(chl.host_b)
+        links_ok, links_failed = await create_deployment_links(
+            session, lab_id, host_to_agent, log_parts
+        )
 
-                if not agent_a or not agent_b:
-                    error_msg = f"missing agent for {chl.host_a} or {chl.host_b}"
-                    log_parts.append(f"Link {chl.link_id}: FAILED - {error_msg}")
-                    link_failures.append(f"{chl.link_id}: {error_msg}")
-                    continue
-
-                # Get container names based on provider naming convention
-                container_a = _get_container_name(lab_id, chl.node_a, provider)
-                container_b = _get_container_name(lab_id, chl.node_b, provider)
-
-                result = await agent_client.setup_cross_host_link(
-                    database=session,
-                    lab_id=lab_id,
-                    link_id=chl.link_id,
-                    agent_a=agent_a,
-                    agent_b=agent_b,
-                    node_a=container_a,
-                    interface_a=chl.interface_a,
-                    node_b=container_b,
-                    interface_b=chl.interface_b,
-                    ip_a=chl.ip_a,
-                    ip_b=chl.ip_b,
-                )
-
-                if result.get("success"):
-                    log_parts.append(
-                        f"Link {chl.link_id}: OK (VNI {result.get('vni')})"
-                    )
-                else:
-                    error_msg = result.get('error', 'unknown error')
-                    log_parts.append(f"Link {chl.link_id}: FAILED - {error_msg}")
-                    link_failures.append(f"{chl.link_id}: {error_msg}")
-
-        # Fail the job if any cross-host links failed
-        if link_failures:
-            log_parts.append(f"\n=== Cross-Host Link Failures ===")
-            log_parts.append(f"Failed links: {', '.join(link_failures)}")
-            log_parts.append("\nNote: Containers are deployed but inter-host connectivity is broken.")
+        # Fail the job if any links failed
+        if links_failed > 0:
+            log_parts.append(f"\n=== Link Setup Summary ===")
+            log_parts.append(f"Links: {links_ok} OK, {links_failed} failed")
+            log_parts.append("\nNote: Containers are deployed but some links failed.")
             job.status = "failed"
             job.completed_at = datetime.utcnow()
             job.log_path = "\n".join(log_parts)
-            update_lab_state(session, lab_id, "error", error=f"Cross-host link setup failed: {len(link_failures)} link(s)")
+            update_lab_state(session, lab_id, "error", error=f"Link setup failed: {links_failed} link(s)")
             session.commit()
-            logger.error(f"Job {job_id} failed: {len(link_failures)} cross-host link(s) failed")
+            logger.error(f"Job {job_id} failed: {links_failed} link(s) failed")
             return
 
         # Update NodePlacement records for each host
@@ -868,17 +831,12 @@ async def run_multihost_destroy(
             logger.error(f"Job {job_id} failed: {error_msg}")
             return
 
-        # First, clean up overlay networks on all agents
-        if analysis.cross_host_links:
-            log_parts.append("=== Cleaning up overlay networks ===")
-            for host_id, agent in host_to_agent.items():
-                result = await agent_client.cleanup_overlay_on_agent(agent, lab_id)
-                log_parts.append(
-                    f"{agent.name}: {result.get('tunnels_deleted', 0)} tunnels, "
-                    f"{result.get('bridges_deleted', 0)} bridges deleted"
-                )
-                if result.get("errors"):
-                    log_parts.append(f"  Errors: {result['errors']}")
+        # First, tear down VXLAN tunnels and clean up VxlanTunnel records
+        from app.tasks.link_orchestration import teardown_deployment_links
+
+        tunnels_ok, tunnels_failed = await teardown_deployment_links(
+            session, lab_id, host_to_agent, log_parts
+        )
 
         # Destroy containers on each host in parallel
         log_parts.append("\n=== Destroying containers ===")
