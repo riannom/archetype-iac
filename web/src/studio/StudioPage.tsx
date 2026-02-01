@@ -1371,6 +1371,7 @@ const StudioPage: React.FC = () => {
             nodeStates={nodeStates}
             deviceModels={deviceModels}
             onUpdateStatus={handleUpdateStatus}
+            onSetRuntimeStatus={(nodeId, status) => setRuntimeStates(prev => ({ ...prev, [nodeId]: status }))}
             onRefreshStates={async () => {
               if (activeLab) {
                 await refreshNodeStatesFromAgent(activeLab.id);

@@ -56,6 +56,7 @@ const mockNodes: DeviceNode[] = [
 
 describe("RuntimeControl", () => {
   const mockOnUpdateStatus = vi.fn();
+  const mockOnSetRuntimeStatus = vi.fn();
   const mockOnRefreshStates = vi.fn();
   const mockStudioRequest = vi.fn();
   const mockOnOpenConfigViewer = vi.fn();
@@ -68,6 +69,7 @@ describe("RuntimeControl", () => {
     nodeStates: {} as Record<string, { id: string; node_id: string; node_name: string; host_id?: string | null; host_name?: string | null }>,
     deviceModels: mockDeviceModels,
     onUpdateStatus: mockOnUpdateStatus,
+    onSetRuntimeStatus: mockOnSetRuntimeStatus,
     onRefreshStates: mockOnRefreshStates,
     studioRequest: mockStudioRequest,
     onOpenConfigViewer: mockOnOpenConfigViewer,
@@ -244,8 +246,8 @@ describe("RuntimeControl", () => {
 
       await user.click(screen.getByTitle("Deploy all nodes in the topology"));
 
-      expect(mockOnUpdateStatus).toHaveBeenCalledWith("node-1", "booting");
-      expect(mockOnUpdateStatus).toHaveBeenCalledWith("node-2", "booting");
+      expect(mockOnSetRuntimeStatus).toHaveBeenCalledWith("node-1", "booting");
+      expect(mockOnSetRuntimeStatus).toHaveBeenCalledWith("node-2", "booting");
     });
 
     it("shows confirmation dialog on Stop All", async () => {

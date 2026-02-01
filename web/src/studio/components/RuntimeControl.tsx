@@ -23,6 +23,7 @@ interface RuntimeControlProps {
   nodeStates: Record<string, NodeStateEntry>;
   deviceModels: DeviceModel[];
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => Promise<void>;
+  onSetRuntimeStatus: (nodeId: string, status: RuntimeStatus) => void;
   onRefreshStates: () => void;
   studioRequest: <T>(path: string, options?: RequestInit) => Promise<T>;
   onOpenConfigViewer?: () => void;
@@ -32,7 +33,7 @@ interface RuntimeControlProps {
   pendingNodeOps?: Set<string>;
 }
 
-const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig, agents = [], onUpdateNode, pendingNodeOps = new Set() }) => {
+const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onSetRuntimeStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig, agents = [], onUpdateNode, pendingNodeOps = new Set() }) => {
   const [isExtracting, setIsExtracting] = useState(false);
   const [pendingOps, setPendingOps] = useState<Set<PendingOp>>(new Set());
 
@@ -77,9 +78,9 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
         body: JSON.stringify({ state: action === 'running' ? 'running' : 'stopped' }),
       });
 
-      // Optimistically update UI
+      // Optimistically update UI (without triggering API calls)
       nodes.forEach(node => {
-        onUpdateStatus(node.id, action === 'running' ? 'booting' : 'stopped');
+        onSetRuntimeStatus(node.id, action === 'running' ? 'booting' : 'stopped');
       });
 
       // Trigger sync for all nodes
@@ -96,7 +97,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
         return next;
       });
     }
-  }, [labId, nodes, studioRequest, onUpdateStatus, onRefreshStates, isOperationPending]);
+  }, [labId, nodes, studioRequest, onSetRuntimeStatus, onRefreshStates, isOperationPending]);
 
   const handleExtractConfigs = useCallback(async () => {
     const confirmed = window.confirm(
