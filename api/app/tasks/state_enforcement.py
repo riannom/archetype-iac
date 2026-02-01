@@ -254,6 +254,10 @@ async def enforce_node_state(
             session.add(placement)
             logger.info(f"Created placement for {node_name} on agent {agent.id}")
 
+    # Set cooldown BEFORE creating job to prevent race with concurrent iterations
+    # This ensures other enforcement loop iterations see the cooldown immediately
+    _set_cooldown(lab_id, node_name)
+
     # Create enforcement job
     job = models.Job(
         lab_id=lab_id,
@@ -269,9 +273,6 @@ async def enforce_node_state(
         f"State enforcement: {action} node {node_name} in lab {lab_id} "
         f"(desired={desired}, actual={actual}, job={job.id})"
     )
-
-    # Set cooldown before starting job
-    _set_cooldown(lab_id, node_name)
 
     # Get lab provider
     from app.utils.lab import get_lab_provider
