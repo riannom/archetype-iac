@@ -102,7 +102,7 @@ describe("ConsoleManager", () => {
       const { container } = render(<ConsoleManager {...defaultProps} />);
 
       // Should have no console windows rendered
-      expect(container.querySelectorAll(".fixed.z-40")).toHaveLength(0);
+      expect(container.querySelectorAll(".fixed.z-\\[100\\]")).toHaveLength(0);
     });
 
     it("renders a single console window", () => {
@@ -164,7 +164,7 @@ describe("ConsoleManager", () => {
         <ConsoleManager {...defaultProps} windows={windows} />
       );
 
-      const windowEl = container.querySelector(".fixed.z-40");
+      const windowEl = container.querySelector(".fixed.z-\\[100\\]");
       expect(windowEl).toHaveStyle({ left: "100px", top: "200px" });
     });
 
@@ -431,7 +431,7 @@ describe("ConsoleManager", () => {
       );
 
       const header = container.querySelector(".cursor-move");
-      const windowEl = container.querySelector(".fixed.z-40");
+      const windowEl = container.querySelector(".fixed.z-\\[100\\]");
 
       // Before drag - normal shadow
       expect(windowEl).toHaveStyle({
@@ -521,7 +521,7 @@ describe("ConsoleManager", () => {
       fireEvent.mouseUp(window);
 
       // Window should have new size
-      const windowEl = container.querySelector(".fixed.z-40");
+      const windowEl = container.querySelector(".fixed.z-\\[100\\]");
       expect(windowEl).toHaveStyle({
         width: "620px",
         height: "460px",
@@ -554,7 +554,7 @@ describe("ConsoleManager", () => {
 
       fireEvent.mouseUp(window);
 
-      const windowEl = container.querySelector(".fixed.z-40");
+      const windowEl = container.querySelector(".fixed.z-\\[100\\]");
       expect(windowEl).toHaveStyle({ width: "320px" });
     });
 
@@ -584,7 +584,7 @@ describe("ConsoleManager", () => {
 
       fireEvent.mouseUp(window);
 
-      const windowEl = container.querySelector(".fixed.z-40");
+      const windowEl = container.querySelector(".fixed.z-\\[100\\]");
       expect(windowEl).toHaveStyle({ height: "240px" });
     });
 
@@ -605,7 +605,7 @@ describe("ConsoleManager", () => {
       );
 
       const resizeHandle = container.querySelector(".cursor-nwse-resize");
-      const windowEl = container.querySelector(".fixed.z-40");
+      const windowEl = container.querySelector(".fixed.z-\\[100\\]");
 
       // Start resize
       fireEvent.mouseDown(resizeHandle!, { clientX: 570, clientY: 410 });
@@ -854,7 +854,7 @@ describe("ConsoleManager", () => {
       );
 
       // Should have two windows
-      const windowElements = container.querySelectorAll(".fixed.z-40");
+      const windowElements = container.querySelectorAll(".fixed.z-\\[100\\]");
       expect(windowElements).toHaveLength(2);
 
       // First window shows Router 1
@@ -983,7 +983,7 @@ describe("ConsoleManager", () => {
         <ConsoleManager {...defaultProps} windows={windows} />
       );
 
-      const windowEl = container.querySelector(".fixed.z-40");
+      const windowEl = container.querySelector(".fixed.z-\\[100\\]");
       expect(windowEl).toHaveStyle({
         width: "520px",
         height: "360px",
