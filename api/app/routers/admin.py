@@ -109,7 +109,7 @@ async def reconcile_state(
                     if lab.state != new_state:
                         logger.info(f"Updating lab {lab_id} state: {lab.state} -> {new_state}")
                         lab.state = new_state
-                        lab.state_updated_at = datetime.utcnow()
+                        lab.state_updated_at = datetime.now(timezone.utc)
                         lab.agent_id = agent.id
                         result["labs_updated"] += 1
 
@@ -146,7 +146,7 @@ async def reconcile_state(
         if lab.id not in discovered_lab_ids and lab.state == "running":
             logger.info(f"Lab {lab.id} has no containers, marking as stopped")
             lab.state = "stopped"
-            lab.state_updated_at = datetime.utcnow()
+            lab.state_updated_at = datetime.now(timezone.utc)
             result["labs_updated"] += 1
 
     database.commit()
@@ -236,7 +236,7 @@ async def refresh_lab_status(
         # Update lab if state changed
         if lab.state != new_state:
             lab.state = new_state
-            lab.state_updated_at = datetime.utcnow()
+            lab.state_updated_at = datetime.now(timezone.utc)
             lab.agent_id = agent.id
 
         database.commit()

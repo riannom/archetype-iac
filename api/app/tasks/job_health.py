@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from app import agent_client, models
@@ -20,6 +21,28 @@ from app.db import SessionLocal
 from app.utils.job import get_job_timeout, is_job_stuck
 
 logger = logging.getLogger(__name__)
+
+
+def _is_file_path(value: str | None) -> bool:
+    """Check if a string is a valid file path (not inline content).
+
+    Returns True only if the value looks like a file path and the file exists.
+    """
+    if not value:
+        return False
+    # Content often contains newlines, paths don't
+    if "\n" in value:
+        return False
+    # Paths are typically short
+    if len(value) > 4096:
+        return False
+    # Must be an absolute path
+    if not value.startswith("/"):
+        return False
+    try:
+        return Path(value).is_file()
+    except OSError:
+        return False
 
 
 async def check_stuck_jobs():
@@ -114,15 +137,19 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
     # Mark old job as failed
     old_job.status = "failed"
     old_job.completed_at = datetime.now(timezone.utc)
-    if old_job.log_path:
-        # Append timeout message to existing log
+    timeout_msg = f"Job timed out after {get_job_timeout(old_job.action)}s, retrying (attempt {old_job.retry_count + 1})..."
+    if _is_file_path(old_job.log_path):
+        # Append timeout message to existing log file
         try:
             with open(old_job.log_path, "a") as f:
-                f.write(f"\n\n--- Job timed out, retrying (attempt {old_job.retry_count + 1}) ---\n")
+                f.write(f"\n\n--- {timeout_msg} ---\n")
         except Exception:
             pass
+    elif old_job.log_path:
+        # log_path contains inline content, append to it
+        old_job.log_path = f"{old_job.log_path}\n\n--- {timeout_msg} ---"
     else:
-        old_job.log_path = f"Job timed out after {get_job_timeout(old_job.action)}s, retrying..."
+        old_job.log_path = timeout_msg
 
     # Create new job with incremented retry count
     new_job = models.Job(
@@ -227,12 +254,16 @@ async def _fail_job(session, job: models.Job, reason: str):
 
     job.status = "failed"
     job.completed_at = datetime.now(timezone.utc)
-    if job.log_path:
+    if _is_file_path(job.log_path):
+        # Append failure message to existing log file
         try:
             with open(job.log_path, "a") as f:
                 f.write(f"\n\n--- Job failed: {reason} ---\n")
         except Exception:
             pass
+    elif job.log_path:
+        # log_path contains inline content, append to it
+        job.log_path = f"{job.log_path}\n\n--- Job failed: {reason} ---"
     else:
         job.log_path = reason
 

@@ -32,6 +32,7 @@ from app.schemas import (
     TopologyGraph,
 )
 from app.topology import _denormalize_interface_name, _normalize_interface_name
+from app.utils.link import generate_link_name
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,12 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         # Resolve image using canonical 3-step fallback
         kind = get_kind_for_device(n.device) if n.device else "linux"
         image = resolve_node_image(n.device, kind, n.image, n.version)
+
+        if not image:
+            raise ValueError(
+                f"No image found for node '{n.name}' (device={n.device}, kind={kind}). "
+                f"Please upload an image or specify one explicitly."
+            )
 
         nodes.append({
             "name": n.container_name or n.name,
@@ -861,11 +868,7 @@ class TopologyService:
         Link names are sorted alphabetically to ensure the same link always gets
         the same name regardless of endpoint order.
         """
-        ep_a = f"{source_node}:{source_interface}"
-        ep_b = f"{target_node}:{target_interface}"
-        if ep_a <= ep_b:
-            return f"{ep_a}-{ep_b}"
-        return f"{ep_b}-{ep_a}"
+        return generate_link_name(source_node, source_interface, target_node, target_interface)
 
     def _link_node_states(self, lab_id: str) -> None:
         """Link NodeState records to their Node definitions."""
@@ -987,6 +990,12 @@ class TopologyService:
         # Resolve image using canonical 3-step fallback
         kind = get_kind_for_device(node.device) if node.device else "linux"
         image = resolve_node_image(node.device, kind, node.image, node.version)
+
+        if not image:
+            raise ValueError(
+                f"No image found for node '{node.display_name}' (device={node.device}, kind={kind}). "
+                f"Please upload an image or specify one explicitly."
+            )
 
         return {
             "name": node.container_name,

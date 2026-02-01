@@ -24,22 +24,12 @@ import redis
 
 from app import agent_client, models
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, get_redis
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
+from app.utils.link import generate_link_name
 
 logger = logging.getLogger(__name__)
-
-# Redis client for distributed locking
-_redis: redis.Redis | None = None
-
-
-def _get_redis() -> redis.Redis:
-    """Get the Redis client, creating it if necessary."""
-    global _redis
-    if _redis is None:
-        _redis = redis.from_url(settings.redis_url)
-    return _redis
 
 
 @contextmanager
@@ -58,7 +48,7 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
         True if lock was acquired, False if another process holds it.
     """
     lock_key = f"reconcile_lock:{lab_id}"
-    r = _get_redis()
+    r = get_redis()
 
     try:
         # Try to acquire lock with NX (only if not exists) and TTL
@@ -79,23 +69,6 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
             pass  # Lock will auto-expire via TTL
 
 
-def _generate_link_name(
-    source_node: str,
-    source_interface: str,
-    target_node: str,
-    target_interface: str,
-) -> str:
-    """Generate a canonical link name from endpoints.
-
-    Link names are sorted alphabetically to ensure the same link always gets
-    the same name regardless of endpoint order.
-    """
-    ep_a = f"{source_node}:{source_interface}"
-    ep_b = f"{target_node}:{target_interface}"
-    # Sort endpoints alphabetically for consistent naming
-    if ep_a <= ep_b:
-        return f"{ep_a}-{ep_b}"
-    return f"{ep_b}-{ep_a}"
 
 
 def _ensure_link_states_for_lab(session, lab_id: str) -> int:

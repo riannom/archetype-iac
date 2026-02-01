@@ -131,17 +131,30 @@ def enqueue_job(lab_id: str, action: str, user_id: str | None) -> Job:
     session = SessionLocal()
     try:
         if user_id:
-            active_jobs = (
-                session.query(Job)
-                .filter(Job.user_id == user_id, Job.status.in_(["queued", "running"]))
-                .count()
-            )
-            if active_jobs >= settings.max_concurrent_jobs_per_user:
-                raise ValueError("Concurrency limit reached")
-        job_record = Job(lab_id=lab_id, user_id=user_id, action=action, status="queued")
-        session.add(job_record)
-        session.commit()
-        session.refresh(job_record)
+            # Use Redis lock to prevent race condition in concurrency check
+            lock_key = f"job_limit_lock:{user_id}"
+            lock_acquired = redis_conn.set(lock_key, "1", nx=True, ex=10)
+            if not lock_acquired:
+                raise ValueError("Concurrency limit reached (lock contention)")
+            try:
+                active_jobs = (
+                    session.query(Job)
+                    .filter(Job.user_id == user_id, Job.status.in_(["queued", "running"]))
+                    .count()
+                )
+                if active_jobs >= settings.max_concurrent_jobs_per_user:
+                    raise ValueError("Concurrency limit reached")
+                job_record = Job(lab_id=lab_id, user_id=user_id, action=action, status="queued")
+                session.add(job_record)
+                session.commit()
+                session.refresh(job_record)
+            finally:
+                redis_conn.delete(lock_key)
+        else:
+            job_record = Job(lab_id=lab_id, user_id=user_id, action=action, status="queued")
+            session.add(job_record)
+            session.commit()
+            session.refresh(job_record)
 
         queue.enqueue(execute_netlab_action, job_record.id, lab_id, action)
         return job_record

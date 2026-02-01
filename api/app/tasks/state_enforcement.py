@@ -18,25 +18,10 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, get_redis
 from app import agent_client
 
 logger = logging.getLogger(__name__)
-
-# Redis client for persistent cooldown storage
-_redis: redis.Redis | None = None
-
-
-def _get_redis() -> redis.Redis:
-    """Get the Redis client, creating it if necessary.
-
-    The cooldowns are stored in Redis so they survive API restarts,
-    preventing retry storms after restarts.
-    """
-    global _redis
-    if _redis is None:
-        _redis = redis.from_url(settings.redis_url)
-    return _redis
 
 
 def _cooldown_key(lab_id: str, node_name: str) -> str:
@@ -50,7 +35,7 @@ def _is_on_cooldown(lab_id: str, node_name: str) -> bool:
     Uses Redis EXIST to check if the cooldown key exists (TTL handles expiry).
     """
     try:
-        return _get_redis().exists(_cooldown_key(lab_id, node_name)) > 0
+        return get_redis().exists(_cooldown_key(lab_id, node_name)) > 0
     except redis.RedisError as e:
         logger.warning(f"Redis error checking cooldown: {e}")
         # On Redis error, assume not on cooldown to avoid blocking enforcement
@@ -63,7 +48,7 @@ def _set_cooldown(lab_id: str, node_name: str):
     Uses Redis SETEX with TTL equal to the cooldown period.
     """
     try:
-        _get_redis().setex(
+        get_redis().setex(
             _cooldown_key(lab_id, node_name),
             settings.state_enforcement_cooldown,
             "1"
@@ -71,14 +56,6 @@ def _set_cooldown(lab_id: str, node_name: str):
     except redis.RedisError as e:
         logger.warning(f"Redis error setting cooldown: {e}")
         # Continue even if Redis fails - enforcement will still work, just might retry sooner
-
-
-def _cleanup_old_cooldowns():
-    """Cleanup is handled automatically by Redis TTL.
-
-    This function is kept for interface compatibility but is now a no-op.
-    """
-    pass
 
 
 def _has_active_job(session: Session, lab_id: str, node_name: str | None = None) -> bool:
@@ -296,9 +273,6 @@ async def enforce_lab_states():
 
     session = SessionLocal()
     try:
-        # Cleanup old cooldowns periodically
-        _cleanup_old_cooldowns()
-
         # Find all node_states where desired != actual for running labs
         mismatched_states = (
             session.query(models.NodeState)

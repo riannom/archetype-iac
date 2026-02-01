@@ -27,6 +27,7 @@ from app.storage import (
 from app.tasks.jobs import run_agent_job, run_multihost_destroy
 from app.topology import analyze_topology
 from app.utils.lab import get_lab_or_404, get_lab_provider
+from app.utils.link import generate_link_name
 from app.jobs import has_conflicting_job
 
 logger = logging.getLogger(__name__)
@@ -1340,25 +1341,6 @@ async def export_inventory(
 # ============================================================================
 
 
-def _generate_link_name(
-    source_node: str,
-    source_interface: str,
-    target_node: str,
-    target_interface: str,
-) -> str:
-    """Generate a canonical link name from endpoints.
-
-    Link names are sorted alphabetically to ensure the same link always gets
-    the same name regardless of endpoint order.
-    """
-    ep_a = f"{source_node}:{source_interface}"
-    ep_b = f"{target_node}:{target_interface}"
-    # Sort endpoints alphabetically for consistent naming
-    if ep_a <= ep_b:
-        return f"{ep_a}-{ep_b}"
-    return f"{ep_b}-{ep_a}"
-
-
 def _upsert_link_states(
     database: Session,
     lab_id: str,
@@ -1410,7 +1392,7 @@ def _upsert_link_states(
         target_interface = ep_b.ifname or "eth0"
 
         # Generate canonical link name
-        link_name = _generate_link_name(
+        link_name = generate_link_name(
             source_node, source_interface, target_node, target_interface
         )
         current_link_names.add(link_name)
@@ -2082,7 +2064,7 @@ async def hot_connect_link(
         link_data = result.get("link", {})
 
         # Update LinkState in database
-        link_name = _generate_link_name(
+        link_name = generate_link_name(
             request.source_node, request.source_interface,
             request.target_node, request.target_interface,
         )
@@ -2152,7 +2134,7 @@ async def hot_disconnect_link(
             .all()
         )
         for ls in link_states:
-            expected_name = _generate_link_name(
+            expected_name = generate_link_name(
                 ls.source_node, ls.source_interface,
                 ls.target_node, ls.target_interface,
             )

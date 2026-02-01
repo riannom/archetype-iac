@@ -256,7 +256,7 @@ class TestUpdateLabState:
 
     def test_updates_state_updated_at(self, test_db: Session, sample_lab: models.Lab):
         """Updates state_updated_at timestamp."""
-        before = datetime.utcnow()
+        before = datetime.now(timezone.utc)
         update_lab_state(test_db, sample_lab.id, "running")
 
         test_db.refresh(sample_lab)

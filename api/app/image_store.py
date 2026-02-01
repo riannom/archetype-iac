@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import re
@@ -437,7 +437,7 @@ def create_image_entry(
         "version": version,
         # New fields
         "vendor": vendor,
-        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "uploaded_at": datetime.now(timezone.utc).isoformat() + "Z",
         "size_bytes": size_bytes,
         "is_default": False,
         "notes": notes,

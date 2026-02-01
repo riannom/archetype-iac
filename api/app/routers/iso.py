@@ -309,7 +309,7 @@ async def init_upload(
             "status": "uploading",
             "error_message": None,
             "user_id": str(current_user.id),
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
 
     # Pre-allocate file (sparse)
@@ -884,7 +884,7 @@ async def _execute_import(session_id: str):
         if session:
             session.status = "completed"
             session.progress_percent = 100
-            session.completed_at = datetime.utcnow()
+            session.completed_at = datetime.now(timezone.utc)
             _save_session(session)
 
     except Exception as e:
@@ -1039,10 +1039,10 @@ def _update_image_progress(
     })
 
     if status == "extracting" and "started_at" not in session.image_progress[image_id]:
-        session.image_progress[image_id]["started_at"] = datetime.utcnow().isoformat()
+        session.image_progress[image_id]["started_at"] = datetime.now(timezone.utc).isoformat()
 
     if status in ("completed", "failed"):
-        session.image_progress[image_id]["completed_at"] = datetime.utcnow().isoformat()
+        session.image_progress[image_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-    session.updated_at = datetime.utcnow()
+    session.updated_at = datetime.now(timezone.utc)
     _save_session(session)
