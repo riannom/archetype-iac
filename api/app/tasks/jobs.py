@@ -1133,6 +1133,7 @@ async def run_node_sync(
                     user_id=job.user_id,
                     action=f"sync:agent:{other_agent_id}:{','.join(other_node_ids)}",
                     status="queued",
+                    parent_job_id=job.id,
                 )
                 session.add(other_job)
                 session.commit()

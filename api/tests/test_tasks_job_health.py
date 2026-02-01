@@ -59,6 +59,123 @@ class TestCheckStuckJobs:
             assert running_job.status == "running"
 
 
+class TestCheckSingleJobParentChild:
+    """Tests for parent-child job handling in _check_single_job."""
+
+    @pytest.mark.asyncio
+    async def test_skips_child_job_when_parent_active(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """Should skip stuck child job if parent is still running."""
+        from app.tasks.job_health import _check_single_job
+
+        # Create parent job that's still running
+        parent_job = models.Job(
+            id="parent-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:lab",
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
+        test_db.add(parent_job)
+        test_db.commit()
+
+        # Create stuck child job
+        child_job = models.Job(
+            id="child-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:agent:agent1:node1",
+            status="running",
+            parent_job_id=parent_job.id,
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=30),  # Stuck
+        )
+        test_db.add(child_job)
+        test_db.commit()
+
+        now = datetime.now(timezone.utc)
+
+        with patch("app.tasks.job_health.is_job_stuck", return_value=True):
+            await _check_single_job(test_db, child_job, now)
+
+            # Child should still be running (skipped because parent is active)
+            test_db.refresh(child_job)
+            assert child_job.status == "running"
+
+    @pytest.mark.asyncio
+    async def test_fails_orphaned_child_job(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """Should fail stuck child job if parent is completed/failed."""
+        from app.tasks.job_health import _check_single_job
+
+        # Create completed parent job
+        parent_job = models.Job(
+            id="parent-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:lab",
+            status="completed",
+            completed_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        test_db.add(parent_job)
+        test_db.commit()
+
+        # Create stuck child job (orphaned)
+        child_job = models.Job(
+            id="child-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:agent:agent1:node1",
+            status="running",
+            parent_job_id=parent_job.id,
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+        )
+        test_db.add(child_job)
+        test_db.commit()
+
+        now = datetime.now(timezone.utc)
+
+        with patch("app.tasks.job_health.is_job_stuck", return_value=True):
+            await _check_single_job(test_db, child_job, now)
+
+            # Child should be failed (orphaned)
+            test_db.refresh(child_job)
+            assert child_job.status == "failed"
+            assert "orphaned" in child_job.log_path.lower()
+
+    @pytest.mark.asyncio
+    async def test_fails_child_job_with_missing_parent(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """Should fail stuck child job if parent is missing."""
+        from app.tasks.job_health import _check_single_job
+
+        # Create stuck child job with non-existent parent
+        child_job = models.Job(
+            id="child-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:agent:agent1:node1",
+            status="running",
+            parent_job_id="non-existent-parent-id",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+        )
+        test_db.add(child_job)
+        test_db.commit()
+
+        now = datetime.now(timezone.utc)
+
+        with patch("app.tasks.job_health.is_job_stuck", return_value=True):
+            await _check_single_job(test_db, child_job, now)
+
+            # Child should be failed (orphaned due to missing parent)
+            test_db.refresh(child_job)
+            assert child_job.status == "failed"
+            assert "missing" in child_job.log_path.lower() or "orphaned" in child_job.log_path.lower()
+
+
 class TestCheckOrphanedQueuedJobs:
     """Tests for the check_orphaned_queued_jobs function."""
 
@@ -318,6 +435,118 @@ class TestRetryJob:
             ).all()
             assert len(new_jobs) == 1
             assert new_jobs[0].retry_count == original_retry_count + 1
+
+    @pytest.mark.asyncio
+    async def test_sets_superseded_by_id_on_old_job(self, test_db: Session, sample_job: models.Job):
+        """Should set superseded_by_id on old job pointing to new job."""
+        from app.tasks.job_health import _retry_job
+
+        with patch("app.tasks.job_health._trigger_job_execution", new_callable=AsyncMock):
+            await _retry_job(test_db, sample_job)
+
+            test_db.refresh(sample_job)
+            assert sample_job.superseded_by_id is not None
+
+            # Verify the superseded_by_id points to the new job
+            new_job = test_db.get(models.Job, sample_job.superseded_by_id)
+            assert new_job is not None
+            assert new_job.status == "queued"
+            assert new_job.action == sample_job.action
+
+    @pytest.mark.asyncio
+    async def test_cancels_child_jobs_on_parent_retry(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """Should cancel all child jobs when parent job is retried."""
+        from app.tasks.job_health import _retry_job
+
+        # Create parent job
+        parent_job = models.Job(
+            id="parent-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:lab",
+            status="running",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        test_db.add(parent_job)
+        test_db.commit()
+
+        # Create child jobs
+        child1 = models.Job(
+            id="child-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:agent:agent1:node1",
+            status="running",
+            parent_job_id=parent_job.id,
+        )
+        child2 = models.Job(
+            id="child-job-2",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:agent:agent2:node2",
+            status="queued",
+            parent_job_id=parent_job.id,
+        )
+        test_db.add_all([child1, child2])
+        test_db.commit()
+
+        with patch("app.tasks.job_health._trigger_job_execution", new_callable=AsyncMock):
+            await _retry_job(test_db, parent_job)
+
+            # Verify children were cancelled
+            test_db.refresh(child1)
+            test_db.refresh(child2)
+            assert child1.status == "cancelled"
+            assert child2.status == "cancelled"
+            assert "parent job retried" in child1.log_path.lower()
+            assert "parent job retried" in child2.log_path.lower()
+
+            # Verify superseded_by_id points to new parent job
+            assert child1.superseded_by_id == parent_job.superseded_by_id
+            assert child2.superseded_by_id == parent_job.superseded_by_id
+
+    @pytest.mark.asyncio
+    async def test_deduplication_prevents_duplicate_retry(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """Should not create duplicate retry if job with same action already exists."""
+        from app.tasks.job_health import _retry_job
+
+        # Create existing queued job
+        existing_job = models.Job(
+            id="existing-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="queued",
+        )
+        test_db.add(existing_job)
+
+        # Create stuck job that would be retried
+        stuck_job = models.Job(
+            id="stuck-job-1",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="running",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        )
+        test_db.add(stuck_job)
+        test_db.commit()
+
+        with patch("app.tasks.job_health._trigger_job_execution", new_callable=AsyncMock) as mock_trigger:
+            await _retry_job(test_db, stuck_job)
+
+            # Verify no new job was created (trigger not called)
+            mock_trigger.assert_not_called()
+
+            # Verify stuck job was marked as cancelled (not failed) with superseded_by_id
+            test_db.refresh(stuck_job)
+            assert stuck_job.status == "cancelled"
+            assert stuck_job.superseded_by_id == existing_job.id
+            assert "duplicate" in stuck_job.log_path.lower()
 
 
 class TestFailJob:
