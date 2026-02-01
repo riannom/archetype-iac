@@ -435,9 +435,19 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
             try:
                 result = await agent_client.get_lab_status_from_agent(agent, lab_id)
-                agents_successfully_queried.add(agent_id)
                 nodes = result.get("nodes", [])
-                # Merge container status from this agent
+                agent_error = result.get("error")
+
+                # Only count as successfully queried if no error in response
+                # An error (e.g., Docker state corruption) means we can't trust the results
+                if not agent_error:
+                    agents_successfully_queried.add(agent_id)
+                else:
+                    logger.warning(
+                        f"Agent {agent.name} returned error for lab {lab_id}: {agent_error}"
+                    )
+
+                # Still merge any nodes that were returned (partial success)
                 for n in nodes:
                     node_name = n.get("name", "")
                     if node_name:

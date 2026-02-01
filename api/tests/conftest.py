@@ -152,6 +152,7 @@ def sample_lab_with_nodes(
 def sample_host(test_db: Session) -> models.Host:
     """Create a sample agent host for testing."""
     import json
+    from datetime import datetime, timezone
 
     host = models.Host(
         id="test-agent-1",
@@ -160,6 +161,7 @@ def sample_host(test_db: Session) -> models.Host:
         status="online",
         capabilities=json.dumps({"providers": ["docker"]}),
         version="1.0.0",
+        last_heartbeat=datetime.now(timezone.utc),  # Required for is_agent_online()
         resource_usage=json.dumps({
             "cpu_percent": 25.5,
             "memory_percent": 45.2,

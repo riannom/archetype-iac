@@ -1632,6 +1632,19 @@ async def run_node_sync(
                     if result.get("stderr"):
                         log_parts.append(f"\nDeploy STDERR:\n{result['stderr']}")
 
+                except AgentUnavailableError as e:
+                    # Transient error - agent unreachable, don't mark nodes as permanently failed
+                    error_msg = f"Agent unreachable (transient): {e.message}"
+                    log_parts.append(f"Deploy FAILED (transient): {error_msg}")
+                    log_parts.append("  Note: This may be a temporary network issue. Nodes will be retried by reconciliation.")
+                    for ns in nodes_need_deploy:
+                        # Keep nodes in pending state rather than marking as error
+                        # Reconciliation will retry when agent becomes available
+                        if ns.actual_state not in ("running", "stopped"):
+                            ns.actual_state = "pending"
+                        ns.error_message = error_msg
+                    session.commit()
+                    logger.warning(f"Deploy in sync job {job_id} failed due to agent unavailability: {e}")
                 except Exception as e:
                     error_msg = str(e)
                     log_parts.append(f"Deploy FAILED: {error_msg}")
@@ -1836,6 +1849,15 @@ async def run_node_sync(
                         if result.get("stderr"):
                             log_parts.append(f"\nDeploy STDERR:\n{result['stderr']}")
 
+                    except AgentUnavailableError as e:
+                        # Transient error - agent unreachable, don't mark nodes as permanently failed
+                        error_msg = f"Agent unreachable (transient): {e.message}"
+                        log_parts.append(f"Redeploy FAILED (transient): {error_msg}")
+                        log_parts.append("  Note: This may be a temporary network issue. Nodes will be retried by reconciliation.")
+                        for ns in nodes_need_start:
+                            # Keep existing state rather than marking as error
+                            ns.error_message = error_msg
+                        logger.warning(f"Redeploy in sync job {job_id} failed due to agent unavailability: {e}")
                     except Exception as e:
                         error_msg = str(e)
                         log_parts.append(f"Redeploy FAILED: {error_msg}")
@@ -1882,6 +1904,13 @@ async def run_node_sync(
                         ns.error_message = result.get("error", "Stop failed")
                         ns.boot_started_at = None
                         log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+                except AgentUnavailableError as e:
+                    # Transient error - agent unreachable, don't mark as permanently failed
+                    error_msg = f"Agent unreachable (transient): {e.message}"
+                    # Keep existing state - reconciliation will handle this
+                    ns.error_message = error_msg
+                    log_parts.append(f"  {ns.node_name}: FAILED (transient) - {error_msg}")
+                    logger.warning(f"Stop {ns.node_name} in job {job_id} failed due to agent unavailability")
                 except Exception as e:
                     ns.actual_state = "error"
                     ns.error_message = str(e)
