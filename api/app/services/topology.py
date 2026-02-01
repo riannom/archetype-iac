@@ -19,7 +19,8 @@ from typing import Any
 
 from sqlalchemy import or_
 
-from agent.vendors import get_kind_for_device
+from agent.vendors import get_kind_for_device, get_default_image
+from app.image_store import find_image_reference
 from sqlalchemy.orm import Session
 
 from app import models
@@ -889,11 +890,21 @@ class TopologyService:
         exec_cmds = config.get("exec", [])
         startup_config = config.get("startup-config")
 
+        # Resolve image: use explicit image, else lookup from manifest, else vendor default
+        kind = get_kind_for_device(node.device) if node.device else "linux"
+        image = node.image
+        if not image:
+            # Try to find uploaded image for this device type and version
+            image = find_image_reference(node.device or kind, node.version)
+        if not image:
+            # Fall back to vendor default image
+            image = get_default_image(kind)
+
         return {
             "name": node.container_name,
             "display_name": node.display_name,
-            "kind": node.device or "linux",
-            "image": node.image,
+            "kind": kind,
+            "image": image,
             "binds": binds,
             "env": env,
             "ports": ports,
