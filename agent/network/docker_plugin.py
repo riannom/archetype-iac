@@ -396,17 +396,20 @@ class DockerOVSPlugin:
         """Save plugin state to disk atomically.
 
         Uses temp file + rename for atomic writes to prevent corruption.
+        Runs file I/O in thread pool to avoid blocking event loop.
         """
         try:
             state = self._serialize_state()
             tmp_path = self._state_file.with_suffix(".tmp")
 
-            # Write to temp file
-            with open(tmp_path, "w") as f:
-                json.dump(state, f, indent=2)
+            # Write to temp file in thread pool to avoid blocking event loop
+            def write_state():
+                with open(tmp_path, "w") as f:
+                    json.dump(state, f, indent=2)
+                # Atomic rename
+                tmp_path.rename(self._state_file)
 
-            # Atomic rename
-            tmp_path.rename(self._state_file)
+            await asyncio.to_thread(write_state)
             self._state_dirty = False
 
             logger.debug(
@@ -1765,6 +1768,14 @@ class DockerOVSPlugin:
         logger.debug(f"Leave endpoint {endpoint_id[:12]}")
         return web.json_response({})
 
+    async def handle_endpoint_oper_info(self, request: web.Request) -> web.Response:
+        """Handle /NetworkDriver.EndpointOperInfo - Return endpoint operational info."""
+        data = await request.json()
+        endpoint_id = data.get("EndpointID", "")
+        logger.debug(f"EndpointOperInfo for {endpoint_id[:12]}")
+        # Return empty Value - Docker just wants to know the endpoint exists
+        return web.json_response({"Value": {}})
+
     async def handle_discover_new(self, request: web.Request) -> web.Response:
         """Handle /NetworkDriver.DiscoverNew."""
         return web.json_response({})
@@ -1968,6 +1979,7 @@ class DockerOVSPlugin:
         app.router.add_post("/NetworkDriver.DeleteEndpoint", self.handle_delete_endpoint)
         app.router.add_post("/NetworkDriver.Join", self.handle_join)
         app.router.add_post("/NetworkDriver.Leave", self.handle_leave)
+        app.router.add_post("/NetworkDriver.EndpointOperInfo", self.handle_endpoint_oper_info)
         app.router.add_post("/NetworkDriver.DiscoverNew", self.handle_discover_new)
         app.router.add_post("/NetworkDriver.DiscoverDelete", self.handle_discover_delete)
         app.router.add_post("/NetworkDriver.ProgramExternalConnectivity", self.handle_program_external_connectivity)

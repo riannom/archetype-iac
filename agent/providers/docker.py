@@ -498,9 +498,9 @@ username admin privilege 15 role network-admin nopassword
             network_name = f"{lab_id}-{interface_name}"
 
             try:
-                # Check if network already exists
+                # Check if network already exists (run in thread to avoid blocking event loop)
                 try:
-                    self.docker.networks.get(network_name)
+                    await asyncio.to_thread(self.docker.networks.get, network_name)
                     logger.debug(f"Network {network_name} already exists")
                     networks[interface_name] = network_name
                     continue
@@ -548,7 +548,8 @@ username admin privilege 15 role network-admin nopassword
         try:
             # Query networks by name prefix (efficient - single API call)
             # Networks are named: {lab_id}-eth1, {lab_id}-Ethernet1, etc.
-            all_networks = self.docker.networks.list()
+            # Run in thread to avoid blocking event loop
+            all_networks = await asyncio.to_thread(self.docker.networks.list)
 
             # Filter to networks that start with this lab's prefix
             lab_prefix = f"{lab_id}-"
@@ -593,27 +594,44 @@ username admin privilege 15 role network-admin nopassword
         Returns:
             List of attached network names
         """
-        attached = []
-
+        # Build list of networks to attach
+        networks_to_attach = []
         for i in range(interface_count):
             iface_num = start_index + i
             interface_name = f"{interface_prefix}{iface_num}"
             network_name = f"{lab_id}-{interface_name}"
+            networks_to_attach.append(network_name)
 
-            try:
-                network = self.docker.networks.get(network_name)
-                # Run in thread pool - network.connect triggers OVS plugin callbacks
-                await asyncio.to_thread(network.connect, container.id)
-                attached.append(network_name)
-                logger.debug(f"Attached {container.name} to {network_name}")
+        # Attach all networks in a single thread to avoid thread pool exhaustion
+        # Each network.connect() triggers Docker plugin callbacks which need the event loop
+        def attach_all_networks(docker_client, net_names: list[str], cont_id: str, cont_name: str) -> list[str]:
+            import logging
+            log = logging.getLogger(__name__)
+            attached = []
+            log.info(f"[{cont_name}] attach_all_networks starting: {len(net_names)} networks")
+            for net_name in net_names:
+                try:
+                    log.debug(f"[{cont_name}] Attaching to {net_name}...")
+                    network = docker_client.networks.get(net_name)
+                    network.connect(cont_id)
+                    attached.append(net_name)
+                    log.debug(f"[{cont_name}] Attached to {net_name}")
+                except Exception as e:
+                    if "already exists" in str(e).lower():
+                        attached.append(net_name)
+                    elif "not found" in str(e).lower():
+                        log.warning(f"[{cont_name}] Network {net_name} not found")
+                    else:
+                        log.warning(f"[{cont_name}] Failed to attach to {net_name}: {e}")
+            log.info(f"[{cont_name}] attach_all_networks completed: {len(attached)} attached")
+            return attached
 
-            except NotFound:
-                logger.warning(f"Network {network_name} not found")
-            except APIError as e:
-                if "already exists" in str(e).lower():
-                    attached.append(network_name)
-                else:
-                    logger.warning(f"Failed to attach to {network_name}: {e}")
+        attached = await asyncio.to_thread(
+            attach_all_networks, self.docker, networks_to_attach, container.id, container.name
+        )
+
+        for net_name in attached:
+            logger.debug(f"Attached {container.name} to {net_name}")
 
         return attached
 
@@ -645,16 +663,18 @@ username admin privilege 15 role network-admin nopassword
                 container_name = self._container_name(lab_id, node_name)
                 log_name = node.log_name()
 
-                # Check if container already exists
+                # Check if container already exists (run in thread to avoid blocking)
                 try:
-                    existing = self.docker.containers.get(container_name)
+                    existing = await asyncio.to_thread(
+                        self.docker.containers.get, container_name
+                    )
                     if existing.status == "running":
                         logger.info(f"Container {log_name} already running")
                         containers[node_name] = existing
                         continue
                     else:
                         logger.info(f"Removing stopped container {log_name}")
-                        existing.remove(force=True)
+                        await asyncio.to_thread(existing.remove, force=True)
                 except NotFound:
                     pass
 
@@ -678,12 +698,15 @@ username admin privilege 15 role network-admin nopassword
                     logger.info(f"Creating container {log_name} with image {config['image']}")
 
                     # Create container - run in thread pool to avoid blocking event loop
+                    logger.debug(f"[{log_name}] Starting container.create...")
                     container = await asyncio.to_thread(
                         lambda cfg=config: self.docker.containers.create(**cfg)
                     )
+                    logger.debug(f"[{log_name}] container.create completed")
                     containers[node_name] = container
 
                     # Attach to remaining interface networks (eth2, eth3, ...)
+                    logger.debug(f"[{log_name}] Starting network attachments...")
                     await self._attach_container_to_networks(
                         container=container,
                         lab_id=lab_id,
@@ -691,6 +714,12 @@ username admin privilege 15 role network-admin nopassword
                         interface_prefix="eth",
                         start_index=2,  # Start from eth2
                     )
+                    logger.debug(f"[{log_name}] Network attachments completed")
+
+                    # Docker processes network.connect() asynchronously - the call returns
+                    # before Docker finishes creating endpoints. Wait briefly to let Docker
+                    # complete endpoint creation before proceeding.
+                    await asyncio.sleep(0.5)
                 else:
                     # Legacy mode: use "none" network, provision interfaces post-start
                     config["network_mode"] = "none"
