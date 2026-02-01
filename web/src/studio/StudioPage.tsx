@@ -12,6 +12,7 @@ import SystemStatusStrip from './components/SystemStatusStrip';
 import ConfigViewerModal from './components/ConfigViewerModal';
 import JobLogModal from './components/JobLogModal';
 import ConfigsView from './components/ConfigsView';
+import LogsView from './components/LogsView';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
@@ -200,7 +201,7 @@ const StudioPage: React.FC = () => {
   const isAdmin = user?.is_admin ?? false;
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
-  const [view, setView] = useState<'designer' | 'configs' | 'runtime'>('designer');
+  const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime'>('designer');
   const [nodes, setNodes] = useState<Node[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -1066,6 +1067,15 @@ const StudioPage: React.FC = () => {
     );
   }, []);
 
+  // Toggle minimize state of a console window
+  const handleToggleMinimize = useCallback((windowId: string) => {
+    setConsoleWindows((prev) =>
+      prev.map((win) =>
+        win.id === windowId ? { ...win, isExpanded: !win.isExpanded } : win
+      )
+    );
+  }, []);
+
   const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string) => {
     if (nodeId && nodeName) {
       setConfigViewerNode({ id: nodeId, name: nodeName });
@@ -1344,6 +1354,14 @@ const StudioPage: React.FC = () => {
             onExtractConfigs={handleExtractConfigs}
           />
         );
+      case 'logs':
+        return (
+          <LogsView
+            labId={activeLab?.id || ''}
+            studioRequest={studioRequest}
+            realtimeEntries={filteredTaskLog}
+          />
+        );
       case 'runtime':
         return (
           <RuntimeControl
@@ -1517,6 +1535,14 @@ const StudioPage: React.FC = () => {
         >
           Configs
         </button>
+        <button
+          onClick={() => setView('logs')}
+          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
+            view === 'logs' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+          }`}
+        >
+          Logs
+        </button>
       </div>
       {isAdmin && <SystemStatusStrip metrics={systemMetrics} />}
       <div className="flex flex-1 overflow-hidden relative">
@@ -1544,6 +1570,7 @@ const StudioPage: React.FC = () => {
           onMergeWindows={handleMergeWindows}
           onSplitTab={handleSplitTab}
           onReorderTab={handleReorderTab}
+          onToggleMinimize={handleToggleMinimize}
         />
       </div>
       <StatusBar nodeStates={nodeStates} />

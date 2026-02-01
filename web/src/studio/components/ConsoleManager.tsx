@@ -22,6 +22,7 @@ interface ConsoleManagerProps {
   onMergeWindows?: (sourceWindowId: string, targetWindowId: string) => void;
   onSplitTab?: (windowId: string, deviceId: string, x: number, y: number) => void;
   onReorderTab?: (windowId: string, fromIndex: number, toIndex: number) => void;
+  onToggleMinimize?: (windowId: string) => void;
 }
 
 // Threshold in pixels before a tab drag initiates a split
@@ -41,6 +42,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   onMergeWindows,
   onSplitTab,
   onReorderTab,
+  onToggleMinimize,
 }) => {
   const [dragState, setDragState] = useState<{ id: string; startX: number; startY: number } | null>(null);
   const [resizeState, setResizeState] = useState<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
@@ -285,19 +287,20 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         const activeNode = nodes.find((n) => n.id === win.activeDeviceId);
         const isDropTarget = dropTargetId === win.id;
         const isBeingDraggedOverTarget = dragState?.id === win.id && dropTargetId !== null;
+        const isMinimized = !win.isExpanded;
 
         return (
           <div
             key={win.id}
             ref={(el) => setWindowRef(win.id, el)}
-            className={`fixed z-[100] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5
+            className={`fixed z-[100] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5 transition-all duration-200
               ${isDropTarget ? 'console-drop-target-active' : ''}
               ${isBeingDraggedOverTarget ? 'console-window-dragging-over-target' : ''}`}
             style={{
               left: win.x,
               top: win.y,
-              width: size.w,
-              height: size.h,
+              width: isMinimized ? 280 : size.w,
+              height: isMinimized ? 36 : size.h,
               boxShadow:
                 dragState?.id === win.id || resizeState?.id === win.id
                   ? '0 25px 50px -12px rgba(0, 0, 0, 0.7)'
@@ -376,19 +379,31 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                 )}
               </div>
               <div className="flex items-center px-2 gap-1.5 shrink-0 bg-stone-800 ml-auto border-l border-stone-700">
-                <button
-                  className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-stone-300 hover:bg-stone-700 rounded transition-all"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => {
-                    if (!activeNode) return;
-                    const url = `/studio/console/${encodeURIComponent(labId)}/${encodeURIComponent(activeNode.id)}`;
-                    window.open(url, `archetype-console-${activeNode.id}`, 'width=960,height=640');
-                  }}
-                >
-                  <i className="fa-solid fa-up-right-from-square text-[9px]"></i>
-                </button>
+                {!isMinimized && (
+                  <button
+                    className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-stone-300 hover:bg-stone-700 rounded transition-all"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => {
+                      if (!activeNode) return;
+                      const url = `/studio/console/${encodeURIComponent(labId)}/${encodeURIComponent(activeNode.id)}`;
+                      window.open(url, `archetype-console-${activeNode.id}`, 'width=960,height=640');
+                    }}
+                  >
+                    <i className="fa-solid fa-up-right-from-square text-[9px]"></i>
+                  </button>
+                )}
+                {onToggleMinimize && (
+                  <button
+                    className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-stone-300 hover:bg-stone-700 rounded transition-all"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => onToggleMinimize(win.id)}
+                  >
+                    <i className={`fa-solid ${isMinimized ? 'fa-window-maximize' : 'fa-window-minimize'} text-[9px]`}></i>
+                  </button>
+                )}
                 <button
                   onClick={() => onCloseWindow(win.id)}
+                  onMouseDown={(e) => e.stopPropagation()}
                   className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-red-400 hover:bg-red-400/10 rounded transition-all"
                 >
                   <i className="fa-solid fa-xmark"></i>
@@ -396,41 +411,45 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
               </div>
             </div>
 
-            <div className="flex-1 bg-[#0b0f16] relative">
-              {win.deviceIds.length === 0 && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-stone-700">
-                  <i className="fa-solid fa-terminal text-4xl mb-4 opacity-10"></i>
-                  <p className="text-xs font-bold uppercase tracking-widest opacity-30">No active session selected</p>
+            {!isMinimized && (
+              <>
+                <div className="flex-1 bg-[#0b0f16] relative">
+                  {win.deviceIds.length === 0 && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-stone-700">
+                      <i className="fa-solid fa-terminal text-4xl mb-4 opacity-10"></i>
+                      <p className="text-xs font-bold uppercase tracking-widest opacity-30">No active session selected</p>
+                    </div>
+                  )}
+                  {win.deviceIds.map((nodeId) => {
+                    const nodeState = nodeStates[nodeId];
+                    // Only show boot warning for running nodes that aren't ready yet
+                    // For error/stopped/pending states, don't show boot warning
+                    const isRunning = nodeState?.actual_state === 'running';
+                    const isReady = !isRunning || nodeState?.is_ready !== false;
+                    return (
+                      <div
+                        key={nodeId}
+                        className={`absolute inset-0 ${win.activeDeviceId === nodeId ? 'block' : 'hidden'}`}
+                      >
+                        <TerminalSession
+                          labId={labId}
+                          nodeId={nodeId}
+                          isActive={win.activeDeviceId === nodeId}
+                          isReady={isReady}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
-              {win.deviceIds.map((nodeId) => {
-                const nodeState = nodeStates[nodeId];
-                // Only show boot warning for running nodes that aren't ready yet
-                // For error/stopped/pending states, don't show boot warning
-                const isRunning = nodeState?.actual_state === 'running';
-                const isReady = !isRunning || nodeState?.is_ready !== false;
-                return (
-                  <div
-                    key={nodeId}
-                    className={`absolute inset-0 ${win.activeDeviceId === nodeId ? 'block' : 'hidden'}`}
-                  >
-                    <TerminalSession
-                      labId={labId}
-                      nodeId={nodeId}
-                      isActive={win.activeDeviceId === nodeId}
-                      isReady={isReady}
-                    />
-                  </div>
-                );
-              })}
-            </div>
 
-            <div
-              className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize flex items-end justify-end p-0.5 group pointer-events-auto"
-              onMouseDown={(e) => handleResizeMouseDown(e, win)}
-            >
-              <div className="w-2 h-2 border-r-2 border-b-2 border-stone-700 group-hover:border-sage-500 transition-colors"></div>
-            </div>
+                <div
+                  className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize flex items-end justify-end p-0.5 group pointer-events-auto"
+                  onMouseDown={(e) => handleResizeMouseDown(e, win)}
+                >
+                  <div className="w-2 h-2 border-r-2 border-b-2 border-stone-700 group-hover:border-sage-500 transition-colors"></div>
+                </div>
+              </>
+            )}
           </div>
         );
       })}
