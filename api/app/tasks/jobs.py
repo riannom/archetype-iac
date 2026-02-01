@@ -1042,30 +1042,76 @@ async def run_node_sync(
                     )
                     .all()
                 )
+                # Track nodes with explicit placement that failed
+                explicit_placement_failures = []
+
                 for db_node in db_nodes:
                     if db_node.host_id:
+                        # Explicit placement - MUST deploy to this agent or error
                         host_agent = session.get(models.Host, db_node.host_id)
-                        if host_agent and agent_client.is_agent_online(host_agent):
+                        if not host_agent:
+                            explicit_placement_failures.append(
+                                f"{db_node.container_name}: assigned host {db_node.host_id} not found"
+                            )
+                        elif not agent_client.is_agent_online(host_agent):
+                            explicit_placement_failures.append(
+                                f"{db_node.container_name}: assigned host {host_agent.name} is offline"
+                            )
+                        else:
                             all_node_agents[db_node.container_name] = db_node.host_id
-                            logger.debug(f"Node {db_node.container_name} -> host {host_agent.name} (from nodes.host_id)")
+                            logger.info(f"Node {db_node.container_name} -> host {host_agent.name} (explicit placement)")
+
+                # Fail fast if any explicit placements can't be honored
+                if explicit_placement_failures:
+                    error_msg = "Cannot deploy - explicit host assignments failed:\n" + "\n".join(explicit_placement_failures)
+                    job.status = "failed"
+                    job.completed_at = datetime.utcnow()
+                    job.log_path = error_msg
+                    for ns in node_states:
+                        if ns.node_name in [f.split(":")[0] for f in explicit_placement_failures]:
+                            ns.actual_state = "error"
+                            ns.error_message = "Assigned host unavailable"
+                    session.commit()
+                    logger.error(f"Sync job {job_id} failed: {error_msg}")
+                    return
 
                 # For nodes without database host_id, check YAML topology
+                # YAML host field is also explicit - must honor or error
                 nodes_without_db_host = node_names_to_sync - set(all_node_agents.keys())
                 if nodes_without_db_host:
                     for node in graph.nodes:
                         node_key = node.container_name or node.name
                         if node_key in nodes_without_db_host and node.host:
-                            # Try lookup by name first, then by ID
+                            # Explicit YAML placement - try lookup by name first, then by ID
                             host_agent = await agent_client.get_agent_by_name(session, node.host, required_provider=provider)
                             if not host_agent:
                                 host_agent = session.get(models.Host, node.host)
-                                if host_agent and not agent_client.is_agent_online(host_agent):
-                                    host_agent = None
-                            if host_agent:
-                                all_node_agents[node_key] = host_agent.id
-                                logger.debug(f"Node {node_key} -> host {host_agent.name} (from YAML)")
+
+                            if not host_agent:
+                                explicit_placement_failures.append(
+                                    f"{node_key}: YAML host '{node.host}' not found"
+                                )
+                            elif not agent_client.is_agent_online(host_agent):
+                                explicit_placement_failures.append(
+                                    f"{node_key}: YAML host {host_agent.name} is offline"
+                                )
                             else:
-                                logger.warning(f"Agent '{node.host}' not found for node {node_key}")
+                                all_node_agents[node_key] = host_agent.id
+                                logger.info(f"Node {node_key} -> host {host_agent.name} (from YAML)")
+
+                # Check again for YAML placement failures
+                if explicit_placement_failures:
+                    error_msg = "Cannot deploy - explicit host assignments failed:\n" + "\n".join(explicit_placement_failures)
+                    job.status = "failed"
+                    job.completed_at = datetime.utcnow()
+                    job.log_path = error_msg
+                    for ns in node_states:
+                        if ns.node_name in [f.split(":")[0] for f in explicit_placement_failures]:
+                            ns.actual_state = "error"
+                            ns.error_message = "Assigned host unavailable"
+                    session.commit()
+                    logger.error(f"Sync job {job_id} failed: {error_msg}")
+                    return
 
                 # Then, determine agent for remaining auto-placed nodes
                 auto_placed_nodes = [ns for ns in node_states if ns.node_name not in all_node_agents]
