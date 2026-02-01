@@ -319,3 +319,56 @@
 .node-error-pulse {
   animation: errorPulse 2s ease-in-out infinite;
 }
+
+/* =====================================================
+   Console Window Merge Drag-and-Drop
+   ===================================================== */
+
+/* Drop target pulse animation for console window merge */
+@keyframes consoleMergeTargetPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(101, 163, 13, 0.4), 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 20px 5px rgba(101, 163, 13, 0.2), 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.console-drop-target-active {
+  animation: consoleMergeTargetPulse 1s ease-in-out infinite;
+  border-color: var(--color-accent-500) !important;
+}
+
+/* Dragging console window visual feedback */
+.console-window-dragging-over-target {
+  opacity: 0.7;
+}
+
+/* Tab ghost preview that follows cursor */
+.console-tab-ghost {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  transform: scale(1.05) rotate(2deg);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+  opacity: 0.9;
+  background: #1c1917;
+  border: 1px solid #44403c;
+  border-radius: 6px;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: bold;
+  color: #a3a3a3;
+}
+
+.console-tab-ghost i {
+  color: #65a30d;
+}
+
+/* Tab being dragged within window */
+.console-tab-dragging {
+  opacity: 0.5;
+}

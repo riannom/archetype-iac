@@ -1000,6 +1000,57 @@ const StudioPage: React.FC = () => {
     });
   };
 
+  // Merge all tabs from source window into target window
+  const handleMergeWindows = useCallback((sourceWindowId: string, targetWindowId: string) => {
+    setConsoleWindows((prev) => {
+      const sourceWin = prev.find((w) => w.id === sourceWindowId);
+      const targetWin = prev.find((w) => w.id === targetWindowId);
+      if (!sourceWin || !targetWin) return prev;
+
+      // Merge deviceIds, using Set to deduplicate
+      const mergedDeviceIds = [...new Set([...targetWin.deviceIds, ...sourceWin.deviceIds])];
+
+      return prev
+        .filter((w) => w.id !== sourceWindowId) // Remove source window
+        .map((w) =>
+          w.id === targetWindowId
+            ? { ...w, deviceIds: mergedDeviceIds }
+            : w
+        );
+    });
+  }, []);
+
+  // Split a tab out of a window into a new separate window
+  const handleSplitTab = useCallback((windowId: string, deviceId: string, x: number, y: number) => {
+    setConsoleWindows((prev) => {
+      const sourceWin = prev.find((w) => w.id === windowId);
+      if (!sourceWin || sourceWin.deviceIds.length <= 1) return prev;
+
+      // Create new window for the split tab
+      const newWin: ConsoleWindow = {
+        id: Math.random().toString(36).slice(2, 9),
+        deviceIds: [deviceId],
+        activeDeviceId: deviceId,
+        x: Math.max(0, x),
+        y: Math.max(0, y),
+        isExpanded: true,
+      };
+
+      // Remove tab from source window
+      const updatedWindows = prev.map((w) => {
+        if (w.id !== windowId) return w;
+        const newDeviceIds = w.deviceIds.filter((id) => id !== deviceId);
+        return {
+          ...w,
+          deviceIds: newDeviceIds,
+          activeDeviceId: w.activeDeviceId === deviceId ? newDeviceIds[0] : w.activeDeviceId,
+        };
+      });
+
+      return [...updatedWindows, newWin];
+    });
+  }, []);
+
   const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string) => {
     if (nodeId && nodeName) {
       setConfigViewerNode({ id: nodeId, name: nodeName });
@@ -1475,6 +1526,8 @@ const StudioPage: React.FC = () => {
           }
           onSetActiveTab={(winId, nodeId) => setConsoleWindows((prev) => prev.map((win) => (win.id === winId ? { ...win, activeDeviceId: nodeId } : win)))}
           onUpdateWindowPos={(id, x, y) => setConsoleWindows((prev) => prev.map((win) => (win.id === id ? { ...win, x, y } : win)))}
+          onMergeWindows={handleMergeWindows}
+          onSplitTab={handleSplitTab}
         />
       </div>
       <StatusBar nodeStates={nodeStates} />
