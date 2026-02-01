@@ -1085,7 +1085,7 @@ username admin privilege 15 role network-admin nopassword
             logger.debug(f"No OVS networks found for lab {lab_id}")
             return result
 
-        # Check if we need to reconnect networks (OVS has no ports for this lab)
+        # Get OVS ports for this lab's bridge
         bridge_name = f"ovs-{lab_id[:12]}"
         proc = await asyncio.create_subprocess_exec(
             "ovs-vsctl", "list-ports", bridge_name,
@@ -1096,14 +1096,31 @@ username admin privilege 15 role network-admin nopassword
         ovs_ports = stdout.decode().strip().split("\n") if proc.returncode == 0 else []
         ovs_ports = [p for p in ovs_ports if p]  # Filter empty
 
-        # If no OVS ports but container has network attachments, reconnect to force endpoint creation
-        if not ovs_ports and networks:
-            logger.info(f"No OVS ports found for {container_name}, reconnecting networks...")
-            for network_name in list(networks.keys()):
-                network_id = networks[network_name].get("NetworkID", "")
-                if network_id not in network_to_interface:
-                    continue  # Skip non-OVS networks
+        # Check which of this container's OVS network attachments are missing from OVS
+        # We need to reconnect networks whose endpoint ports don't exist
+        networks_to_reconnect = []
+        for network_name, network_info in networks.items():
+            network_id = network_info.get("NetworkID", "")
+            if network_id not in network_to_interface:
+                continue  # Skip non-OVS networks
 
+            endpoint_id = network_info.get("EndpointID", "")
+            if not endpoint_id:
+                continue
+
+            # Check if OVS port exists for this endpoint (format: vh{endpoint_id[:5]}...)
+            port_prefix = f"vh{endpoint_id[:5]}"
+            port_exists = any(p.startswith(port_prefix) for p in ovs_ports)
+            if not port_exists:
+                networks_to_reconnect.append(network_name)
+
+        # Reconnect networks that are missing OVS ports
+        if networks_to_reconnect:
+            logger.info(
+                f"Missing OVS ports for {container_name}, reconnecting "
+                f"{len(networks_to_reconnect)} networks..."
+            )
+            for network_name in networks_to_reconnect:
                 try:
                     # Disconnect
                     docker_network = await asyncio.to_thread(self.docker.networks.get, network_name)
