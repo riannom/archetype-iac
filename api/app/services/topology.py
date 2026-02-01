@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import or_
+
+from agent.vendors import get_kind_for_device
 from sqlalchemy.orm import Session
 
 from app import models
@@ -85,7 +87,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         nodes.append({
             "name": n.container_name or n.name,
             "display_name": n.name,
-            "kind": n.device or "linux",
+            "kind": get_kind_for_device(n.device) if n.device else "linux",
             "image": n.image,
             "binds": binds,
             "env": env,
