@@ -973,8 +973,6 @@ async def rebuild_docker_agent(
     2. The agent container is rebuilt with latest code
     3. Agent re-registers with new version after restart
     """
-    import subprocess
-
     host = database.get(models.Host, agent_id)
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1011,43 +1009,54 @@ async def rebuild_docker_agent(
                 message="docker-compose.gui.yml not found. Ensure project directory is mounted.",
             )
 
-        # Run docker compose rebuild
+        # Run docker compose rebuild using async subprocess to avoid blocking event loop
         # Try docker compose (new) first, fall back to docker-compose (legacy)
         compose_cmd = ["docker", "compose"]
-        result = subprocess.run(
-            compose_cmd + ["version"],
-            capture_output=True,
-            timeout=10,
+        proc = await asyncio.create_subprocess_exec(
+            *compose_cmd, "version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        if result.returncode != 0:
+        await proc.communicate()
+        if proc.returncode != 0:
             compose_cmd = ["docker-compose"]
 
-        result = subprocess.run(
-            compose_cmd + ["-p", "archetype-iac", "-f", str(compose_file), "up", "-d", "--build", "--no-deps", "agent"],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout for build
+        # Run the rebuild command with timeout
+        full_cmd = compose_cmd + [
+            "-p", "archetype-iac",
+            "-f", str(compose_file),
+            "up", "-d", "--build", "--no-deps", "agent"
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *full_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             cwd=compose_file.parent,
         )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+            stdout_str = stdout.decode() if stdout else ""
+            stderr_str = stderr.decode() if stderr else ""
 
-        if result.returncode == 0:
-            return RebuildResponse(
-                success=True,
-                message="Agent container rebuilt successfully. It will re-register shortly.",
-                output=result.stdout + result.stderr,
-            )
-        else:
+            if proc.returncode == 0:
+                return RebuildResponse(
+                    success=True,
+                    message="Agent container rebuilt successfully. It will re-register shortly.",
+                    output=stdout_str + stderr_str,
+                )
+            else:
+                return RebuildResponse(
+                    success=False,
+                    message="Rebuild failed",
+                    output=stdout_str + stderr_str,
+                )
+        except asyncio.TimeoutError:
+            proc.kill()
             return RebuildResponse(
                 success=False,
-                message="Rebuild failed",
-                output=result.stdout + result.stderr,
+                message="Rebuild timed out after 5 minutes",
             )
 
-    except subprocess.TimeoutExpired:
-        return RebuildResponse(
-            success=False,
-            message="Rebuild timed out after 5 minutes",
-        )
     except Exception as e:
         return RebuildResponse(
             success=False,

@@ -1,10 +1,12 @@
 """Lab CRUD and topology management endpoints."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 import yaml
@@ -1632,6 +1634,19 @@ def sync_link_states(
 # ============================================================================
 
 
+def _save_config_to_workspace(workspace: Path, node_name: str, content: str) -> None:
+    """Save a config file to the workspace.
+
+    This is a blocking operation meant to run in asyncio.to_thread().
+    """
+    configs_dir = workspace / "configs"
+    configs_dir.mkdir(parents=True, exist_ok=True)
+    node_config_dir = configs_dir / node_name
+    node_config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = node_config_dir / "startup-config"
+    config_file.write_text(content, encoding="utf-8")
+
+
 @router.post("/labs/{lab_id}/extract-configs")
 async def extract_configs(
     lab_id: str,
@@ -1677,8 +1692,6 @@ async def extract_configs(
     # Save configs to API workspace and create snapshots
     if configs:
         workspace = lab_workspace(lab.id)
-        configs_dir = workspace / "configs"
-        configs_dir.mkdir(parents=True, exist_ok=True)
 
         for config_data in configs:
             node_name = config_data.get("node_name")
@@ -1686,11 +1699,10 @@ async def extract_configs(
             if not node_name or not content:
                 continue
 
-            # Save config to workspace
-            node_config_dir = configs_dir / node_name
-            node_config_dir.mkdir(parents=True, exist_ok=True)
-            config_file = node_config_dir / "startup-config"
-            config_file.write_text(content, encoding="utf-8")
+            # Save config to workspace (run in thread to avoid blocking event loop)
+            await asyncio.to_thread(
+                _save_config_to_workspace, workspace, node_name, content
+            )
 
             # Create snapshot if requested
             if create_snapshot:
