@@ -118,7 +118,7 @@ describe("RuntimeControl", () => {
     expect(deployButton).toHaveTextContent("Deploy Lab");
   });
 
-  it("shows Start All and Stop All buttons when lab is deployed", () => {
+  it("shows Start All and Stop All buttons when lab is deployed with mixed states", () => {
     const runtimeStates: Record<string, RuntimeStatus> = {
       "node-1": "running",
       "node-2": "stopped",
@@ -129,6 +129,22 @@ describe("RuntimeControl", () => {
     expect(
       screen.getByRole("button", { name: /start all/i })
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /stop all/i })
+    ).toBeInTheDocument();
+  });
+
+  it("hides Start All button when all nodes are already running", () => {
+    const runtimeStates: Record<string, RuntimeStatus> = {
+      "node-1": "running",
+      "node-2": "running",
+    };
+
+    render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
+
+    expect(
+      screen.queryByRole("button", { name: /start all/i })
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /stop all/i })
     ).toBeInTheDocument();
