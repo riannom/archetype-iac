@@ -37,7 +37,7 @@ from typing import Any
 import docker
 import yaml
 from docker.errors import NotFound, APIError, ImageNotFound
-from docker.types import Mount
+from docker.types import Mount, IPAMConfig
 
 from agent.config import settings
 from agent.network.local import LocalNetworkManager, get_local_manager
@@ -444,10 +444,40 @@ username admin privilege 15 role network-admin nopassword
                     zerotouch_config.write_text("DISABLE=True\n")
                     logger.debug(f"Created zerotouch-config for {node.log_name()}")
 
+    def _calculate_required_interfaces(self, topology: ParsedTopology) -> int:
+        """Calculate the maximum interface index needed based on topology links.
+
+        Examines all links to find the highest interface number used,
+        then adds a small buffer for flexibility.
+
+        Args:
+            topology: Parsed topology with nodes and links
+
+        Returns:
+            Number of interfaces to create (max index found + buffer)
+        """
+        max_index = 0
+
+        for link in topology.links:
+            for endpoint in link.endpoints:
+                # Endpoint format: "node:eth1" or "node:Ethernet1"
+                if ":" in endpoint:
+                    _, interface = endpoint.split(":", 1)
+                    # Extract number from interface name (eth1, Ethernet1, etc.)
+                    import re
+                    match = re.search(r"(\d+)$", interface)
+                    if match:
+                        index = int(match.group(1))
+                        max_index = max(max_index, index)
+
+        # Add buffer of 4 interfaces for flexibility (connecting new links)
+        # Minimum of 4 interfaces even if no links defined
+        return max(max_index + 4, 4)
+
     async def _create_lab_networks(
         self,
         lab_id: str,
-        max_interfaces: int = 64,
+        max_interfaces: int = 8,
     ) -> dict[str, str]:
         """Create Docker networks for lab interfaces via OVS plugin.
 
@@ -456,7 +486,7 @@ username admin privilege 15 role network-admin nopassword
 
         Args:
             lab_id: Lab identifier
-            max_interfaces: Maximum number of interfaces per node
+            max_interfaces: Maximum number of interfaces to create
 
         Returns:
             Dict mapping interface name (e.g., "eth1") to network name
@@ -478,11 +508,14 @@ username admin privilege 15 role network-admin nopassword
                     pass
 
                 # Create network via Docker API - plugin handles OVS bridge
+                # Use null IPAM driver to avoid consuming IP address space.
+                # These networks are L2-only (OVS switching), no IP allocation needed.
                 # Run in thread pool to avoid blocking event loop (OVS plugin needs it)
                 await asyncio.to_thread(
                     self.docker.networks.create,
                     name=network_name,
                     driver="archetype-ovs",
+                    ipam=IPAMConfig(driver="null"),
                     options={
                         "lab_id": lab_id,
                         "interface_name": interface_name,
@@ -596,71 +629,99 @@ username admin privilege 15 role network-admin nopassword
         """
         containers = {}
 
+        # Calculate the number of interfaces actually needed based on topology links
+        # This avoids creating 64 networks per node which exhausts Docker's IP pool
+        required_interfaces = self._calculate_required_interfaces(topology)
+        logger.info(f"Lab {lab_id} requires {required_interfaces} interfaces based on topology")
+
         # Create lab networks if OVS plugin is enabled
         # Always use "eth" naming for Docker networks for consistency
         # The OVS plugin handles interface naming inside containers
         if self.use_ovs_plugin:
-            await self._create_lab_networks(lab_id)
+            await self._create_lab_networks(lab_id, max_interfaces=required_interfaces)
 
-        for node_name, node in topology.nodes.items():
-            container_name = self._container_name(lab_id, node_name)
-            log_name = node.log_name()
+        try:
+            for node_name, node in topology.nodes.items():
+                container_name = self._container_name(lab_id, node_name)
+                log_name = node.log_name()
 
-            # Check if container already exists
-            try:
-                existing = self.docker.containers.get(container_name)
-                if existing.status == "running":
-                    logger.info(f"Container {log_name} already running")
-                    containers[node_name] = existing
-                    continue
+                # Check if container already exists
+                try:
+                    existing = self.docker.containers.get(container_name)
+                    if existing.status == "running":
+                        logger.info(f"Container {log_name} already running")
+                        containers[node_name] = existing
+                        continue
+                    else:
+                        logger.info(f"Removing stopped container {log_name}")
+                        existing.remove(force=True)
+                except NotFound:
+                    pass
+
+                # Build container config
+                config = self._create_container_config(node, lab_id, workspace)
+
+                # Set network mode based on whether OVS plugin is enabled
+                # When OVS plugin is enabled, we attach to Docker networks which
+                # provision interfaces BEFORE container init runs (critical for cEOS).
+                # When disabled, we use "none" mode and provision interfaces post-start.
+                if self.use_ovs_plugin:
+                    # Use the pre-calculated required_interfaces count
+                    # This avoids creating 64 interfaces per node (vendor max_ports)
+                    # and only creates what's actually needed based on topology links
+
+                    # Docker network names always use "eth" prefix for consistency
+                    # The OVS plugin handles renaming inside the container based on
+                    # the interface_name option passed during network creation
+                    first_network = f"{lab_id}-eth1"
+                    config["network"] = first_network
+                    logger.info(f"Creating container {log_name} with image {config['image']}")
+
+                    # Create container - run in thread pool to avoid blocking event loop
+                    container = await asyncio.to_thread(
+                        lambda cfg=config: self.docker.containers.create(**cfg)
+                    )
+                    containers[node_name] = container
+
+                    # Attach to remaining interface networks (eth2, eth3, ...)
+                    await self._attach_container_to_networks(
+                        container=container,
+                        lab_id=lab_id,
+                        interface_count=required_interfaces - 1,  # Already attached to eth1
+                        interface_prefix="eth",
+                        start_index=2,  # Start from eth2
+                    )
                 else:
-                    logger.info(f"Removing stopped container {log_name}")
-                    existing.remove(force=True)
-            except NotFound:
-                pass
+                    # Legacy mode: use "none" network, provision interfaces post-start
+                    config["network_mode"] = "none"
+                    logger.info(f"Creating container {log_name} with image {config['image']}")
 
-            # Build container config
-            config = self._create_container_config(node, lab_id, workspace)
+                    container = await asyncio.to_thread(
+                        lambda cfg=config: self.docker.containers.create(**cfg)
+                    )
+                    containers[node_name] = container
 
-            # Set network mode based on whether OVS plugin is enabled
-            # When OVS plugin is enabled, we attach to Docker networks which
-            # provision interfaces BEFORE container init runs (critical for cEOS).
-            # When disabled, we use "none" mode and provision interfaces post-start.
+        except Exception as e:
+            # Clean up partially created resources on failure to prevent leaks
+            logger.error(f"Container creation failed, cleaning up: {e}")
+
+            # Remove any containers that were created before the failure
+            for node_name, container in containers.items():
+                try:
+                    container.remove(force=True, v=True)
+                    logger.debug(f"Cleaned up container for {node_name}")
+                except Exception as cleanup_err:
+                    logger.warning(f"Failed to clean up container {node_name}: {cleanup_err}")
+
+            # Clean up Docker networks to prevent IP address exhaustion
             if self.use_ovs_plugin:
-                # Get vendor config for interface count
-                vendor_config = get_config_by_device(node.kind)
-                interface_count = vendor_config.max_ports if vendor_config else 16
+                try:
+                    deleted = await self._delete_lab_networks(lab_id)
+                    logger.info(f"Cleaned up {deleted} networks after failed container creation")
+                except Exception as net_err:
+                    logger.warning(f"Failed to clean up networks: {net_err}")
 
-                # Docker network names always use "eth" prefix for consistency
-                # The OVS plugin handles renaming inside the container based on
-                # the interface_name option passed during network creation
-                first_network = f"{lab_id}-eth1"
-                config["network"] = first_network
-                logger.info(f"Creating container {log_name} with image {config['image']}")
-
-                # Create container - run in thread pool to avoid blocking event loop
-                container = await asyncio.to_thread(
-                    lambda cfg=config: self.docker.containers.create(**cfg)
-                )
-                containers[node_name] = container
-
-                # Attach to remaining interface networks (eth2, eth3, ...)
-                await self._attach_container_to_networks(
-                    container=container,
-                    lab_id=lab_id,
-                    interface_count=interface_count - 1,  # Already attached to eth1
-                    interface_prefix="eth",
-                    start_index=2,  # Start from eth2
-                )
-            else:
-                # Legacy mode: use "none" network, provision interfaces post-start
-                config["network_mode"] = "none"
-                logger.info(f"Creating container {log_name} with image {config['image']}")
-
-                container = await asyncio.to_thread(
-                    lambda cfg=config: self.docker.containers.create(**cfg)
-                )
-                containers[node_name] = container
+            raise
 
         return containers
 
@@ -691,13 +752,29 @@ username admin privilege 15 role network-admin nopassword
             except Exception as e:
                 logger.warning(f"OVS initialization failed, falling back to legacy networking: {e}")
 
+        # Track if we've started a cEOS container (for staggered boot)
+        ceos_started = False
+
         for node_name, container in containers.items():
             try:
                 log_name = topology.log_name(node_name)
+                node = topology.nodes.get(node_name)
+                is_ceos = node and node.kind in ("ceos", "eos")
+
+                # Stagger cEOS container starts to avoid modprobe race condition
+                # When multiple cEOS instances start simultaneously, they race to
+                # load kernel modules (tun, etc.) which can cause boot failures
+                if is_ceos and ceos_started:
+                    logger.info(f"Waiting 5s before starting {log_name} (cEOS stagger)")
+                    await asyncio.sleep(5)
+
                 if container.status != "running":
                     # Run in thread pool - start triggers network plugin callbacks
                     await asyncio.to_thread(container.start)
                     logger.info(f"Started container {log_name}")
+
+                if is_ceos:
+                    ceos_started = True
 
                 # Skip interface provisioning if OVS plugin is handling it
                 # (interfaces already exist via Docker network attachments)
