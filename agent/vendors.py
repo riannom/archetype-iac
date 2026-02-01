@@ -337,13 +337,59 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     # =========================================================================
     # NETWORK DEVICES - Switches
     # =========================================================================
+    # =========================================================================
+    # Arista cEOS (containerized EOS)
+    # =========================================================================
+    # Key behaviors and requirements:
+    #
+    # 1. PLATFORM DETECTION RACE CONDITION
+    #    cEOS uses Ark.getPlatform() during early boot to detect if running as
+    #    a container. If this returns None (instead of "ceoslab"), boot fails:
+    #    - VEosLabInit skips container-specific init
+    #    - EosInitStage tries to load kernel modules (modprobe rbfd) which fails
+    #    - Result: Partial boot, no CLI access
+    #
+    #    Solution: Network interfaces must exist BEFORE /sbin/init runs. We use
+    #    an if-wait.sh script (from containerlab) that blocks until interfaces
+    #    appear in /sys/class/net/. The CLAB_INTFS env var tells it how many
+    #    interfaces to wait for. See docker.py IF_WAIT_SCRIPT and
+    #    _create_container_config() for implementation.
+    #
+    # 2. ENVIRONMENT VARIABLES (all required for proper boot)
+    #    - CEOS=1: Identifies as cEOS container
+    #    - EOS_PLATFORM=ceoslab: Platform type for Ark.getPlatform()
+    #    - INTFTYPE=eth: Linux interface naming (eth1 -> Ethernet1)
+    #    - MGMT_INTF=eth0: Management interface name
+    #    - SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT=1: Skip ZTP barrier
+    #    - CEOS_NOZEROTOUCH=1: Disable Zero Touch Provisioning
+    #    - CLAB_INTFS=N: Number of interfaces to wait for (set by docker.py)
+    #
+    # 3. FLASH DIRECTORY (/mnt/flash)
+    #    Must be mounted and contain:
+    #    - startup-config: Initial configuration (hostname, users, etc.)
+    #    - zerotouch-config: File presence disables ZTP
+    #    - if-wait.sh: Interface wait script (created by docker.py)
+    #
+    # 4. KERNEL MODULES
+    #    /lib/modules must be mounted read-only so cEOS can load modules.
+    #    Without this, modprobe calls fail even when platform is correct.
+    #
+    # 5. INTERFACE MAPPING
+    #    Linux eth1,eth2,... map to EOS Ethernet1,Ethernet2,...
+    #    eth0 is reserved for management (Ma0 in EOS).
+    #
+    # 6. BOOT TIME
+    #    cEOS takes 60-120+ seconds to fully boot. Readiness is detected via
+    #    log patterns like %SYS-5-CONFIG_I or "System ready".
+    # =========================================================================
     "ceos": VendorConfig(
         kind="ceos",
         vendor="Arista",
         console_shell="FastCli",  # FastCli is always available; Cli symlink may not exist
         default_image="ceos:latest",
         aliases=["eos", "arista_eos", "arista_ceos"],
-        entrypoint="/sbin/init",  # cEOS images have no default entrypoint
+        # Note: entrypoint is overridden in docker.py to use if-wait.sh wrapper
+        entrypoint="/sbin/init",
         device_type=DeviceType.SWITCH,
         category="Network",
         subcategory="Switches",
@@ -355,34 +401,34 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="Ethernet",
         port_start_index=1,
         max_ports=12,
-        # Note: cEOS interfaces are now provisioned via OVS at boot time
-        memory=2048,  # 2GB recommended
+        memory=2048,  # 2GB recommended minimum
         cpu=2,
         requires_image=True,
         documentation_url="https://www.arista.com/en/support/product-documentation",
         license_required=True,
         tags=["switching", "bgp", "evpn", "vxlan", "datacenter"],
-        # Boot readiness: cEOS takes 30-60+ seconds to boot
+        # Boot readiness detection via log patterns
         readiness_probe="log_pattern",
         readiness_pattern=r"%SYS-5-CONFIG_I|%SYS-5-SYSTEM_INITIALIZED|%SYS-5-SYSTEM_RESTARTED|%ZTP-6-CANCEL|Startup complete|System ready",
         readiness_timeout=300,  # cEOS can take up to 5 minutes
         # Container runtime configuration
         environment={
-            "CEOS": "1",
-            "EOS_PLATFORM": "ceoslab",
-            "container": "docker",
-            "ETBA": "1",
-            "SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT": "1",
-            "INTFTYPE": "eth",
-            "MGMT_INTF": "eth0",
-            "CEOS_NOZEROTOUCH": "1",  # Cancel ZeroTouch provisioning
+            "CEOS": "1",                                  # Identify as cEOS
+            "EOS_PLATFORM": "ceoslab",                    # Platform for Ark.getPlatform()
+            "container": "docker",                        # Container runtime type
+            "ETBA": "1",                                  # Enable test board agent
+            "SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT": "1",   # Skip ZTP barrier
+            "INTFTYPE": "eth",                            # Linux interface prefix
+            "MGMT_INTF": "eth0",                          # Management interface
+            "CEOS_NOZEROTOUCH": "1",                      # Disable ZTP
+            # Note: CLAB_INTFS is set dynamically in docker.py based on topology
         },
         capabilities=["NET_ADMIN", "SYS_ADMIN", "NET_RAW"],
         privileged=True,
         binds=[
-            "{workspace}/configs/{node}/flash:/mnt/flash",
-            "{workspace}/configs/{node}/systemd:/etc/systemd/system.conf.d:ro",
-            "/lib/modules:/lib/modules:ro",  # Host kernel modules for modprobe
+            "{workspace}/configs/{node}/flash:/mnt/flash",              # EOS flash storage
+            "{workspace}/configs/{node}/systemd:/etc/systemd/system.conf.d:ro",  # systemd env
+            "/lib/modules:/lib/modules:ro",                              # Kernel modules for modprobe
         ],
         sysctls={
             "net.ipv4.ip_forward": "1",
