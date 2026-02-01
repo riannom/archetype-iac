@@ -477,7 +477,9 @@ username admin privilege 15 role network-admin nopassword
                     pass
 
                 # Create network via Docker API - plugin handles OVS bridge
-                self.docker.networks.create(
+                # Run in thread pool to avoid blocking event loop (OVS plugin needs it)
+                await asyncio.to_thread(
+                    self.docker.networks.create,
                     name=network_name,
                     driver="archetype-ovs",
                     options={
@@ -553,7 +555,8 @@ username admin privilege 15 role network-admin nopassword
 
             try:
                 network = self.docker.networks.get(network_name)
-                network.connect(container.id)
+                # Run in thread pool - network.connect triggers OVS plugin callbacks
+                await asyncio.to_thread(network.connect, container.id)
                 attached.append(network_name)
                 logger.debug(f"Attached {container.name} to {network_name}")
 
@@ -603,9 +606,13 @@ username admin privilege 15 role network-admin nopassword
             # Build container config
             config = self._create_container_config(node, lab_id, workspace)
 
-            # Create container
+            # Create container - run in thread pool to avoid blocking event loop
+            # This is critical when using OVS plugin, which needs the event loop
+            # to respond to Docker's network plugin callbacks
             logger.info(f"Creating container {log_name} with image {config['image']}")
-            container = self.docker.containers.create(**config)
+            container = await asyncio.to_thread(
+                lambda: self.docker.containers.create(**config)
+            )
             containers[node_name] = container
 
             # Attach to interface networks if OVS plugin is enabled
@@ -653,7 +660,8 @@ username admin privilege 15 role network-admin nopassword
             try:
                 log_name = topology.log_name(node_name)
                 if container.status != "running":
-                    container.start()
+                    # Run in thread pool - start triggers network plugin callbacks
+                    await asyncio.to_thread(container.start)
                     logger.info(f"Started container {log_name}")
 
                 # Skip interface provisioning if OVS plugin is handling it
