@@ -17,6 +17,7 @@ const LogsView: React.FC<LogsViewProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
 
   // Filters
@@ -30,6 +31,8 @@ const LogsView: React.FC<LogsViewProps> = ({
   const [hostSidebarCollapsed, setHostSidebarCollapsed] = useState(false);
 
   const autoRefreshIntervalRef = useRef<number | null>(null);
+  const logContainerRef = useRef<HTMLDivElement | null>(null);
+  const isInitialLoadRef = useRef(true);
 
   // Build query params from filter state
   const queryParams = useMemo((): LabLogsQueryParams => {
@@ -87,6 +90,33 @@ const LogsView: React.FC<LogsViewProps> = ({
     };
   }, [autoRefresh, loadLogs]);
 
+  // Scroll to bottom helper
+  const scrollToBottom = useCallback(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, []);
+
+  // Handle scroll to detect when user scrolls away from bottom
+  const handleScroll = useCallback(() => {
+    if (!logContainerRef.current || !autoScroll) return;
+    const { scrollTop, scrollHeight, clientHeight } = logContainerRef.current;
+    // If user scrolled more than 50px from bottom, disable auto-scroll
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
+    if (!isNearBottom) {
+      setAutoScroll(false);
+    }
+  }, [autoScroll]);
+
+  // Scroll to bottom on initial load
+  useEffect(() => {
+    if (!loading && logs && isInitialLoadRef.current) {
+      isInitialLoadRef.current = false;
+      // Use setTimeout to ensure DOM has rendered
+      setTimeout(scrollToBottom, 0);
+    }
+  }, [loading, logs, scrollToBottom]);
+
   // Merge job logs with realtime entries
   const allEntries = useMemo(() => {
     const entries: Array<LabLogEntry & { isRealtime?: boolean }> = [];
@@ -115,6 +145,13 @@ const LogsView: React.FC<LogsViewProps> = ({
 
     return entries;
   }, [logs?.entries, realtimeEntries]);
+
+  // Scroll to bottom when entries change (if autoScroll is enabled)
+  useEffect(() => {
+    if (autoScroll && allEntries.length > 0) {
+      setTimeout(scrollToBottom, 0);
+    }
+  }, [allEntries, autoScroll, scrollToBottom]);
 
   // Get all hosts (from logs + filter for sidebar)
   const allHosts = useMemo(() => {
@@ -230,6 +267,24 @@ const LogsView: React.FC<LogsViewProps> = ({
               />
               Auto-refresh
             </label>
+            <button
+              onClick={() => {
+                setAutoScroll(!autoScroll);
+                if (!autoScroll) {
+                  // Scroll to bottom immediately when enabling
+                  setTimeout(scrollToBottom, 0);
+                }
+              }}
+              className={`px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                autoScroll
+                  ? 'bg-sage-600 text-white hover:bg-sage-700'
+                  : 'bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white'
+              }`}
+              title={autoScroll ? 'Auto-scroll enabled (click to disable)' : 'Auto-scroll disabled (click to enable)'}
+            >
+              <i className={`fa-solid ${autoScroll ? 'fa-angles-down' : 'fa-arrow-down'}`} />
+              {autoScroll ? 'Following' : 'Follow'}
+            </button>
             <button
               onClick={handleCopyAll}
               disabled={allEntries.length === 0}
@@ -416,7 +471,11 @@ const LogsView: React.FC<LogsViewProps> = ({
           )}
 
           {allEntries.length > 0 && (
-            <div className="flex-1 overflow-y-auto font-mono text-[11px] custom-scrollbar">
+            <div
+              ref={logContainerRef}
+              onScroll={handleScroll}
+              className="flex-1 overflow-y-auto font-mono text-[11px] custom-scrollbar"
+            >
               {allEntries.map((entry, idx) => {
                 const isRealtime = (entry as any).isRealtime;
                 return (
