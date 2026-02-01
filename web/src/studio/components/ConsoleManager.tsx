@@ -290,7 +290,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
           <div
             key={win.id}
             ref={(el) => setWindowRef(win.id, el)}
-            className={`fixed z-40 bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5
+            className={`fixed z-[100] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5
               ${isDropTarget ? 'console-drop-target-active' : ''}
               ${isBeingDraggedOverTarget ? 'console-window-dragging-over-target' : ''}`}
             style={{
