@@ -335,7 +335,7 @@ class TestResourceDistribution:
         assert "by_agent" in data
         assert "by_lab" in data
         assert data["by_agent"] == []
-        assert data["by_lab"] == {}
+        assert data["by_lab"] == []
 
     def test_resources_by_agent(
         self,
@@ -403,10 +403,12 @@ class TestResourceDistribution:
         assert response.status_code == 200
         data = response.json()
 
-        # Lab should have container count
-        assert lab.id in data["by_lab"]
-        assert data["by_lab"][lab.id]["containers"] == 2
-        assert data["by_lab"][lab.id]["name"] == "Test Lab"
+        # Lab should have container count (by_lab is a list of objects)
+        assert len(data["by_lab"]) == 1
+        lab_entry = data["by_lab"][0]
+        assert lab_entry["id"] == lab.id
+        assert lab_entry["container_count"] == 2
+        assert lab_entry["name"] == "Test Lab"
 
 
 class TestLabPrefixMatching:
