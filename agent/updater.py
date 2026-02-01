@@ -146,16 +146,25 @@ async def perform_systemd_update(
     """
     root = get_agent_root()
 
+    def _run_subprocess(cmd, cwd, timeout):
+        """Run subprocess synchronously (to be wrapped in asyncio.to_thread)."""
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+        )
+
     try:
         # Step 1: Downloading (git fetch)
         await report_progress(callback_url, job_id, agent_id, "downloading", 10)
 
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            _run_subprocess,
             ["git", "fetch", "origin", "--tags", "--force"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            cwd=root,
+            root,
+            60,
         )
         if result.returncode != 0:
             await report_progress(
@@ -170,11 +179,11 @@ async def perform_systemd_update(
         # Try tag format first (v0.2.0), then raw version (0.2.0)
         checkout_ref = None
         for ref in [f"v{target_version}", target_version, f"origin/v{target_version}"]:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                _run_subprocess,
                 ["git", "rev-parse", "--verify", ref],
-                capture_output=True,
-                timeout=10,
-                cwd=root,
+                root,
+                10,
             )
             if result.returncode == 0:
                 checkout_ref = ref
@@ -187,12 +196,11 @@ async def perform_systemd_update(
             )
             return False
 
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            _run_subprocess,
             ["git", "checkout", checkout_ref],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=root,
+            root,
+            30,
         )
         if result.returncode != 0:
             await report_progress(
@@ -208,12 +216,11 @@ async def perform_systemd_update(
 
         # Find the correct pip/python
         python_exe = sys.executable
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            _run_subprocess,
             [python_exe, "-m", "pip", "install", "-r", "requirements.txt"],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 min for pip install
-            cwd=root / "agent",
+            root / "agent",
+            300,  # 5 min for pip install
         )
         if result.returncode != 0:
             await report_progress(

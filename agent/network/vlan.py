@@ -40,7 +40,10 @@ class VlanManager:
     _interfaces_by_lab: dict[str, set[str]] = field(default_factory=dict)
 
     def _run_ip_command(self, args: list[str]) -> tuple[int, str, str]:
-        """Run an ip command and return (returncode, stdout, stderr)."""
+        """Run an ip command and return (returncode, stdout, stderr).
+
+        This is the synchronous version, used internally.
+        """
         cmd = ["ip"] + args
         logger.debug(f"Running: {' '.join(cmd)}")
         try:
@@ -57,6 +60,13 @@ class VlanManager:
         except Exception as e:
             logger.error(f"Command failed: {' '.join(cmd)}: {e}")
             return 1, "", str(e)
+
+    async def _run_ip_command_async(self, args: list[str]) -> tuple[int, str, str]:
+        """Run an ip command asynchronously.
+
+        Wraps _run_ip_command in asyncio.to_thread to avoid blocking.
+        """
+        return await asyncio.to_thread(self._run_ip_command, args)
 
     def interface_exists(self, name: str) -> bool:
         """Check if an interface exists."""
@@ -257,42 +267,45 @@ async def setup_external_networks(
     Returns:
         List of created interface names
     """
-    manager = get_vlan_manager()
-    external_networks = parse_external_networks_from_topology(topology_yaml)
-    created = []
+    def _sync_setup() -> list[str]:
+        manager = get_vlan_manager()
+        external_networks = parse_external_networks_from_topology(topology_yaml)
+        created = []
 
-    for ext_net in external_networks:
-        # Skip networks assigned to other hosts
-        host = ext_net.get("host")
-        if host and agent_id and host != agent_id:
-            logger.debug(f"Skipping external network {ext_net['name']} - assigned to host {host}")
-            continue
-
-        conn_type = ext_net.get("connection_type", "bridge")
-
-        if conn_type == "vlan":
-            parent = ext_net.get("parent_interface")
-            vlan_id = ext_net.get("vlan_id")
-
-            if not parent or not vlan_id:
-                logger.warning(f"External network {ext_net['name']} missing parent_interface or vlan_id")
+        for ext_net in external_networks:
+            # Skip networks assigned to other hosts
+            host = ext_net.get("host")
+            if host and agent_id and host != agent_id:
+                logger.debug(f"Skipping external network {ext_net['name']} - assigned to host {host}")
                 continue
 
-            iface = manager.create_vlan_interface(parent, vlan_id, lab_id)
-            if iface:
-                created.append(iface)
+            conn_type = ext_net.get("connection_type", "bridge")
 
-        # Bridge mode doesn't need interface creation - assumes bridge already exists
-        elif conn_type == "bridge":
-            bridge_name = ext_net.get("bridge_name")
-            if bridge_name:
-                # Verify bridge exists
-                if manager.interface_exists(bridge_name):
-                    logger.info(f"External network {ext_net['name']} using existing bridge {bridge_name}")
-                else:
-                    logger.warning(f"Bridge {bridge_name} does not exist for external network {ext_net['name']}")
+            if conn_type == "vlan":
+                parent = ext_net.get("parent_interface")
+                vlan_id = ext_net.get("vlan_id")
 
-    return created
+                if not parent or not vlan_id:
+                    logger.warning(f"External network {ext_net['name']} missing parent_interface or vlan_id")
+                    continue
+
+                iface = manager.create_vlan_interface(parent, vlan_id, lab_id)
+                if iface:
+                    created.append(iface)
+
+            # Bridge mode doesn't need interface creation - assumes bridge already exists
+            elif conn_type == "bridge":
+                bridge_name = ext_net.get("bridge_name")
+                if bridge_name:
+                    # Verify bridge exists
+                    if manager.interface_exists(bridge_name):
+                        logger.info(f"External network {ext_net['name']} using existing bridge {bridge_name}")
+                    else:
+                        logger.warning(f"Bridge {bridge_name} does not exist for external network {ext_net['name']}")
+
+        return created
+
+    return await asyncio.to_thread(_sync_setup)
 
 
 async def cleanup_external_networks(lab_id: str) -> list[str]:
@@ -304,5 +317,8 @@ async def cleanup_external_networks(lab_id: str) -> list[str]:
     Returns:
         List of deleted interface names
     """
-    manager = get_vlan_manager()
-    return manager.cleanup_lab(lab_id)
+    def _sync_cleanup() -> list[str]:
+        manager = get_vlan_manager()
+        return manager.cleanup_lab(lab_id)
+
+    return await asyncio.to_thread(_sync_cleanup)
