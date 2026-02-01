@@ -1050,9 +1050,11 @@ class DockerOVSPlugin:
             else:
                 subnet, gateway = self._allocate_mgmt_subnet()
 
-            try:
+            # Wrap Docker operations in thread to avoid blocking event loop
+            def _sync_create_network():
                 import docker
                 client = docker.from_env()
+                nonlocal subnet, gateway
 
                 # Check if network already exists
                 try:
@@ -1063,6 +1065,7 @@ class DockerOVSPlugin:
                     subnet = config.get("Subnet", subnet)
                     gateway = config.get("Gateway", gateway)
                     logger.info(f"Management network {network_name} already exists")
+                    return network_id, subnet, gateway
                 except docker.errors.NotFound:
                     # Create the network
                     ipam_pool = docker.types.IPAMPool(
@@ -1085,8 +1088,11 @@ class DockerOVSPlugin:
                             "archetype.type": "management",
                         },
                     )
-                    network_id = network.id
                     logger.info(f"Created management network {network_name}: {subnet}")
+                    return network.id, subnet, gateway
+
+            try:
+                network_id, subnet, gateway = await asyncio.to_thread(_sync_create_network)
 
                 mgmt_net = ManagementNetwork(
                     lab_id=lab_id,
@@ -1121,7 +1127,8 @@ class DockerOVSPlugin:
             # Create management network if it doesn't exist
             mgmt_net = await self.create_management_network(lab_id)
 
-        try:
+        # Wrap Docker operations in thread to avoid blocking event loop
+        def _sync_attach():
             import docker
             client = docker.from_env()
 
@@ -1145,6 +1152,9 @@ class DockerOVSPlugin:
             logger.info(f"Attached {container_id[:12]} to management network, IP: {ip_addr}")
             return ip_addr
 
+        try:
+            return await asyncio.to_thread(_sync_attach)
+
         except Exception as e:
             logger.error(f"Failed to attach to management network: {e}")
             return None
@@ -1162,7 +1172,9 @@ class DockerOVSPlugin:
         if not mgmt_net:
             return False
 
-        try:
+        # Wrap Docker operations in thread to avoid blocking event loop
+        def _sync_delete() -> tuple[bool, bool]:
+            """Returns (success, needs_save)"""
             import docker
             client = docker.from_env()
 
@@ -1170,9 +1182,9 @@ class DockerOVSPlugin:
                 network = client.networks.get(mgmt_net.network_name)
                 network.remove()
                 logger.info(f"Deleted management network {mgmt_net.network_name}")
-                return True
+                return True, True
             except docker.errors.NotFound:
-                return True  # Already gone
+                return True, False  # Already gone
             except docker.errors.APIError as e:
                 if "has active endpoints" in str(e):
                     # Force disconnect all containers first
@@ -1183,19 +1195,20 @@ class DockerOVSPlugin:
                         except Exception:
                             pass
                     network.remove()
-                    # Persist state after management network deletion
-                    await self._mark_dirty_and_save()
-                    return True
+                    return True, True
                 raise
+
+        try:
+            success, needs_save = await asyncio.to_thread(_sync_delete)
+            if success and needs_save:
+                await self._mark_dirty_and_save()
+            return success
 
         except Exception as e:
             logger.error(f"Failed to delete management network: {e}")
             # Put it back in tracking since we failed
             self.management_networks[lab_id] = mgmt_net
             return False
-
-        # Persist state after successful deletion
-        await self._mark_dirty_and_save()
 
     # =========================================================================
     # Multi-Host VXLAN Support
@@ -1912,6 +1925,188 @@ class DockerOVSPlugin:
 
             logger.info(f"Disconnected {container}:{interface} (new VLAN {new_vlan})")
             return new_vlan
+
+    # =========================================================================
+    # Carrier State Management (for link up/down simulation)
+    # =========================================================================
+
+    async def _get_container_pid(self, container_name: str) -> int | None:
+        """Get the PID of a container's init process.
+
+        Uses docker inspect to get the container's namespace PID.
+
+        Returns:
+            PID on success, None if container not found or not running.
+        """
+        def _sync_get_pid() -> int | None:
+            try:
+                import docker
+                client = docker.from_env()
+                container = client.containers.get(container_name)
+                if container.status != "running":
+                    logger.warning(f"Container {container_name} is not running")
+                    return None
+                return container.attrs["State"]["Pid"]
+            except Exception as e:
+                logger.error(f"Failed to get PID for container {container_name}: {e}")
+                return None
+
+        return await asyncio.to_thread(_sync_get_pid)
+
+    async def set_carrier_state(
+        self,
+        lab_id: str,
+        container: str,
+        interface: str,
+        state: str,
+    ) -> bool:
+        """Set the carrier state of an interface inside a container.
+
+        This uses `ip link set carrier on/off` via nsenter to simulate
+        link up/down at the physical layer. The interface remains configured
+        but no traffic can flow when carrier is off.
+
+        Args:
+            lab_id: Lab identifier
+            container: Container name
+            interface: Interface name in container (e.g., "eth1")
+            state: "on" or "off"
+
+        Returns:
+            True if carrier state was set successfully, False otherwise.
+        """
+        if state not in ("on", "off"):
+            logger.error(f"Invalid carrier state: {state}, must be 'on' or 'off'")
+            return False
+
+        # Get container PID for nsenter
+        pid = await self._get_container_pid(container)
+        if not pid:
+            return False
+
+        # Set carrier state inside container namespace
+        code, _, stderr = await self._run_cmd([
+            "nsenter", "-t", str(pid), "-n",
+            "ip", "link", "set", interface, "carrier", state,
+        ])
+
+        if code != 0:
+            logger.error(f"Failed to set carrier {state} on {container}:{interface}: {stderr}")
+            return False
+
+        logger.info(f"Set carrier {state} on {container}:{interface}")
+        return True
+
+    async def isolate_port(
+        self,
+        lab_id: str,
+        container: str,
+        interface: str,
+    ) -> int | None:
+        """Isolate a port by giving it a unique VLAN and setting carrier off.
+
+        This effectively disconnects the interface from any L2 domain and
+        simulates a cable disconnect at the physical layer.
+
+        Args:
+            lab_id: Lab identifier
+            container: Container name
+            interface: Interface name in container
+
+        Returns:
+            New VLAN tag on success, None on failure.
+        """
+        # First, isolate via VLAN (hot_disconnect logic)
+        new_vlan = await self.hot_disconnect(lab_id, container, interface)
+        if new_vlan is None:
+            return None
+
+        # Then set carrier off to simulate physical disconnect
+        if not await self.set_carrier_state(lab_id, container, interface, "off"):
+            logger.warning(f"VLAN isolated but carrier off failed for {container}:{interface}")
+            # Return the VLAN anyway - isolation still works at L2
+
+        return new_vlan
+
+    async def restore_port(
+        self,
+        lab_id: str,
+        container: str,
+        interface: str,
+        target_vlan: int,
+    ) -> bool:
+        """Restore a port to a specific VLAN and set carrier on.
+
+        This reconnects the interface to the specified L2 domain and
+        simulates a cable reconnect at the physical layer.
+
+        Args:
+            lab_id: Lab identifier
+            container: Container name
+            interface: Interface name in container
+            target_vlan: VLAN tag to set (should match peer's VLAN)
+
+        Returns:
+            True on success, False on failure.
+        """
+        async with self._lock:
+            lab_bridge = self.lab_bridges.get(lab_id)
+            if not lab_bridge:
+                logger.error(f"Lab bridge not found for {lab_id}")
+                return False
+
+            # Find endpoint
+            endpoint = None
+            for ep in self.endpoints.values():
+                if ep.container_name == container and ep.interface_name == interface:
+                    endpoint = ep
+                    break
+
+            if not endpoint:
+                logger.error(f"Endpoint not found for {container}:{interface}")
+                return False
+
+            # Set VLAN to match peer
+            code, _, stderr = await self._ovs_vsctl(
+                "set", "port", endpoint.host_veth, f"tag={target_vlan}"
+            )
+            if code != 0:
+                logger.error(f"Failed to set VLAN {target_vlan}: {stderr}")
+                return False
+
+            endpoint.vlan_tag = target_vlan
+            self._touch_lab(lab_id)
+            await self._mark_dirty_and_save()
+
+        # Set carrier on to restore physical link
+        if not await self.set_carrier_state(lab_id, container, interface, "on"):
+            logger.warning(f"VLAN restored but carrier on failed for {container}:{interface}")
+            return False
+
+        logger.info(f"Restored {container}:{interface} to VLAN {target_vlan}")
+        return True
+
+    async def get_endpoint_vlan(
+        self,
+        lab_id: str,
+        container: str,
+        interface: str,
+    ) -> int | None:
+        """Get the current VLAN tag for an endpoint.
+
+        Args:
+            lab_id: Lab identifier
+            container: Container name
+            interface: Interface name
+
+        Returns:
+            VLAN tag if found, None otherwise.
+        """
+        async with self._lock:
+            for ep in self.endpoints.values():
+                if ep.container_name == container and ep.interface_name == interface:
+                    return ep.vlan_tag
+            return None
 
     async def set_endpoint_container_name(self, endpoint_id: str, container_name: str) -> None:
         """Associate endpoint with container name for hot-connect lookups."""
