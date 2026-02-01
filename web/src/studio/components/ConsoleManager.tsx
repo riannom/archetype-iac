@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ConsoleWindow, Node } from '../types';
 import TerminalSession from './TerminalSession';
 
@@ -19,7 +19,12 @@ interface ConsoleManagerProps {
   onSetActiveTab: (windowId: string, nodeId: string) => void;
   onUpdateWindowPos: (windowId: string, x: number, y: number) => void;
   onUpdateWindowSize?: (windowId: string, width: number, height: number) => void;
+  onMergeWindows?: (sourceWindowId: string, targetWindowId: string) => void;
+  onSplitTab?: (windowId: string, deviceId: string, x: number, y: number) => void;
 }
+
+// Threshold in pixels before a tab drag initiates a split
+const TAB_DRAG_THRESHOLD = 30;
 
 const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   labId,
@@ -30,10 +35,53 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   onCloseTab,
   onSetActiveTab,
   onUpdateWindowPos,
+  onMergeWindows,
+  onSplitTab,
 }) => {
   const [dragState, setDragState] = useState<{ id: string; startX: number; startY: number } | null>(null);
   const [resizeState, setResizeState] = useState<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
   const [winSizes, setWinSizes] = useState<Record<string, { w: number; h: number }>>({});
+
+  // Drop target detection state
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const windowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Tab drag state for splitting tabs out of windows
+  const [tabDragState, setTabDragState] = useState<{
+    windowId: string;
+    deviceId: string;
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+    isDragging: boolean; // true once threshold is exceeded
+  } | null>(null);
+
+  // Store ref for a window element
+  const setWindowRef = useCallback((windowId: string, element: HTMLDivElement | null) => {
+    if (element) {
+      windowRefs.current.set(windowId, element);
+    } else {
+      windowRefs.current.delete(windowId);
+    }
+  }, []);
+
+  // Find which window (if any) the cursor is over, excluding the source window
+  const findDropTarget = useCallback((clientX: number, clientY: number, excludeWindowId: string): string | null => {
+    for (const [windowId, element] of windowRefs.current.entries()) {
+      if (windowId === excludeWindowId) continue;
+      const rect = element.getBoundingClientRect();
+      if (
+        clientX >= rect.left &&
+        clientX <= rect.right &&
+        clientY >= rect.top &&
+        clientY <= rect.bottom
+      ) {
+        return windowId;
+      }
+    }
+    return null;
+  }, []);
 
   const handleMouseDown = (e: React.MouseEvent, win: ConsoleWindow) => {
     setDragState({ id: win.id, startX: e.clientX - win.x, startY: e.clientY - win.y });
@@ -53,11 +101,37 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     });
   };
 
+  // Handle tab mousedown for potential split drag
+  const handleTabMouseDown = (e: React.MouseEvent, win: ConsoleWindow, deviceId: string) => {
+    // Only allow tab drag if window has multiple tabs and handlers are available
+    if (win.deviceIds.length <= 1 || !onSplitTab) return;
+
+    e.stopPropagation();
+    setTabDragState({
+      windowId: win.id,
+      deviceId,
+      startX: e.clientX,
+      startY: e.clientY,
+      currentX: e.clientX,
+      currentY: e.clientY,
+      isDragging: false,
+    });
+  };
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
+      // Handle window drag
       if (dragState) {
         onUpdateWindowPos(dragState.id, e.clientX - dragState.startX, e.clientY - dragState.startY);
+
+        // Check for drop target (for window merge)
+        if (onMergeWindows) {
+          const target = findDropTarget(e.clientX, e.clientY, dragState.id);
+          setDropTargetId(target);
+        }
       }
+
+      // Handle window resize
       if (resizeState) {
         const deltaX = e.clientX - resizeState.startX;
         const deltaY = e.clientY - resizeState.startY;
@@ -69,14 +143,43 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
           },
         }));
       }
+
+      // Handle tab drag for splitting
+      if (tabDragState) {
+        const deltaX = e.clientX - tabDragState.startX;
+        const deltaY = e.clientY - tabDragState.startY;
+        const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+        setTabDragState((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            currentX: e.clientX,
+            currentY: e.clientY,
+            isDragging: prev.isDragging || distance >= TAB_DRAG_THRESHOLD,
+          };
+        });
+      }
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+      // Handle window merge on drop
+      if (dragState && dropTargetId && onMergeWindows) {
+        onMergeWindows(dragState.id, dropTargetId);
+      }
+
+      // Handle tab split on drop
+      if (tabDragState?.isDragging && onSplitTab) {
+        onSplitTab(tabDragState.windowId, tabDragState.deviceId, e.clientX - 260, e.clientY - 50);
+      }
+
       setDragState(null);
       setResizeState(null);
+      setDropTargetId(null);
+      setTabDragState(null);
     };
 
-    if (dragState || resizeState) {
+    if (dragState || resizeState || tabDragState) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     }
@@ -84,18 +187,28 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragState, resizeState, onUpdateWindowPos]);
+  }, [dragState, resizeState, tabDragState, dropTargetId, onUpdateWindowPos, onMergeWindows, onSplitTab, findDropTarget]);
+
+  // Get the node being dragged as a tab (for ghost preview)
+  const tabDragNode = tabDragState?.isDragging
+    ? nodes.find((n) => n.id === tabDragState.deviceId)
+    : null;
 
   return (
     <>
       {windows.map((win) => {
         const size = winSizes[win.id] || { w: 520, h: 360 };
         const activeNode = nodes.find((n) => n.id === win.activeDeviceId);
+        const isDropTarget = dropTargetId === win.id;
+        const isBeingDraggedOverTarget = dragState?.id === win.id && dropTargetId !== null;
 
         return (
           <div
             key={win.id}
-            className="fixed z-40 bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5"
+            ref={(el) => setWindowRef(win.id, el)}
+            className={`fixed z-40 bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5
+              ${isDropTarget ? 'console-drop-target-active' : ''}
+              ${isBeingDraggedOverTarget ? 'console-window-dragging-over-target' : ''}`}
             style={{
               left: win.x,
               top: win.y,
@@ -115,15 +228,24 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                 {win.deviceIds.map((nodeId) => {
                   const node = nodes.find((n) => n.id === nodeId);
                   const isActive = win.activeDeviceId === nodeId;
+                  const isTabBeingDragged = tabDragState?.isDragging &&
+                    tabDragState.windowId === win.id &&
+                    tabDragState.deviceId === nodeId;
+
                   return (
                     <div
                       key={nodeId}
+                      onMouseDown={(e) => handleTabMouseDown(e, win, nodeId)}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSetActiveTab(win.id, nodeId);
+                        if (!tabDragState?.isDragging) {
+                          onSetActiveTab(win.id, nodeId);
+                        }
                       }}
                       className={`h-full px-4 flex items-center gap-2 text-[10px] font-bold border-r border-stone-700/50 transition-all cursor-pointer shrink-0 relative
-                        ${isActive ? 'bg-stone-900 text-sage-400' : 'text-stone-500 hover:bg-stone-700/50 hover:text-stone-300'}`}
+                        ${isActive ? 'bg-stone-900 text-sage-400' : 'text-stone-500 hover:bg-stone-700/50 hover:text-stone-300'}
+                        ${isTabBeingDragged ? 'console-tab-dragging' : ''}
+                        ${win.deviceIds.length > 1 ? 'cursor-grab active:cursor-grabbing' : ''}`}
                     >
                       {isActive && <div className="absolute top-0 left-0 right-0 h-0.5 bg-sage-500" />}
                       <i className={`fa-solid ${isActive ? 'fa-terminal' : 'fa-rectangle-list'} scale-90`}></i>
@@ -201,6 +323,20 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
           </div>
         );
       })}
+
+      {/* Tab ghost preview that follows cursor during tab drag */}
+      {tabDragNode && tabDragState?.isDragging && (
+        <div
+          className="console-tab-ghost"
+          style={{
+            left: tabDragState.currentX + 10,
+            top: tabDragState.currentY + 10,
+          }}
+        >
+          <i className="fa-solid fa-terminal"></i>
+          <span>{tabDragNode.name}</span>
+        </div>
+      )}
     </>
   );
 };
