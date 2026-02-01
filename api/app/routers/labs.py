@@ -2348,3 +2348,141 @@ def generate_config_diff(
         additions=additions,
         deletions=deletions,
     )
+
+
+# ============================================================================
+# Lab Logs Endpoints
+# ============================================================================
+
+
+@router.get("/labs/{lab_id}/logs")
+def get_lab_logs(
+    lab_id: str,
+    job_id: str | None = None,
+    host_id: str | None = None,
+    level: str | None = None,
+    since: str | None = None,
+    search: str | None = None,
+    limit: int = 500,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LabLogsResponse:
+    """Get aggregated logs for a lab.
+
+    Combines job logs from all jobs in this lab, parsed with host sections.
+    Optionally includes system logs from Loki if configured and user is admin.
+
+    Query parameters:
+    - job_id: Filter to logs from a specific job
+    - host_id: Filter to logs from a specific host
+    - level: Filter by minimum log level (info, warning, error)
+    - since: Time filter (e.g., "15m", "1h", "24h")
+    - search: Text search in log messages
+    - limit: Maximum number of entries to return (default 500)
+
+    Returns structured log entries with host associations and summary info.
+    """
+    from datetime import timedelta
+    from app.services.log_parser import parse_job_log, filter_entries
+
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Parse 'since' parameter
+    since_dt = None
+    if since:
+        # Parse relative time like "15m", "1h", "24h"
+        import re
+        match = re.match(r"(\d+)([mhd])", since)
+        if match:
+            value = int(match.group(1))
+            unit = match.group(2)
+            if unit == "m":
+                since_dt = datetime.now(timezone.utc) - timedelta(minutes=value)
+            elif unit == "h":
+                since_dt = datetime.now(timezone.utc) - timedelta(hours=value)
+            elif unit == "d":
+                since_dt = datetime.now(timezone.utc) - timedelta(days=value)
+
+    # Query jobs for this lab
+    jobs_query = (
+        database.query(models.Job)
+        .filter(models.Job.lab_id == lab_id)
+        .order_by(models.Job.created_at.desc())
+    )
+
+    if job_id:
+        jobs_query = jobs_query.filter(models.Job.id == job_id)
+
+    # Limit to recent jobs for performance
+    jobs = jobs_query.limit(50).all()
+
+    # Parse all job logs
+    all_entries = []
+    hosts_found = set()
+
+    for job in jobs:
+        if not job.log_path:
+            continue
+
+        parsed = parse_job_log(
+            log_content=job.log_path,  # log_path contains actual log content
+            job_id=job.id,
+            job_created_at=job.created_at,
+        )
+
+        all_entries.extend(parsed.entries)
+        hosts_found.update(parsed.hosts)
+
+    # Apply filters
+    filtered_entries = filter_entries(
+        all_entries,
+        host_id=host_id,
+        level=level,
+        search=search,
+        since=since_dt,
+    )
+
+    # Sort by timestamp (newest first for display, but API returns oldest first for streaming)
+    filtered_entries.sort(key=lambda e: e.timestamp)
+
+    # Apply limit
+    has_more = len(filtered_entries) > limit
+    limited_entries = filtered_entries[:limit]
+
+    # Count errors
+    error_count = sum(1 for e in limited_entries if e.level == "error")
+
+    # Build job summaries for filtering UI
+    job_summaries = [
+        schemas.LabLogJob(
+            id=job.id,
+            action=job.action,
+            status=job.status,
+            created_at=job.created_at,
+            completed_at=job.completed_at,
+        )
+        for job in jobs
+    ]
+
+    # Convert entries to response schema
+    response_entries = [
+        schemas.LabLogEntry(
+            timestamp=e.timestamp,
+            level=e.level,
+            message=e.message,
+            host_id=e.host_id,
+            host_name=e.host_name,
+            job_id=e.job_id,
+            source=e.source,
+        )
+        for e in limited_entries
+    ]
+
+    return schemas.LabLogsResponse(
+        entries=response_entries,
+        jobs=job_summaries,
+        hosts=list(hosts_found),
+        total_count=len(filtered_entries),
+        error_count=error_count,
+        has_more=has_more,
+    )

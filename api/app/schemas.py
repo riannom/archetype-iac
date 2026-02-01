@@ -709,3 +709,41 @@ class UpdateInfo(BaseModel):
     release_notes: str | None = None
     published_at: str | None = None
     error: str | None = None
+
+
+# =============================================================================
+# Lab Logs Schemas
+# =============================================================================
+
+
+class LabLogEntry(BaseModel):
+    """A single log entry for a lab."""
+
+    timestamp: datetime
+    level: str  # "info", "success", "warning", "error"
+    message: str
+    host_id: str | None = None
+    host_name: str | None = None
+    job_id: str | None = None
+    source: str = "job"  # "job", "system", "realtime"
+
+
+class LabLogJob(BaseModel):
+    """Summary of a job for log filtering."""
+
+    id: str
+    action: str
+    status: str
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+class LabLogsResponse(BaseModel):
+    """Response schema for lab logs endpoint."""
+
+    entries: list[LabLogEntry]
+    jobs: list[LabLogJob]  # Jobs available for filtering
+    hosts: list[str]  # Hosts found in logs
+    total_count: int
+    error_count: int
+    has_more: bool = False
