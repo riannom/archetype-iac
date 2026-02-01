@@ -93,3 +93,60 @@ export async function getVersionInfo(): Promise<VersionInfo> {
 export async function checkForUpdates(): Promise<UpdateInfo> {
   return apiRequest<UpdateInfo>("/system/updates");
 }
+
+
+// --- Lab Logs Types and Functions ---
+
+export interface LabLogEntry {
+  timestamp: string;
+  level: "info" | "success" | "warning" | "error";
+  message: string;
+  host_id?: string | null;
+  host_name?: string | null;
+  job_id?: string | null;
+  source: "job" | "system" | "realtime";
+}
+
+export interface LabLogJob {
+  id: string;
+  action: string;
+  status: string;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+export interface LabLogsResponse {
+  entries: LabLogEntry[];
+  jobs: LabLogJob[];
+  hosts: string[];
+  total_count: number;
+  error_count: number;
+  has_more: boolean;
+}
+
+export interface LabLogsQueryParams {
+  job_id?: string;
+  host_id?: string;
+  level?: string;
+  since?: string;
+  search?: string;
+  limit?: number;
+}
+
+export async function getLabLogs(
+  labId: string,
+  params: LabLogsQueryParams = {}
+): Promise<LabLogsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.job_id) queryParams.set("job_id", params.job_id);
+  if (params.host_id) queryParams.set("host_id", params.host_id);
+  if (params.level) queryParams.set("level", params.level);
+  if (params.since) queryParams.set("since", params.since);
+  if (params.search) queryParams.set("search", params.search);
+  if (params.limit) queryParams.set("limit", params.limit.toString());
+
+  const queryString = queryParams.toString();
+  const path = `/labs/${labId}/logs${queryString ? `?${queryString}` : ""}`;
+
+  return apiRequest<LabLogsResponse>(path);
+}
