@@ -619,14 +619,15 @@ class DockerOVSPlugin:
         logger.info(f"Found {len(ovs_bridges)} OVS bridges to recover")
 
         for bridge_name in ovs_bridges:
-            await self._recover_bridge_state(bridge_name)
+            # Only recover bridge metadata, skip expensive endpoint recovery
+            # Endpoints will be re-registered by Docker when containers reconnect
+            await self._recover_bridge_state(bridge_name, skip_endpoints=True)
 
         logger.info(
-            f"State recovery complete: {len(self.lab_bridges)} bridges, "
-            f"{len(self.endpoints)} endpoints"
+            f"State recovery complete: {len(self.lab_bridges)} bridges"
         )
 
-    async def _recover_bridge_state(self, bridge_name: str) -> None:
+    async def _recover_bridge_state(self, bridge_name: str, skip_endpoints: bool = False) -> None:
         """Recover state for a single OVS bridge."""
         # Extract lab_id from bridge name (ovs-{lab_id[:12]})
         lab_id_prefix = bridge_name[len(OVS_BRIDGE_PREFIX):]
@@ -704,52 +705,60 @@ class DockerOVSPlugin:
             f"vxlan_tunnels={len(vxlan_tunnels)}, external={len(external_ports)}"
         )
 
-        # Recover endpoint state by matching veth ports to containers
-        await self._recover_endpoints_for_bridge(lab_bridge, ports)
+        # Optionally recover endpoint state by matching veth ports to containers
+        # This is expensive (nsenter for each port/container) and usually not needed
+        # since Docker will re-register endpoints when containers reconnect
+        if not skip_endpoints:
+            await self._recover_endpoints_for_bridge(lab_bridge, ports)
 
     async def _find_lab_id_from_containers(self, lab_id_prefix: str) -> str | None:
         """Find full lab_id by checking Docker container labels."""
-        try:
-            import docker
-            client = docker.from_env()
+        def _sync_find():
+            try:
+                import docker
+                client = docker.from_env()
 
-            for container in client.containers.list(all=True):
-                labels = container.labels
-                lab_id = labels.get("archetype.lab_id", "")
-                if lab_id and lab_id.startswith(lab_id_prefix):
-                    return lab_id
-                # Also check legacy containerlab label
-                clab_prefix = labels.get("containerlab", "")
-                if clab_prefix and clab_prefix.startswith(lab_id_prefix):
-                    return clab_prefix
+                for container in client.containers.list(all=True):
+                    labels = container.labels
+                    lab_id = labels.get("archetype.lab_id", "")
+                    if lab_id and lab_id.startswith(lab_id_prefix):
+                        return lab_id
+                    # Also check legacy containerlab label
+                    clab_prefix = labels.get("containerlab", "")
+                    if clab_prefix and clab_prefix.startswith(lab_id_prefix):
+                        return clab_prefix
+            except Exception as e:
+                logger.debug(f"Error finding lab_id from containers: {e}")
+            return None
 
-        except Exception as e:
-            logger.debug(f"Error finding lab_id from containers: {e}")
-
-        return None
+        # Run synchronous Docker calls in thread pool to avoid blocking event loop
+        return await asyncio.get_event_loop().run_in_executor(None, _sync_find)
 
     async def _recover_endpoints_for_bridge(
         self, lab_bridge: LabBridge, ports: list[str]
     ) -> None:
         """Recover endpoint state by matching veth ports to containers."""
         try:
-            import docker
-            client = docker.from_env()
+            # Run synchronous Docker calls in thread pool
+            def _get_container_pids():
+                import docker
+                client = docker.from_env()
+                pids = {}
+                for container in client.containers.list():
+                    labels = container.labels
+                    lab_id = labels.get("archetype.lab_id", "")
+                    if not lab_id:
+                        lab_id = labels.get("containerlab", "")
+                    if lab_id and lab_id.startswith(lab_bridge.lab_id[:12]):
+                        pids[container.name] = (
+                            container.id,
+                            container.attrs["State"]["Pid"],
+                        )
+                return pids
 
-            # Build a map of container PIDs for namespace lookups
-            container_pids: dict[str, tuple[str, int]] = {}  # container_name -> (container_id, pid)
-
-            for container in client.containers.list():
-                labels = container.labels
-                lab_id = labels.get("archetype.lab_id", "")
-                if not lab_id:
-                    lab_id = labels.get("containerlab", "")
-
-                if lab_id and lab_id.startswith(lab_bridge.lab_id[:12]):
-                    container_pids[container.name] = (
-                        container.id,
-                        container.attrs["State"]["Pid"],
-                    )
+            container_pids = await asyncio.get_event_loop().run_in_executor(
+                None, _get_container_pids
+            )
 
             # For each veth port (vh* pattern), try to find its container
             for port_name in ports:
