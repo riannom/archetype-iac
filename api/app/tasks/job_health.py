@@ -87,6 +87,24 @@ async def _check_single_job(session, job: models.Job, now: datetime):
     if not is_job_stuck(job.action, job.status, job.started_at, job.created_at, job.last_heartbeat):
         return
 
+    # If this is a child job, check if parent is still active
+    if job.parent_job_id:
+        parent_job = session.get(models.Job, job.parent_job_id)
+        if parent_job and parent_job.status in ("queued", "running"):
+            # Parent is still active - skip this child, parent will handle it
+            logger.debug(
+                f"Skipping stuck child job {job.id} - parent job {job.parent_job_id} is still {parent_job.status}"
+            )
+            return
+        elif not parent_job or parent_job.status in ("completed", "failed", "cancelled"):
+            # Orphaned child - parent is done/missing, fail this child (don't retry orphans)
+            logger.warning(
+                f"Failing orphaned child job {job.id} - parent job {job.parent_job_id} is "
+                f"{'missing' if not parent_job else parent_job.status}"
+            )
+            await _fail_job(session, job, reason="Parent job completed or missing, child orphaned")
+            return
+
     logger.warning(
         f"Detected stuck job {job.id}: action={job.action}, status={job.status}, "
         f"started_at={job.started_at}, last_heartbeat={job.last_heartbeat}, agent_id={job.agent_id}"
@@ -118,6 +136,32 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
     logger.info(
         f"Retrying job {old_job.id} (attempt {old_job.retry_count + 1}/{settings.job_max_retries})"
     )
+
+    # Deduplication: Check for existing running/queued job with same lab_id and action
+    # This prevents creating duplicate retries if multiple stuck jobs are processed
+    if old_job.lab_id:
+        existing_job = (
+            session.query(models.Job)
+            .filter(
+                models.Job.lab_id == old_job.lab_id,
+                models.Job.action == old_job.action,
+                models.Job.status.in_(["queued", "running"]),
+                models.Job.id != old_job.id,
+            )
+            .first()
+        )
+        if existing_job:
+            logger.info(
+                f"Skipping retry for job {old_job.id} - existing job {existing_job.id} "
+                f"with same action '{old_job.action}' is already {existing_job.status}"
+            )
+            # Mark old job as superseded by existing job instead of creating new one
+            old_job.status = "cancelled"
+            old_job.completed_at = datetime.now(timezone.utc)
+            old_job.superseded_by_id = existing_job.id
+            old_job.log_path = (old_job.log_path or "") + f"\n\n--- Cancelled: duplicate of job {existing_job.id} ---"
+            session.commit()
+            return
 
     # Force-release lock on agent before retry to prevent new job from blocking
     if old_job.agent_id and old_job.lab_id:
@@ -161,6 +205,31 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
         retry_count=old_job.retry_count + 1,
     )
     session.add(new_job)
+
+    # Link old job to new job for tracking
+    old_job.superseded_by_id = new_job.id
+
+    # Cancel all child jobs of the old parent job
+    # The new parent job will spawn fresh children
+    child_jobs = (
+        session.query(models.Job)
+        .filter(
+            models.Job.parent_job_id == old_job.id,
+            models.Job.status.in_(["queued", "running"]),
+        )
+        .all()
+    )
+    if child_jobs:
+        logger.info(f"Cancelling {len(child_jobs)} child job(s) of retried parent job {old_job.id}")
+        for child in child_jobs:
+            child.status = "cancelled"
+            child.completed_at = datetime.now(timezone.utc)
+            child.superseded_by_id = new_job.id
+            if child.log_path:
+                child.log_path = f"{child.log_path}\n\n--- Cancelled: parent job retried ---"
+            else:
+                child.log_path = "Cancelled: parent job retried"
+
     session.commit()
     session.refresh(new_job)
 

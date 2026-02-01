@@ -104,6 +104,14 @@ class Job(Base):
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Number of retry attempts
     retry_count: Mapped[int] = mapped_column(default=0)
+    # Parent job ID for child jobs (e.g., sync:agent jobs spawned by sync:lab)
+    parent_job_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # ID of job that superseded this one (when cancelled and replaced by retry)
+    superseded_by_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
