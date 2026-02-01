@@ -2046,8 +2046,8 @@ username admin privilege 15 role network-admin nopassword
                 node_name = labels.get(LABEL_NODE_NAME)
                 kind = labels.get(LABEL_NODE_KIND, "")
 
-                # Only extract from cEOS containers
-                if kind != "ceos" or not node_name:
+                # Only extract from cEOS/EOS containers
+                if kind not in ("ceos", "eos") or not node_name:
                     continue
 
                 log_name = _log_name_from_labels(labels)
