@@ -1517,109 +1517,109 @@ async def run_node_sync(
             # Track which nodes are actually being deployed (the new ones)
             deployed_node_names = nodes_to_deploy_names & filtered_node_names
 
-            if deployed_node_names:
-                clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
-                log_parts.append(f"Deploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
-            else:
+            if not deployed_node_names:
                 log_parts.append(f"No nodes to deploy on {agent.name}")
                 for ns in nodes_need_deploy:
                     ns.actual_state = "error"
                     ns.error_message = "No nodes to deploy"
                 session.commit()
                 nodes_need_deploy = []
+            else:
+                clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
+                log_parts.append(f"Deploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
 
-            try:
-                result = await agent_client.deploy_to_agent(
-                    agent, job_id, lab_id,
-                    topology_yaml=clab_yaml,
-                    provider=provider,
-                )
-
-                if result.get("status") == "completed":
-                    log_parts.append("Deploy completed successfully")
-
-                    # Capture management IPs for IaC workflows
-                    await _capture_node_ips(session, lab_id, agent)
-
-                    # Get all node states for this lab to update them
-                    all_states = (
-                        session.query(models.NodeState)
-                        .filter(models.NodeState.lab_id == lab_id)
-                        .all()
+                try:
+                    result = await agent_client.deploy_to_agent(
+                        agent, job_id, lab_id,
+                        topology_yaml=clab_yaml,
+                        provider=provider,
                     )
 
-                    # Only update NodePlacement for nodes that were actually deployed
-                    await _update_node_placements(
-                        session, lab_id, agent.id, list(deployed_node_names)
-                    )
+                    if result.get("status") == "completed":
+                        log_parts.append("Deploy completed successfully")
 
-                    # Clean up orphan containers on old agents if deploy moved
-                    if old_agent_ids and agent.id not in old_agent_ids:
-                        log_parts.append("")
-                        log_parts.append("=== Orphan Cleanup ===")
-                        await _cleanup_orphan_containers(
-                            session, lab_id, agent.id, old_agent_ids, log_parts
+                        # Capture management IPs for IaC workflows
+                        await _capture_node_ips(session, lab_id, agent)
+
+                        # Get all node states for this lab to update them
+                        all_states = (
+                            session.query(models.NodeState)
+                            .filter(models.NodeState.lab_id == lab_id)
+                            .all()
                         )
 
-                    # After deploy, only deployed nodes are running
-                    # We need to stop deployed nodes where desired_state=stopped
-                    nodes_to_stop_after_deploy = [
-                        ns for ns in all_states
-                        if ns.desired_state == "stopped" and ns.node_name in deployed_node_names
-                    ]
+                        # Only update NodePlacement for nodes that were actually deployed
+                        await _update_node_placements(
+                            session, lab_id, agent.id, list(deployed_node_names)
+                        )
 
-                    # Mark deployed nodes as running (since clab starts them all)
-                    for ns in all_states:
-                        if ns.node_name in deployed_node_names:
-                            ns.actual_state = "running"
-                            ns.error_message = None
-                            if not ns.boot_started_at:
-                                ns.boot_started_at = datetime.now(timezone.utc)
-
-                    session.commit()
-
-                    if nodes_to_stop_after_deploy:
-                        log_parts.append("")
-                        log_parts.append(f"Stopping {len(nodes_to_stop_after_deploy)} nodes with desired_state=stopped...")
-
-                        for ns in nodes_to_stop_after_deploy:
-                            container_name = _get_container_name(lab_id, ns.node_name)
-                            stop_result = await agent_client.container_action(
-                                agent, container_name, "stop"
+                        # Clean up orphan containers on old agents if deploy moved
+                        if old_agent_ids and agent.id not in old_agent_ids:
+                            log_parts.append("")
+                            log_parts.append("=== Orphan Cleanup ===")
+                            await _cleanup_orphan_containers(
+                                session, lab_id, agent.id, old_agent_ids, log_parts
                             )
-                            if stop_result.get("success"):
-                                ns.actual_state = "stopped"
-                                ns.boot_started_at = None
-                                log_parts.append(f"  {ns.node_name}: stopped")
-                            else:
-                                ns.actual_state = "error"
-                                ns.error_message = stop_result.get("error", "Stop failed")
-                                ns.boot_started_at = None
-                                log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+
+                        # After deploy, only deployed nodes are running
+                        # We need to stop deployed nodes where desired_state=stopped
+                        nodes_to_stop_after_deploy = [
+                            ns for ns in all_states
+                            if ns.desired_state == "stopped" and ns.node_name in deployed_node_names
+                        ]
+
+                        # Mark deployed nodes as running (since clab starts them all)
+                        for ns in all_states:
+                            if ns.node_name in deployed_node_names:
+                                ns.actual_state = "running"
+                                ns.error_message = None
+                                if not ns.boot_started_at:
+                                    ns.boot_started_at = datetime.now(timezone.utc)
 
                         session.commit()
 
-                else:
-                    error_msg = result.get("error_message", "Deploy failed")
+                        if nodes_to_stop_after_deploy:
+                            log_parts.append("")
+                            log_parts.append(f"Stopping {len(nodes_to_stop_after_deploy)} nodes with desired_state=stopped...")
+
+                            for ns in nodes_to_stop_after_deploy:
+                                container_name = _get_container_name(lab_id, ns.node_name)
+                                stop_result = await agent_client.container_action(
+                                    agent, container_name, "stop"
+                                )
+                                if stop_result.get("success"):
+                                    ns.actual_state = "stopped"
+                                    ns.boot_started_at = None
+                                    log_parts.append(f"  {ns.node_name}: stopped")
+                                else:
+                                    ns.actual_state = "error"
+                                    ns.error_message = stop_result.get("error", "Stop failed")
+                                    ns.boot_started_at = None
+                                    log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+
+                            session.commit()
+
+                    else:
+                        error_msg = result.get("error_message", "Deploy failed")
+                        log_parts.append(f"Deploy FAILED: {error_msg}")
+                        for ns in nodes_need_deploy:
+                            ns.actual_state = "error"
+                            ns.error_message = error_msg
+                        session.commit()
+
+                    if result.get("stdout"):
+                        log_parts.append(f"\nDeploy STDOUT:\n{result['stdout']}")
+                    if result.get("stderr"):
+                        log_parts.append(f"\nDeploy STDERR:\n{result['stderr']}")
+
+                except Exception as e:
+                    error_msg = str(e)
                     log_parts.append(f"Deploy FAILED: {error_msg}")
                     for ns in nodes_need_deploy:
                         ns.actual_state = "error"
                         ns.error_message = error_msg
                     session.commit()
-
-                if result.get("stdout"):
-                    log_parts.append(f"\nDeploy STDOUT:\n{result['stdout']}")
-                if result.get("stderr"):
-                    log_parts.append(f"\nDeploy STDERR:\n{result['stderr']}")
-
-            except Exception as e:
-                error_msg = str(e)
-                log_parts.append(f"Deploy FAILED: {error_msg}")
-                for ns in nodes_need_deploy:
-                    ns.actual_state = "error"
-                    ns.error_message = error_msg
-                session.commit()
-                logger.exception(f"Deploy failed in sync job {job_id}: {e}")
+                    logger.exception(f"Deploy failed in sync job {job_id}: {e}")
 
         # Phase 2: Start nodes that are stopped but should be running
         # For containerlab: docker start doesn't recreate network interfaces,
@@ -1720,103 +1720,103 @@ async def run_node_sync(
                 # Track which nodes are actually being started (the new ones)
                 deployed_node_names = nodes_to_start_names & filtered_node_names
 
-                if deployed_node_names:
-                    clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
-                    log_parts.append(f"Redeploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
-                else:
+                if not deployed_node_names:
                     log_parts.append(f"No nodes to redeploy on {agent.name}")
                     for ns in nodes_need_start:
                         ns.actual_state = "error"
                         ns.error_message = "No nodes to deploy"
                     session.commit()
                     nodes_need_start = []
+                else:
+                    clab_yaml = graph_to_containerlab_yaml(filtered_graph, lab.id)
+                    log_parts.append(f"Redeploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
 
-                try:
-                    result = await agent_client.deploy_to_agent(
-                        agent, job_id, lab_id,
-                        topology_yaml=clab_yaml,
-                        provider=provider,
-                    )
-
-                    if result.get("status") == "completed":
-                        log_parts.append("Redeploy completed successfully")
-
-                        # Capture management IPs for IaC workflows
-                        await _capture_node_ips(session, lab_id, agent)
-
-                        # Get all node states for this lab
-                        all_states = (
-                            session.query(models.NodeState)
-                            .filter(models.NodeState.lab_id == lab_id)
-                            .all()
+                    try:
+                        result = await agent_client.deploy_to_agent(
+                            agent, job_id, lab_id,
+                            topology_yaml=clab_yaml,
+                            provider=provider,
                         )
 
-                        # Only update NodePlacement for nodes that were actually deployed
-                        await _update_node_placements(
-                            session, lab_id, agent.id, list(deployed_node_names)
-                        )
+                        if result.get("status") == "completed":
+                            log_parts.append("Redeploy completed successfully")
 
-                        # Clean up orphan containers on old agents if deploy moved
-                        if old_agent_ids and agent.id not in old_agent_ids:
-                            log_parts.append("")
-                            log_parts.append("=== Orphan Cleanup ===")
-                            await _cleanup_orphan_containers(
-                                session, lab_id, agent.id, old_agent_ids, log_parts
+                            # Capture management IPs for IaC workflows
+                            await _capture_node_ips(session, lab_id, agent)
+
+                            # Get all node states for this lab
+                            all_states = (
+                                session.query(models.NodeState)
+                                .filter(models.NodeState.lab_id == lab_id)
+                                .all()
                             )
 
-                        # Only mark deployed nodes as running (not all nodes)
-                        for ns in all_states:
-                            if ns.node_name in deployed_node_names:
-                                ns.actual_state = "running"
-                                ns.error_message = None
-                                if not ns.boot_started_at:
-                                    ns.boot_started_at = datetime.now(timezone.utc)
+                            # Only update NodePlacement for nodes that were actually deployed
+                            await _update_node_placements(
+                                session, lab_id, agent.id, list(deployed_node_names)
+                            )
 
-                        # Now stop deployed nodes that should be stopped
-                        nodes_to_stop_after = [
-                            ns for ns in all_states
-                            if ns.desired_state == "stopped" and ns.node_name in deployed_node_names
-                        ]
-
-                        if nodes_to_stop_after:
-                            log_parts.append("")
-                            log_parts.append(f"Stopping {len(nodes_to_stop_after)} nodes with desired_state=stopped...")
-
-                            for ns in nodes_to_stop_after:
-                                container_name = _get_container_name(lab_id, ns.node_name)
-                                stop_result = await agent_client.container_action(
-                                    agent, container_name, "stop"
+                            # Clean up orphan containers on old agents if deploy moved
+                            if old_agent_ids and agent.id not in old_agent_ids:
+                                log_parts.append("")
+                                log_parts.append("=== Orphan Cleanup ===")
+                                await _cleanup_orphan_containers(
+                                    session, lab_id, agent.id, old_agent_ids, log_parts
                                 )
-                                if stop_result.get("success"):
-                                    ns.actual_state = "stopped"
-                                    ns.boot_started_at = None
-                                    log_parts.append(f"  {ns.node_name}: stopped")
-                                else:
-                                    ns.actual_state = "error"
-                                    ns.error_message = stop_result.get("error", "Stop failed")
-                                    ns.boot_started_at = None
-                                    log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
-                    else:
-                        error_msg = result.get("error_message", "Redeploy failed")
+
+                            # Only mark deployed nodes as running (not all nodes)
+                            for ns in all_states:
+                                if ns.node_name in deployed_node_names:
+                                    ns.actual_state = "running"
+                                    ns.error_message = None
+                                    if not ns.boot_started_at:
+                                        ns.boot_started_at = datetime.now(timezone.utc)
+
+                            # Now stop deployed nodes that should be stopped
+                            nodes_to_stop_after = [
+                                ns for ns in all_states
+                                if ns.desired_state == "stopped" and ns.node_name in deployed_node_names
+                            ]
+
+                            if nodes_to_stop_after:
+                                log_parts.append("")
+                                log_parts.append(f"Stopping {len(nodes_to_stop_after)} nodes with desired_state=stopped...")
+
+                                for ns in nodes_to_stop_after:
+                                    container_name = _get_container_name(lab_id, ns.node_name)
+                                    stop_result = await agent_client.container_action(
+                                        agent, container_name, "stop"
+                                    )
+                                    if stop_result.get("success"):
+                                        ns.actual_state = "stopped"
+                                        ns.boot_started_at = None
+                                        log_parts.append(f"  {ns.node_name}: stopped")
+                                    else:
+                                        ns.actual_state = "error"
+                                        ns.error_message = stop_result.get("error", "Stop failed")
+                                        ns.boot_started_at = None
+                                        log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+                        else:
+                            error_msg = result.get("error_message", "Redeploy failed")
+                            log_parts.append(f"Redeploy FAILED: {error_msg}")
+                            for ns in nodes_need_start:
+                                ns.actual_state = "error"
+                                ns.error_message = error_msg
+
+                        if result.get("stdout"):
+                            log_parts.append(f"\nDeploy STDOUT:\n{result['stdout']}")
+                        if result.get("stderr"):
+                            log_parts.append(f"\nDeploy STDERR:\n{result['stderr']}")
+
+                    except Exception as e:
+                        error_msg = str(e)
                         log_parts.append(f"Redeploy FAILED: {error_msg}")
                         for ns in nodes_need_start:
                             ns.actual_state = "error"
                             ns.error_message = error_msg
+                        logger.exception(f"Redeploy failed in sync job {job_id}: {e}")
 
-                    if result.get("stdout"):
-                        log_parts.append(f"\nDeploy STDOUT:\n{result['stdout']}")
-                    if result.get("stderr"):
-                        log_parts.append(f"\nDeploy STDERR:\n{result['stderr']}")
-
-                except Exception as e:
-                    error_msg = str(e)
-                    log_parts.append(f"Redeploy FAILED: {error_msg}")
-                    for ns in nodes_need_start:
-                        ns.actual_state = "error"
-                        ns.error_message = error_msg
-                    logger.exception(f"Redeploy failed in sync job {job_id}: {e}")
-
-                session.commit()
+                    session.commit()
 
         # Phase 3: Stop nodes that are running but should be stopped
         if nodes_need_stop:
