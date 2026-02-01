@@ -256,7 +256,9 @@ class OverlayManager:
             logger.info(f"Bridge already exists for: {key}")
             return self._bridges[key]
 
-        bridge_name = f"archetype-br-{tunnel.vni}"
+        # Linux interface names limited to 15 chars (IFNAMSIZ=16 includes null)
+        # Use short prefix: "abr" = archetype bridge
+        bridge_name = f"abr-{tunnel.vni}"
 
         # Delete if exists from previous run
         if await self._bridge_exists(bridge_name):
