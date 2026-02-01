@@ -399,7 +399,11 @@ def import_graph(
 
     # Store topology in database (source of truth)
     service = TopologyService(database)
-    service.import_from_graph(lab.id, payload)
+    try:
+        service.import_from_graph(lab.id, payload)
+    except ValueError as e:
+        # Invalid host assignment or other validation error
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Create/update NodeState records for all nodes in the topology
     _upsert_node_states(database, lab.id, payload)

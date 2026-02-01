@@ -414,6 +414,20 @@ class TopologyService:
                 )
                 if host:
                     host_id = host.id
+                    logger.debug(
+                        f"Node '{graph_node.name}' assigned to host '{host.name}' "
+                        f"(id={host.id})"
+                    )
+                else:
+                    # Explicit host assignment must succeed - fail import if host not found
+                    logger.error(
+                        f"Node '{graph_node.name}' specifies host '{graph_node.host}' "
+                        f"which does not exist or is not registered"
+                    )
+                    raise ValueError(
+                        f"Node '{graph_node.name}' specifies host '{graph_node.host}' "
+                        f"which does not exist or is not registered"
+                    )
 
             if graph_node.id in existing_nodes:
                 # Update existing node
