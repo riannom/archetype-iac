@@ -3271,6 +3271,26 @@ def _get_container_ip(container_name: str) -> str | None:
         return None
 
 
+def _get_container_boot_logs(container_name: str, tail_lines: int = 50) -> str | None:
+    """Get recent boot logs from a container.
+
+    Args:
+        container_name: Name of the container
+        tail_lines: Number of log lines to retrieve (default 50)
+
+    Returns:
+        Log output as string, or None if unavailable
+    """
+    try:
+        import docker
+        client = docker.from_env()
+        container = client.containers.get(container_name)
+        logs = container.logs(tail=tail_lines, timestamps=False).decode("utf-8", errors="replace")
+        return logs if logs.strip() else None
+    except Exception:
+        return None
+
+
 @app.websocket("/console/{lab_id}/{node_name}")
 async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
     """WebSocket endpoint for console access to a node."""
@@ -3307,6 +3327,14 @@ async def _console_websocket_ssh(
 ):
     """Handle console via SSH to container IP (for vrnetlab containers)."""
     from agent.console.ssh_console import SSHConsole
+
+    # Send boot logs before connecting to CLI
+    boot_logs = _get_container_boot_logs(container_name)
+    if boot_logs:
+        await websocket.send_text("\r\n\x1b[90m--- Boot Log ---\x1b[0m\r\n")
+        for line in boot_logs.splitlines():
+            await websocket.send_text(f"\x1b[90m{line}\x1b[0m\r\n")
+        await websocket.send_text("\x1b[90m--- Connecting to CLI ---\x1b[0m\r\n\r\n")
 
     # Get container IP
     container_ip = _get_container_ip(container_name)
@@ -3419,6 +3447,14 @@ async def _console_websocket_docker(
 ):
     """Handle console via docker exec (for native containers)."""
     from agent.console.docker_exec import DockerConsole
+
+    # Send boot logs before connecting to CLI
+    boot_logs = _get_container_boot_logs(container_name)
+    if boot_logs:
+        await websocket.send_text("\r\n\x1b[90m--- Boot Log ---\x1b[0m\r\n")
+        for line in boot_logs.splitlines():
+            await websocket.send_text(f"\x1b[90m{line}\x1b[0m\r\n")
+        await websocket.send_text("\x1b[90m--- Connecting to CLI ---\x1b[0m\r\n\r\n")
 
     console = DockerConsole(container_name)
 
