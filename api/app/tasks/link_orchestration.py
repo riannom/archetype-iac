@@ -84,6 +84,11 @@ async def create_deployment_links(
         # Get or create LinkState
         if link.link_name in existing_states:
             link_state = existing_states[link.link_name]
+            # Skip links that are already up (idempotent)
+            if link_state.actual_state == "up":
+                logger.debug(f"Link {link.link_name} already up, skipping")
+                success_count += 1
+                continue
         else:
             link_state = models.LinkState(
                 lab_id=lab_id,

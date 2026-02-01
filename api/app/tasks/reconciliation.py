@@ -403,6 +403,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             .all()
         )
         agent_ids = {p.host_id for p in placements}
+        # Map node names to their expected agent for safer undeployed detection
+        node_expected_agent: dict[str, str] = {p.node_name: p.host_id for p in placements}
 
         # Also include the lab's default agent if set
         if lab.agent_id:
@@ -424,6 +426,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         # Track both status and which agent has each container
         container_status_map: dict[str, str] = {}
         container_agent_map: dict[str, str] = {}  # node_name -> agent_id
+        agents_successfully_queried: set[str] = set()  # Track which agents responded
         for agent_id in agent_ids:
             agent = session.get(models.Host, agent_id)
             if not agent or not agent_client.is_agent_online(agent):
@@ -432,6 +435,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
             try:
                 result = await agent_client.get_lab_status_from_agent(agent, lab_id)
+                agents_successfully_queried.add(agent_id)
                 nodes = result.get("nodes", [])
                 # Merge container status from this agent
                 for n in nodes:
@@ -502,13 +506,30 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     # Unknown container status
                     stopped_count += 1
             else:
-                # Container doesn't exist - mark as undeployed
-                if ns.actual_state not in ("undeployed", "stopped"):
-                    ns.actual_state = "undeployed"
-                    ns.error_message = None
-                ns.is_ready = False
-                ns.boot_started_at = None
-                undeployed_count += 1
+                # Container not found in status response
+                # Only mark as undeployed if we successfully queried the agent that should have it
+                # This prevents falsely marking nodes as undeployed when agent is temporarily unreachable
+                expected_agent = node_expected_agent.get(ns.node_name)
+                agent_was_queried = (
+                    expected_agent in agents_successfully_queried
+                    if expected_agent
+                    else len(agents_successfully_queried) > 0
+                )
+
+                if agent_was_queried:
+                    # Agent responded but container not found - safe to mark undeployed
+                    if ns.actual_state not in ("undeployed", "stopped"):
+                        ns.actual_state = "undeployed"
+                        ns.error_message = None
+                    ns.is_ready = False
+                    ns.boot_started_at = None
+                    undeployed_count += 1
+                else:
+                    # Agent didn't respond - preserve existing state to avoid false negatives
+                    logger.debug(
+                        f"Preserving state for {ns.node_name} - expected agent "
+                        f"{expected_agent or 'unknown'} was not successfully queried"
+                    )
 
             if ns.actual_state != old_state:
                 logger.info(
