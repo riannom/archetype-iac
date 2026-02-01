@@ -226,6 +226,41 @@ def _send_sse_event(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
+def _write_content_to_tempfile(content: bytes, suffix: str) -> tuple[str, int]:
+    """Write content to a temporary file and return (path, size).
+
+    This is a blocking operation meant to run in asyncio.to_thread().
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+        tmp_file.write(content)
+        temp_path = tmp_file.name
+    file_size = os.path.getsize(temp_path)
+    return temp_path, file_size
+
+
+def _decompress_xz_file(source_path: str) -> tuple[str, int]:
+    """Decompress an XZ file and return (decompressed_path, size).
+
+    This is a blocking operation meant to run in asyncio.to_thread().
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_tar:
+        with lzma.open(source_path, "rb") as source:
+            shutil.copyfileobj(source, tmp_tar)
+        decompressed_path = tmp_tar.name
+    decompressed_size = os.path.getsize(decompressed_path)
+    return decompressed_path, decompressed_size
+
+
+def _cleanup_temp_files(*paths: str) -> None:
+    """Clean up temporary files.
+
+    This is a blocking operation meant to run in asyncio.to_thread().
+    """
+    for path in paths:
+        if path and os.path.exists(path):
+            os.unlink(path)
+
+
 def _load_image_background(upload_id: str, filename: str, content: bytes):
     """Process image upload in background thread with progress updates."""
     print(f"[UPLOAD {upload_id}] Starting background processing for {filename}")
@@ -431,7 +466,7 @@ async def _load_image_streaming(filename: str, content: bytes) -> AsyncGenerator
     decompressed_path = ""
 
     try:
-        # Phase 1: Save uploaded file to temp
+        # Phase 1: Save uploaded file to temp (run in thread to avoid blocking event loop)
         total_size = len(content)
         yield _send_sse_event("progress", {
             "phase": "saving",
@@ -439,26 +474,11 @@ async def _load_image_streaming(filename: str, content: bytes) -> AsyncGenerator
             "percent": 5,
         })
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-            # Write in chunks for progress reporting
-            chunk_size = 1024 * 1024  # 1MB chunks
-            bytes_written = 0
-
-            for i in range(0, total_size, chunk_size):
-                chunk = content[i:i + chunk_size]
-                tmp_file.write(chunk)
-                bytes_written += len(chunk)
-                percent = min(30, 5 + int((bytes_written / total_size) * 25))
-                yield _send_sse_event("progress", {
-                    "phase": "saving",
-                    "message": f"Saving file... {_format_size(bytes_written)} / {_format_size(total_size)}",
-                    "percent": percent,
-                })
-
-            temp_path = tmp_file.name
-
+        # Write content to temp file in a thread to avoid blocking
+        temp_path, file_size = await asyncio.to_thread(
+            _write_content_to_tempfile, content, suffix
+        )
         load_path = temp_path
-        file_size = os.path.getsize(temp_path)
 
         yield _send_sse_event("progress", {
             "phase": "saved",
@@ -466,7 +486,7 @@ async def _load_image_streaming(filename: str, content: bytes) -> AsyncGenerator
             "percent": 30,
         })
 
-        # Phase 2: Decompress if needed
+        # Phase 2: Decompress if needed (run in thread to avoid blocking event loop)
         if filename.lower().endswith((".tar.xz", ".txz", ".xz")):
             yield _send_sse_event("progress", {
                 "phase": "decompressing",
@@ -475,27 +495,11 @@ async def _load_image_streaming(filename: str, content: bytes) -> AsyncGenerator
             })
 
             try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_tar:
-                    with lzma.open(temp_path, "rb") as source:
-                        # Read and decompress in chunks
-                        chunk_size = 1024 * 1024  # 1MB
-                        bytes_decompressed = 0
-                        while True:
-                            chunk = source.read(chunk_size)
-                            if not chunk:
-                                break
-                            tmp_tar.write(chunk)
-                            bytes_decompressed += len(chunk)
-                            if bytes_decompressed % (10 * 1024 * 1024) == 0:  # Update every 10MB
-                                yield _send_sse_event("progress", {
-                                    "phase": "decompressing",
-                                    "message": f"Decompressing... {_format_size(bytes_decompressed)} extracted",
-                                    "percent": 40,
-                                })
-                    decompressed_path = tmp_tar.name
-
+                # Decompress in a thread to avoid blocking the event loop
+                decompressed_path, decompressed_size = await asyncio.to_thread(
+                    _decompress_xz_file, temp_path
+                )
                 load_path = decompressed_path
-                decompressed_size = os.path.getsize(decompressed_path)
 
                 yield _send_sse_event("progress", {
                     "phase": "decompressed",
@@ -508,14 +512,14 @@ async def _load_image_streaming(filename: str, content: bytes) -> AsyncGenerator
                 })
                 return
 
-        # Phase 3: Detect format
+        # Phase 3: Detect format (run in thread to avoid blocking event loop)
         yield _send_sse_event("progress", {
             "phase": "detecting",
             "message": "Detecting image format...",
             "percent": 55,
         })
 
-        is_docker_image = _is_docker_image_tar(load_path)
+        is_docker_image = await asyncio.to_thread(_is_docker_image_tar, load_path)
         loaded_images = []
         output = ""
 
@@ -677,11 +681,8 @@ async def _load_image_streaming(filename: str, content: bytes) -> AsyncGenerator
         })
         yield "\n"
     finally:
-        # Clean up temp files
-        if decompressed_path and os.path.exists(decompressed_path):
-            os.unlink(decompressed_path)
-        if temp_path and os.path.exists(temp_path):
-            os.unlink(temp_path)
+        # Clean up temp files (run in thread to avoid blocking event loop)
+        await asyncio.to_thread(_cleanup_temp_files, decompressed_path, temp_path)
 
 
 def _load_image_sync(file: UploadFile) -> dict:
@@ -1368,16 +1369,16 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
         if not reference:
             raise ValueError("Image has no Docker reference")
 
-        # Get image size from Docker
+        # Get image size from Docker (async subprocess to avoid blocking event loop)
         try:
-            result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.Size}}", reference],
-                capture_output=True,
-                text=True,
-                timeout=30,
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "inspect", "--format", "{{.Size}}", reference,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            if result.returncode == 0:
-                job.total_bytes = int(result.stdout.strip())
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode == 0:
+                job.total_bytes = int(stdout.decode().strip())
                 session.commit()
         except Exception as e:
             logger.warning(f"Could not get image size for {reference}: {e}")
@@ -1522,19 +1523,19 @@ async def stream_image(
     if not reference:
         raise HTTPException(status_code=400, detail="Image has no Docker reference")
 
-    # Get image size for Content-Length header
+    # Get image size for Content-Length header (async subprocess to avoid blocking)
     content_length = None
     try:
-        result = subprocess.run(
-            ["docker", "inspect", "--format", "{{.Size}}", reference],
-            capture_output=True,
-            text=True,
-            timeout=30,
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "inspect", "--format", "{{.Size}}", reference,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        if result.returncode == 0:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode == 0:
             # Note: This is the image size, not the tar size
             # Tar size is usually slightly larger
-            content_length = int(result.stdout.strip())
+            content_length = int(stdout.decode().strip())
     except Exception:
         pass
 

@@ -462,54 +462,57 @@ class DockerProvider(Provider):
 
         return config
 
-    async def _ensure_directories(
+    def _setup_ceos_directories(
         self,
-        topology: ParsedTopology,
+        node_name: str,
+        node: TopologyNode,
         workspace: Path,
     ) -> None:
-        """Create required directories for nodes (e.g., cEOS flash)."""
-        for node_name, node in topology.nodes.items():
-            if node.kind == "ceos":
-                flash_dir = workspace / "configs" / node_name / "flash"
-                flash_dir.mkdir(parents=True, exist_ok=True)
-                logger.debug(f"Created flash directory: {flash_dir}")
+        """Set up cEOS directories and config files.
 
-                # Create systemd environment config for cEOS
-                # This is needed because systemd services don't inherit
-                # Docker container environment variables
-                systemd_dir = workspace / "configs" / node_name / "systemd"
-                systemd_dir.mkdir(parents=True, exist_ok=True)
-                env_file = systemd_dir / "ceos-env.conf"
-                env_file.write_text(
-                    "[Manager]\n"
-                    "DefaultEnvironment=EOS_PLATFORM=ceoslab CEOS=1 "
-                    "container=docker ETBA=1 SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT=1 "
-                    "INTFTYPE=eth MGMT_INTF=eth0 CEOS_NOZEROTOUCH=1\n"
-                )
-                logger.debug(f"Created cEOS systemd env config: {env_file}")
+        This is a blocking operation meant to run in asyncio.to_thread().
+        """
+        import shutil
 
-                # Write startup-config to flash directory
-                # cEOS reads startup-config from /mnt/flash/startup-config
-                startup_config_path = flash_dir / "startup-config"
+        flash_dir = workspace / "configs" / node_name / "flash"
+        flash_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"Created flash directory: {flash_dir}")
 
-                # Check for existing startup-config in configs/{node}/startup-config
-                # (this is where extracted configs are saved)
-                extracted_config = workspace / "configs" / node_name / "startup-config"
+        # Create systemd environment config for cEOS
+        # This is needed because systemd services don't inherit
+        # Docker container environment variables
+        systemd_dir = workspace / "configs" / node_name / "systemd"
+        systemd_dir.mkdir(parents=True, exist_ok=True)
+        env_file = systemd_dir / "ceos-env.conf"
+        env_file.write_text(
+            "[Manager]\n"
+            "DefaultEnvironment=EOS_PLATFORM=ceoslab CEOS=1 "
+            "container=docker ETBA=1 SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT=1 "
+            "INTFTYPE=eth MGMT_INTF=eth0 CEOS_NOZEROTOUCH=1\n"
+        )
+        logger.debug(f"Created cEOS systemd env config: {env_file}")
 
-                if node.startup_config:
-                    # Use startup-config from topology YAML
-                    startup_config_path.write_text(node.startup_config)
-                    logger.debug(f"Wrote startup-config from topology for {node.log_name()}")
-                elif extracted_config.exists():
-                    # Copy previously extracted config to flash
-                    import shutil
-                    shutil.copy2(extracted_config, startup_config_path)
-                    logger.debug(f"Copied extracted startup-config for {node.log_name()}")
-                elif not startup_config_path.exists():
-                    # Create minimal startup-config with essential initialization
-                    # Use display_name for hostname if available, otherwise node_name
-                    hostname = node.display_name or node_name
-                    minimal_config = f"""! Minimal cEOS startup config
+        # Write startup-config to flash directory
+        # cEOS reads startup-config from /mnt/flash/startup-config
+        startup_config_path = flash_dir / "startup-config"
+
+        # Check for existing startup-config in configs/{node}/startup-config
+        # (this is where extracted configs are saved)
+        extracted_config = workspace / "configs" / node_name / "startup-config"
+
+        if node.startup_config:
+            # Use startup-config from topology YAML
+            startup_config_path.write_text(node.startup_config)
+            logger.debug(f"Wrote startup-config from topology for {node.log_name()}")
+        elif extracted_config.exists():
+            # Copy previously extracted config to flash
+            shutil.copy2(extracted_config, startup_config_path)
+            logger.debug(f"Copied extracted startup-config for {node.log_name()}")
+        elif not startup_config_path.exists():
+            # Create minimal startup-config with essential initialization
+            # Use display_name for hostname if available, otherwise node_name
+            hostname = node.display_name or node_name
+            minimal_config = f"""! Minimal cEOS startup config
 hostname {hostname}
 !
 no aaa root
@@ -517,23 +520,42 @@ no aaa root
 username admin privilege 15 role network-admin nopassword
 !
 """
-                    startup_config_path.write_text(minimal_config)
-                    logger.debug(f"Created minimal startup-config for {node.log_name()}")
+            startup_config_path.write_text(minimal_config)
+            logger.debug(f"Created minimal startup-config for {node.log_name()}")
 
-                # Create zerotouch-config to disable ZTP
-                # This file's presence tells cEOS to skip Zero Touch Provisioning
-                zerotouch_config = flash_dir / "zerotouch-config"
-                if not zerotouch_config.exists():
-                    zerotouch_config.write_text("DISABLE=True\n")
-                    logger.debug(f"Created zerotouch-config for {node.log_name()}")
+        # Create zerotouch-config to disable ZTP
+        # This file's presence tells cEOS to skip Zero Touch Provisioning
+        zerotouch_config = flash_dir / "zerotouch-config"
+        if not zerotouch_config.exists():
+            zerotouch_config.write_text("DISABLE=True\n")
+            logger.debug(f"Created zerotouch-config for {node.log_name()}")
 
-                # Create if-wait.sh script to wait for interfaces before boot
-                # This prevents the platform detection race where Ark.getPlatform()
-                # returns None because init runs before interfaces are ready
-                if_wait_script = flash_dir / "if-wait.sh"
-                if_wait_script.write_text(IF_WAIT_SCRIPT)
-                if_wait_script.chmod(0o755)
-                logger.debug(f"Created if-wait.sh for {node.log_name()}")
+        # Create if-wait.sh script to wait for interfaces before boot
+        # This prevents the platform detection race where Ark.getPlatform()
+        # returns None because init runs before interfaces are ready
+        if_wait_script = flash_dir / "if-wait.sh"
+        if_wait_script.write_text(IF_WAIT_SCRIPT)
+        if_wait_script.chmod(0o755)
+        logger.debug(f"Created if-wait.sh for {node.log_name()}")
+
+    async def _ensure_directories(
+        self,
+        topology: ParsedTopology,
+        workspace: Path,
+    ) -> None:
+        """Create required directories for nodes (e.g., cEOS flash).
+
+        Runs blocking file I/O in thread pool to avoid blocking event loop.
+        """
+        for node_name, node in topology.nodes.items():
+            if node.kind == "ceos":
+                # Run blocking file operations in thread pool
+                await asyncio.to_thread(
+                    self._setup_ceos_directories,
+                    node_name,
+                    node,
+                    workspace,
+                )
 
     def _calculate_required_interfaces(self, topology: ParsedTopology) -> int:
         """Calculate the maximum interface index needed based on topology links.
