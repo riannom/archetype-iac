@@ -1890,6 +1890,11 @@ async def run_node_sync(
 
             session.commit()
 
+        # Phase 4: Create cross-host links if needed
+        # This handles VXLAN tunnel setup for links between nodes on different agents.
+        # We check after each sync job because both endpoints need to be deployed first.
+        await _create_cross_host_links_if_ready(session, lab_id, log_parts)
+
         # Check if any nodes are in error state
         error_count = sum(1 for ns in node_states if ns.actual_state == "error")
 
@@ -1919,6 +1924,99 @@ async def run_node_sync(
             pass
     finally:
         session.close()
+
+
+async def _create_cross_host_links_if_ready(
+    session,
+    lab_id: str,
+    log_parts: list[str],
+) -> None:
+    """Create cross-host links (VXLAN tunnels) if both endpoints are ready.
+
+    This is called after each sync job completes to check if any cross-host
+    links can now be created. A link can be created when:
+    1. Both endpoint nodes are deployed (have containers running)
+    2. Both agents are online
+    3. The link hasn't already been created
+
+    Args:
+        session: Database session
+        lab_id: Lab identifier
+        log_parts: List to append log messages to
+    """
+    from app.tasks.link_orchestration import create_deployment_links
+
+    # Check if there are any cross-host links that need creation
+    # First, check if any link_states exist with is_cross_host=True and actual_state != "up"
+    pending_cross_host = (
+        session.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.is_cross_host == True,
+            models.LinkState.actual_state != "up",
+        )
+        .count()
+    )
+
+    # Also check for links that haven't been categorized yet (no host IDs set)
+    uncategorized_links = (
+        session.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.source_host_id == None,
+        )
+        .count()
+    )
+
+    # Check if there are any links defined that don't have LinkState records yet
+    from app.services.topology import TopologyService
+    topo_service = TopologyService(session)
+    db_links = topo_service.get_links(lab_id)
+    existing_link_names = {
+        ls.link_name
+        for ls in session.query(models.LinkState.link_name)
+        .filter(models.LinkState.lab_id == lab_id)
+        .all()
+    }
+    new_links = [l for l in db_links if l.link_name not in existing_link_names]
+
+    if not pending_cross_host and not uncategorized_links and not new_links:
+        # No cross-host links need creation
+        return
+
+    logger.info(
+        f"Checking cross-host links for lab {lab_id}: "
+        f"{pending_cross_host} pending, {uncategorized_links} uncategorized, {len(new_links)} new"
+    )
+
+    # Build host_to_agent map with all online agents
+    all_agents = session.query(models.Host).filter(models.Host.status == "online").all()
+    host_to_agent: dict[str, models.Host] = {}
+    for agent in all_agents:
+        if agent_client.is_agent_online(agent):
+            host_to_agent[agent.id] = agent
+
+    if not host_to_agent:
+        logger.warning(f"No online agents available for cross-host link creation")
+        return
+
+    # Call create_deployment_links which handles all the logic:
+    # - Creates LinkState records if needed
+    # - Determines which links are cross-host based on node placements
+    # - Creates VXLAN tunnels for cross-host links where both endpoints are ready
+    # - Skips links that are already "up"
+    log_parts.append("")
+    log_parts.append("=== Phase 4: Cross-Host Links ===")
+
+    try:
+        links_ok, links_failed = await create_deployment_links(
+            session, lab_id, host_to_agent, log_parts
+        )
+        if links_ok > 0 or links_failed > 0:
+            logger.info(f"Cross-host link creation: {links_ok} OK, {links_failed} failed")
+    except Exception as e:
+        logger.error(f"Failed to create cross-host links for lab {lab_id}: {e}")
+        log_parts.append(f"  Cross-host link creation failed: {e}")
 
 
 def _get_container_name(lab_id: str, node_name: str, provider: str = "docker") -> str:
