@@ -21,10 +21,13 @@ interface ConsoleManagerProps {
   onUpdateWindowSize?: (windowId: string, width: number, height: number) => void;
   onMergeWindows?: (sourceWindowId: string, targetWindowId: string) => void;
   onSplitTab?: (windowId: string, deviceId: string, x: number, y: number) => void;
+  onReorderTab?: (windowId: string, fromIndex: number, toIndex: number) => void;
 }
 
 // Threshold in pixels before a tab drag initiates a split
 const TAB_DRAG_THRESHOLD = 30;
+// Threshold for horizontal movement to trigger reorder mode
+const REORDER_THRESHOLD = 10;
 
 const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   labId,
@@ -37,6 +40,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   onUpdateWindowPos,
   onMergeWindows,
   onSplitTab,
+  onReorderTab,
 }) => {
   const [dragState, setDragState] = useState<{ id: string; startX: number; startY: number } | null>(null);
   const [resizeState, setResizeState] = useState<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
@@ -46,7 +50,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const windowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Tab drag state for splitting tabs out of windows
+  // Tab drag state for splitting tabs out of windows or reordering within
   const [tabDragState, setTabDragState] = useState<{
     windowId: string;
     deviceId: string;
@@ -54,8 +58,13 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     startY: number;
     currentX: number;
     currentY: number;
-    isDragging: boolean; // true once threshold is exceeded
+    isDragging: boolean; // true once split threshold is exceeded (vertical)
+    isReordering: boolean; // true for horizontal drag within header
+    reorderTargetIndex: number | null; // drop position indicator
   } | null>(null);
+
+  // Refs to track tab elements for calculating drop positions
+  const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Store ref for a window element
   const setWindowRef = useCallback((windowId: string, element: HTMLDivElement | null) => {
@@ -101,10 +110,10 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     });
   };
 
-  // Handle tab mousedown for potential split drag
+  // Handle tab mousedown for potential split drag or reorder
   const handleTabMouseDown = (e: React.MouseEvent, win: ConsoleWindow, deviceId: string) => {
-    // Only allow tab drag if window has multiple tabs and handlers are available
-    if (win.deviceIds.length <= 1 || !onSplitTab) return;
+    // Only allow tab drag if window has multiple tabs and at least one handler is available
+    if (win.deviceIds.length <= 1 || (!onSplitTab && !onReorderTab)) return;
 
     e.stopPropagation();
     setTabDragState({
@@ -115,8 +124,26 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       currentX: e.clientX,
       currentY: e.clientY,
       isDragging: false,
+      isReordering: false,
+      reorderTargetIndex: null,
     });
   };
+
+  // Calculate the target index for reordering based on cursor position
+  const calculateReorderIndex = useCallback((clientX: number, windowId: string, draggedId: string): number => {
+    const win = windows.find(w => w.id === windowId);
+    if (!win) return 0;
+
+    let targetIndex = 0;
+    for (let i = 0; i < win.deviceIds.length; i++) {
+      const tabEl = tabRefs.current.get(`${windowId}-${win.deviceIds[i]}`);
+      if (!tabEl) continue;
+      const rect = tabEl.getBoundingClientRect();
+      const midpoint = rect.left + rect.width / 2;
+      if (clientX > midpoint) targetIndex = i + 1;
+    }
+    return targetIndex;
+  }, [windows]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -144,19 +171,65 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         }));
       }
 
-      // Handle tab drag for splitting
+      // Handle tab drag for splitting OR reordering
       if (tabDragState) {
         const deltaX = e.clientX - tabDragState.startX;
         const deltaY = e.clientY - tabDragState.startY;
-        const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+        const absX = Math.abs(deltaX);
+        const absY = Math.abs(deltaY);
 
         setTabDragState((prev) => {
           if (!prev) return null;
+
+          // If vertical movement exceeds threshold → split mode (existing behavior)
+          if (absY >= TAB_DRAG_THRESHOLD && !prev.isReordering) {
+            return {
+              ...prev,
+              currentX: e.clientX,
+              currentY: e.clientY,
+              isDragging: true,
+              isReordering: false,
+              reorderTargetIndex: null,
+            };
+          }
+
+          // If already in split mode, continue tracking position
+          if (prev.isDragging) {
+            return {
+              ...prev,
+              currentX: e.clientX,
+              currentY: e.clientY,
+            };
+          }
+
+          // If horizontal movement detected and not in split mode → reorder mode
+          if (absX >= REORDER_THRESHOLD && !prev.isDragging) {
+            const targetIndex = calculateReorderIndex(e.clientX, prev.windowId, prev.deviceId);
+            return {
+              ...prev,
+              currentX: e.clientX,
+              currentY: e.clientY,
+              isReordering: true,
+              reorderTargetIndex: targetIndex,
+            };
+          }
+
+          // If already in reorder mode, update target index
+          if (prev.isReordering) {
+            const targetIndex = calculateReorderIndex(e.clientX, prev.windowId, prev.deviceId);
+            return {
+              ...prev,
+              currentX: e.clientX,
+              currentY: e.clientY,
+              reorderTargetIndex: targetIndex,
+            };
+          }
+
+          // Not enough movement yet
           return {
             ...prev,
             currentX: e.clientX,
             currentY: e.clientY,
-            isDragging: prev.isDragging || distance >= TAB_DRAG_THRESHOLD,
           };
         });
       }
@@ -168,8 +241,19 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         onMergeWindows(dragState.id, dropTargetId);
       }
 
+      // Handle tab reorder on drop
+      if (tabDragState?.isReordering && tabDragState.reorderTargetIndex !== null && onReorderTab) {
+        const win = windows.find(w => w.id === tabDragState.windowId);
+        if (win) {
+          const fromIndex = win.deviceIds.indexOf(tabDragState.deviceId);
+          const toIndex = tabDragState.reorderTargetIndex;
+          if (fromIndex !== -1 && fromIndex !== toIndex && fromIndex !== toIndex - 1) {
+            onReorderTab(tabDragState.windowId, fromIndex, toIndex);
+          }
+        }
+      }
       // Handle tab split on drop
-      if (tabDragState?.isDragging && onSplitTab) {
+      else if (tabDragState?.isDragging && onSplitTab) {
         onSplitTab(tabDragState.windowId, tabDragState.deviceId, e.clientX - 260, e.clientY - 50);
       }
 
@@ -187,7 +271,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragState, resizeState, tabDragState, dropTargetId, onUpdateWindowPos, onMergeWindows, onSplitTab, findDropTarget]);
+  }, [dragState, resizeState, tabDragState, dropTargetId, windows, onUpdateWindowPos, onMergeWindows, onSplitTab, onReorderTab, findDropTarget, calculateReorderIndex]);
 
   // Get the node being dragged as a tab (for ghost preview)
   const tabDragNode = tabDragState?.isDragging
@@ -225,44 +309,71 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
               onMouseDown={(e) => handleMouseDown(e, win)}
             >
               <div className="flex-1 flex items-center h-full overflow-x-auto no-scrollbar scroll-smooth">
-                {win.deviceIds.map((nodeId) => {
+                {win.deviceIds.map((nodeId, index) => {
                   const node = nodes.find((n) => n.id === nodeId);
                   const isActive = win.activeDeviceId === nodeId;
                   const isTabBeingDragged = tabDragState?.isDragging &&
                     tabDragState.windowId === win.id &&
                     tabDragState.deviceId === nodeId;
+                  const isTabBeingReordered = tabDragState?.isReordering &&
+                    tabDragState.windowId === win.id &&
+                    tabDragState.deviceId === nodeId;
+
+                  // Show reorder indicator before this tab if target index matches
+                  const showIndicatorBefore = tabDragState?.isReordering &&
+                    tabDragState.windowId === win.id &&
+                    tabDragState.reorderTargetIndex === index;
 
                   return (
-                    <div
-                      key={nodeId}
-                      onMouseDown={(e) => handleTabMouseDown(e, win, nodeId)}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!tabDragState?.isDragging) {
-                          onSetActiveTab(win.id, nodeId);
-                        }
-                      }}
-                      className={`h-full px-4 flex items-center gap-2 text-[10px] font-bold border-r border-stone-700/50 transition-all cursor-pointer shrink-0 relative
-                        ${isActive ? 'bg-stone-900 text-sage-400' : 'text-stone-500 hover:bg-stone-700/50 hover:text-stone-300'}
-                        ${isTabBeingDragged ? 'console-tab-dragging' : ''}
-                        ${win.deviceIds.length > 1 ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                    >
-                      {isActive && <div className="absolute top-0 left-0 right-0 h-0.5 bg-sage-500" />}
-                      <i className={`fa-solid ${isActive ? 'fa-terminal' : 'fa-rectangle-list'} scale-90`}></i>
-                      <span className="truncate max-w-[80px]">{node?.name || 'Unknown'}</span>
-                      <button
-                        onMouseDown={(e) => e.stopPropagation()}
+                    <React.Fragment key={nodeId}>
+                      {/* Reorder drop indicator before this tab */}
+                      {showIndicatorBefore && (
+                        <div className="console-tab-reorder-indicator" />
+                      )}
+                      <div
+                        ref={(el) => {
+                          if (el) {
+                            tabRefs.current.set(`${win.id}-${nodeId}`, el);
+                          } else {
+                            tabRefs.current.delete(`${win.id}-${nodeId}`);
+                          }
+                        }}
+                        onMouseDown={(e) => handleTabMouseDown(e, win, nodeId)}
                         onClick={(e) => {
                           e.stopPropagation();
-                          onCloseTab(win.id, nodeId);
+                          if (!tabDragState?.isDragging && !tabDragState?.isReordering) {
+                            onSetActiveTab(win.id, nodeId);
+                          }
                         }}
-                        className="ml-1 hover:text-red-400 p-0.5 transition-colors opacity-60 hover:opacity-100"
+                        className={`h-full px-4 flex items-center gap-2 text-[10px] font-bold border-r border-stone-700/50 transition-all cursor-pointer shrink-0 relative
+                          ${isActive ? 'bg-stone-900 text-sage-400' : 'text-stone-500 hover:bg-stone-700/50 hover:text-stone-300'}
+                          ${isTabBeingDragged ? 'console-tab-dragging' : ''}
+                          ${isTabBeingReordered ? 'console-tab-reordering' : ''}
+                          ${win.deviceIds.length > 1 ? 'cursor-grab active:cursor-grabbing' : ''}`}
                       >
-                        <i className="fa-solid fa-xmark"></i>
-                      </button>
-                    </div>
+                        {isActive && <div className="absolute top-0 left-0 right-0 h-0.5 bg-sage-500" />}
+                        <i className={`fa-solid ${isActive ? 'fa-terminal' : 'fa-rectangle-list'} scale-90`}></i>
+                        <span className="truncate max-w-[80px]">{node?.name || 'Unknown'}</span>
+                        <button
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCloseTab(win.id, nodeId);
+                          }}
+                          className="ml-1 hover:text-red-400 p-0.5 transition-colors opacity-60 hover:opacity-100"
+                        >
+                          <i className="fa-solid fa-xmark"></i>
+                        </button>
+                      </div>
+                    </React.Fragment>
                   );
                 })}
+                {/* Reorder drop indicator at the end */}
+                {tabDragState?.isReordering &&
+                  tabDragState.windowId === win.id &&
+                  tabDragState.reorderTargetIndex === win.deviceIds.length && (
+                  <div className="console-tab-reorder-indicator" />
+                )}
               </div>
               <div className="flex items-center px-2 gap-1.5 shrink-0 bg-stone-800 ml-auto border-l border-stone-700">
                 <button

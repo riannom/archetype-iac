@@ -1051,6 +1051,21 @@ const StudioPage: React.FC = () => {
     });
   }, []);
 
+  // Reorder tabs within a console window
+  const handleReorderTab = useCallback((windowId: string, fromIndex: number, toIndex: number) => {
+    setConsoleWindows((prev) =>
+      prev.map((win) => {
+        if (win.id !== windowId) return win;
+        const newDeviceIds = [...win.deviceIds];
+        const [movedId] = newDeviceIds.splice(fromIndex, 1);
+        // Adjust toIndex if moving right (since we removed an element)
+        const adjustedTo = toIndex > fromIndex ? toIndex - 1 : toIndex;
+        newDeviceIds.splice(adjustedTo, 0, movedId);
+        return { ...win, deviceIds: newDeviceIds };
+      })
+    );
+  }, []);
+
   const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string) => {
     if (nodeId && nodeName) {
       setConfigViewerNode({ id: nodeId, name: nodeName });
@@ -1528,6 +1543,7 @@ const StudioPage: React.FC = () => {
           onUpdateWindowPos={(id, x, y) => setConsoleWindows((prev) => prev.map((win) => (win.id === id ? { ...win, x, y } : win)))}
           onMergeWindows={handleMergeWindows}
           onSplitTab={handleSplitTab}
+          onReorderTab={handleReorderTab}
         />
       </div>
       <StatusBar nodeStates={nodeStates} />
