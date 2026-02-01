@@ -502,8 +502,10 @@ class DockerProvider(Provider):
                     logger.debug(f"Copied extracted startup-config for {node.log_name()}")
                 elif not startup_config_path.exists():
                     # Create minimal startup-config with essential initialization
+                    # Use display_name for hostname if available, otherwise node_name
+                    hostname = node.display_name or node_name
                     minimal_config = f"""! Minimal cEOS startup config
-hostname {node_name}
+hostname {hostname}
 !
 no aaa root
 !
