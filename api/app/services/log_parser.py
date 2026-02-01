@@ -29,6 +29,8 @@ class ParsedLogs(BaseModel):
 
 # Regex patterns for parsing log content
 HOST_SECTION_PATTERN = re.compile(r"^=== Host: ([^(]+)\s*(?:\(([^)]+)\))?\s*===\s*$")
+# Pattern for "Agent: id (name)" format used in job logs
+AGENT_LINE_PATTERN = re.compile(r"^Agent:\s*([a-f0-9-]+)\s*\(([^)]+)\)\s*$")
 TIMESTAMP_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})")
 LEVEL_PATTERNS = [
     (re.compile(r"\bERROR\b", re.IGNORECASE), "error"),
@@ -100,13 +102,21 @@ def parse_job_log(
         if not line:
             continue
 
-        # Check for host section header
+        # Check for host section header (=== Host: name (id) ===)
         host_match = HOST_SECTION_PATTERN.match(line)
         if host_match:
             current_host_name = host_match.group(1).strip()
             current_host_id = host_match.group(2) if host_match.group(2) else None
             hosts_found.add(current_host_name)
             continue
+
+        # Check for agent line (Agent: id (name))
+        agent_match = AGENT_LINE_PATTERN.match(line)
+        if agent_match:
+            current_host_id = agent_match.group(1).strip()
+            current_host_name = agent_match.group(2).strip()
+            hosts_found.add(current_host_name)
+            # Don't continue - still add as log entry
 
         # Parse as log entry
         timestamp = extract_timestamp(line)

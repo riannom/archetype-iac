@@ -2416,6 +2416,17 @@ def get_lab_logs(
     # Limit to recent jobs for performance
     jobs = jobs_query.limit(50).all()
 
+    # Build agent_id -> host_name lookup from all jobs
+    agent_ids = {job.agent_id for job in jobs if job.agent_id}
+    agent_name_map: dict[str, str] = {}
+    if agent_ids:
+        hosts = (
+            database.query(models.Host)
+            .filter(models.Host.id.in_(agent_ids))
+            .all()
+        )
+        agent_name_map = {h.id: h.name for h in hosts}
+
     # Parse all job logs
     all_entries = []
     hosts_found = set()
@@ -2424,14 +2435,31 @@ def get_lab_logs(
         if not job.log_path:
             continue
 
+        # Get host info for this job from its agent_id
+        job_host_id = job.agent_id
+        job_host_name = agent_name_map.get(job.agent_id) if job.agent_id else None
+
         parsed = parse_job_log(
             log_content=job.log_path,  # log_path contains actual log content
             job_id=job.id,
             job_created_at=job.created_at,
         )
 
+        # If job has an agent, set host info on entries that don't have it
+        # and add the host to hosts_found
+        for entry in parsed.entries:
+            if not entry.host_id and job_host_id:
+                entry.host_id = job_host_id
+                entry.host_name = job_host_name
+            if entry.host_name:
+                hosts_found.add(entry.host_name)
+
         all_entries.extend(parsed.entries)
         hosts_found.update(parsed.hosts)
+
+        # Also add job's host to found hosts
+        if job_host_name:
+            hosts_found.add(job_host_name)
 
     # Apply filters
     filtered_entries = filter_entries(
