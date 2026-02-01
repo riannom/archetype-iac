@@ -695,3 +695,51 @@ class PluginMgmtAttachResponse(BaseModel):
     success: bool
     ip_address: str | None = None
     error: str | None = None
+
+
+# --- Carrier State Management ---
+
+
+class CarrierStateRequest(BaseModel):
+    """Request to set interface carrier state."""
+    state: str  # "on" or "off"
+
+
+class CarrierStateResponse(BaseModel):
+    """Response from carrier state operation."""
+    success: bool
+    container: str
+    interface: str
+    state: str
+    error: str | None = None
+
+
+class PortIsolateResponse(BaseModel):
+    """Response from port isolation operation."""
+    success: bool
+    container: str
+    interface: str
+    vlan_tag: int | None = None
+    error: str | None = None
+
+
+class PortRestoreRequest(BaseModel):
+    """Request to restore a port to a specific VLAN."""
+    target_vlan: int
+
+
+class PortRestoreResponse(BaseModel):
+    """Response from port restore operation."""
+    success: bool
+    container: str
+    interface: str
+    vlan_tag: int
+    error: str | None = None
+
+
+class PortVlanResponse(BaseModel):
+    """Response containing a port's VLAN tag."""
+    container: str
+    interface: str
+    vlan_tag: int | None = None
+    error: str | None = None

@@ -612,7 +612,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         if lab.state != old_lab_state:
             logger.info(f"Reconciled lab {lab_id} state: {old_lab_state} -> {lab.state}")
 
-        # Reconcile link states based on node states
+        # Reconcile link states based on node states and L2 connectivity
         # Build a map of node name -> actual state for quick lookup
         node_actual_states: dict[str, str] = {}
         for ns in node_states:
@@ -632,11 +632,34 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
             # Determine link actual state based on endpoint node states
             if source_state == "running" and target_state == "running":
-                # Both nodes running - link is operational
-                # If user wants it down, actual is still "up" from infrastructure perspective
-                # The desired_state tracks user intent
-                ls.actual_state = "up"
-                ls.error_message = None
+                # Both nodes running - check L2 connectivity
+                # If carrier states are off, link is administratively down
+                if ls.source_carrier_state == "off" or ls.target_carrier_state == "off":
+                    ls.actual_state = "down"
+                    ls.error_message = "Carrier disabled on one or more endpoints"
+                elif ls.is_cross_host:
+                    # For cross-host links, verify VXLAN tunnel exists
+                    tunnel = (
+                        session.query(models.VxlanTunnel)
+                        .filter(
+                            models.VxlanTunnel.link_state_id == ls.id,
+                            models.VxlanTunnel.status == "active",
+                        )
+                        .first()
+                    )
+                    if tunnel:
+                        ls.actual_state = "up"
+                        ls.error_message = None
+                    else:
+                        # No active tunnel - link is broken
+                        ls.actual_state = "error"
+                        ls.error_message = "VXLAN tunnel not active"
+                else:
+                    # Same-host link - assume up if both nodes are running and carrier on
+                    # Full L2 verification would require querying OVS VLAN tags from agent
+                    # which adds latency. For now, trust that hot_connect worked.
+                    ls.actual_state = "up"
+                    ls.error_message = None
             elif source_state in ("error",) or target_state in ("error",):
                 # At least one node is in error state
                 ls.actual_state = "error"
