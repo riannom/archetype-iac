@@ -67,9 +67,14 @@ logger = logging.getLogger(__name__)
 # Container name prefix for Archetype-managed containers
 CONTAINER_PREFIX = "archetype"
 
-# Interface wait script for cEOS - waits for interfaces before starting init
-# This prevents the platform detection race condition where Ark.getPlatform()
-# returns None because systemd services run before network interfaces are ready
+# Interface wait script for cEOS (adapted from containerlab)
+#
+# cEOS has a platform detection race condition: Ark.getPlatform() returns None
+# if network interfaces aren't available when systemd services start, causing
+# boot failures (VEosLabInit skips init, EosInitStage tries modprobe rbfd).
+#
+# This script runs BEFORE /sbin/init, waiting for CLAB_INTFS interfaces to
+# appear in /sys/class/net/. See vendors.py cEOS section for full details.
 IF_WAIT_SCRIPT = """#!/bin/sh
 
 # Validate CLAB_INTFS environment variable
