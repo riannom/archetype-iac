@@ -147,6 +147,27 @@ Open `http://localhost:8080` in your browser and log in with your admin credenti
 
 For larger deployments, you can run agents on multiple hosts to distribute lab workloads.
 
+### MTU Considerations for VXLAN Overlay
+
+Multi-host labs use VXLAN tunnels to connect nodes across hosts. VXLAN adds ~50 bytes of overhead, which affects the effective MTU for traffic inside the tunnel:
+
+| Underlay MTU | Effective Tenant MTU | Notes |
+|--------------|---------------------|-------|
+| 1500 | ~1450 | Default config, may cause fragmentation |
+| 9000 | ~8950 | Jumbo frames, recommended for production |
+
+**Default behavior:** Archetype sets tenant interface MTU to 1450 bytes to avoid IP fragmentation on standard 1500-byte networks.
+
+**For full 1500 MTU inside tunnels:** Configure jumbo frames (MTU 9000+) on all underlay network paths between agent hosts, then set `ARCHETYPE_AGENT_OVERLAY_MTU=1500` on each agent.
+
+```bash
+# Check current MTU on your network interface
+ip link show eth0
+
+# Example: Set jumbo frames on underlay (requires switch/router support)
+sudo ip link set eth0 mtu 9000
+```
+
 ### Controller Host
 
 Run the controller with the agent disabled:
@@ -278,6 +299,7 @@ alembic revision --autogenerate -m "description"  # Create migration
 | `ARCHETYPE_AGENT_ENABLE_DOCKER` | Enable DockerProvider | `true` |
 | `ARCHETYPE_AGENT_ENABLE_LIBVIRT` | Enable LibvirtProvider for VMs | `false` |
 | `ARCHETYPE_AGENT_ENABLE_VXLAN` | Enable VXLAN overlay for multi-host | `true` |
+| `ARCHETYPE_AGENT_OVERLAY_MTU` | MTU for overlay tunnel interfaces (0 to disable) | `1450` |
 
 ### OIDC/SSO Configuration
 

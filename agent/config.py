@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     vxlan_vni_base: int = 100000
     vxlan_vni_max: int = 199999
 
+    # Overlay MTU settings
+    # VXLAN adds ~50 bytes overhead (8 VXLAN + 8 UDP + 20 IP + 14 Ethernet)
+    # If underlay MTU is 1500, tenant MTU should be ~1450 to avoid fragmentation
+    # Set to 0 to disable explicit MTU configuration (inherit from system)
+    # For full 1500 MTU inside tunnels, configure jumbo frames (9000+) on underlay
+    overlay_mtu: int = 1450  # MTU for tenant interfaces on overlay links
+
     # OVS networking (hot-plug support)
     enable_ovs: bool = True  # Enable OVS-based networking for hot-plug
     ovs_bridge_name: str = "arch-ovs"  # Name of OVS bridge

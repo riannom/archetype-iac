@@ -186,6 +186,14 @@ class OverlayManager:
         if code != 0:
             raise RuntimeError(f"Failed to create VXLAN interface: {stderr}")
 
+        # Set MTU if configured (to avoid fragmentation on 1500 MTU underlays)
+        if settings.overlay_mtu > 0:
+            code, _, stderr = await self._run_cmd([
+                "ip", "link", "set", interface_name, "mtu", str(settings.overlay_mtu)
+            ])
+            if code != 0:
+                logger.warning(f"Failed to set MTU on VXLAN interface: {stderr}")
+
         # Bring interface up
         code, _, stderr = await self._run_cmd(["ip", "link", "set", interface_name, "up"])
         if code != 0:
@@ -203,7 +211,8 @@ class OverlayManager:
         )
 
         self._tunnels[key] = tunnel
-        logger.info(f"Created VXLAN tunnel: {interface_name} (VNI {vni}) to {remote_ip}")
+        mtu_info = f", MTU {settings.overlay_mtu}" if settings.overlay_mtu > 0 else ""
+        logger.info(f"Created VXLAN tunnel: {interface_name} (VNI {vni}{mtu_info}) to {remote_ip}")
 
         return tunnel
 
@@ -270,6 +279,14 @@ class OverlayManager:
         code, _, stderr = await self._run_cmd(["ip", "link", "add", bridge_name, "type", "bridge"])
         if code != 0:
             raise RuntimeError(f"Failed to create bridge: {stderr}")
+
+        # Set MTU on bridge if configured
+        if settings.overlay_mtu > 0:
+            code, _, stderr = await self._run_cmd([
+                "ip", "link", "set", bridge_name, "mtu", str(settings.overlay_mtu)
+            ])
+            if code != 0:
+                logger.warning(f"Failed to set MTU on bridge: {stderr}")
 
         # Bring bridge up
         code, _, stderr = await self._run_cmd(["ip", "link", "set", bridge_name, "up"])
@@ -377,6 +394,15 @@ class OverlayManager:
             ])
             if code != 0:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
+
+            # Set MTU on veth pair if configured
+            if settings.overlay_mtu > 0:
+                await self._run_cmd([
+                    "ip", "link", "set", veth_host, "mtu", str(settings.overlay_mtu)
+                ])
+                await self._run_cmd([
+                    "ip", "link", "set", veth_cont, "mtu", str(settings.overlay_mtu)
+                ])
 
             # Attach host end to bridge
             code, _, stderr = await self._run_cmd([
