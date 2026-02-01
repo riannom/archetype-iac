@@ -31,9 +31,44 @@ from app.schemas import (
     GraphNode,
     TopologyGraph,
 )
-from app.topology import _denormalize_interface_name
+from app.topology import _denormalize_interface_name, _normalize_interface_name
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_node_image(
+    device: str | None,
+    kind: str,
+    explicit_image: str | None = None,
+    version: str | None = None,
+) -> str | None:
+    """Resolve the Docker image for a node using 3-step fallback.
+
+    This is the canonical image resolution logic used throughout the codebase.
+    Priority:
+    1. Explicit image if specified (node.image)
+    2. Image from manifest via find_image_reference() (uploaded images)
+    3. Vendor default via get_default_image()
+
+    Args:
+        device: Device type (e.g., "ceos", "nokia_srlinux") for manifest lookup
+        kind: Resolved kind (e.g., "ceos") for vendor default lookup
+        explicit_image: Explicitly specified image (highest priority)
+        version: Optional version for manifest lookup
+
+    Returns:
+        Resolved image reference or None if no image found
+    """
+    if explicit_image:
+        return explicit_image
+
+    # Try to find uploaded image for this device type and version
+    image = find_image_reference(device or kind, version)
+    if image:
+        return image
+
+    # Fall back to vendor default image
+    return get_default_image(kind)
 
 
 @dataclass
@@ -58,6 +93,9 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
     This function converts the internal graph representation to the JSON
     format expected by the agent's DeployTopology schema. Used for partial
     deploys in run_node_sync where a filtered graph needs to be deployed.
+
+    NOTE: This function resolves images using the same 3-step logic as
+    build_deploy_topology(): node.image → manifest → vendor default.
 
     Args:
         graph: TopologyGraph to convert
@@ -85,11 +123,15 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
             exec_cmds = n.vars.get("exec", [])
             startup_config = n.vars.get("startup-config")
 
+        # Resolve image using canonical 3-step fallback
+        kind = get_kind_for_device(n.device) if n.device else "linux"
+        image = resolve_node_image(n.device, kind, n.image, n.version)
+
         nodes.append({
             "name": n.container_name or n.name,
             "display_name": n.name,
-            "kind": get_kind_for_device(n.device) if n.device else "linux",
-            "image": n.image,
+            "kind": kind,
+            "image": image,
             "binds": binds,
             "env": env,
             "ports": ports,
@@ -108,11 +150,14 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         # Resolve node references - could be GUI ID or container name
         source = node_id_to_name.get(ep1.node, ep1.node)
         target = node_id_to_name.get(ep2.node, ep2.node)
+        # Normalize interface names to containerlab format (e.g., Ethernet1 -> eth1)
+        source_iface = _normalize_interface_name(ep1.ifname) if ep1.ifname else ""
+        target_iface = _normalize_interface_name(ep2.ifname) if ep2.ifname else ""
         links.append({
             "source_node": source,
-            "source_interface": ep1.ifname or "",
+            "source_interface": source_iface,
             "target_node": target,
-            "target_interface": ep2.ifname or "",
+            "target_interface": target_iface,
         })
 
     return {"nodes": nodes, "links": links}
@@ -222,7 +267,7 @@ class TopologyService:
     def get_required_images(self, lab_id: str) -> list[str]:
         """Get unique Docker images required for a lab's topology.
 
-        Uses the same image resolution logic as deployment:
+        Uses resolve_node_image() for canonical 3-step resolution:
         1. Explicit node.image if set
         2. Image from manifest via find_image_reference()
         3. Vendor default via get_default_image()
@@ -238,11 +283,7 @@ class TopologyService:
 
         for node in nodes:
             kind = get_kind_for_device(node.device) if node.device else "linux"
-            image = node.image
-            if not image:
-                image = find_image_reference(node.device or kind, node.version)
-            if not image:
-                image = get_default_image(kind)
+            image = resolve_node_image(node.device, kind, node.image, node.version)
             if image:
                 images.add(image)
 
@@ -251,7 +292,7 @@ class TopologyService:
     def get_image_to_nodes_map(self, lab_id: str) -> dict[str, list[str]]:
         """Get mapping from image references to node names.
 
-        Uses the same image resolution logic as deployment.
+        Uses resolve_node_image() for canonical 3-step resolution.
 
         Args:
             lab_id: Lab ID to get mapping for
@@ -264,11 +305,7 @@ class TopologyService:
 
         for node in nodes:
             kind = get_kind_for_device(node.device) if node.device else "linux"
-            image = node.image
-            if not image:
-                image = find_image_reference(node.device or kind, node.version)
-            if not image:
-                image = get_default_image(kind)
+            image = resolve_node_image(node.device, kind, node.image, node.version)
             if image:
                 if image not in image_to_nodes:
                     image_to_nodes[image] = []
@@ -947,15 +984,9 @@ class TopologyService:
         exec_cmds = config.get("exec", [])
         startup_config = config.get("startup-config")
 
-        # Resolve image: use explicit image, else lookup from manifest, else vendor default
+        # Resolve image using canonical 3-step fallback
         kind = get_kind_for_device(node.device) if node.device else "linux"
-        image = node.image
-        if not image:
-            # Try to find uploaded image for this device type and version
-            image = find_image_reference(node.device or kind, node.version)
-        if not image:
-            # Fall back to vendor default image
-            image = get_default_image(kind)
+        image = resolve_node_image(node.device, kind, node.image, node.version)
 
         return {
             "name": node.container_name,
@@ -983,11 +1014,14 @@ class TopologyService:
         Returns:
             Dict matching DeployLink schema
         """
+        # Normalize interface names to containerlab format (e.g., Ethernet1 -> eth1)
+        source_iface = _normalize_interface_name(link.source_interface) if link.source_interface else ""
+        target_iface = _normalize_interface_name(link.target_interface) if link.target_interface else ""
         return {
             "source_node": node_id_to_name.get(link.source_node_id, ""),
-            "source_interface": link.source_interface,
+            "source_interface": source_iface,
             "target_node": node_id_to_name.get(link.target_node_id, ""),
-            "target_interface": link.target_interface,
+            "target_interface": target_iface,
         }
 
     def get_reserved_interfaces_for_host(
