@@ -217,7 +217,6 @@ async def lab_up(
     # Use TopologyService for analysis (database is source of truth)
     service = TopologyService(database)
     is_multihost = False
-    clab_yaml = ""
     graph = None
     analysis = None
     has_explicit_placements = False
@@ -229,7 +228,6 @@ async def lab_up(
         db_analysis = service.analyze_placements(lab.id)
         has_explicit_placements = bool(db_analysis.placements)
         is_multihost = not db_analysis.single_host or has_explicit_placements
-        clab_yaml = service.to_containerlab_yaml(lab.id)
         graph = service.export_to_graph(lab.id)
         # Convert to legacy analysis format for compatibility
         analysis = analyze_topology(graph)
@@ -293,12 +291,15 @@ async def lab_up(
 
     # Pre-deploy image sync check (if enabled)
     image_sync_log: list[str] = []
-    if settings.image_sync_enabled and settings.image_sync_pre_deploy_check and clab_yaml:
-        from app.tasks.image_sync import get_images_from_topology, ensure_images_for_deployment
+    if settings.image_sync_enabled and settings.image_sync_pre_deploy_check:
+        from app.tasks.image_sync import ensure_images_for_deployment
 
-        # Get image references from topology
-        image_refs = get_images_from_topology(clab_yaml)
+        # Get image references from database (uses same resolution as deployment)
+        image_refs = service.get_required_images(lab.id)
         if image_refs:
+            # Get image-to-nodes mapping for status updates
+            image_to_nodes = service.get_image_to_nodes_map(lab.id)
+
             # Determine target agent for single-host or first agent for multi-host
             target_host_id = None
             if is_multihost and analysis:
@@ -321,7 +322,7 @@ async def lab_up(
                     timeout=settings.image_sync_timeout,
                     database=database,
                     lab_id=lab.id,
-                    topology_yaml=clab_yaml,
+                    image_to_nodes=image_to_nodes,
                 )
                 if not all_ready and missing:
                     # Images still missing after sync attempt
@@ -431,19 +432,10 @@ async def lab_restart(
     if not agent:
         raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
-    # Validate and convert topology from database (source of truth)
+    # Validate topology exists in database (source of truth)
     service = TopologyService(database)
     if not service.has_nodes(lab.id):
         raise HTTPException(status_code=400, detail="No topology defined for this lab")
-
-    try:
-        clab_yaml = service.to_containerlab_yaml(lab.id)
-    except Exception as e:
-        logger.error(f"Failed to convert topology for restart of lab {lab.id}: {e}")
-        raise HTTPException(status_code=400, detail=f"Failed to convert topology: {str(e)}")
-
-    if not clab_yaml or not clab_yaml.strip():
-        raise HTTPException(status_code=400, detail="Topology conversion resulted in empty YAML")
 
     # Create separate jobs for down and up phases
     down_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
