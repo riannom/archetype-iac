@@ -1239,6 +1239,24 @@ def get_kind_for_device(device: str) -> str:
     return _ALIAS_TO_KIND.get(device_lower, device_lower)
 
 
+def is_ceos_kind(kind: str) -> bool:
+    """Check if a device kind is cEOS (Arista containerized EOS).
+
+    This is a convenience function that handles all cEOS aliases consistently.
+    Use this instead of hard-coded checks like `kind == "ceos"` or
+    `kind in ("ceos", "eos")`.
+
+    Args:
+        kind: Device kind to check
+
+    Returns:
+        True if the kind is cEOS or one of its aliases
+    """
+    # Normalize to canonical kind first
+    canonical = get_kind_for_device(kind)
+    return canonical == "ceos"
+
+
 def get_all_vendors() -> list[VendorConfig]:
     """Return all vendor configurations."""
     return list(VENDOR_CONFIGS.values())

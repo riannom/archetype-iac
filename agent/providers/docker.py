@@ -58,6 +58,7 @@ from agent.vendors import (
     get_config_by_device,
     get_container_config,
     get_console_shell,
+    is_ceos_kind,
 )
 
 
@@ -436,7 +437,7 @@ class DockerProvider(Provider):
         # Entry command - ensure entrypoint is a list for Docker SDK
         # For cEOS, we wrap the init process with if-wait.sh to wait for interfaces
         # before starting init - this prevents the platform detection race condition
-        if node.kind == "ceos" and interface_count > 0:
+        if is_ceos_kind(node.kind) and interface_count > 0:
             # Set CLAB_INTFS so the if-wait.sh script knows how many interfaces to wait for
             config["environment"]["CLAB_INTFS"] = str(interface_count)
 
@@ -548,7 +549,7 @@ username admin privilege 15 role network-admin nopassword
         Runs blocking file I/O in thread pool to avoid blocking event loop.
         """
         for node_name, node in topology.nodes.items():
-            if node.kind == "ceos":
+            if is_ceos_kind(node.kind):
                 # Run blocking file operations in thread pool
                 await asyncio.to_thread(
                     self._setup_ceos_directories,
@@ -929,7 +930,7 @@ username admin privilege 15 role network-admin nopassword
             try:
                 log_name = topology.log_name(node_name)
                 node = topology.nodes.get(node_name)
-                is_ceos = node and node.kind in ("ceos", "eos")
+                is_ceos = node and is_ceos_kind(node.kind)
 
                 # Stagger cEOS container starts to avoid modprobe race condition
                 # When multiple cEOS instances start simultaneously, they race to
@@ -1921,18 +1922,142 @@ username admin privilege 15 role network-admin nopassword
                 error=str(e),
             )
 
+    async def _recover_stale_networks(
+        self,
+        container: Any,
+        lab_id: str,
+    ) -> bool:
+        """Recover from stale network references by reconnecting to current lab networks.
+
+        When a lab is redeployed while a node is stopped, the old container may reference
+        Docker networks that no longer exist. This method:
+        1. Disconnects from all stale/missing networks
+        2. Reconnects to the current lab networks
+
+        Returns True if recovery was attempted, False if no recovery was needed.
+        """
+        container_name = container.name
+
+        # Get container's current network attachments
+        await asyncio.to_thread(container.reload)
+        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+
+        if not networks:
+            return False
+
+        # Find current lab networks (format: {lab_id}-eth{N})
+        lab_prefix = f"{lab_id}-"
+        current_lab_networks = {}
+        try:
+            all_networks = await asyncio.to_thread(self.docker.networks.list)
+            for net in all_networks:
+                if net.name.startswith(lab_prefix):
+                    current_lab_networks[net.name] = net
+        except Exception as e:
+            logger.warning(f"Failed to list networks: {e}")
+            return False
+
+        # Disconnect from all networks that are stale or no longer exist
+        networks_disconnected = []
+        for net_name in list(networks.keys()):
+            # Skip built-in networks
+            if net_name in ("bridge", "host", "none"):
+                continue
+
+            # Check if this is a lab network that no longer exists or has wrong ID
+            if net_name.startswith(lab_prefix) or net_name.startswith(lab_id):
+                try:
+                    # Try to get the network - if it doesn't exist, disconnect
+                    await asyncio.to_thread(self.docker.networks.get, net_name)
+                except NotFound:
+                    # Network doesn't exist, need to disconnect
+                    try:
+                        # Can't disconnect from non-existent network normally,
+                        # but we'll try anyway and catch the error
+                        logger.debug(f"Network {net_name} not found, will be cleaned up on start")
+                    except Exception:
+                        pass
+                    networks_disconnected.append(net_name)
+
+        # Now disconnect from ALL lab-related networks so we can reconnect cleanly
+        for net_name in list(networks.keys()):
+            if net_name in ("bridge", "host", "none"):
+                continue
+            if net_name.startswith(lab_prefix) or net_name.startswith(lab_id):
+                try:
+                    net = await asyncio.to_thread(self.docker.networks.get, net_name)
+                    await asyncio.to_thread(net.disconnect, container_name, force=True)
+                    logger.debug(f"Disconnected {container_name} from {net_name}")
+                    if net_name not in networks_disconnected:
+                        networks_disconnected.append(net_name)
+                except NotFound:
+                    pass  # Network already gone
+                except Exception as e:
+                    logger.debug(f"Could not disconnect from {net_name}: {e}")
+
+        if not networks_disconnected:
+            return False
+
+        logger.info(
+            f"Disconnected {container_name} from {len(networks_disconnected)} stale networks"
+        )
+
+        # Reconnect to current lab networks
+        reconnected = 0
+        for net_name, net in sorted(current_lab_networks.items()):
+            try:
+                await asyncio.to_thread(net.connect, container_name)
+                reconnected += 1
+                logger.debug(f"Reconnected {container_name} to {net_name}")
+            except APIError as e:
+                if "already exists" in str(e).lower():
+                    reconnected += 1
+                else:
+                    logger.warning(f"Failed to reconnect to {net_name}: {e}")
+
+        logger.info(f"Reconnected {container_name} to {reconnected} lab networks")
+        return True
+
     async def start_node(
         self,
         lab_id: str,
         node_name: str,
         workspace: Path,
     ) -> NodeActionResult:
-        """Start a specific node."""
+        """Start a specific node.
+
+        If the container fails to start due to stale network references (e.g., after
+        a lab redeploy), this method will attempt to recover by disconnecting from
+        stale networks and reconnecting to current lab networks.
+        """
         container_name = self._container_name(lab_id, node_name)
 
         try:
             container = await asyncio.to_thread(self.docker.containers.get, container_name)
-            await asyncio.to_thread(container.start)
+
+            # First attempt to start
+            try:
+                await asyncio.to_thread(container.start)
+            except APIError as e:
+                # Check if this is a stale network error
+                error_msg = str(e).lower()
+                if "network" in error_msg and "not found" in error_msg:
+                    logger.warning(
+                        f"Container {container_name} has stale network references, "
+                        "attempting recovery..."
+                    )
+                    # Try to recover networks
+                    recovered = await self._recover_stale_networks(container, lab_id)
+                    if recovered:
+                        # Retry start after recovery
+                        await asyncio.to_thread(container.reload)
+                        await asyncio.to_thread(container.start)
+                        logger.info(f"Successfully started {container_name} after network recovery")
+                    else:
+                        raise  # Re-raise if recovery didn't help
+                else:
+                    raise  # Re-raise non-network errors
+
             await asyncio.sleep(1)
             await asyncio.to_thread(container.reload)
 
@@ -2047,7 +2172,7 @@ username admin privilege 15 role network-admin nopassword
                 kind = labels.get(LABEL_NODE_KIND, "")
 
                 # Only extract from cEOS/EOS containers
-                if kind not in ("ceos", "eos") or not node_name:
+                if not is_ceos_kind(kind) or not node_name:
                     continue
 
                 log_name = _log_name_from_labels(labels)

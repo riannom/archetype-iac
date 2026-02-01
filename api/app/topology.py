@@ -18,7 +18,7 @@ from app.schemas import (
 from app.image_store import find_image_reference
 from app.config import settings
 from app.storage import lab_workspace
-from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config
+from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config, is_ceos_kind
 
 
 def _normalize_interface_name(iface_name: str) -> str:
@@ -660,7 +660,7 @@ def graph_to_containerlab_yaml(
         # This enables config persistence across restarts and redeploys:
         # 1. Disables ZTP and configures AAA to allow 'copy run start'
         # 2. Mounts a persistent flash directory from the workspace
-        if kind == "ceos":
+        if is_ceos_kind(kind):
             # Check for saved startup-config first, fall back to generated default
             # Saved configs are stored at: {workspace}/configs/{node_name}/startup-config
             saved_config = _get_saved_startup_config(lab_id, safe_name)

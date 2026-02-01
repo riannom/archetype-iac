@@ -318,6 +318,81 @@ async def get_agent_for_lab(
     )
 
 
+async def get_agent_for_node(
+    database: Session,
+    lab_id: str,
+    node_name: str,
+    required_provider: str = "docker",
+) -> models.Host | None:
+    """Get an agent for a specific node, respecting host placement priority.
+
+    This function uses a consistent priority order for node placement:
+    1. Node.host_id (explicit topology placement) - MUST be honored
+    2. NodePlacement record (runtime placement from previous deploy)
+    3. lab.agent_id (lab's default agent)
+    4. Any healthy agent with required provider
+
+    Args:
+        database: Database session
+        lab_id: Lab identifier
+        node_name: Node's container name (YAML key)
+        required_provider: Provider the agent must support
+
+    Returns:
+        The agent to use for this node, or None if no healthy agent available
+    """
+    # Step 1: Check Node.host_id (explicit topology placement)
+    node = (
+        database.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name == node_name,
+        )
+        .first()
+    )
+
+    if node and node.host_id:
+        agent = database.get(models.Host, node.host_id)
+        if agent and is_agent_online(agent):
+            logger.debug(f"Node {node_name}: using explicit host {agent.name} from Node.host_id")
+            return agent
+        else:
+            # Explicit placement but agent unavailable
+            logger.warning(f"Node {node_name}: explicit host {node.host_id} is unavailable")
+            return None  # Don't fall back - explicit placement must be honored
+
+    # Step 2: Check NodePlacement (runtime placement)
+    placement = (
+        database.query(models.NodePlacement)
+        .filter(
+            models.NodePlacement.lab_id == lab_id,
+            models.NodePlacement.node_name == node_name,
+        )
+        .first()
+    )
+
+    if placement:
+        agent = database.get(models.Host, placement.host_id)
+        if agent and is_agent_online(agent):
+            logger.debug(f"Node {node_name}: using placed host {agent.name} from NodePlacement")
+            return agent
+        # Placement exists but agent unavailable - fall through to lab default
+
+    # Step 3: Check lab.agent_id
+    lab = database.get(models.Lab, lab_id)
+    if lab and lab.agent_id:
+        agent = database.get(models.Host, lab.agent_id)
+        if agent and is_agent_online(agent):
+            logger.debug(f"Node {node_name}: using lab default agent {agent.name}")
+            return agent
+
+    # Step 4: Find any healthy agent
+    return await get_healthy_agent(
+        database,
+        required_provider=required_provider,
+    )
+
+
 async def mark_agent_offline(database: Session, agent_id: str) -> None:
     """Mark an agent as offline when it becomes unreachable."""
     agent = database.get(models.Host, agent_id)

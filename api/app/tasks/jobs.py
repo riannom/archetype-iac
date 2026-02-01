@@ -294,33 +294,24 @@ async def run_agent_job(
             return
 
         # Find a healthy agent with required capability
-        # For node-specific actions, use the node's assigned host (nodes.host_id)
-        # For lab-wide actions, use the lab affinity logic (node_placements)
+        # For node-specific actions, use get_agent_for_node() with full priority chain
+        # For lab-wide actions, use get_agent_for_lab() (NodePlacement affinity)
         agent = None
         if action.startswith("node:"):
             # Parse node name from action: "node:start:nodename"
             parts = action.split(":", 2)
             target_node_name = parts[2] if len(parts) > 2 else None
             if target_node_name:
-                # Look up the node's assigned host from nodes.host_id
-                node_def = (
-                    session.query(models.Node)
-                    .filter(
-                        models.Node.lab_id == lab_id,
-                        models.Node.container_name == target_node_name,
-                    )
-                    .first()
+                # Use unified get_agent_for_node() with consistent priority:
+                # Node.host_id → NodePlacement → lab.agent_id → any healthy
+                agent = await agent_client.get_agent_for_node(
+                    session,
+                    lab_id,
+                    target_node_name,
+                    required_provider=provider,
                 )
-                if node_def and node_def.host_id:
-                    target_host = session.get(models.Host, node_def.host_id)
-                    if target_host and agent_client.is_agent_online(target_host):
-                        agent = target_host
-                        logger.info(
-                            f"Node {target_node_name} assigned to host {target_host.name} "
-                            f"(from nodes.host_id)"
-                        )
 
-        # Fallback to lab affinity if no node-specific agent found
+        # For lab-wide actions or if node-specific lookup failed, use lab affinity
         if not agent:
             agent = await agent_client.get_agent_for_lab(
                 session,

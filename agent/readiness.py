@@ -21,7 +21,7 @@ from typing import Optional
 
 import docker
 
-from agent.vendors import get_vendor_config
+from agent.vendors import get_vendor_config, is_ceos_kind
 
 
 @dataclass
@@ -230,7 +230,7 @@ def get_probe_for_vendor(kind: str) -> ReadinessProbe:
 
         # Add progress patterns for cEOS
         progress_patterns = {}
-        if kind == "ceos":
+        if is_ceos_kind(kind):
             progress_patterns = CEOS_PROGRESS_PATTERNS
 
         return LogPatternProbe(
