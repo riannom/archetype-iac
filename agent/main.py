@@ -605,6 +605,10 @@ async def lifespan(app: FastAPI):
     # Close Docker OVS plugin
     if _docker_plugin_runner:
         try:
+            # Call shutdown first to save state
+            from agent.network.docker_plugin import get_docker_ovs_plugin
+            plugin = get_docker_ovs_plugin()
+            await plugin.shutdown()
             await _docker_plugin_runner.cleanup()
             logger.info("Docker OVS network plugin stopped")
         except Exception as e:

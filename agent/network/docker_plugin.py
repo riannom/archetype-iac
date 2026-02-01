@@ -64,6 +64,9 @@ PLUGIN_NAME = "archetype-ovs"
 PLUGIN_SOCKET_PATH = f"/run/docker/plugins/{PLUGIN_NAME}.sock"
 PLUGIN_SPEC_PATH = f"/etc/docker/plugins/{PLUGIN_NAME}.spec"
 
+# State persistence path (in workspace directory)
+STATE_PERSISTENCE_FILE = "docker_ovs_plugin_state.json"
+
 # OVS configuration
 OVS_BRIDGE_PREFIX = "ovs-"
 VLAN_RANGE_START = 100
@@ -128,6 +131,14 @@ class DockerOVSPlugin:
     Each Docker network maps to one interface on the lab's OVS bridge.
     Containers attach to multiple networks to get multiple interfaces.
     All interfaces are provisioned BEFORE container init runs.
+
+    State Persistence:
+        The plugin persists its state to disk to survive agent restarts.
+        On startup, it loads persisted state and reconciles with actual
+        OVS bridge state to handle:
+        - Agent restarts (state in file matches OVS)
+        - Agent crashes (OVS may have drifted from last saved state)
+        - OVS restarts (bridges recreated, need reprovisioning)
     """
 
     def __init__(self):
@@ -139,6 +150,12 @@ class DockerOVSPlugin:
         self._started_at = datetime.now(timezone.utc)
         self._cleanup_task: asyncio.Task | None = None
         self._next_mgmt_subnet_index = 1  # For allocating management subnets
+
+        # State persistence
+        workspace = Path(settings.workspace_path)
+        workspace.mkdir(parents=True, exist_ok=True)
+        self._state_file = workspace / STATE_PERSISTENCE_FILE
+        self._state_dirty = False  # Track if state needs saving
 
     # =========================================================================
     # OVS Operations
@@ -263,18 +280,327 @@ class DockerOVSPlugin:
             self.lab_bridges[lab_id].last_activity = datetime.now(timezone.utc)
 
     # =========================================================================
+    # State Persistence
+    # =========================================================================
+
+    def _serialize_state(self) -> dict[str, Any]:
+        """Serialize plugin state to a JSON-compatible dict."""
+        return {
+            "version": 1,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "next_mgmt_subnet_index": self._next_mgmt_subnet_index,
+            "lab_bridges": {
+                lab_id: {
+                    "lab_id": bridge.lab_id,
+                    "bridge_name": bridge.bridge_name,
+                    "next_vlan": bridge.next_vlan,
+                    "network_ids": list(bridge.network_ids),
+                    "last_activity": bridge.last_activity.isoformat(),
+                    "vxlan_tunnels": bridge.vxlan_tunnels,
+                    "external_ports": bridge.external_ports,
+                }
+                for lab_id, bridge in self.lab_bridges.items()
+            },
+            "networks": {
+                net_id: {
+                    "network_id": net.network_id,
+                    "lab_id": net.lab_id,
+                    "interface_name": net.interface_name,
+                    "bridge_name": net.bridge_name,
+                }
+                for net_id, net in self.networks.items()
+            },
+            "endpoints": {
+                ep_id: {
+                    "endpoint_id": ep.endpoint_id,
+                    "network_id": ep.network_id,
+                    "interface_name": ep.interface_name,
+                    "host_veth": ep.host_veth,
+                    "cont_veth": ep.cont_veth,
+                    "vlan_tag": ep.vlan_tag,
+                    "container_name": ep.container_name,
+                }
+                for ep_id, ep in self.endpoints.items()
+            },
+            "management_networks": {
+                lab_id: {
+                    "lab_id": mgmt.lab_id,
+                    "network_id": mgmt.network_id,
+                    "network_name": mgmt.network_name,
+                    "subnet": mgmt.subnet,
+                    "gateway": mgmt.gateway,
+                }
+                for lab_id, mgmt in self.management_networks.items()
+            },
+        }
+
+    def _deserialize_state(self, data: dict[str, Any]) -> None:
+        """Deserialize plugin state from a JSON dict."""
+        version = data.get("version", 1)
+        if version != 1:
+            logger.warning(f"Unknown state file version {version}, attempting load anyway")
+
+        self._next_mgmt_subnet_index = data.get("next_mgmt_subnet_index", 1)
+
+        # Load lab bridges
+        for lab_id, bridge_data in data.get("lab_bridges", {}).items():
+            last_activity = datetime.now(timezone.utc)
+            if bridge_data.get("last_activity"):
+                try:
+                    last_activity = datetime.fromisoformat(bridge_data["last_activity"])
+                except (ValueError, TypeError):
+                    pass
+
+            self.lab_bridges[lab_id] = LabBridge(
+                lab_id=bridge_data["lab_id"],
+                bridge_name=bridge_data["bridge_name"],
+                next_vlan=bridge_data.get("next_vlan", VLAN_RANGE_START),
+                network_ids=set(bridge_data.get("network_ids", [])),
+                last_activity=last_activity,
+                vxlan_tunnels=bridge_data.get("vxlan_tunnels", {}),
+                external_ports=bridge_data.get("external_ports", {}),
+            )
+
+        # Load networks
+        for net_id, net_data in data.get("networks", {}).items():
+            self.networks[net_id] = NetworkState(
+                network_id=net_data["network_id"],
+                lab_id=net_data["lab_id"],
+                interface_name=net_data["interface_name"],
+                bridge_name=net_data["bridge_name"],
+            )
+
+        # Load endpoints
+        for ep_id, ep_data in data.get("endpoints", {}).items():
+            self.endpoints[ep_id] = EndpointState(
+                endpoint_id=ep_data["endpoint_id"],
+                network_id=ep_data["network_id"],
+                interface_name=ep_data["interface_name"],
+                host_veth=ep_data["host_veth"],
+                cont_veth=ep_data["cont_veth"],
+                vlan_tag=ep_data["vlan_tag"],
+                container_name=ep_data.get("container_name"),
+            )
+
+        # Load management networks
+        for lab_id, mgmt_data in data.get("management_networks", {}).items():
+            self.management_networks[lab_id] = ManagementNetwork(
+                lab_id=mgmt_data["lab_id"],
+                network_id=mgmt_data["network_id"],
+                network_name=mgmt_data["network_name"],
+                subnet=mgmt_data["subnet"],
+                gateway=mgmt_data["gateway"],
+            )
+
+    async def _save_state(self) -> None:
+        """Save plugin state to disk atomically.
+
+        Uses temp file + rename for atomic writes to prevent corruption.
+        """
+        try:
+            state = self._serialize_state()
+            tmp_path = self._state_file.with_suffix(".tmp")
+
+            # Write to temp file
+            with open(tmp_path, "w") as f:
+                json.dump(state, f, indent=2)
+
+            # Atomic rename
+            tmp_path.rename(self._state_file)
+            self._state_dirty = False
+
+            logger.debug(
+                f"Saved plugin state: {len(self.lab_bridges)} bridges, "
+                f"{len(self.endpoints)} endpoints"
+            )
+        except Exception as e:
+            logger.error(f"Failed to save plugin state: {e}")
+
+    async def _load_state(self) -> bool:
+        """Load plugin state from disk.
+
+        Returns True if state was loaded successfully.
+        """
+        if not self._state_file.exists():
+            logger.info("No persisted plugin state found, starting fresh")
+            return False
+
+        try:
+            with open(self._state_file, "r") as f:
+                data = json.load(f)
+
+            self._deserialize_state(data)
+
+            logger.info(
+                f"Loaded plugin state: {len(self.lab_bridges)} bridges, "
+                f"{len(self.networks)} networks, {len(self.endpoints)} endpoints"
+            )
+            return True
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Corrupted state file, starting fresh: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to load plugin state: {e}")
+            return False
+
+    async def _mark_dirty_and_save(self) -> None:
+        """Mark state as dirty and save to disk.
+
+        Called after any state mutation to ensure persistence.
+        """
+        self._state_dirty = True
+        await self._save_state()
+
+    # =========================================================================
+    # State Reconciliation (compares persisted state with OVS reality)
+    # =========================================================================
+
+    async def _reconcile_state(self) -> dict[str, Any]:
+        """Reconcile persisted state with actual OVS state.
+
+        This handles mismatches between what we think exists (persisted state)
+        and what actually exists (OVS bridges/ports). Possible scenarios:
+
+        1. Port in state but not in OVS: Remove from state (OVS was cleaned up)
+        2. Port in OVS but not in state: Query Docker to determine if it's ours
+        3. Bridge in state but not in OVS: Recreate bridge if Docker networks exist
+        4. Endpoint in state but veth missing: Clean up endpoint
+
+        Returns dict with reconciliation statistics.
+        """
+        stats = {
+            "endpoints_removed": 0,
+            "endpoints_recovered": 0,
+            "bridges_recreated": 0,
+            "ports_orphaned": 0,
+        }
+
+        # For each lab bridge in our state, verify it exists in OVS
+        for lab_id, bridge in list(self.lab_bridges.items()):
+            code, _, _ = await self._ovs_vsctl("br-exists", bridge.bridge_name)
+            if code != 0:
+                # Bridge doesn't exist - check if we should recreate it
+                if bridge.network_ids:
+                    # We have Docker networks expecting this bridge - recreate it
+                    logger.warning(
+                        f"Bridge {bridge.bridge_name} missing but has {len(bridge.network_ids)} networks, recreating"
+                    )
+                    await self._ensure_bridge(lab_id)
+                    stats["bridges_recreated"] += 1
+                else:
+                    # No networks - clean up from state
+                    logger.info(f"Removing orphaned bridge state for {bridge.bridge_name}")
+                    del self.lab_bridges[lab_id]
+                continue
+
+            # Bridge exists - verify ports
+            code, stdout, _ = await self._ovs_vsctl("list-ports", bridge.bridge_name)
+            if code != 0:
+                continue
+
+            ovs_ports = set(stdout.strip().split("\n")) if stdout.strip() else set()
+
+        # Verify each endpoint's host veth exists
+        endpoints_to_remove = []
+        for ep_id, endpoint in self.endpoints.items():
+            # Check if host veth exists
+            code, _, _ = await self._run_cmd(["ip", "link", "show", endpoint.host_veth])
+            if code != 0:
+                # Host veth doesn't exist
+                logger.info(f"Endpoint {ep_id[:12]} veth {endpoint.host_veth} missing, removing from state")
+                endpoints_to_remove.append(ep_id)
+
+        for ep_id in endpoints_to_remove:
+            endpoint = self.endpoints.pop(ep_id, None)
+            if endpoint:
+                # Also clean up network tracking
+                network = self.networks.get(endpoint.network_id)
+                if network:
+                    lab_bridge = self.lab_bridges.get(network.lab_id)
+                    if lab_bridge:
+                        lab_bridge.network_ids.discard(endpoint.network_id)
+            stats["endpoints_removed"] += 1
+
+        if any(v > 0 for v in stats.values()):
+            await self._save_state()
+            logger.info(f"State reconciliation complete: {stats}")
+
+        return stats
+
+    async def _cleanup_orphaned_ovs_ports(self) -> int:
+        """Remove OVS ports that are not tracked in our state.
+
+        These can occur after a crash where Docker created networks
+        that we didn't track before the crash.
+
+        Returns number of ports cleaned up.
+        """
+        cleaned = 0
+
+        for lab_id, bridge in self.lab_bridges.items():
+            # Get all ports on this bridge
+            code, stdout, _ = await self._ovs_vsctl("list-ports", bridge.bridge_name)
+            if code != 0:
+                continue
+
+            ovs_ports = set(stdout.strip().split("\n")) if stdout.strip() else set()
+
+            # Get tracked host veths for this bridge
+            tracked_veths = set()
+            for endpoint in self.endpoints.values():
+                network = self.networks.get(endpoint.network_id)
+                if network and network.lab_id == lab_id:
+                    tracked_veths.add(endpoint.host_veth)
+
+            # Find orphaned ports (excluding special ports like VXLAN, external)
+            for port in ovs_ports:
+                if not port.startswith("vh"):
+                    # Not a container veth, skip
+                    continue
+
+                if port not in tracked_veths:
+                    # Orphaned port - clean it up
+                    logger.warning(f"Removing orphaned OVS port: {port}")
+                    await self._delete_port(bridge.bridge_name, port)
+                    cleaned += 1
+
+        return cleaned
+
+    # =========================================================================
     # State Recovery (discovers existing OVS state on startup)
     # =========================================================================
 
     async def _discover_existing_state(self) -> None:
-        """Rebuild plugin state from existing OVS bridges on startup.
+        """Load persisted state and reconcile with OVS on startup.
 
-        This enables state recovery after agent restart by:
-        1. Finding all OVS bridges matching our naming pattern (ovs-*)
-        2. Enumerating ports on each bridge
-        3. Matching ports to Docker containers via interface inspection
-        4. Reconstructing LabBridge, NetworkState, and EndpointState
+        Startup sequence:
+        1. Load persisted state from disk (if exists)
+        2. Reconcile with actual OVS state (clean orphans, detect missing)
+        3. If no persisted state, discover from OVS bridges
+        4. Clean up orphaned OVS ports not in our tracking
+
+        This enables state recovery after:
+        - Normal agent restart (persisted state matches reality)
+        - Agent crash (persisted state may be stale)
+        - OVS restart (bridges may be missing)
         """
+        # Step 1: Try to load persisted state
+        loaded = await self._load_state()
+
+        if loaded:
+            # Step 2: Reconcile persisted state with OVS reality
+            logger.info("Reconciling persisted state with OVS...")
+            await self._reconcile_state()
+
+            # Step 3: Clean up orphaned ports
+            orphaned = await self._cleanup_orphaned_ovs_ports()
+            if orphaned > 0:
+                logger.info(f"Cleaned up {orphaned} orphaned OVS ports")
+
+            return
+
+        # No persisted state - fall back to OVS discovery
         logger.info("Discovering existing OVS state...")
 
         # List all OVS bridges
@@ -532,6 +858,10 @@ class DockerOVSPlugin:
         checks["endpoints_count"] = len(self.endpoints)
         checks["management_networks_count"] = len(self.management_networks)
 
+        # State persistence status
+        checks["state_file_exists"] = self._state_file.exists()
+        checks["state_dirty"] = self._state_dirty
+
         # Calculate uptime
         uptime = datetime.now(timezone.utc) - self._started_at
 
@@ -543,6 +873,7 @@ class DockerOVSPlugin:
             "checks": checks,
             "uptime_seconds": uptime.total_seconds(),
             "started_at": self._started_at.isoformat(),
+            "state_file": str(self._state_file),
         }
 
     async def _check_ovs_health(self) -> bool:
@@ -647,6 +978,9 @@ class DockerOVSPlugin:
             if lab_id in self.management_networks:
                 await self.delete_management_network(lab_id)
 
+            # Persist state after full lab cleanup
+            await self._mark_dirty_and_save()
+
             logger.info(f"Cleaned up all resources for lab {lab_id}")
 
     # =========================================================================
@@ -750,6 +1084,10 @@ class DockerOVSPlugin:
                     gateway=gateway,
                 )
                 self.management_networks[lab_id] = mgmt_net
+
+                # Persist state after management network creation
+                await self._mark_dirty_and_save()
+
                 return mgmt_net
 
             except Exception as e:
@@ -833,6 +1171,8 @@ class DockerOVSPlugin:
                         except Exception:
                             pass
                     network.remove()
+                    # Persist state after management network deletion
+                    await self._mark_dirty_and_save()
                     return True
                 raise
 
@@ -841,6 +1181,9 @@ class DockerOVSPlugin:
             # Put it back in tracking since we failed
             self.management_networks[lab_id] = mgmt_net
             return False
+
+        # Persist state after successful deletion
+        await self._mark_dirty_and_save()
 
     # =========================================================================
     # Multi-Host VXLAN Support
@@ -911,6 +1254,9 @@ class DockerOVSPlugin:
             lab_bridge.vxlan_tunnels[vni] = vxlan_port
             self._touch_lab(lab_id)
 
+            # Persist state after VXLAN tunnel creation
+            await self._mark_dirty_and_save()
+
             logger.info(
                 f"Created VXLAN tunnel: {vxlan_port} (VNI={vni}, "
                 f"remote={remote_ip}, VLAN={vlan_tag})"
@@ -941,6 +1287,9 @@ class DockerOVSPlugin:
 
             # Delete VXLAN interface
             await self._run_cmd(["ip", "link", "delete", vxlan_port])
+
+            # Persist state after VXLAN tunnel deletion
+            await self._mark_dirty_and_save()
 
             logger.info(f"Deleted VXLAN tunnel: {vxlan_port} (VNI={vni})")
             return True
@@ -1000,6 +1349,9 @@ class DockerOVSPlugin:
             lab_bridge.external_ports[external_interface] = actual_vlan
             self._touch_lab(lab_id)
 
+            # Persist state after external interface attachment
+            await self._mark_dirty_and_save()
+
             logger.info(
                 f"Attached external interface {external_interface} to "
                 f"{lab_bridge.bridge_name} (VLAN={actual_vlan})"
@@ -1057,6 +1409,9 @@ class DockerOVSPlugin:
             endpoint.vlan_tag = vlan_tag
             self._touch_lab(lab_id)
 
+            # Persist state after external connection
+            await self._mark_dirty_and_save()
+
             logger.info(
                 f"Connected {container_name}:{interface_name} to external "
                 f"{external_interface} (VLAN={vlan_tag})"
@@ -1087,6 +1442,9 @@ class DockerOVSPlugin:
             )
 
             del lab_bridge.external_ports[external_interface]
+
+            # Persist state after external interface detachment
+            await self._mark_dirty_and_save()
 
             logger.info(
                 f"Detached external interface {external_interface} from "
@@ -1256,6 +1614,9 @@ class DockerOVSPlugin:
                 self.networks[network_id] = network
                 lab_bridge.network_ids.add(network_id)
 
+                # Persist state after network creation
+                await self._mark_dirty_and_save()
+
                 logger.info(f"Network {network_id[:12]} created on bridge {lab_bridge.bridge_name}")
 
             except Exception as e:
@@ -1277,6 +1638,9 @@ class DockerOVSPlugin:
                     lab_bridge.network_ids.discard(network_id)
                     await self._maybe_delete_bridge(network.lab_id)
                 logger.info(f"Deleted network {network_id[:12]}")
+
+                # Persist state after network deletion
+                await self._mark_dirty_and_save()
 
         return web.json_response({})
 
@@ -1329,6 +1693,9 @@ class DockerOVSPlugin:
             # Update activity timestamp
             self._touch_lab(network.lab_id)
 
+            # Persist state after endpoint creation
+            await self._mark_dirty_and_save()
+
             logger.info(
                 f"Created endpoint {endpoint_id[:12]}: {host_veth} <-> {cont_veth} "
                 f"({network.interface_name}, VLAN {vlan_tag})"
@@ -1349,6 +1716,9 @@ class DockerOVSPlugin:
                 if network:
                     await self._delete_port(network.bridge_name, endpoint.host_veth)
                 logger.info(f"Deleted endpoint {endpoint_id[:12]}")
+
+                # Persist state after endpoint deletion
+                await self._mark_dirty_and_save()
 
         return web.json_response({})
 
@@ -1462,6 +1832,9 @@ class DockerOVSPlugin:
             # Update activity timestamp
             self._touch_lab(lab_id)
 
+            # Persist state after hot-connect
+            await self._mark_dirty_and_save()
+
             logger.info(
                 f"Connected {container_a}:{iface_a} <-> {container_b}:{iface_b} "
                 f"(VLAN {shared_vlan})"
@@ -1514,6 +1887,9 @@ class DockerOVSPlugin:
             # Update activity timestamp
             self._touch_lab(lab_id)
 
+            # Persist state after hot-disconnect
+            await self._mark_dirty_and_save()
+
             logger.info(f"Disconnected {container}:{interface} (new VLAN {new_vlan})")
             return new_vlan
 
@@ -1523,6 +1899,8 @@ class DockerOVSPlugin:
             endpoint = self.endpoints.get(endpoint_id)
             if endpoint:
                 endpoint.container_name = container_name
+                # Persist state after container name association
+                await self._mark_dirty_and_save()
 
     def get_lab_status(self, lab_id: str) -> dict[str, Any] | None:
         """Get status of a lab's networks and endpoints."""
@@ -1637,6 +2015,20 @@ class DockerOVSPlugin:
 
         logger.info(f"Created plugin spec at {PLUGIN_SPEC_PATH}")
 
+    async def shutdown(self) -> None:
+        """Graceful shutdown - save state and stop cleanup task."""
+        logger.info("Docker OVS plugin shutting down...")
+
+        # Stop TTL cleanup task
+        await self._stop_ttl_cleanup()
+
+        # Save final state
+        if self._state_dirty or True:  # Always save on shutdown
+            logger.info("Saving plugin state before shutdown...")
+            await self._save_state()
+
+        logger.info("Docker OVS plugin shutdown complete")
+
 
 # Singleton instance
 _plugin_instance: DockerOVSPlugin | None = None
@@ -1674,6 +2066,7 @@ async def run_plugin_standalone() -> None:
     await stop_event.wait()
 
     logger.info("Shutting down...")
+    await plugin.shutdown()
     await runner.cleanup()
 
 

@@ -1744,6 +1744,224 @@ class OVSNetworkManager:
             "vlan_allocations": len(self._vlan_allocator._allocated),
         }
 
+    # =========================================================================
+    # Reconciliation Helpers
+    # =========================================================================
+
+    async def get_all_ovs_ports(self) -> list[dict[str, Any]]:
+        """List all ports on the OVS bridge with their VLAN tags.
+
+        Returns a list of dicts with:
+        - port_name: Name of the OVS port
+        - vlan_tag: VLAN tag (or None for trunk)
+        - type: Port type (system, internal, vxlan, etc.)
+
+        Used for reconciliation to compare OVS reality with tracked state.
+        """
+        if not self._initialized:
+            return []
+
+        ports = []
+
+        code, stdout, _ = await self._ovs_vsctl("list-ports", self._bridge_name)
+        if code != 0:
+            return ports
+
+        port_names = [p.strip() for p in stdout.strip().split("\n") if p.strip()]
+
+        for port_name in port_names:
+            port_info: dict[str, Any] = {"port_name": port_name}
+
+            # Get VLAN tag
+            code, tag_stdout, _ = await self._ovs_vsctl("get", "port", port_name, "tag")
+            if code == 0:
+                tag_str = tag_stdout.strip()
+                if tag_str and tag_str != "[]":
+                    try:
+                        port_info["vlan_tag"] = int(tag_str)
+                    except ValueError:
+                        port_info["vlan_tag"] = None
+                else:
+                    port_info["vlan_tag"] = None
+            else:
+                port_info["vlan_tag"] = None
+
+            # Get port type
+            code, type_stdout, _ = await self._ovs_vsctl("get", "interface", port_name, "type")
+            if code == 0:
+                port_info["type"] = type_stdout.strip().strip('"') or "system"
+            else:
+                port_info["type"] = "unknown"
+
+            ports.append(port_info)
+
+        return ports
+
+    async def delete_orphan_port(self, port_name: str) -> bool:
+        """Remove a port that's not tracked in our state.
+
+        This is used during reconciliation to clean up ports that exist
+        in OVS but are not in our tracking (e.g., after a crash).
+
+        Args:
+            port_name: Name of the OVS port to delete
+
+        Returns:
+            True if deleted successfully
+        """
+        if not self._initialized:
+            return False
+
+        # First check it's not one of our tracked ports
+        for port in self._ports.values():
+            if port.port_name == port_name:
+                logger.warning(f"Refusing to delete tracked port {port_name}")
+                return False
+
+        # Remove from OVS
+        code, _, stderr = await self._ovs_vsctl(
+            "--if-exists", "del-port", self._bridge_name, port_name
+        )
+        if code != 0:
+            logger.warning(f"Failed to delete orphan port {port_name}: {stderr}")
+            return False
+
+        # Also delete the veth pair if it exists
+        await self._run_cmd(["ip", "link", "delete", port_name])
+
+        logger.info(f"Deleted orphan OVS port: {port_name}")
+        return True
+
+    async def get_ovs_bridge_state(self) -> dict[str, Any]:
+        """Get full OVS bridge state for comparison/debugging.
+
+        Returns comprehensive bridge state including:
+        - bridge_exists: Whether the bridge exists
+        - bridge_name: Name of the bridge
+        - ports: List of port info dicts
+        - tracked_ports: List of ports we're tracking
+        - orphaned_ports: Ports in OVS but not tracked
+        - missing_ports: Ports tracked but not in OVS
+        """
+        if not self._initialized:
+            return {
+                "bridge_exists": False,
+                "bridge_name": self._bridge_name,
+                "ports": [],
+                "tracked_ports": [],
+                "orphaned_ports": [],
+                "missing_ports": [],
+            }
+
+        # Check bridge exists
+        code, _, _ = await self._ovs_vsctl("br-exists", self._bridge_name)
+        bridge_exists = code == 0
+
+        if not bridge_exists:
+            return {
+                "bridge_exists": False,
+                "bridge_name": self._bridge_name,
+                "ports": [],
+                "tracked_ports": list(self._ports.keys()),
+                "orphaned_ports": [],
+                "missing_ports": list(self._ports.keys()),
+            }
+
+        # Get all OVS ports
+        ovs_ports = await self.get_all_ovs_ports()
+        ovs_port_names = {p["port_name"] for p in ovs_ports}
+
+        # Get tracked port names
+        tracked_port_names = {p.port_name for p in self._ports.values()}
+
+        # Calculate orphaned and missing
+        orphaned = [p for p in ovs_ports if p["port_name"] not in tracked_port_names
+                    and p["port_name"].startswith("vh")]  # Only our veth ports
+        missing = [key for key, port in self._ports.items()
+                   if port.port_name not in ovs_port_names]
+
+        return {
+            "bridge_exists": True,
+            "bridge_name": self._bridge_name,
+            "ports": ovs_ports,
+            "tracked_ports": list(self._ports.keys()),
+            "orphaned_ports": orphaned,
+            "missing_ports": missing,
+        }
+
+    async def reconcile_with_ovs(self) -> dict[str, Any]:
+        """Reconcile tracked state with actual OVS state.
+
+        This method:
+        1. Removes tracking for ports that no longer exist in OVS
+        2. Cleans up orphaned OVS ports not in our tracking
+        3. Updates VLAN tags if they've drifted
+
+        Returns summary of reconciliation actions.
+        """
+        stats = {
+            "tracked_removed": 0,
+            "orphans_deleted": 0,
+            "vlans_updated": 0,
+            "errors": [],
+        }
+
+        if not self._initialized:
+            return stats
+
+        bridge_state = await self.get_ovs_bridge_state()
+
+        if not bridge_state["bridge_exists"]:
+            # Bridge is gone - clear all tracking
+            stats["tracked_removed"] = len(self._ports)
+            self._ports.clear()
+            self._links.clear()
+            logger.warning(f"Bridge {self._bridge_name} missing, cleared all tracking")
+            return stats
+
+        # Get OVS port info indexed by name
+        ovs_by_name = {p["port_name"]: p for p in bridge_state["ports"]}
+
+        # Remove tracking for missing ports
+        for missing_key in bridge_state["missing_ports"]:
+            port = self._ports.pop(missing_key, None)
+            if port:
+                self._vlan_allocator.release(missing_key)
+                # Remove any links involving this port
+                links_to_remove = [
+                    lk for lk, lv in self._links.items()
+                    if lv.port_a == missing_key or lv.port_b == missing_key
+                ]
+                for lk in links_to_remove:
+                    del self._links[lk]
+                stats["tracked_removed"] += 1
+
+        # Delete orphaned ports
+        for orphan in bridge_state["orphaned_ports"]:
+            try:
+                await self.delete_orphan_port(orphan["port_name"])
+                stats["orphans_deleted"] += 1
+            except Exception as e:
+                stats["errors"].append(f"Failed to delete orphan {orphan['port_name']}: {e}")
+
+        # Check VLAN tag consistency
+        for key, port in self._ports.items():
+            if port.port_name in ovs_by_name:
+                ovs_vlan = ovs_by_name[port.port_name].get("vlan_tag")
+                if ovs_vlan is not None and ovs_vlan != port.vlan_tag:
+                    # OVS has different VLAN - update our tracking
+                    logger.info(
+                        f"Port {port.port_name} VLAN drift: tracked={port.vlan_tag}, "
+                        f"actual={ovs_vlan}"
+                    )
+                    port.vlan_tag = ovs_vlan
+                    stats["vlans_updated"] += 1
+
+        if any(v > 0 for k, v in stats.items() if k != "errors"):
+            logger.info(f"OVS reconciliation: {stats}")
+
+        return stats
+
 
 # Module-level singleton accessor
 _ovs_manager: OVSNetworkManager | None = None
