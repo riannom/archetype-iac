@@ -18,6 +18,47 @@ redis_conn = Redis.from_url(settings.redis_url)
 queue = Queue("archetype", connection=redis_conn)
 
 
+# Actions that conflict with each other for concurrent execution
+CONFLICTING_ACTIONS = {
+    "up": ["up", "down", "sync"],
+    "down": ["up", "down", "sync"],
+    "sync": ["up", "down"],
+}
+
+
+def has_conflicting_job(lab_id: str, action: str) -> tuple[bool, str | None]:
+    """Check if lab has a running/queued job that conflicts with new action.
+
+    Args:
+        lab_id: The lab ID to check
+        action: The action being attempted (up, down, sync, etc.)
+
+    Returns:
+        Tuple of (has_conflict, conflicting_action_name)
+    """
+    conflicting_actions = CONFLICTING_ACTIONS.get(action, [])
+    if not conflicting_actions:
+        return False, None
+
+    session = SessionLocal()
+    try:
+        active_job = (
+            session.query(Job)
+            .filter(
+                Job.lab_id == lab_id,
+                Job.status.in_(["queued", "running"]),
+                Job.action.in_(conflicting_actions),
+            )
+            .first()
+        )
+
+        if active_job:
+            return True, active_job.action
+        return False, None
+    finally:
+        session.close()
+
+
 def _build_command(lab_id: str, action: str) -> list[list[str]]:
     if action.startswith("node:"):
         _, subaction, node = action.split(":", 2)

@@ -406,6 +406,7 @@ def get_agent_info() -> AgentInfo:
         capabilities=get_capabilities(),
         started_at=AGENT_STARTED_AT,
         is_local=settings.is_local,
+        deployment_mode=detect_deployment_mode().value,
     )
 
 
@@ -1003,9 +1004,18 @@ async def destroy_lab(request: DestroyRequest) -> JobResult:
     If callback_url is provided, returns 202 Accepted immediately and executes
     the destroy in the background, POSTing the result to the callback URL when done.
     """
+    from agent.locks import LockAcquisitionTimeout
+
     logger.info(f"Destroy request: lab={request.lab_id}, job={request.job_id}")
     if request.callback_url:
         logger.debug(f"  Async mode with callback: {request.callback_url}")
+
+    lock_manager = get_lock_manager()
+    if lock_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Lock manager not initialized"
+        )
 
     # Async callback mode - return immediately and execute in background
     if request.callback_url:
@@ -1023,29 +1033,40 @@ async def destroy_lab(request: DestroyRequest) -> JobResult:
             stdout="Destroy accepted for async execution",
         )
 
-    # Synchronous mode (existing behavior)
-    # Use provider from request
-    provider = get_provider_for_request(request.provider.value)
-    workspace = get_workspace(request.lab_id)
-    result = await provider.destroy(
-        lab_id=request.lab_id,
-        workspace=workspace,
-    )
+    # Synchronous mode - acquire lock first
+    try:
+        async with lock_manager.acquire_with_heartbeat(
+            request.lab_id,
+            timeout=settings.lock_acquire_timeout,
+            extend_interval=settings.lock_extend_interval,
+        ):
+            provider = get_provider_for_request(request.provider.value)
+            workspace = get_workspace(request.lab_id)
+            result = await provider.destroy(
+                lab_id=request.lab_id,
+                workspace=workspace,
+            )
 
-    if result.success:
-        return JobResult(
-            job_id=request.job_id,
-            status=JobStatus.COMPLETED,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        )
-    else:
-        return JobResult(
-            job_id=request.job_id,
-            status=JobStatus.FAILED,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            error_message=result.error,
+            if result.success:
+                return JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.COMPLETED,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                )
+            else:
+                return JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.FAILED,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    error_message=result.error,
+                )
+    except LockAcquisitionTimeout:
+        logger.warning(f"Timeout waiting for lock on lab {request.lab_id} for destroy")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Another operation is in progress for lab {request.lab_id}, try again later"
         )
 
 
@@ -1057,31 +1078,62 @@ async def _execute_destroy_with_callback(
 ) -> None:
     """Execute destroy in background and send result via callback."""
     from agent.callbacks import CallbackPayload, deliver_callback, HeartbeatSender
+    from agent.locks import LockAcquisitionTimeout
     from datetime import datetime, timezone
 
     started_at = datetime.now(timezone.utc)
+    lock_manager = get_lock_manager()
 
-    try:
-        provider = get_provider_for_request(provider_name)
-        workspace = get_workspace(lab_id)
-        logger.info(f"Async destroy starting: lab={lab_id}, workspace={workspace}")
-
-        # Send heartbeats during destroy to prove job is active
-        async with HeartbeatSender(callback_url, job_id, interval=30.0):
-            result = await provider.destroy(
-                lab_id=lab_id,
-                workspace=workspace,
-            )
-
-        logger.info(f"Async destroy finished: lab={lab_id}, success={result.success}")
-
+    if lock_manager is None:
+        logger.error(f"Lock manager not initialized for async destroy of lab {lab_id}")
         payload = CallbackPayload(
             job_id=job_id,
             agent_id=AGENT_ID,
-            status="completed" if result.success else "failed",
-            stdout=result.stdout or "",
-            stderr=result.stderr or "",
-            error_message=result.error if not result.success else None,
+            status="failed",
+            error_message="Lock manager not initialized",
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
+        )
+        await deliver_callback(callback_url, payload)
+        return
+
+    try:
+        async with lock_manager.acquire_with_heartbeat(
+            lab_id,
+            timeout=settings.lock_acquire_timeout,
+            extend_interval=settings.lock_extend_interval,
+        ):
+            provider = get_provider_for_request(provider_name)
+            workspace = get_workspace(lab_id)
+            logger.info(f"Async destroy starting: lab={lab_id}, workspace={workspace}")
+
+            # Send heartbeats during destroy to prove job is active
+            async with HeartbeatSender(callback_url, job_id, interval=30.0):
+                result = await provider.destroy(
+                    lab_id=lab_id,
+                    workspace=workspace,
+                )
+
+            logger.info(f"Async destroy finished: lab={lab_id}, success={result.success}")
+
+            payload = CallbackPayload(
+                job_id=job_id,
+                agent_id=AGENT_ID,
+                status="completed" if result.success else "failed",
+                stdout=result.stdout or "",
+                stderr=result.stderr or "",
+                error_message=result.error if not result.success else None,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+
+    except LockAcquisitionTimeout:
+        logger.warning(f"Lock timeout for async destroy of lab {lab_id}")
+        payload = CallbackPayload(
+            job_id=job_id,
+            agent_id=AGENT_ID,
+            status="failed",
+            error_message=f"Another operation is in progress for lab {lab_id}",
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
         )
@@ -1104,45 +1156,67 @@ async def _execute_destroy_with_callback(
 @app.post("/jobs/node-action")
 async def node_action(request: NodeActionRequest) -> JobResult:
     """Start or stop a specific node."""
+    from agent.locks import LockAcquisitionTimeout
+
     logger.info(f"Node action: lab={request.lab_id}, node={request.log_name()}, action={request.action}")
 
-    # Use default provider for node actions
-    provider = get_provider_for_request()
-    workspace = get_workspace(request.lab_id)
-
-    if request.action == "start":
-        result = await provider.start_node(
-            lab_id=request.lab_id,
-            node_name=request.node_name,
-            workspace=workspace,
-        )
-    elif request.action == "stop":
-        result = await provider.stop_node(
-            lab_id=request.lab_id,
-            node_name=request.node_name,
-            workspace=workspace,
-        )
-    else:
-        return JobResult(
-            job_id=request.job_id,
-            status=JobStatus.FAILED,
-            error_message=f"Unknown action: {request.action}",
+    lock_manager = get_lock_manager()
+    if lock_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Lock manager not initialized"
         )
 
-    if result.success:
-        return JobResult(
-            job_id=request.job_id,
-            status=JobStatus.COMPLETED,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        )
-    else:
-        return JobResult(
-            job_id=request.job_id,
-            status=JobStatus.FAILED,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            error_message=result.error,
+    try:
+        # Use shorter timeout for node actions since they are quick
+        async with lock_manager.acquire_with_heartbeat(
+            request.lab_id,
+            timeout=10.0,  # Shorter timeout for node ops
+            extend_interval=settings.lock_extend_interval,
+        ):
+            # Use default provider for node actions
+            provider = get_provider_for_request()
+            workspace = get_workspace(request.lab_id)
+
+            if request.action == "start":
+                result = await provider.start_node(
+                    lab_id=request.lab_id,
+                    node_name=request.node_name,
+                    workspace=workspace,
+                )
+            elif request.action == "stop":
+                result = await provider.stop_node(
+                    lab_id=request.lab_id,
+                    node_name=request.node_name,
+                    workspace=workspace,
+                )
+            else:
+                return JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.FAILED,
+                    error_message=f"Unknown action: {request.action}",
+                )
+
+            if result.success:
+                return JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.COMPLETED,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                )
+            else:
+                return JobResult(
+                    job_id=request.job_id,
+                    status=JobStatus.FAILED,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    error_message=result.error,
+                )
+    except LockAcquisitionTimeout:
+        logger.warning(f"Timeout waiting for lock on lab {request.lab_id} for node action")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Another operation is in progress for lab {request.lab_id}, try again later"
         )
 
 

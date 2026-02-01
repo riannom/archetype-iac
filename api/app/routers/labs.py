@@ -27,6 +27,7 @@ from app.storage import (
 from app.tasks.jobs import run_agent_job, run_multihost_destroy
 from app.topology import analyze_topology, graph_to_yaml, yaml_to_graph
 from app.utils.lab import get_lab_or_404, get_lab_provider
+from app.jobs import has_conflicting_job
 
 logger = logging.getLogger(__name__)
 
@@ -892,6 +893,14 @@ async def sync_lab(
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Check for conflicting jobs before proceeding
+    has_conflict, conflicting_action = has_conflicting_job(lab_id, "sync")
+    if has_conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot sync lab: '{conflicting_action}' operation already in progress"
+        )
     _ensure_node_states_exist(database, lab.id)
 
     # Find all out-of-sync nodes

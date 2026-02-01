@@ -20,6 +20,7 @@ from app.topology import analyze_topology, graph_to_containerlab_yaml, yaml_to_g
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.utils.lab import get_lab_or_404, get_lab_provider
+from app.jobs import has_conflicting_job
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,14 @@ async def lab_up(
 ) -> schemas.JobOut:
     lab = get_lab_or_404(lab_id, database, current_user)
 
+    # Check for conflicting jobs before proceeding
+    has_conflict, conflicting_action = has_conflicting_job(lab_id, "up")
+    if has_conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot start lab: '{conflicting_action}' operation already in progress"
+        )
+
     # Use TopologyService for analysis (database is source of truth)
     service = TopologyService(database)
     is_multihost = False
@@ -382,6 +391,14 @@ async def lab_down(
 ) -> schemas.JobOut:
     lab = get_lab_or_404(lab_id, database, current_user)
 
+    # Check for conflicting jobs before proceeding
+    has_conflict, conflicting_action = has_conflicting_job(lab_id, "down")
+    if has_conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot stop lab: '{conflicting_action}' operation already in progress"
+        )
+
     # Use TopologyService for analysis (database is source of truth)
     service = TopologyService(database)
     is_multihost = False
@@ -442,6 +459,14 @@ async def lab_restart(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
     lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Check for conflicting jobs before proceeding (restart involves down + up)
+    has_conflict, conflicting_action = has_conflicting_job(lab_id, "down")
+    if has_conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot restart lab: '{conflicting_action}' operation already in progress"
+        )
 
     # Get the provider for this lab
     lab_provider = get_lab_provider(lab)

@@ -237,6 +237,8 @@ const StudioPage: React.FC = () => {
   // Job log modal state
   const [jobLogModalOpen, setJobLogModalOpen] = useState(false);
   const [jobLogModalJobId, setJobLogModalJobId] = useState<string | null>(null);
+  // Track pending node operations to prevent race conditions from rapid clicks
+  const [pendingNodeOps, setPendingNodeOps] = useState<Set<string>>(new Set());
   const layoutDirtyRef = useRef(false);
   const saveLayoutTimeoutRef = useRef<number | null>(null);
   const topologyDirtyRef = useRef(false);
@@ -901,8 +903,15 @@ const StudioPage: React.FC = () => {
     triggerLayoutSave();
   };
 
-  const handleUpdateStatus = async (nodeId: string, status: RuntimeStatus) => {
+  const handleUpdateStatus = useCallback(async (nodeId: string, status: RuntimeStatus): Promise<void> => {
     if (!activeLab) return;
+
+    // Block if operation already pending for this node
+    if (pendingNodeOps.has(nodeId)) {
+      addTaskLogEntry('info', 'Operation already in progress for this node');
+      return;
+    }
+
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const nodeName = node.name;
@@ -911,6 +920,8 @@ const StudioPage: React.FC = () => {
     const desiredState = status === 'stopped' ? 'stopped' : 'running';
     const action = desiredState === 'running' ? 'start' : 'stop';
 
+    // Mark operation as pending
+    setPendingNodeOps((prev) => new Set(prev).add(nodeId));
     addTaskLogEntry('info', `Setting "${nodeName}" to ${desiredState}...`);
 
     try {
@@ -939,12 +950,37 @@ const StudioPage: React.FC = () => {
       setTimeout(() => loadNodeStates(activeLab.id, nodes), 1000);
       loadJobs(activeLab.id, nodes);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Action failed';
+      let message = error instanceof Error ? error.message : 'Action failed';
+
+      // Handle specific HTTP error codes with user-friendly messages
+      if (error instanceof Error) {
+        // Check for 409 Conflict (operation already in progress)
+        if (message.includes('409') || message.toLowerCase().includes('already in progress') || message.toLowerCase().includes('conflict')) {
+          message = 'Another operation is already in progress for this lab';
+          addTaskLogEntry('warning', `Cannot ${action} "${nodeName}": ${message}`);
+          // Don't set error state - just inform the user
+          return;
+        }
+        // Check for 503 Service Unavailable (agent busy / lock timeout)
+        if (message.includes('503') || message.toLowerCase().includes('try again later')) {
+          message = 'Service temporarily unavailable, please try again';
+          addTaskLogEntry('warning', `Cannot ${action} "${nodeName}": ${message}`);
+          return;
+        }
+      }
+
       console.error('Node action failed:', error);
       setRuntimeStates((prev) => ({ ...prev, [nodeId]: 'error' }));
       addTaskLogEntry('error', `Node ${action} failed for "${nodeName}": ${message}`);
+    } finally {
+      // Clear pending operation
+      setPendingNodeOps((prev) => {
+        const next = new Set(prev);
+        next.delete(nodeId);
+        return next;
+      });
     }
-  };
+  }, [activeLab, nodes, pendingNodeOps, studioRequest, addTaskLogEntry, loadNodeStates, loadJobs]);
 
   const handleOpenConsole = (nodeId: string) => {
     setConsoleWindows((prev) => {
@@ -1262,6 +1298,7 @@ const StudioPage: React.FC = () => {
             onOpenNodeConfig={handleOpenConfigViewer}
             agents={agents}
             onUpdateNode={handleUpdateNode}
+            pendingNodeOps={pendingNodeOps}
           />
         );
       default:
