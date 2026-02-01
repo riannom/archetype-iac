@@ -32,6 +32,8 @@ const LogsView: React.FC<LogsViewProps> = ({
 
   // Expanded entry for detail view
   const [expandedEntryIdx, setExpandedEntryIdx] = useState<number | null>(null);
+  const [expandedJobLog, setExpandedJobLog] = useState<string | null>(null);
+  const [loadingJobLog, setLoadingJobLog] = useState(false);
 
   const autoRefreshIntervalRef = useRef<number | null>(null);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
@@ -73,6 +75,32 @@ const LogsView: React.FC<LogsViewProps> = ({
       setLoading(false);
     }
   }, [labId, queryParams, studioRequest]);
+
+  // Fetch full job log when expanding an entry
+  const fetchJobLog = useCallback(async (jobId: string) => {
+    setLoadingJobLog(true);
+    setExpandedJobLog(null);
+    try {
+      const data = await studioRequest<{ log: string }>(`/labs/${labId}/jobs/${jobId}/log`);
+      setExpandedJobLog(data.log || 'No log content available');
+    } catch (err) {
+      setExpandedJobLog(`Failed to load job log: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setLoadingJobLog(false);
+    }
+  }, [labId, studioRequest]);
+
+  // Check if any filters are active
+  const hasActiveFilters = selectedJobId !== 'all' || selectedHostId !== 'all' || selectedLevel !== 'all' || selectedSince !== 'all' || searchQuery.trim() !== '';
+
+  // Clear all filters
+  const clearFilters = useCallback(() => {
+    setSelectedJobId('all');
+    setSelectedHostId('all');
+    setSelectedLevel('all');
+    setSelectedSince('all');
+    setSearchQuery('');
+  }, []);
 
   useEffect(() => {
     loadLogs();
@@ -383,6 +411,17 @@ const LogsView: React.FC<LogsViewProps> = ({
             className="w-full px-3 py-1.5 text-xs bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-stone-700 dark:text-stone-300 placeholder-stone-400 focus:outline-none focus:ring-1 focus:ring-sage-500"
           />
         </div>
+
+        {/* Clear filters button */}
+        {hasActiveFilters && (
+          <button
+            onClick={clearFilters}
+            className="px-3 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 text-red-700 dark:text-red-400 rounded-lg font-medium transition-all flex items-center gap-1"
+          >
+            <i className="fa-solid fa-times" />
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Main content */}
@@ -486,7 +525,17 @@ const LogsView: React.FC<LogsViewProps> = ({
                 return (
                   <div key={`${entry.timestamp}-${idx}`}>
                     <div
-                      onClick={() => setExpandedEntryIdx(isExpanded ? null : idx)}
+                      onClick={() => {
+                        if (isExpanded) {
+                          setExpandedEntryIdx(null);
+                          setExpandedJobLog(null);
+                        } else {
+                          setExpandedEntryIdx(idx);
+                          if (entry.job_id) {
+                            fetchJobLog(entry.job_id);
+                          }
+                        }
+                      }}
                       className={`flex gap-3 px-4 py-1.5 border-l-2 cursor-pointer hover:bg-stone-100 dark:hover:bg-stone-800/50 ${
                         levelBorders[entry.level] || 'border-l-stone-300'
                       } ${isRealtime ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''} ${isExpanded ? 'bg-stone-100 dark:bg-stone-800/50' : ''}`}
@@ -525,10 +574,26 @@ const LogsView: React.FC<LogsViewProps> = ({
                             <span className="text-[9px] font-bold text-stone-500 uppercase">Message</span>
                             <p className="text-stone-700 dark:text-stone-300 whitespace-pre-wrap mt-1">{entry.message}</p>
                           </div>
-                          {/* Timestamp */}
-                          <div>
-                            <span className="text-[9px] font-bold text-stone-500 uppercase">Timestamp</span>
-                            <p className="text-stone-600 dark:text-stone-400 mt-1">{new Date(entry.timestamp).toLocaleString()}</p>
+                          {/* Metadata grid */}
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+                            <div>
+                              <span className="text-stone-500">Timestamp:</span>{' '}
+                              <span className="text-stone-600 dark:text-stone-400">{new Date(entry.timestamp).toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-stone-500">Level:</span>{' '}
+                              <span className={`font-bold uppercase ${levelColors[entry.level] || 'text-stone-500'}`}>{entry.level}</span>
+                            </div>
+                            {entry.host_name && (
+                              <div>
+                                <span className="text-stone-500">Host:</span>{' '}
+                                <span className="text-stone-600 dark:text-stone-400">{entry.host_name}</span>
+                              </div>
+                            )}
+                            <div>
+                              <span className="text-stone-500">Source:</span>{' '}
+                              <span className="text-stone-600 dark:text-stone-400">{entry.source || (isRealtime ? 'realtime' : 'job')}</span>
+                            </div>
                           </div>
                           {/* Job details */}
                           {job && (
@@ -566,6 +631,21 @@ const LogsView: React.FC<LogsViewProps> = ({
                                 <i className="fa-solid fa-filter mr-1" />
                                 Filter to this job
                               </button>
+
+                              {/* Full job log */}
+                              <div className="mt-3 pt-3 border-t border-stone-300 dark:border-stone-600">
+                                <span className="text-[9px] font-bold text-stone-500 uppercase">Full Job Log</span>
+                                {loadingJobLog ? (
+                                  <div className="mt-2 text-stone-500 dark:text-stone-400">
+                                    <i className="fa-solid fa-spinner fa-spin mr-2" />
+                                    Loading job log...
+                                  </div>
+                                ) : expandedJobLog ? (
+                                  <pre className="mt-2 p-2 bg-stone-900 dark:bg-black text-stone-100 text-[10px] rounded overflow-x-auto whitespace-pre-wrap max-h-60 overflow-y-auto custom-scrollbar">
+                                    {expandedJobLog}
+                                  </pre>
+                                ) : null}
+                              </div>
                             </div>
                           )}
                           {/* Copy button */}
