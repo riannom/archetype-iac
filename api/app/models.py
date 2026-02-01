@@ -131,6 +131,9 @@ class Host(Base):
     # When the agent process started (for uptime tracking)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Error tracking: persists agent-level errors across operations
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

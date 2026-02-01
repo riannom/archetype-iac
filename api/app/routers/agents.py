@@ -102,6 +102,9 @@ class HostOut(BaseModel):
     version: str
     image_sync_strategy: str = "on_demand"
     last_heartbeat: datetime | None
+    # Error tracking fields
+    last_error: str | None = None
+    error_since: datetime | None = None
     created_at: datetime
 
     class Config:
@@ -353,6 +356,8 @@ def list_agents(
             version=host.version,
             image_sync_strategy=host.image_sync_strategy or "on_demand",
             last_heartbeat=host.last_heartbeat,
+            last_error=host.last_error,
+            error_since=host.error_since,
             created_at=host.created_at,
         ))
 
@@ -435,6 +440,9 @@ def list_agents_detailed(
             "image_sync_strategy": host.image_sync_strategy or "on_demand",
             "deployment_mode": host.deployment_mode or "unknown",
             "is_local": host.is_local,
+            # Error tracking
+            "last_error": host.last_error,
+            "error_since": host.error_since.isoformat() if host.error_since else None,
         })
 
     return result
@@ -465,6 +473,8 @@ def get_agent(
         version=host.version,
         image_sync_strategy=host.image_sync_strategy or "on_demand",
         last_heartbeat=host.last_heartbeat,
+        last_error=host.last_error,
+        error_since=host.error_since,
         created_at=host.created_at,
     )
 
