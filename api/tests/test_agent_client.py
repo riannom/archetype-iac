@@ -113,13 +113,10 @@ async def test_check_agent_health_failure():
     mock_agent.address = "localhost:8001"
     mock_agent.id = "test-agent"
 
-    with patch("app.agent_client.httpx.AsyncClient") as mock_client_class:
-        mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-        mock_client.get.side_effect = httpx.ConnectError("Connection refused")
-        mock_client_class.return_value = mock_client
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = httpx.ConnectError("Connection refused")
 
+    with patch("app.agent_client.get_http_client", return_value=mock_client):
         result = await agent_client.check_agent_health(mock_agent)
 
     assert result is False
