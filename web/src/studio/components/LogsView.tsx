@@ -30,6 +30,9 @@ const LogsView: React.FC<LogsViewProps> = ({
   // Host sidebar collapsed state
   const [hostSidebarCollapsed, setHostSidebarCollapsed] = useState(false);
 
+  // Expanded entry for detail view
+  const [expandedEntryIdx, setExpandedEntryIdx] = useState<number | null>(null);
+
   const autoRefreshIntervalRef = useRef<number | null>(null);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const isInitialLoadRef = useRef(true);
@@ -478,37 +481,106 @@ const LogsView: React.FC<LogsViewProps> = ({
             >
               {allEntries.map((entry, idx) => {
                 const isRealtime = (entry as any).isRealtime;
+                const isExpanded = expandedEntryIdx === idx;
+                const job = entry.job_id ? logs?.jobs.find(j => j.id === entry.job_id) : null;
                 return (
-                  <div
-                    key={`${entry.timestamp}-${idx}`}
-                    onClick={() => handleCopyEntry(entry)}
-                    className={`flex gap-3 px-4 py-1.5 border-l-2 cursor-pointer hover:bg-stone-100 dark:hover:bg-stone-800/50 ${
-                      levelBorders[entry.level] || 'border-l-stone-300'
-                    } ${isRealtime ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''}`}
-                    title="Click to copy"
-                  >
-                    <span className="text-stone-400 dark:text-stone-600 min-w-[70px] shrink-0">
-                      {formatTimestamp(entry.timestamp)}
-                    </span>
-                    <span
-                      className={`min-w-[50px] shrink-0 font-bold uppercase ${
-                        levelColors[entry.level] || 'text-stone-500'
-                      }`}
+                  <div key={`${entry.timestamp}-${idx}`}>
+                    <div
+                      onClick={() => setExpandedEntryIdx(isExpanded ? null : idx)}
+                      className={`flex gap-3 px-4 py-1.5 border-l-2 cursor-pointer hover:bg-stone-100 dark:hover:bg-stone-800/50 ${
+                        levelBorders[entry.level] || 'border-l-stone-300'
+                      } ${isRealtime ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''} ${isExpanded ? 'bg-stone-100 dark:bg-stone-800/50' : ''}`}
+                      title="Click to expand"
                     >
-                      {entry.level}
-                    </span>
-                    {entry.host_name && (
-                      <span className="px-1.5 py-0.5 bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-400 rounded text-[9px] font-medium shrink-0">
-                        {entry.host_name}
+                      <span className="text-stone-400 dark:text-stone-600 min-w-[70px] shrink-0">
+                        {formatTimestamp(entry.timestamp)}
                       </span>
-                    )}
-                    <span className="text-stone-700 dark:text-stone-300 flex-1 break-words">
-                      {entry.message}
-                    </span>
-                    {isRealtime && (
-                      <span className="text-blue-500 dark:text-blue-400 text-[9px] shrink-0">
-                        LIVE
+                      <span
+                        className={`min-w-[50px] shrink-0 font-bold uppercase ${
+                          levelColors[entry.level] || 'text-stone-500'
+                        }`}
+                      >
+                        {entry.level}
                       </span>
+                      {entry.host_name && (
+                        <span className="px-1.5 py-0.5 bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-400 rounded text-[9px] font-medium shrink-0">
+                          {entry.host_name}
+                        </span>
+                      )}
+                      <span className="text-stone-700 dark:text-stone-300 flex-1 break-words">
+                        {entry.message}
+                      </span>
+                      {isRealtime && (
+                        <span className="text-blue-500 dark:text-blue-400 text-[9px] shrink-0">
+                          LIVE
+                        </span>
+                      )}
+                      <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'} text-stone-400 dark:text-stone-600 shrink-0`} />
+                    </div>
+                    {isExpanded && (
+                      <div className="px-4 py-3 bg-stone-100 dark:bg-stone-800/70 border-l-2 border-l-stone-300 dark:border-l-stone-600 ml-0">
+                        <div className="flex flex-col gap-2">
+                          {/* Full message */}
+                          <div>
+                            <span className="text-[9px] font-bold text-stone-500 uppercase">Message</span>
+                            <p className="text-stone-700 dark:text-stone-300 whitespace-pre-wrap mt-1">{entry.message}</p>
+                          </div>
+                          {/* Timestamp */}
+                          <div>
+                            <span className="text-[9px] font-bold text-stone-500 uppercase">Timestamp</span>
+                            <p className="text-stone-600 dark:text-stone-400 mt-1">{new Date(entry.timestamp).toLocaleString()}</p>
+                          </div>
+                          {/* Job details */}
+                          {job && (
+                            <div className="mt-2 p-2 bg-stone-200/50 dark:bg-stone-700/50 rounded">
+                              <span className="text-[9px] font-bold text-stone-500 uppercase">Job Details</span>
+                              <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+                                <div>
+                                  <span className="text-stone-500">Action:</span>{' '}
+                                  <span className="text-stone-700 dark:text-stone-300">{formatJobAction(job.action)}</span>
+                                </div>
+                                <div>
+                                  <span className="text-stone-500">Status:</span>{' '}
+                                  <span className={job.status === 'failed' ? 'text-red-600 dark:text-red-400 font-bold' : job.status === 'completed' ? 'text-green-600 dark:text-green-400' : 'text-stone-700 dark:text-stone-300'}>
+                                    {job.status}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-stone-500">ID:</span>{' '}
+                                  <span className="text-stone-600 dark:text-stone-400 font-mono">{job.id.slice(0, 8)}...</span>
+                                </div>
+                                <div>
+                                  <span className="text-stone-500">Created:</span>{' '}
+                                  <span className="text-stone-600 dark:text-stone-400">{new Date(job.created_at).toLocaleTimeString()}</span>
+                                </div>
+                              </div>
+                              {/* Filter to this job button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedJobId(job.id);
+                                  setExpandedEntryIdx(null);
+                                }}
+                                className="mt-2 px-2 py-1 text-[10px] bg-sage-600 hover:bg-sage-500 text-white rounded transition-all"
+                              >
+                                <i className="fa-solid fa-filter mr-1" />
+                                Filter to this job
+                              </button>
+                            </div>
+                          )}
+                          {/* Copy button */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCopyEntry(entry);
+                            }}
+                            className="self-start px-2 py-1 text-[10px] bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600 text-stone-700 dark:text-stone-300 rounded transition-all"
+                          >
+                            <i className="fa-solid fa-copy mr-1" />
+                            Copy entry
+                          </button>
+                        </div>
+                      </div>
                     )}
                   </div>
                 );
