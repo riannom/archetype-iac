@@ -6,8 +6,11 @@ import time
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app import db, models
 from app.config import settings
 from app.schemas import UpdateInfo, VersionInfo
 
@@ -193,3 +196,54 @@ def _compare_versions(v1: str, v2: str) -> int:
         elif v1 < v2:
             return -1
         return 0
+
+
+# --- System Alerts ---
+
+class AgentAlert(BaseModel):
+    """Alert for an agent with an error."""
+    agent_id: str
+    agent_name: str
+    error_message: str
+    error_since: str  # ISO format timestamp
+
+
+class SystemAlertsResponse(BaseModel):
+    """Response containing active system alerts."""
+    alerts: list[AgentAlert]
+    agent_error_count: int
+
+
+@router.get("/alerts", response_model=SystemAlertsResponse)
+def get_system_alerts(
+    database: Session = Depends(db.get_db),
+) -> SystemAlertsResponse:
+    """Get active system alerts.
+
+    Returns a list of agents that currently have errors (e.g., Docker state
+    corruption, unreachable agents). These alerts persist until the error
+    condition is resolved.
+
+    Used by the UI to display a prominent alert banner when infrastructure
+    issues need attention.
+    """
+    agents_with_errors = (
+        database.query(models.Host)
+        .filter(models.Host.last_error.isnot(None))
+        .all()
+    )
+
+    alerts = [
+        AgentAlert(
+            agent_id=agent.id,
+            agent_name=agent.name,
+            error_message=agent.last_error,
+            error_since=agent.error_since.isoformat() if agent.error_since else "",
+        )
+        for agent in agents_with_errors
+    ]
+
+    return SystemAlertsResponse(
+        alerts=alerts,
+        agent_error_count=len(alerts),
+    )

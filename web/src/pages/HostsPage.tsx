@@ -52,6 +52,9 @@ interface HostDetailed {
   lab_count: number;
   started_at: string | null;
   last_heartbeat: string | null;
+  // Error tracking
+  last_error: string | null;
+  error_since: string | null;
 }
 
 interface UpdateStatus {
@@ -479,6 +482,28 @@ const HostsPage: React.FC = () => {
                           {formatTimestamp(host.last_heartbeat)}
                         </span>
                       </div>
+
+                      {/* Error Alert */}
+                      {host.last_error && (
+                        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                          <div className="flex items-start gap-2">
+                            <i className="fa-solid fa-triangle-exclamation text-red-500 dark:text-red-400 mt-0.5 flex-shrink-0"></i>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-semibold text-red-700 dark:text-red-300 mb-1">
+                                Agent Error
+                                {host.error_since && (
+                                  <span className="font-normal text-red-500 dark:text-red-400 ml-1">
+                                    (since {formatTimestamp(host.error_since)})
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-red-600 dark:text-red-400 break-words">
+                                {host.last_error}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Update Progress or Button */}
                       {updatingAgents.has(host.id) ? (

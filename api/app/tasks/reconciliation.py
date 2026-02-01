@@ -32,6 +32,37 @@ from app.utils.link import generate_link_name
 logger = logging.getLogger(__name__)
 
 
+def _set_agent_error(agent: models.Host, error_message: str) -> None:
+    """Set or update an agent's error state.
+
+    If this is a new error (agent.last_error was None), sets error_since
+    to the current time. Always updates last_error to the new message.
+
+    Args:
+        agent: Host model instance
+        error_message: Error message to persist
+    """
+    if agent.last_error is None:
+        agent.error_since = datetime.now(timezone.utc)
+    agent.last_error = error_message
+    logger.warning(f"Agent {agent.name} error: {error_message}")
+
+
+def _clear_agent_error(agent: models.Host) -> None:
+    """Clear an agent's error state.
+
+    Clears both last_error and error_since when the agent successfully
+    responds to queries.
+
+    Args:
+        agent: Host model instance
+    """
+    if agent.last_error is not None:
+        logger.info(f"Agent {agent.name} error cleared (was: {agent.last_error})")
+        agent.last_error = None
+        agent.error_since = None
+
+
 @contextmanager
 def reconciliation_lock(lab_id: str, timeout: int = 60):
     """Acquire a distributed lock before reconciling a lab.
@@ -442,10 +473,14 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 # An error (e.g., Docker state corruption) means we can't trust the results
                 if not agent_error:
                     agents_successfully_queried.add(agent_id)
+                    # Clear any previous error state - agent responded successfully
+                    _clear_agent_error(agent)
                 else:
                     logger.warning(
                         f"Agent {agent.name} returned error for lab {lab_id}: {agent_error}"
                     )
+                    # Persist the error for visibility in UI
+                    _set_agent_error(agent, agent_error)
 
                 # Still merge any nodes that were returned (partial success)
                 for n in nodes:
@@ -455,6 +490,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                         container_agent_map[node_name] = agent_id
             except Exception as e:
                 logger.warning(f"Failed to query agent {agent.name} for lab {lab_id}: {e}")
+                # Persist the error for visibility in UI
+                _set_agent_error(agent, f"Query failed: {e}")
 
         logger.debug(f"Lab {lab_id} container status: {container_status_map}")
 

@@ -9,6 +9,7 @@ import StatusBar from './components/StatusBar';
 import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
+import AgentAlertBanner from './components/AgentAlertBanner';
 import ConfigViewerModal from './components/ConfigViewerModal';
 import JobLogModal from './components/JobLogModal';
 import ConfigsView from './components/ConfigsView';
@@ -1548,6 +1549,7 @@ const StudioPage: React.FC = () => {
         </button>
       </div>
       {isAdmin && <SystemStatusStrip metrics={systemMetrics} />}
+      <AgentAlertBanner />
       <div className="flex flex-1 overflow-hidden relative">
         {renderView()}
         <ConsoleManager
