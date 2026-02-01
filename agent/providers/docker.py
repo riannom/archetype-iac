@@ -67,6 +67,64 @@ logger = logging.getLogger(__name__)
 # Container name prefix for Archetype-managed containers
 CONTAINER_PREFIX = "archetype"
 
+# Interface wait script for cEOS - waits for interfaces before starting init
+# This prevents the platform detection race condition where Ark.getPlatform()
+# returns None because systemd services run before network interfaces are ready
+IF_WAIT_SCRIPT = """#!/bin/sh
+
+# Validate CLAB_INTFS environment variable
+REQUIRED_INTFS_NUM=${CLAB_INTFS:-0}
+if ! echo "$REQUIRED_INTFS_NUM" | grep -qE '^[0-9]+$' || [ "$REQUIRED_INTFS_NUM" -eq 0 ]; then
+    echo "if-wait: CLAB_INTFS not set or invalid, skipping interface wait"
+    REQUIRED_INTFS_NUM=0
+fi
+
+TIMEOUT=300  # 5 minute timeout
+WAIT_TIME=0
+
+int_calc() {
+    if [ ! -d "/sys/class/net/" ]; then
+        echo "if-wait: /sys/class/net/ not accessible"
+        AVAIL_INTFS_NUM=0
+        return 1
+    fi
+
+    # Count eth1+ interfaces (excluding eth0 which is management)
+    AVAIL_INTFS_NUM=$(ls -1 /sys/class/net/ 2>/dev/null | grep -cE '^eth[1-9]')
+    return 0
+}
+
+# Only wait for interfaces if CLAB_INTFS is set
+if [ "$REQUIRED_INTFS_NUM" -gt 0 ]; then
+    echo "if-wait: Waiting for $REQUIRED_INTFS_NUM interfaces (timeout: ${TIMEOUT}s)"
+
+    while [ "$WAIT_TIME" -lt "$TIMEOUT" ]; do
+        if ! int_calc; then
+            echo "if-wait: Failed to check interfaces, continuing..."
+            break
+        fi
+
+        if [ "$AVAIL_INTFS_NUM" -ge "$REQUIRED_INTFS_NUM" ]; then
+            echo "if-wait: Found $AVAIL_INTFS_NUM interfaces (required: $REQUIRED_INTFS_NUM)"
+            break
+        fi
+
+        # Log every 5 seconds to reduce noise
+        if [ $((WAIT_TIME % 5)) -eq 0 ]; then
+            echo "if-wait: Have $AVAIL_INTFS_NUM of $REQUIRED_INTFS_NUM interfaces (waited ${WAIT_TIME}s)"
+        fi
+        sleep 1
+        WAIT_TIME=$((WAIT_TIME + 1))
+    done
+
+    if [ "$WAIT_TIME" -ge "$TIMEOUT" ]; then
+        echo "if-wait: Timeout reached, proceeding with $AVAIL_INTFS_NUM interfaces"
+    fi
+fi
+
+echo "if-wait: Starting init"
+"""
+
 # Label keys for container metadata
 LABEL_LAB_ID = "archetype.lab_id"
 LABEL_NODE_NAME = "archetype.node_name"
@@ -288,8 +346,15 @@ class DockerProvider(Provider):
         node: TopologyNode,
         lab_id: str,
         workspace: Path,
+        interface_count: int = 0,
     ) -> dict[str, Any]:
         """Build Docker container configuration for a node.
+
+        Args:
+            node: The topology node configuration
+            lab_id: Lab identifier
+            workspace: Path to lab workspace
+            interface_count: Number of interfaces this node has (for cEOS CLAB_INTFS)
 
         Returns a dict suitable for docker.containers.create().
         """
@@ -364,14 +429,25 @@ class DockerProvider(Provider):
             config["sysctls"] = runtime_config.sysctls
 
         # Entry command - ensure entrypoint is a list for Docker SDK
-        if runtime_config.entrypoint:
+        # For cEOS, we wrap the init process with if-wait.sh to wait for interfaces
+        # before starting init - this prevents the platform detection race condition
+        if node.kind == "ceos" and interface_count > 0:
+            # Set CLAB_INTFS so the if-wait.sh script knows how many interfaces to wait for
+            config["environment"]["CLAB_INTFS"] = str(interface_count)
+
+            # Use bash wrapper to run if-wait.sh before /sbin/init
+            # The script is created in flash dir by _ensure_directories()
+            config["entrypoint"] = ["/bin/bash", "-c"]
+            config["command"] = ["/mnt/flash/if-wait.sh ; exec /sbin/init"]
+            logger.debug(f"cEOS {node.name}: using if-wait.sh wrapper with CLAB_INTFS={interface_count}")
+        elif runtime_config.entrypoint:
             # Docker SDK expects entrypoint as a list
             if isinstance(runtime_config.entrypoint, str):
                 config["entrypoint"] = [runtime_config.entrypoint]
             else:
                 config["entrypoint"] = runtime_config.entrypoint
 
-        if runtime_config.cmd:
+        if runtime_config.cmd and "command" not in config:
             config["command"] = runtime_config.cmd
 
         # Ensure at least one of entrypoint or command is set
@@ -444,6 +520,14 @@ username admin privilege 15 role network-admin nopassword
                     zerotouch_config.write_text("DISABLE=True\n")
                     logger.debug(f"Created zerotouch-config for {node.log_name()}")
 
+                # Create if-wait.sh script to wait for interfaces before boot
+                # This prevents the platform detection race where Ark.getPlatform()
+                # returns None because init runs before interfaces are ready
+                if_wait_script = flash_dir / "if-wait.sh"
+                if_wait_script.write_text(IF_WAIT_SCRIPT)
+                if_wait_script.chmod(0o755)
+                logger.debug(f"Created if-wait.sh for {node.log_name()}")
+
     def _calculate_required_interfaces(self, topology: ParsedTopology) -> int:
         """Calculate the maximum interface index needed based on topology links.
 
@@ -473,6 +557,30 @@ username admin privilege 15 role network-admin nopassword
         # Add buffer of 4 interfaces for flexibility (connecting new links)
         # Minimum of 4 interfaces even if no links defined
         return max(max_index + 4, 4)
+
+    def _count_node_interfaces(self, node_name: str, topology: ParsedTopology) -> int:
+        """Count the number of interfaces connected to a specific node.
+
+        Args:
+            node_name: Name of the node
+            topology: Parsed topology with links
+
+        Returns:
+            Number of interfaces this node has in the topology
+        """
+        interfaces = set()
+
+        for link in topology.links:
+            for endpoint in link.endpoints:
+                if ":" in endpoint:
+                    ep_node, interface = endpoint.split(":", 1)
+                    if ep_node == node_name:
+                        # Extract interface number
+                        match = re.search(r"(\d+)$", interface)
+                        if match:
+                            interfaces.add(int(match.group(1)))
+
+        return len(interfaces)
 
     async def _create_lab_networks(
         self,
@@ -679,7 +787,11 @@ username admin privilege 15 role network-admin nopassword
                     pass
 
                 # Build container config
-                config = self._create_container_config(node, lab_id, workspace)
+                # Count interfaces for this specific node (for cEOS if-wait.sh)
+                node_interface_count = self._count_node_interfaces(node_name, topology)
+                config = self._create_container_config(
+                    node, lab_id, workspace, interface_count=node_interface_count
+                )
 
                 # Set network mode based on whether OVS plugin is enabled
                 # When OVS plugin is enabled, we attach to Docker networks which
@@ -737,7 +849,7 @@ username admin privilege 15 role network-admin nopassword
             # Remove any containers that were created before the failure
             for node_name, container in containers.items():
                 try:
-                    container.remove(force=True, v=True)
+                    await asyncio.to_thread(container.remove, force=True, v=True)
                     logger.debug(f"Cleaned up container for {node_name}")
                 except Exception as cleanup_err:
                     logger.warning(f"Failed to clean up container {node_name}: {cleanup_err}")
@@ -920,7 +1032,7 @@ username admin privilege 15 role network-admin nopassword
         async def find_ovs_port(container_name: str, interface_name: str) -> str | None:
             """Find OVS port name for a container interface."""
             try:
-                container = self.docker.containers.get(container_name)
+                container = await asyncio.to_thread(self.docker.containers.get, container_name)
                 pid = container.attrs["State"]["Pid"]
 
                 # Get interface's peer index from inside container
@@ -1110,16 +1222,17 @@ username admin privilege 15 role network-admin nopassword
                     logger.warning(f"Node {log_name} timed out waiting for readiness")
                     continue
 
-                # Check readiness
+                # Check readiness - use asyncio.to_thread to avoid blocking event loop
                 try:
-                    container.reload()
+                    await asyncio.to_thread(container.reload)
                     if container.status != "running":
                         all_ready = False
                         continue
 
                     if config.readiness_probe == "log_pattern":
-                        # Check logs for pattern
-                        logs = container.logs(tail=100).decode(errors="replace")
+                        # Check logs for pattern - run in thread to avoid blocking
+                        logs_bytes = await asyncio.to_thread(container.logs, tail=100)
+                        logs = logs_bytes.decode(errors="replace")
                         if config.readiness_pattern:
                             if re.search(config.readiness_pattern, logs):
                                 ready_status[node_name] = True
@@ -1267,6 +1380,7 @@ username admin privilege 15 role network-admin nopassword
         # Validate images
         missing_images = self._validate_images(parsed_topology)
         if missing_images:
+            logger.error(f"Missing images: {missing_images}")
             error_lines = ["Missing Docker images:"]
             for node_name, image in missing_images:
                 log_name = parsed_topology.log_name(node_name)
@@ -1347,14 +1461,16 @@ username admin privilege 15 role network-admin nopassword
         errors = []
 
         try:
-            # Find all containers for this lab
-            containers = self.docker.containers.list(
+            # Find all containers for this lab - run in thread to avoid blocking
+            containers = await asyncio.to_thread(
+                self.docker.containers.list,
                 all=True,
                 filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
             )
 
             # Also find by prefix (fallback)
-            prefix_containers = self.docker.containers.list(
+            prefix_containers = await asyncio.to_thread(
+                self.docker.containers.list,
                 all=True,
                 filters={"name": prefix},
             )
@@ -1365,7 +1481,7 @@ username admin privilege 15 role network-admin nopassword
             # Remove containers
             for container in all_containers.values():
                 try:
-                    container.remove(force=True, v=True)  # v=True removes anonymous volumes
+                    await asyncio.to_thread(container.remove, force=True, v=True)  # v=True removes anonymous volumes
                     removed += 1
                     logger.info(f"Removed container {container.name}")
                 except Exception as e:
@@ -1420,14 +1536,15 @@ username admin privilege 15 role network-admin nopassword
         removed = 0
 
         try:
-            # Find volumes with our lab label
-            volumes = self.docker.volumes.list(
+            # Find volumes with our lab label - run in thread to avoid blocking
+            volumes = await asyncio.to_thread(
+                self.docker.volumes.list,
                 filters={"label": f"{LABEL_LAB_ID}={lab_id}"}
             )
 
             for volume in volumes:
                 try:
-                    volume.remove(force=True)
+                    await asyncio.to_thread(volume.remove, force=True)
                     removed += 1
                     logger.debug(f"Removed volume {volume.name}")
                 except APIError as e:
@@ -1436,7 +1553,8 @@ username admin privilege 15 role network-admin nopassword
 
             # Also prune any dangling volumes (not tied to a container)
             # This catches volumes that weren't labeled but were created by our containers
-            prune_result = self.docker.volumes.prune(
+            prune_result = await asyncio.to_thread(
+                self.docker.volumes.prune,
                 filters={"dangling": "true"}
             )
             if prune_result.get("VolumesDeleted"):
@@ -1458,15 +1576,17 @@ username admin privilege 15 role network-admin nopassword
         nodes: list[NodeInfo] = []
 
         try:
-            # Find containers by label
-            containers = self.docker.containers.list(
+            # Find containers by label - run in thread to avoid blocking
+            containers = await asyncio.to_thread(
+                self.docker.containers.list,
                 all=True,
                 filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
             )
 
             # Also find by prefix (fallback)
             prefix = self._lab_prefix(lab_id)
-            prefix_containers = self.docker.containers.list(
+            prefix_containers = await asyncio.to_thread(
+                self.docker.containers.list,
                 all=True,
                 filters={"name": prefix},
             )
@@ -1501,10 +1621,10 @@ username admin privilege 15 role network-admin nopassword
         container_name = self._container_name(lab_id, node_name)
 
         try:
-            container = self.docker.containers.get(container_name)
-            container.start()
+            container = await asyncio.to_thread(self.docker.containers.get, container_name)
+            await asyncio.to_thread(container.start)
             await asyncio.sleep(1)
-            container.reload()
+            await asyncio.to_thread(container.reload)
 
             return NodeActionResult(
                 success=True,
@@ -1536,9 +1656,9 @@ username admin privilege 15 role network-admin nopassword
         container_name = self._container_name(lab_id, node_name)
 
         try:
-            container = self.docker.containers.get(container_name)
-            container.stop(timeout=settings.container_stop_timeout)
-            container.reload()
+            container = await asyncio.to_thread(self.docker.containers.get, container_name)
+            await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
+            await asyncio.to_thread(container.reload)
 
             return NodeActionResult(
                 success=True,
@@ -1570,7 +1690,7 @@ username admin privilege 15 role network-admin nopassword
         container_name = self._container_name(lab_id, node_name)
 
         try:
-            container = self.docker.containers.get(container_name)
+            container = await asyncio.to_thread(self.docker.containers.get, container_name)
             if container.status != "running":
                 return None
 
@@ -1603,7 +1723,8 @@ username admin privilege 15 role network-admin nopassword
         prefix = self._lab_prefix(lab_id)
 
         try:
-            containers = self.docker.containers.list(
+            containers = await asyncio.to_thread(
+                self.docker.containers.list,
                 filters={
                     "name": prefix,
                     "label": LABEL_PROVIDER + "=" + self.name,
@@ -1627,7 +1748,8 @@ username admin privilege 15 role network-admin nopassword
 
                 try:
                     # Execute 'show running-config' via FastCli with privilege level 15
-                    result = container.exec_run(
+                    result = await asyncio.to_thread(
+                        container.exec_run,
                         ["FastCli", "-p", "15", "-c", "show running-config"],
                         demux=True,
                     )
@@ -1670,7 +1792,8 @@ username admin privilege 15 role network-admin nopassword
         discovered: dict[str, list[NodeInfo]] = {}
 
         try:
-            containers = self.docker.containers.list(
+            containers = await asyncio.to_thread(
+                self.docker.containers.list,
                 all=True,
                 filters={"label": LABEL_PROVIDER + "=" + self.name},
             )
@@ -1705,7 +1828,8 @@ username admin privilege 15 role network-admin nopassword
         """
         removed = []
         try:
-            containers = self.docker.containers.list(
+            containers = await asyncio.to_thread(
+                self.docker.containers.list,
                 all=True,
                 filters={"label": LABEL_PROVIDER + "=" + self.name},
             )
@@ -1726,7 +1850,7 @@ username admin privilege 15 role network-admin nopassword
 
                 if is_orphan:
                     logger.info(f"Removing orphan container {container.name} (lab: {lab_id})")
-                    container.remove(force=True)
+                    await asyncio.to_thread(container.remove, force=True)
                     removed.append(container.name)
                     await self.local_network.cleanup_lab(lab_id)
 

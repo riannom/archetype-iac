@@ -26,6 +26,21 @@ from agent.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _get_ovs_plugin_active_veths() -> set[str]:
+    """Get active veths from OVS plugin if available.
+
+    Returns empty set if plugin is not initialized.
+    """
+    try:
+        from agent.network.docker_plugin import get_docker_ovs_plugin
+        plugin = get_docker_ovs_plugin()
+        if plugin:
+            return plugin.get_active_host_veths()
+    except Exception:
+        pass
+    return set()
+
+
 # Interface naming patterns used by Archetype
 # veth pairs from local.py: arch{random_hex}
 # veth pairs from ovs.py: vh{suffix}
@@ -259,10 +274,20 @@ class NetworkCleanupManager:
         # Get running container PIDs
         container_pids = await self._get_running_container_pids()
 
+        # Get active veths tracked by OVS plugin - these should never be deleted
+        ovs_active_veths = _get_ovs_plugin_active_veths()
+        if ovs_active_veths:
+            logger.debug(f"OVS plugin tracking {len(ovs_active_veths)} active veths")
+
         # Check each veth for orphan status
         for veth in veths:
             name = veth["name"]
             try:
+                # Skip veths that are tracked by the OVS plugin
+                if name in ovs_active_veths:
+                    logger.debug(f"Skipping veth {name}: tracked by OVS plugin")
+                    continue
+
                 if await self._is_veth_orphaned(veth, container_pids):
                     stats.veths_orphaned += 1
 

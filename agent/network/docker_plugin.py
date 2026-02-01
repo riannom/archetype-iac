@@ -1960,6 +1960,13 @@ class DockerOVSPlugin:
         """Get list of all lab IDs with active bridges."""
         return list(self.lab_bridges.keys())
 
+    def get_active_host_veths(self) -> set[str]:
+        """Get set of all host-side veth names being tracked.
+
+        Used by cleanup manager to avoid deleting active veths.
+        """
+        return {ep.host_veth for ep in self.endpoints.values()}
+
     # =========================================================================
     # HTTP Server
     # =========================================================================

@@ -382,6 +382,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         binds=[
             "{workspace}/configs/{node}/flash:/mnt/flash",
             "{workspace}/configs/{node}/systemd:/etc/systemd/system.conf.d:ro",
+            "/lib/modules:/lib/modules:ro",  # Host kernel modules for modprobe
         ],
         sysctls={
             "net.ipv4.ip_forward": "1",
@@ -1118,6 +1119,10 @@ def get_console_shell(kind: str) -> str:
         Shell command to use for console access
     """
     config = _get_config_by_kind(kind)
+    if not config:
+        # Try alias lookup (e.g., "eos" -> "ceos")
+        canonical_kind = get_kind_for_device(kind)
+        config = _get_config_by_kind(canonical_kind)
     if config:
         return config.console_shell
     return "/bin/sh"  # Safe default
@@ -1133,6 +1138,10 @@ def get_console_method(kind: str) -> str:
         Console method: "docker_exec" or "ssh"
     """
     config = _get_config_by_kind(kind)
+    if not config:
+        # Try alias lookup (e.g., "eos" -> "ceos")
+        canonical_kind = get_kind_for_device(kind)
+        config = _get_config_by_kind(canonical_kind)
     if config:
         return config.console_method
     return "docker_exec"  # Default
@@ -1226,10 +1235,14 @@ def get_container_config(
     Returns:
         ContainerRuntimeConfig for container creation
     """
-    # Look up by device key first, then by kind
+    # Look up by device key first, then by kind, then by alias
     config = VENDOR_CONFIGS.get(device)
     if not config:
         config = _get_config_by_kind(device)
+    if not config:
+        # Try alias lookup (e.g., "eos" -> "ceos")
+        kind = get_kind_for_device(device)
+        config = _get_config_by_kind(kind)
     if not config:
         # Fallback to linux defaults
         config = VENDOR_CONFIGS.get("linux")
