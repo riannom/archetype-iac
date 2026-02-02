@@ -23,6 +23,7 @@ interface ConsoleManagerProps {
   onSplitTab?: (windowId: string, deviceId: string, x: number, y: number) => void;
   onReorderTab?: (windowId: string, fromIndex: number, toIndex: number) => void;
   onToggleMinimize?: (windowId: string) => void;
+  onDockWindow?: (windowId: string) => void;
 }
 
 // Threshold in pixels before a tab drag initiates a split
@@ -43,6 +44,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   onSplitTab,
   onReorderTab,
   onToggleMinimize,
+  onDockWindow,
 }) => {
   const [dragState, setDragState] = useState<{ id: string; startX: number; startY: number } | null>(null);
   const [resizeState, setResizeState] = useState<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
@@ -379,6 +381,16 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                 )}
               </div>
               <div className="flex items-center px-2 gap-1.5 shrink-0 bg-stone-800 ml-auto border-l border-stone-700">
+                {!isMinimized && onDockWindow && (
+                  <button
+                    className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-sage-400 hover:bg-stone-700 rounded transition-all"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => onDockWindow(win.id)}
+                    title="Dock to bottom panel"
+                  >
+                    <i className="fa-solid fa-window-restore text-[9px]"></i>
+                  </button>
+                )}
                 {!isMinimized && (
                   <button
                     className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-stone-300 hover:bg-stone-700 rounded transition-all"
@@ -388,6 +400,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                       const url = `/studio/console/${encodeURIComponent(labId)}/${encodeURIComponent(activeNode.id)}`;
                       window.open(url, `archetype-console-${activeNode.id}`, 'width=960,height=640');
                     }}
+                    title="Open in new window"
                   >
                     <i className="fa-solid fa-up-right-from-square text-[9px]"></i>
                   </button>

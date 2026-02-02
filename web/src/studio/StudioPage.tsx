@@ -6,7 +6,7 @@ import PropertiesPanel from './components/PropertiesPanel';
 import ConsoleManager from './components/ConsoleManager';
 import RuntimeControl, { RuntimeStatus } from './components/RuntimeControl';
 import StatusBar from './components/StatusBar';
-import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
+import TaskLogPanel, { TaskLogEntry, DockedConsole } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
 import AgentAlertBanner from './components/AgentAlertBanner';
@@ -210,6 +210,8 @@ const StudioPage: React.FC = () => {
   const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeStatus>>({});
   const [nodeStates, setNodeStates] = useState<Record<string, NodeStateEntry>>({});
   const [consoleWindows, setConsoleWindows] = useState<ConsoleWindow[]>([]);
+  const [dockedConsoles, setDockedConsoles] = useState<DockedConsole[]>([]);
+  const [activeBottomTabId, setActiveBottomTabId] = useState<string>('log');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
@@ -914,6 +916,8 @@ const StudioPage: React.FC = () => {
     setActiveLab(lab);
     setAnnotations([]);
     setConsoleWindows([]);
+    setDockedConsoles([]);
+    setActiveBottomTabId('log');
     setSelectedId(null);
     setView('designer');
   };
@@ -1071,21 +1075,40 @@ const StudioPage: React.FC = () => {
   }, [activeLab, nodes, pendingNodeOps, studioRequest, addTaskLogEntry, loadNodeStates, loadJobs]);
 
   const handleOpenConsole = (nodeId: string) => {
-    setConsoleWindows((prev) => {
-      const existingWin = prev.find((win) => win.deviceIds.includes(nodeId));
-      if (existingWin) {
-        return prev.map((win) => (win.id === existingWin.id ? { ...win, activeDeviceId: nodeId } : win));
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    const openInPanel = preferences?.canvas_settings?.consoleInBottomPanel ?? false;
+
+    if (openInPanel) {
+      // Check if already docked
+      if (dockedConsoles.some((c) => c.nodeId === nodeId)) {
+        setActiveBottomTabId(nodeId);
+        setIsTaskLogVisible(true);
+        return;
       }
-      const newWin: ConsoleWindow = {
-        id: Math.random().toString(36).slice(2, 9),
-        deviceIds: [nodeId],
-        activeDeviceId: nodeId,
-        x: 100,
-        y: 100,
-        isExpanded: true,
-      };
-      return [...prev, newWin];
-    });
+      // Add to docked consoles
+      setDockedConsoles((prev) => [...prev, { nodeId, nodeName: node.name }]);
+      setActiveBottomTabId(nodeId);
+      setIsTaskLogVisible(true);
+    } else {
+      // Existing floating window logic
+      setConsoleWindows((prev) => {
+        const existingWin = prev.find((win) => win.deviceIds.includes(nodeId));
+        if (existingWin) {
+          return prev.map((win) => (win.id === existingWin.id ? { ...win, activeDeviceId: nodeId } : win));
+        }
+        const newWin: ConsoleWindow = {
+          id: Math.random().toString(36).slice(2, 9),
+          deviceIds: [nodeId],
+          activeDeviceId: nodeId,
+          x: 100,
+          y: 100,
+          isExpanded: true,
+        };
+        return [...prev, newWin];
+      });
+    }
   };
 
   // Merge all tabs from source window into target window
@@ -1162,6 +1185,54 @@ const StudioPage: React.FC = () => {
       )
     );
   }, []);
+
+  // Undock a console from the bottom panel to a floating window
+  const handleUndockConsole = useCallback((nodeId: string, x: number, y: number) => {
+    // Remove from docked
+    setDockedConsoles((prev) => prev.filter((c) => c.nodeId !== nodeId));
+    if (activeBottomTabId === nodeId) {
+      setActiveBottomTabId('log');
+    }
+
+    // Add to floating windows
+    const newWin: ConsoleWindow = {
+      id: Math.random().toString(36).slice(2, 9),
+      deviceIds: [nodeId],
+      activeDeviceId: nodeId,
+      x: Math.max(0, x),
+      y: Math.max(0, y),
+      isExpanded: true,
+    };
+    setConsoleWindows((prev) => [...prev, newWin]);
+  }, [activeBottomTabId]);
+
+  // Dock a floating window to the bottom panel
+  const handleDockWindow = useCallback((windowId: string) => {
+    const win = consoleWindows.find((w) => w.id === windowId);
+    if (!win) return;
+
+    // Add all tabs to docked
+    win.deviceIds.forEach((nodeId) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      if (dockedConsoles.some((c) => c.nodeId === nodeId)) return;
+      setDockedConsoles((prev) => [...prev, { nodeId, nodeName: node.name }]);
+    });
+
+    setActiveBottomTabId(win.activeDeviceId);
+    setIsTaskLogVisible(true);
+
+    // Remove floating window
+    setConsoleWindows((prev) => prev.filter((w) => w.id !== windowId));
+  }, [consoleWindows, nodes, dockedConsoles]);
+
+  // Close a docked console tab
+  const handleCloseDockedConsole = useCallback((nodeId: string) => {
+    setDockedConsoles((prev) => prev.filter((c) => c.nodeId !== nodeId));
+    if (activeBottomTabId === nodeId) {
+      setActiveBottomTabId('log');
+    }
+  }, [activeBottomTabId]);
 
   const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string) => {
     if (nodeId && nodeName) {
@@ -1660,6 +1731,7 @@ const StudioPage: React.FC = () => {
           onSplitTab={handleSplitTab}
           onReorderTab={handleReorderTab}
           onToggleMinimize={handleToggleMinimize}
+          onDockWindow={handleDockWindow}
         />
       </div>
       <StatusBar nodeStates={nodeStates} wsConnected={wsConnected} reconnectAttempts={wsReconnectAttempts} />
@@ -1669,6 +1741,13 @@ const StudioPage: React.FC = () => {
         onToggle={() => setIsTaskLogVisible(!isTaskLogVisible)}
         onClear={clearTaskLog}
         onEntryClick={handleTaskLogEntryClick}
+        consoleTabs={dockedConsoles}
+        activeTabId={activeBottomTabId}
+        onSelectTab={setActiveBottomTabId}
+        onCloseConsoleTab={handleCloseDockedConsole}
+        onUndockConsole={handleUndockConsole}
+        labId={activeLab?.id}
+        nodeStates={nodeStates}
       />
       {showYamlModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md">

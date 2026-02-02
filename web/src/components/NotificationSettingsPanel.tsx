@@ -12,7 +12,7 @@ export function NotificationSettingsPanel({ isOpen, onClose }: NotificationSetti
   if (!isOpen || !preferences) return null;
 
   const { toasts, bell } = preferences.notification_settings;
-  const { errorIndicator, showAgentIndicators } = preferences.canvas_settings;
+  const { errorIndicator, showAgentIndicators, consoleInBottomPanel } = preferences.canvas_settings;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -246,6 +246,19 @@ export function NotificationSettingsPanel({ isOpen, onClose }: NotificationSetti
                 />
                 <span className="text-sm text-stone-700 dark:text-stone-300">
                   Show agent indicators on nodes
+                </span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={consoleInBottomPanel ?? false}
+                  onChange={(e) =>
+                    updateCanvasSettings({ consoleInBottomPanel: e.target.checked })
+                  }
+                  className="w-4 h-4 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                />
+                <span className="text-sm text-stone-700 dark:text-stone-300">
+                  Open console in bottom panel
                 </span>
               </label>
             </div>
