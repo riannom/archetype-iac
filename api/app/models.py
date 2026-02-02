@@ -646,3 +646,58 @@ class Link(Base):
     config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class InfraSettings(Base):
+    """Global infrastructure settings (singleton row).
+
+    This model stores cluster-wide settings that apply to all agents,
+    such as the default overlay MTU for VXLAN tunnels.
+
+    The table always contains exactly one row with id="global".
+    """
+    __tablename__ = "infra_settings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default="global")
+    # Default MTU for VXLAN overlay (accounts for ~50 byte encapsulation overhead)
+    overlay_mtu: Mapped[int] = mapped_column(default=1450)
+    # Whether to enable automatic MTU verification between agents
+    mtu_verification_enabled: Mapped[bool] = mapped_column(default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_by_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+
+
+class AgentLink(Base):
+    """Tracks connectivity between agent pairs for mesh visualization.
+
+    Each record represents a directional connection from one agent to another.
+    For bidirectional testing, there will be two records (A→B and B→A) to
+    capture asymmetric path characteristics.
+
+    Link types:
+    - direct: L2 adjacent (TTL unchanged, typically switched)
+    - routed: L3 routed path (TTL decremented)
+    - unknown: Not yet tested or unable to determine
+    """
+    __tablename__ = "agent_links"
+    __table_args__ = (UniqueConstraint("source_agent_id", "target_agent_id", name="uq_agent_link_pair"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source_agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    target_agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    # Link type: "direct" (L2), "routed" (L3), "unknown"
+    link_type: Mapped[str] = mapped_column(String(20), default="unknown")
+    # Configured MTU from InfraSettings at test time
+    configured_mtu: Mapped[int] = mapped_column(default=1450)
+    # Actually tested/verified MTU (null if untested)
+    tested_mtu: Mapped[int | None] = mapped_column(nullable=True)
+    # When the last MTU test was performed
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Test status: "pending", "success", "failed", "untested"
+    test_status: Mapped[str] = mapped_column(String(20), default="untested")
+    # Error message if test failed
+    test_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Measured latency in milliseconds
+    latency_ms: Mapped[float | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

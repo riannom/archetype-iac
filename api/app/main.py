@@ -27,7 +27,7 @@ from app.logging_config import (
 )
 from app.middleware import CurrentUserMiddleware, DeprecationMiddleware
 from app.routers.v1 import router as v1_router
-from app.routers import admin, agents, auth, callbacks, console, events, images, iso, jobs, labs, permissions, state_ws, system, webhooks
+from app.routers import admin, agents, auth, callbacks, console, events, images, infrastructure, iso, jobs, labs, permissions, state_ws, system, webhooks
 from app.tasks.health import agent_health_monitor
 from app.tasks.job_health import job_health_monitor
 from app.tasks.reconciliation import state_reconciliation_monitor
@@ -217,6 +217,7 @@ app.include_router(iso.router)
 app.include_router(webhooks.router)
 app.include_router(system.router)
 app.include_router(state_ws.router)
+app.include_router(infrastructure.router)
 app.include_router(v1_router, prefix="/api/v1")
 
 
