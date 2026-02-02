@@ -57,6 +57,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
             name: string;
             containers: Array<{
               node_name: string;
+              status: string;
               cpu_percent: number | null;
               memory_percent: number | null;
               memory_mb: number | null;
@@ -67,13 +68,19 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
         const labData = data.by_lab[labId];
         if (labData?.containers) {
           const metricsMap: Record<string, ContainerMetrics> = {};
+          // Only use metrics from running containers that have actual metrics data
+          // This handles duplicates across agents and failed stats collection
           for (const container of labData.containers) {
-            if (container.node_name) {
-              metricsMap[container.node_name] = {
-                cpu_percent: container.cpu_percent,
-                memory_percent: container.memory_percent,
-                memory_mb: container.memory_mb,
-              };
+            if (container.node_name && container.status === 'running') {
+              const hasMetrics = container.cpu_percent !== null || container.memory_percent !== null;
+              // Only update if we have actual metrics (don't overwrite good data with nulls)
+              if (hasMetrics) {
+                metricsMap[container.node_name] = {
+                  cpu_percent: container.cpu_percent,
+                  memory_percent: container.memory_percent,
+                  memory_mb: container.memory_mb,
+                };
+              }
             }
           }
           setContainerMetrics(metricsMap);
@@ -339,7 +346,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                     <td className="px-6 py-4">
                       {status === 'running' ? (
                         (() => {
-                          const metrics = containerMetrics[node.name];
+                          const metrics = containerMetrics[node.container_name || node.name];
                           if (metrics && (metrics.cpu_percent !== null || metrics.memory_percent !== null)) {
                             return (
                               <div className="space-y-1.5">
