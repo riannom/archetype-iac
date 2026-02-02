@@ -338,7 +338,8 @@ class DockerProvider(Provider):
         for node_name, node_config in (nodes_raw or {}).items():
             if not isinstance(node_config, dict):
                 continue
-            kind = node_config.get("kind", "linux")
+            raw_kind = node_config.get("kind") or node_config.get("device") or "linux"
+            kind = get_kind_for_device(raw_kind)
             interface_count = node_config.get("interface_count")
             if is_ceos_kind(kind) and (not interface_count or interface_count <= 0):
                 config = get_config_by_device(kind)
