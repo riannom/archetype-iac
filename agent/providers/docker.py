@@ -1352,8 +1352,9 @@ username admin privilege 15 role network-admin nopassword
                 pid = container.attrs["State"]["Pid"]
 
                 # Get interface's peer index from inside container
+                # Need both -n (net) and -m (mount) namespaces to access /sys/class/net
                 proc = await asyncio.create_subprocess_exec(
-                    "nsenter", "-t", str(pid), "-n",
+                    "nsenter", "-t", str(pid), "-n", "-m",
                     "cat", f"/sys/class/net/{interface_name}/iflink",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
