@@ -53,6 +53,7 @@ export interface CanvasSettings {
   showAgentIndicators: boolean;
   sidebarFilters: SidebarFilterSettings;
   consoleInBottomPanel: boolean;
+  metricsBarExpanded: boolean;
 }
 
 export interface UserPreferences {
@@ -100,6 +101,7 @@ export const DEFAULT_CANVAS_SETTINGS: CanvasSettings = {
   showAgentIndicators: true,
   sidebarFilters: DEFAULT_SIDEBAR_FILTER_SETTINGS,
   consoleInBottomPanel: false,
+  metricsBarExpanded: false,
 };
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {

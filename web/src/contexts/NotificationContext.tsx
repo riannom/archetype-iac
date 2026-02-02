@@ -181,6 +181,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           ...preferences.canvas_settings.sidebarFilters,
           ...settings.sidebarFilters,
         },
+        metricsBarExpanded:
+          settings.metricsBarExpanded ?? preferences.canvas_settings.metricsBarExpanded,
       };
 
       try {
