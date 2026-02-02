@@ -15,7 +15,7 @@ from app.schemas import (
     TopologyAnalysis,
     TopologyGraph,
 )
-from app.image_store import find_image_reference
+from app.image_store import find_image_reference, find_custom_device, get_device_override
 from app.config import settings
 from app.storage import lab_workspace
 from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config, is_ceos_kind
@@ -52,14 +52,22 @@ def _denormalize_interface_name(iface_name: str, device: str | None) -> str:
     if not device or not iface_name:
         return iface_name
 
-    # Get the vendor config for this device
+    # Get port naming from vendor config, custom device, and overrides (in that order).
     kind = get_kind_for_device(device)
     config = get_vendor_config(kind)
-    if not config:
-        return iface_name
 
-    port_naming = config.port_naming
-    port_start_index = config.port_start_index
+    port_naming = config.port_naming if config else "eth"
+    port_start_index = config.port_start_index if config else 0
+
+    custom = find_custom_device(device)
+    if custom:
+        port_naming = custom.get("portNaming", port_naming)
+        port_start_index = custom.get("portStartIndex", port_start_index)
+
+    override = get_device_override(device) or get_device_override(kind)
+    if override:
+        port_naming = override.get("portNaming", port_naming)
+        port_start_index = override.get("portStartIndex", port_start_index)
 
     # If the device uses 'eth' naming, no conversion needed
     if port_naming == "eth":
