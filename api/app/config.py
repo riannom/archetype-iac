@@ -45,7 +45,6 @@ class Settings(BaseSettings):
     agent_deploy_timeout: float = 900.0
     # Destroy timeout increased to 300s (5 min) for graceful shutdown
     agent_destroy_timeout: float = 300.0
-    agent_node_action_timeout: float = 60.0
     agent_status_timeout: float = 30.0
     agent_health_check_timeout: float = 5.0
 
