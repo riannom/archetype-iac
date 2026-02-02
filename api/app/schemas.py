@@ -676,6 +676,7 @@ class CanvasSettings(BaseModel):
     showAgentIndicators: bool = True
     sidebarFilters: SidebarFilterSettings = SidebarFilterSettings()
     consoleInBottomPanel: bool = False
+    metricsBarExpanded: bool = False
 
 
 class UserPreferencesOut(BaseModel):
