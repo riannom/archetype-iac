@@ -456,6 +456,7 @@ async def enforce_lab_states():
 
     except Exception as e:
         logger.error(f"Error in state enforcement: {e}")
+        session.rollback()
     finally:
         session.close()
 

@@ -688,6 +688,10 @@ async def run_agent_job(
             session.commit()
             logger.exception(f"Job {job_id} failed with unexpected error: {e}")
 
+    except Exception as e:
+        # Catch-all for any errors during error handling itself
+        logger.exception(f"Critical error in job {job_id}: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -968,8 +972,9 @@ async def run_multihost_deploy(
                 # Dispatch webhook for failed deploy
                 if lab:
                     await _dispatch_webhook("lab.deploy_failed", lab, job, session)
-        except Exception:
-            pass
+        except Exception as inner_e:
+            logger.exception(f"Critical error handling job {job_id} failure: {inner_e}")
+            session.rollback()
     finally:
         session.close()
 
@@ -1114,8 +1119,9 @@ async def run_multihost_destroy(
                 job.log_path = f"ERROR: Unexpected error: {e}"
                 update_lab_state(session, lab_id, "error", error=str(e))
                 session.commit()
-        except Exception:
-            pass
+        except Exception as inner_e:
+            logger.exception(f"Critical error handling job {job_id} failure: {inner_e}")
+            session.rollback()
     finally:
         session.close()
 
@@ -2342,8 +2348,9 @@ async def run_node_reconcile(
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Unexpected error: {e}"
                 session.commit()
-        except Exception:
-            pass
+        except Exception as inner_e:
+            logger.exception(f"Critical error handling job {job_id} failure: {inner_e}")
+            session.rollback()
     finally:
         session.close()
 

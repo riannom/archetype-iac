@@ -249,6 +249,10 @@ async def cleanup_docker_on_agents() -> dict:
             "errors": errors,
         }
 
+    except Exception as e:
+        logger.error(f"Error in Docker cleanup: {e}")
+        session.rollback()
+        return {"agents_cleaned": 0, "space_reclaimed": 0, "errors": [str(e)]}
     finally:
         session.close()
 

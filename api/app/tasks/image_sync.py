@@ -108,6 +108,8 @@ async def sync_image_to_agent(
             return False, job.error_message if job else "Sync job disappeared"
 
     except Exception as e:
+        if own_session:
+            database.rollback()
         return False, str(e)
     finally:
         if own_session:
@@ -251,6 +253,8 @@ async def reconcile_agent_images(host_id: str, database: Session | None = None):
         print(f"Error reconciling images for host {host_id}: {e}")
         import traceback
         traceback.print_exc()
+        if own_session:
+            database.rollback()
     finally:
         if own_session:
             database.close()
@@ -509,6 +513,11 @@ async def ensure_images_for_deployment(
             update_nodes_for_images(syncing_refs, "failed", "Sync timed out")
             return False, missing, log_entries
 
+    except Exception as e:
+        log_entries.append(f"Error during image sync: {e}")
+        if own_session:
+            database.rollback()
+        return False, image_references, log_entries
     finally:
         if own_session:
             database.close()

@@ -78,6 +78,7 @@ async def check_stuck_jobs():
 
     except Exception as e:
         logger.error(f"Error in job health check: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -388,6 +389,7 @@ async def check_orphaned_queued_jobs():
 
     except Exception as e:
         logger.error(f"Error checking orphaned jobs: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -432,6 +434,7 @@ async def check_jobs_on_offline_agents():
 
     except Exception as e:
         logger.error(f"Error checking jobs on offline agents: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -522,6 +525,7 @@ async def check_stuck_image_sync_jobs():
 
     except Exception as e:
         logger.error(f"Error in ImageSyncJob health check: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -589,6 +593,7 @@ async def check_stuck_locks():
 
     except Exception as e:
         logger.error(f"Error in stuck lock check: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -666,6 +671,7 @@ async def check_stuck_stopping_nodes():
 
     except Exception as e:
         logger.error(f"Error in stuck stopping nodes check: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -743,6 +749,7 @@ async def check_stuck_starting_nodes():
 
     except Exception as e:
         logger.error(f"Error in stuck starting nodes check: {e}")
+        session.rollback()
     finally:
         session.close()
 
