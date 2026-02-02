@@ -433,12 +433,11 @@ def _sync_get_resource_usage() -> dict:
                         system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
                         online_cpus = cpu_stats.get("online_cpus") or len(cpu_usage.get("percpu_usage", [])) or 1
 
-                        if system_delta > 0 and cpu_delta > 0:
-                            # cgroups v1 calculation
+                        if system_delta > 0:
+                            # cgroups v1 calculation (or v2 with system_cpu_usage available)
                             container_cpu_percent = round((cpu_delta / system_delta) * online_cpus * 100, 1)
-                        elif cpu_delta > 0:
+                        elif cpu_delta >= 0:
                             # cgroups v2: system_cpu_usage not available, use time-based estimation
-                            # The precpu_stats timestamp gives us the interval
                             read_time = stats.get("read", "")
                             preread_time = stats.get("preread", "")
                             if read_time and preread_time:
@@ -452,8 +451,6 @@ def _sync_get_resource_usage() -> dict:
                                         container_cpu_percent = round((cpu_delta / time_delta_ns) * 100, 1)
                                 except Exception:
                                     pass
-                        else:
-                            logger.debug(f"CPU stats invalid for {c.name}: cpu_delta={cpu_delta}, system_delta={system_delta}")
 
                         # Calculate memory percentage and usage
                         memory_stats = stats.get("memory_stats", {})
