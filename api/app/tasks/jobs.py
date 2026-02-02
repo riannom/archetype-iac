@@ -25,6 +25,7 @@ from app.db import SessionLocal
 from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
 from app.services.topology import TopologyService, graph_to_deploy_topology
 from app.utils.lab import update_lab_state
+from app.utils.async_tasks import safe_create_task
 
 logger = logging.getLogger(__name__)
 
@@ -1148,7 +1149,7 @@ async def run_node_reconcile(
 
             # Broadcast transitional state change to WebSocket clients
             if ns.actual_state != old_state:
-                asyncio.create_task(
+                safe_create_task(
                     broadcast_node_state_change(
                         lab_id=lab_id,
                         node_id=ns.node_id,
@@ -1157,7 +1158,8 @@ async def run_node_reconcile(
                         actual_state=ns.actual_state,
                         is_ready=ns.is_ready,
                         error_message=ns.error_message,
-                    )
+                    ),
+                    name=f"broadcast:state:{lab_id}:{ns.node_id}"
                 )
         session.commit()
 
@@ -1279,7 +1281,10 @@ async def run_node_reconcile(
                 session.add(other_job)
                 session.commit()
                 session.refresh(other_job)
-                asyncio.create_task(run_node_reconcile(other_job.id, lab_id, other_node_ids, provider=provider))
+                safe_create_task(
+                    run_node_reconcile(other_job.id, lab_id, other_node_ids, provider=provider),
+                    name=f"sync:agent:{other_job.id}"
+                )
 
         # Handle nodes that couldn't be assigned an agent
         # DON'T spawn separate jobs - that can cause infinite loops if agent lookup keeps failing
