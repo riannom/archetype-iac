@@ -20,6 +20,8 @@ from agent.providers.docker import (
     ParsedTopology,
     IF_WAIT_SCRIPT,
 )
+from agent.schemas import DeployNode, DeployTopology
+from agent.vendors import get_config_by_device
 
 
 # --- Fixtures ---
@@ -217,6 +219,34 @@ class TestCeosContainerConfig:
             assert env.get("EOS_PLATFORM") == "ceoslab"
             assert env.get("INTFTYPE") == "eth"
             assert env.get("MGMT_INTF") == "eth0"
+
+    def test_json_topology_defaults_interface_count_for_ceos(self, provider):
+        """Verify JSON topology defaults interface_count for cEOS when missing."""
+        config = get_config_by_device("ceos")
+        assert config and config.max_ports > 0
+
+        topology = DeployTopology(
+            nodes=[
+                DeployNode(
+                    name="eos_1",
+                    display_name="EOS-1",
+                    kind="ceos",
+                    image="ceos:latest",
+                    interface_count=None,
+                ),
+            ],
+            links=[],
+        )
+
+        parsed = provider._topology_from_json(topology)
+        assert parsed.nodes["eos_1"].interface_count == config.max_ports
+
+    def test_yaml_topology_defaults_interface_count_for_ceos(self, provider):
+        """Verify YAML topology defaults interface_count for cEOS when missing."""
+        config = get_config_by_device("ceos")
+        assert config and config.max_ports > 0
+
+        topology_yaml = \"\"\"\n+nodes:\n+  eos_1:\n+    kind: ceos\n+    _display_name: EOS-1\n+    image: ceos:latest\n+links: []\n+\"\"\"\n+        parsed = provider._parse_topology(topology_yaml, \"test-lab\")\n+        assert parsed.nodes[\"eos_1\"].interface_count == config.max_ports
 
 
 # --- Tests for startup-config hostname ---
