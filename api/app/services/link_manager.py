@@ -442,10 +442,10 @@ class LinkManager:
         result = await agent_client.create_link_on_agent(
             agent,
             lab_id=link_state.lab_id,
-            container_a=link_state.source_node,
-            interface_a=link_state.source_interface,
-            container_b=link_state.target_node,
-            interface_b=link_state.target_interface,
+            source_node=link_state.source_node,
+            source_interface=link_state.source_interface,
+            target_node=link_state.target_node,
+            target_interface=link_state.target_interface,
         )
 
         if result.get("success"):

@@ -648,9 +648,10 @@ class OVSNetworkManager:
             if code != 0:
                 raise RuntimeError(f"Failed to create OVS bridge: {stderr}")
 
-            # Set fail mode to secure (drop unknown traffic)
+            # Set fail mode to standalone for normal L2 switching
+            # Secure mode drops all traffic without explicit OpenFlow rules
             await self._ovs_vsctl(
-                "set-fail-mode", self._bridge_name, "secure"
+                "set-fail-mode", self._bridge_name, "standalone"
             )
 
             # Bring bridge up

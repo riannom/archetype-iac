@@ -205,6 +205,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
         retry_count=old_job.retry_count + 1,
     )
     session.add(new_job)
+    session.flush()  # Persist new job so superseded_by_id FK is valid
 
     # Link old job to new job for tracking
     old_job.superseded_by_id = new_job.id
