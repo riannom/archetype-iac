@@ -18,16 +18,89 @@ import logging
 import re
 from datetime import datetime, timezone
 
+import redis
+
 from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, get_redis
 from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
 from app.services.topology import TopologyService, graph_to_deploy_topology
 from app.utils.lab import update_lab_state
 from app.utils.async_tasks import safe_create_task
 
 logger = logging.getLogger(__name__)
+
+
+def acquire_deploy_lock(lab_id: str, node_names: list[str], agent_id: str, timeout: int = 300) -> tuple[bool, list[str]]:
+    """Acquire distributed locks for deploying specific nodes.
+
+    Prevents concurrent jobs from deploying the same nodes to different agents.
+    Each node gets its own lock key to allow parallel deploys of different nodes.
+
+    Args:
+        lab_id: Lab identifier
+        node_names: List of node names to lock
+        agent_id: Agent ID requesting the lock (stored in lock value for debugging)
+        timeout: Lock TTL in seconds (default 5 minutes for deploy operations)
+
+    Returns:
+        Tuple of (success, locked_nodes). If success is False, locked_nodes contains
+        the nodes that couldn't be locked (held by another agent).
+    """
+    r = get_redis()
+    locked = []
+    failed = []
+
+    try:
+        for node_name in node_names:
+            lock_key = f"deploy_lock:{lab_id}:{node_name}"
+            lock_value = f"agent:{agent_id}:time:{datetime.now(timezone.utc).isoformat()}"
+
+            # Try to acquire lock
+            lock_acquired = r.set(lock_key, lock_value, nx=True, ex=timeout)
+            if lock_acquired:
+                locked.append(node_name)
+            else:
+                # Check who holds the lock
+                holder = r.get(lock_key)
+                holder_str = holder.decode() if holder else "unknown"
+                logger.warning(
+                    f"Deploy lock for {node_name} in lab {lab_id} held by {holder_str}, "
+                    f"requested by agent {agent_id}"
+                )
+                failed.append(node_name)
+
+        if failed:
+            # Release any locks we acquired
+            for node_name in locked:
+                try:
+                    r.delete(f"deploy_lock:{lab_id}:{node_name}")
+                except redis.RedisError:
+                    pass
+            return False, failed
+
+        return True, locked
+
+    except redis.RedisError as e:
+        logger.warning(f"Redis error acquiring deploy lock for lab {lab_id}: {e}")
+        # On Redis error, proceed without lock (better than blocking deploy)
+        return True, node_names
+
+
+def release_deploy_lock(lab_id: str, node_names: list[str]) -> None:
+    """Release deploy locks for nodes.
+
+    Args:
+        lab_id: Lab identifier
+        node_names: List of node names to unlock
+    """
+    r = get_redis()
+    for node_name in node_names:
+        try:
+            r.delete(f"deploy_lock:{lab_id}:{node_name}")
+        except redis.RedisError:
+            pass  # Lock will auto-expire via TTL
 
 
 async def _auto_extract_configs_before_destroy(
@@ -1259,12 +1332,22 @@ async def run_node_reconcile(
             else:
                 nodes_without_agent.append(ns)
 
+        # Debug: Log node-to-agent mapping for multi-host debugging
+        logger.debug(f"Job {job_id}: all_node_agents mapping: {all_node_agents}")
+        for agent_id, nodes in nodes_by_agent.items():
+            logger.debug(f"Job {job_id}: Agent {agent_id} will handle nodes: {[ns.node_name for ns in nodes]}")
+
         if nodes_by_agent:
             # Pick the first agent to handle in this job
             agent_ids = list(nodes_by_agent.keys())
             target_agent_id = agent_ids[0]
+            original_node_count = len(node_states)
             node_states = nodes_by_agent[target_agent_id]
             logger.info(f"Processing {len(node_states)} node(s) on agent {target_agent_id}")
+            logger.debug(
+                f"Job {job_id}: Filtered node_states from {original_node_count} to {len(node_states)} nodes. "
+                f"Remaining nodes: {[ns.node_name for ns in node_states]}"
+            )
 
             # Spawn separate jobs for other agents
             for other_agent_id in agent_ids[1:]:
@@ -1628,11 +1711,15 @@ async def run_node_reconcile(
                     # Explicit host - check if it matches this agent
                     if db_node.host_id == agent.id:
                         all_agent_node_names.add(node_key)
+                        logger.debug(f"Job {job_id}: Added {node_key} (explicit host match: {db_node.host_id})")
+                    else:
+                        logger.debug(f"Job {job_id}: Skipped {node_key} (explicit host {db_node.host_id} != agent {agent.id})")
                 else:
                     # Auto-placed node - include if it's one we're deploying
                     # (auto-placed nodes on this agent are the ones we're syncing)
                     if node_key in nodes_to_deploy_names:
                         all_agent_node_names.add(node_key)
+                        logger.debug(f"Job {job_id}: Added {node_key} (auto-placed, in nodes_to_deploy_names)")
                     else:
                         # Check if this node has a placement on this agent
                         placement = (
@@ -1646,6 +1733,7 @@ async def run_node_reconcile(
                         )
                         if placement:
                             all_agent_node_names.add(node_key)
+                            logger.debug(f"Job {job_id}: Added {node_key} (existing placement on this agent)")
 
             # Also include nodes that exist (running or stopped) and should be on this agent
             # For nodes without placement records, assume they're on the lab's default agent
@@ -1671,13 +1759,27 @@ async def run_node_reconcile(
                 if placement:
                     if placement.host_id == agent.id:
                         all_agent_node_names.add(ns.node_name)
+                        logger.debug(f"Job {job_id}: Added existing {ns.node_name} (placement on this agent)")
                 else:
                     # No placement - assume it's on lab's default agent or this agent
                     if lab.agent_id == agent.id or lab.agent_id is None:
                         all_agent_node_names.add(ns.node_name)
+                        logger.debug(
+                            f"Job {job_id}: Added existing {ns.node_name} (no placement, lab default agent match: "
+                            f"lab.agent_id={lab.agent_id}, agent.id={agent.id})"
+                        )
 
             # Filter topology to include all nodes for this agent
             filtered_nodes = [n for n in graph.nodes if (n.container_name or n.name) in all_agent_node_names]
+
+            # Debug: Log the filtering decision for each node
+            for n in graph.nodes:
+                node_key = n.container_name or n.name
+                is_included = node_key in all_agent_node_names
+                logger.debug(
+                    f"Node filtering for {node_key}: included={is_included}, "
+                    f"agent={agent.id}, all_agent_nodes={list(all_agent_node_names)}"
+                )
 
             # Include links where BOTH endpoints are in our filtered nodes
             # Build a set with both container names AND GUI IDs since link endpoints use GUI IDs
@@ -1706,9 +1808,58 @@ async def run_node_reconcile(
                 session.commit()
                 nodes_need_deploy = []
             else:
+                # VALIDATION: Verify all nodes in topology belong to this agent
+                # This prevents race conditions where wrong nodes get deployed
+                misplaced_nodes = []
+                for n in filtered_graph.nodes:
+                    node_key = n.container_name or n.name
+                    db_node = session.query(models.Node).filter(
+                        models.Node.lab_id == lab_id,
+                        models.Node.container_name == node_key,
+                    ).first()
+                    if db_node and db_node.host_id and db_node.host_id != agent.id:
+                        misplaced_nodes.append(f"{node_key} (assigned to {db_node.host_id})")
+
+                if misplaced_nodes:
+                    error_msg = (
+                        f"DEPLOY ABORTED: Nodes assigned to different agent detected in topology: "
+                        f"{', '.join(misplaced_nodes)}. This agent: {agent.id}"
+                    )
+                    logger.error(f"Job {job_id}: {error_msg}")
+                    log_parts.append(error_msg)
+                    for ns in nodes_need_deploy:
+                        ns.actual_state = "error"
+                        ns.error_message = "Deploy validation failed - wrong agent"
+                    session.commit()
+                    job.status = "failed"
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.log_path = "\n".join(log_parts)
+                    session.commit()
+                    return
+
                 # Convert filtered graph to JSON deploy topology
                 topology_json = graph_to_deploy_topology(filtered_graph)
                 log_parts.append(f"Deploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
+
+                # Acquire deploy locks for all nodes we're about to deploy
+                all_topology_nodes = [n.container_name or n.name for n in filtered_graph.nodes]
+                lock_acquired, failed_nodes = acquire_deploy_lock(lab_id, all_topology_nodes, agent.id)
+                if not lock_acquired:
+                    error_msg = (
+                        f"DEPLOY ABORTED: Could not acquire lock for nodes: {', '.join(failed_nodes)}. "
+                        f"Another deploy may be in progress."
+                    )
+                    logger.error(f"Job {job_id}: {error_msg}")
+                    log_parts.append(error_msg)
+                    for ns in nodes_need_deploy:
+                        ns.actual_state = "error"
+                        ns.error_message = "Deploy lock conflict"
+                    session.commit()
+                    job.status = "failed"
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.log_path = "\n".join(log_parts)
+                    session.commit()
+                    return
 
                 try:
                     result = await agent_client.deploy_to_agent(
@@ -1817,6 +1968,9 @@ async def run_node_reconcile(
                         ns.error_message = error_msg
                     session.commit()
                     logger.exception(f"Deploy failed in sync job {job_id}: {e}")
+                finally:
+                    # Always release deploy locks
+                    release_deploy_lock(lab_id, all_topology_nodes)
 
         # Phase 2: Start nodes that are stopped but should be running
         # For containerlab: docker start doesn't recreate network interfaces,
@@ -1934,9 +2088,59 @@ async def run_node_reconcile(
                     session.commit()
                     nodes_need_start = []
                 else:
+                    # VALIDATION: Verify all nodes in topology belong to this agent
+                    misplaced_nodes = []
+                    for n in filtered_graph.nodes:
+                        node_key = n.container_name or n.name
+                        db_node = session.query(models.Node).filter(
+                            models.Node.lab_id == lab_id,
+                            models.Node.container_name == node_key,
+                        ).first()
+                        if db_node and db_node.host_id and db_node.host_id != agent.id:
+                            misplaced_nodes.append(f"{node_key} (assigned to {db_node.host_id})")
+
+                    if misplaced_nodes:
+                        error_msg = (
+                            f"REDEPLOY ABORTED: Nodes assigned to different agent detected: "
+                            f"{', '.join(misplaced_nodes)}. This agent: {agent.id}"
+                        )
+                        logger.error(f"Job {job_id}: {error_msg}")
+                        log_parts.append(error_msg)
+                        for ns in nodes_need_start:
+                            ns.actual_state = "error"
+                            ns.starting_started_at = None
+                            ns.error_message = "Deploy validation failed - wrong agent"
+                        session.commit()
+                        job.status = "failed"
+                        job.completed_at = datetime.now(timezone.utc)
+                        job.log_path = "\n".join(log_parts)
+                        session.commit()
+                        return
+
                     # Convert filtered graph to JSON deploy topology
                     topology_json = graph_to_deploy_topology(filtered_graph)
                     log_parts.append(f"Redeploying {len(filtered_graph.nodes)} node(s) on {agent.name}: {', '.join(deployed_node_names)}")
+
+                    # Acquire deploy locks for all nodes we're about to redeploy
+                    all_topology_nodes = [n.container_name or n.name for n in filtered_graph.nodes]
+                    lock_acquired, failed_nodes = acquire_deploy_lock(lab_id, all_topology_nodes, agent.id)
+                    if not lock_acquired:
+                        error_msg = (
+                            f"REDEPLOY ABORTED: Could not acquire lock for nodes: {', '.join(failed_nodes)}. "
+                            f"Another deploy may be in progress."
+                        )
+                        logger.error(f"Job {job_id}: {error_msg}")
+                        log_parts.append(error_msg)
+                        for ns in nodes_need_start:
+                            ns.actual_state = "error"
+                            ns.starting_started_at = None
+                            ns.error_message = "Deploy lock conflict"
+                        session.commit()
+                        job.status = "failed"
+                        job.completed_at = datetime.now(timezone.utc)
+                        job.log_path = "\n".join(log_parts)
+                        session.commit()
+                        return
 
                     try:
                         result = await agent_client.deploy_to_agent(
@@ -2039,6 +2243,9 @@ async def run_node_reconcile(
                             ns.starting_started_at = None  # Clear starting timestamp
                             ns.error_message = error_msg
                         logger.exception(f"Redeploy failed in sync job {job_id}: {e}")
+                    finally:
+                        # Always release deploy locks
+                        release_deploy_lock(lab_id, all_topology_nodes)
 
                     session.commit()
 
