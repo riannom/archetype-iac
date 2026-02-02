@@ -367,9 +367,17 @@ def import_yaml(
     # Sync NodeState/LinkState records from database
     graph = service.export_to_graph(lab.id)
     _upsert_node_states(database, lab.id, graph)
-    _upsert_link_states(database, lab.id, graph)
+    created, updated, added_names, removed_info = _upsert_link_states(
+        database, lab.id, graph
+    )
 
     database.commit()
+
+    # Trigger live link operations in background if there are changes
+    if added_names or removed_info:
+        from app.tasks.live_links import process_link_changes
+        asyncio.create_task(process_link_changes(lab.id, added_names, removed_info))
+
     return schemas.LabOut.model_validate(lab)
 
 
@@ -410,9 +418,16 @@ def import_graph(
     _upsert_node_states(database, lab.id, payload)
 
     # Create/update LinkState records for all links in the topology
-    _upsert_link_states(database, lab.id, payload)
+    created, updated, added_names, removed_info = _upsert_link_states(
+        database, lab.id, payload
+    )
 
     database.commit()
+
+    # Trigger live link operations in background if there are changes
+    if added_names or removed_info:
+        from app.tasks.live_links import process_link_changes
+        asyncio.create_task(process_link_changes(lab.id, added_names, removed_info))
 
     return schemas.LabOut.model_validate(lab)
 
@@ -1445,15 +1460,17 @@ def _upsert_link_states(
     database: Session,
     lab_id: str,
     graph: schemas.TopologyGraph,
-) -> tuple[int, int]:
+) -> tuple[int, int, list[str], list[dict]]:
     """Create or update LinkState records for all links in a topology graph.
 
     New links are initialized with desired_state='up', actual_state='unknown'.
     Existing links retain their desired_state (user preference persists).
-    Links removed from topology have their LinkState records deleted.
+    Links removed from topology are marked for deletion (caller handles teardown).
 
     Returns:
-        Tuple of (created_count, updated_count)
+        Tuple of (created_count, updated_count, added_link_names, removed_link_info)
+        - added_link_names: List of newly created link names
+        - removed_link_info: List of dicts with info about removed links for teardown
     """
     # Get existing link states for this lab
     existing_states = (
@@ -1474,6 +1491,8 @@ def _upsert_link_states(
     current_link_names: set[str] = set()
     created_count = 0
     updated_count = 0
+    added_link_names: list[str] = []
+    removed_link_info: list[dict] = []
 
     for link in graph.links:
         if len(link.endpoints) != 2:
@@ -1533,14 +1552,31 @@ def _upsert_link_states(
                 actual_state="unknown",
             )
             database.add(new_state)
+            added_link_names.append(link_name)
             created_count += 1
 
-    # Delete link states for links no longer in topology
+    # Collect info about links to remove (for teardown) before deleting
     for existing_name, existing_state in existing_by_name.items():
         if existing_name not in current_link_names:
-            database.delete(existing_state)
+            # Store info needed for teardown before deletion
+            removed_link_info.append({
+                "link_name": existing_state.link_name,
+                "source_node": existing_state.source_node,
+                "source_interface": existing_state.source_interface,
+                "target_node": existing_state.target_node,
+                "target_interface": existing_state.target_interface,
+                "is_cross_host": existing_state.is_cross_host,
+                "actual_state": existing_state.actual_state,
+                "source_host_id": existing_state.source_host_id,
+                "target_host_id": existing_state.target_host_id,
+                "vni": existing_state.vni,
+            })
+            # Don't delete here - let the live_links task handle teardown first
+            # The task will delete after successful teardown
+            # For now, mark as pending deletion but keep the record
+            existing_state.desired_state = "deleted"
 
-    return created_count, updated_count
+    return created_count, updated_count, added_link_names, removed_link_info
 
 
 def _ensure_link_states_exist(
@@ -1555,6 +1591,7 @@ def _ensure_link_states_exist(
     service = TopologyService(database)
     if service.has_nodes(lab_id):
         graph = service.export_to_graph(lab_id)
+        # Ignore the added/removed info - this is just for ensuring records exist
         _upsert_link_states(database, lab_id, graph)
         database.commit()
 

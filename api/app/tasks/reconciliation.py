@@ -458,11 +458,13 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         container_status_map: dict[str, str] = {}
         container_agent_map: dict[str, str] = {}  # node_name -> agent_id
         agents_successfully_queried: set[str] = set()  # Track which agents responded
+        host_to_agent: dict[str, models.Host] = {}  # For live link creation
         for agent_id in agent_ids:
             agent = session.get(models.Host, agent_id)
             if not agent or not agent_client.is_agent_online(agent):
                 logger.debug(f"Agent {agent_id} is offline, skipping in reconciliation")
                 continue
+            host_to_agent[agent_id] = agent
 
             try:
                 result = await agent_client.get_lab_status_from_agent(agent, lab_id)
@@ -787,6 +789,32 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     f"Reconciled link {ls.link_name} in lab {lab_id}: "
                     f"{old_actual} -> {ls.actual_state}"
                 )
+
+        # Auto-connect pending links when both nodes become running
+        # This handles links that were added while nodes were not yet deployed
+        from app.tasks.live_links import create_link_if_ready
+
+        for ls in link_states:
+            # Check if link should be connected but isn't
+            if (
+                ls.desired_state == "up"
+                and ls.actual_state in ("unknown", "pending", "down")
+                and node_actual_states.get(ls.source_node) == "running"
+                and node_actual_states.get(ls.target_node) == "running"
+            ):
+                # Both nodes running, link should be up but isn't - create it
+                logger.info(f"Auto-connecting pending link {ls.link_name}")
+                try:
+                    await create_link_if_ready(session, lab_id, ls, host_to_agent)
+                except Exception as e:
+                    logger.error(f"Failed to auto-connect link {ls.link_name}: {e}")
+                    ls.actual_state = "error"
+                    ls.error_message = str(e)
+
+        # Clean up links marked for deletion (desired_state="deleted")
+        for ls in link_states:
+            if ls.desired_state == "deleted":
+                session.delete(ls)
 
         session.commit()
 
