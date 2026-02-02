@@ -1953,6 +1953,7 @@ async def create_tunnel(request: CreateTunnelRequest) -> CreateTunnelResponse:
                 remote_ip=tunnel.remote_ip,
                 lab_id=tunnel.lab_id,
                 link_id=tunnel.link_id,
+                vlan_tag=tunnel.vlan_tag,
             ),
         )
 

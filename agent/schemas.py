@@ -105,6 +105,11 @@ class DeployNode(BaseModel):
     display_name: str | None = None   # Human-readable name for logs
     kind: str = "linux"               # Device kind (ceos, srl, linux, etc.)
     image: str | None = None          # Docker image (uses vendor default if not specified)
+    # Max interface index needed for this node (e.g., eth3 => 3).
+    # Sourced from UI maxPorts (vendor defaults/overrides) and raised if any
+    # link references a higher interface. Used to pre-provision interfaces
+    # before boot (critical for devices like cEOS).
+    interface_count: int | None = None
     binds: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     ports: list[str] = Field(default_factory=list)
@@ -299,6 +304,7 @@ class TunnelInfo(BaseModel):
     remote_ip: str
     lab_id: str
     link_id: str
+    vlan_tag: int | None = None
 
 
 class CreateTunnelResponse(BaseModel):

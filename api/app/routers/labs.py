@@ -28,6 +28,8 @@ from app.tasks.jobs import run_agent_job, run_multihost_destroy
 from app.topology import analyze_topology
 from app.utils.lab import get_lab_or_404, get_lab_provider
 from app.utils.link import generate_link_name
+from app.topology import _normalize_interface_name
+from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map, teardown_link
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
 
@@ -2375,52 +2377,62 @@ async def hot_connect_link(
             detail=f"Lab must be running for hot-connect (current state: {lab.state})"
         )
 
-    # Get agent for this lab
-    lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
-    if not agent:
+    link_name = generate_link_name(
+        request.source_node, request.source_interface,
+        request.target_node, request.target_interface,
+    )
+    link_state = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.link_name == link_name,
+        )
+        .first()
+    )
+    if not link_state:
+        if f"{request.source_node}:{request.source_interface}" <= f"{request.target_node}:{request.target_interface}":
+            src_n, src_i = request.source_node, request.source_interface
+            tgt_n, tgt_i = request.target_node, request.target_interface
+        else:
+            src_n, src_i = request.target_node, request.target_interface
+            tgt_n, tgt_i = request.source_node, request.source_interface
+        link_state = models.LinkState(
+            lab_id=lab_id,
+            link_name=link_name,
+            source_node=src_n,
+            source_interface=src_i,
+            target_node=tgt_n,
+            target_interface=tgt_i,
+            desired_state="up",
+            actual_state="unknown",
+        )
+        database.add(link_state)
+        database.flush()
+
+    host_to_agent = await _build_host_to_agent_map(database, lab_id)
+    if not host_to_agent:
         raise HTTPException(status_code=503, detail="No healthy agent available")
 
-    # Forward to agent
-    result = await agent_client.create_link_on_agent(
-        agent=agent,
-        lab_id=lab.id,
-        source_node=request.source_node,
-        source_interface=request.source_interface,
-        target_node=request.target_node,
-        target_interface=request.target_interface,
-    )
+    success = await create_link_if_ready(database, lab_id, link_state, host_to_agent)
+    database.commit()
 
-    if result.get("success"):
-        link_data = result.get("link", {})
-
-        # Update LinkState in database
-        link_name = generate_link_name(
-            request.source_node, request.source_interface,
-            request.target_node, request.target_interface,
-        )
-        link_state = (
-            database.query(models.LinkState)
-            .filter(
-                models.LinkState.lab_id == lab_id,
-                models.LinkState.link_name == link_name,
-            )
-            .first()
-        )
-        if link_state:
-            link_state.actual_state = "up"
-        database.commit()
-
+    if success:
         return HotConnectResponse(
             success=True,
-            link_id=link_data.get("link_id"),
-            vlan_tag=link_data.get("vlan_tag"),
+            link_id=link_state.link_name,
+            vlan_tag=link_state.vlan_tag,
         )
-    else:
+
+    if link_state.actual_state == "pending":
         return HotConnectResponse(
             success=False,
-            error=result.get("error", "Unknown error"),
+            error="Link pending - waiting for nodes to be running",
         )
+
+    return HotConnectResponse(
+        success=False,
+        error=link_state.error_message or "Link creation failed",
+    )
 
 
 @router.delete("/labs/{lab_id}/hot-disconnect/{link_id:path}")
@@ -2442,45 +2454,47 @@ async def hot_disconnect_link(
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Get agent for this lab
-    lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
-    if not agent:
+    link_states = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.lab_id == lab_id)
+        .all()
+    )
+    link_state = None
+    for ls in link_states:
+        if link_id == f"{ls.source_node}:{ls.source_interface}-{ls.target_node}:{ls.target_interface}" or \
+           link_id == f"{ls.target_node}:{ls.target_interface}-{ls.source_node}:{ls.source_interface}":
+            link_state = ls
+            break
+
+    if not link_state:
+        return HotConnectResponse(success=False, error=f"Link '{link_id}' not found")
+
+    host_to_agent = await _build_host_to_agent_map(database, lab_id)
+    if not host_to_agent:
         raise HTTPException(status_code=503, detail="No healthy agent available")
 
-    # Forward to agent
-    result = await agent_client.delete_link_on_agent(
-        agent=agent,
-        lab_id=lab.id,
-        link_id=link_id,
-    )
+    link_info = {
+        "link_name": link_state.link_name,
+        "source_node": link_state.source_node,
+        "source_interface": link_state.source_interface,
+        "target_node": link_state.target_node,
+        "target_interface": link_state.target_interface,
+        "is_cross_host": link_state.is_cross_host,
+        "actual_state": link_state.actual_state,
+        "source_host_id": link_state.source_host_id,
+        "target_host_id": link_state.target_host_id,
+        "vni": link_state.vni,
+    }
+    success = await teardown_link(database, lab_id, link_info, host_to_agent)
+    database.commit()
 
-    if result.get("success"):
-        # Update LinkState in database
-        # Parse link_id to find matching LinkState
-        # link_id format: "node1:iface1-node2:iface2"
-        link_states = (
-            database.query(models.LinkState)
-            .filter(models.LinkState.lab_id == lab_id)
-            .all()
-        )
-        for ls in link_states:
-            expected_name = generate_link_name(
-                ls.source_node, ls.source_interface,
-                ls.target_node, ls.target_interface,
-            )
-            if link_id == f"{ls.source_node}:{ls.source_interface}-{ls.target_node}:{ls.target_interface}" or \
-               link_id == f"{ls.target_node}:{ls.target_interface}-{ls.source_node}:{ls.source_interface}":
-                ls.actual_state = "down"
-                break
-        database.commit()
-
+    if success:
         return HotConnectResponse(success=True, link_id=link_id)
-    else:
-        return HotConnectResponse(
-            success=False,
-            error=result.get("error", "Unknown error"),
-        )
+
+    return HotConnectResponse(
+        success=False,
+        error="Failed to disconnect link",
+    )
 
 
 @router.get("/labs/{lab_id}/live-links")

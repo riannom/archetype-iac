@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import or_
 
-from agent.vendors import get_kind_for_device, get_default_image
-from app.image_store import find_image_reference
+from agent.vendors import get_kind_for_device, get_default_image, get_config_by_device
+from app.image_store import find_image_reference, find_custom_device, get_device_override
 from sqlalchemy.orm import Session
 
 from app import models
@@ -104,6 +105,49 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
     Returns:
         Dict with 'nodes' and 'links' lists suitable for DeployTopology schema
     """
+    # Calculate max interface index per node from graph links
+    max_if_index: dict[str, int] = {}
+    for link in graph.links:
+        if len(link.endpoints) != 2:
+            continue
+        for ep in link.endpoints:
+            node_key = ep.node
+            if ep.ifname:
+                iface = _normalize_interface_name(ep.ifname)
+                match = re.search(r"(\d+)$", iface)
+                if match:
+                    max_if_index[node_key] = max(
+                        max_if_index.get(node_key, 0),
+                        int(match.group(1)),
+                    )
+
+    def _effective_max_ports(device_id: str | None, kind: str | None) -> int:
+        base_ports: int | None = None
+
+        if device_id:
+            config = get_config_by_device(device_id)
+            if config:
+                base_ports = config.max_ports
+            else:
+                custom = find_custom_device(device_id)
+                if custom:
+                    base_ports = custom.get("maxPorts")
+
+        if base_ports is None and kind:
+            config = get_config_by_device(kind)
+            if config:
+                base_ports = config.max_ports
+
+        override = None
+        if device_id:
+            override = get_device_override(device_id)
+        if not override and kind and kind != device_id:
+            override = get_device_override(kind)
+        if override and "maxPorts" in override:
+            base_ports = override["maxPorts"]
+
+        return int(base_ports or 0)
+
     nodes = []
     for n in graph.nodes:
         # Skip external network nodes - they're not containers
@@ -123,6 +167,10 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
             ports = n.vars.get("ports", [])
             exec_cmds = n.vars.get("exec", [])
             startup_config = n.vars.get("startup-config")
+            # Optional override for max interface index
+            if_override = n.vars.get("interface_count")
+        else:
+            if_override = None
 
         # Resolve image using canonical 3-step fallback
         kind = get_kind_for_device(n.device) if n.device else "linux"
@@ -134,7 +182,20 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
                 f"Please upload an image or specify one explicitly."
             )
 
-        nodes.append({
+        node_name = n.container_name or n.name
+        interface_count = None
+        if isinstance(if_override, int) and if_override > 0:
+            interface_count = if_override
+        else:
+            # Use UI-configured maxPorts (vendor defaults/overrides), but ensure
+            # we pre-provision enough interfaces for any referenced links.
+            device_ports = _effective_max_ports(n.device, kind)
+            max_index = max_if_index.get(n.id) or max_if_index.get(node_name) or 0
+            interface_count = max(device_ports, max_index)
+            if interface_count == 0:
+                interface_count = None
+
+        node_dict = {
             "name": n.container_name or n.name,
             "display_name": n.name,
             "kind": kind,
@@ -144,7 +205,10 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
             "ports": ports,
             "startup_config": startup_config,
             "exec_cmds": exec_cmds,
-        })
+        }
+        if interface_count:
+            node_dict["interface_count"] = interface_count
+        nodes.append(node_dict)
 
     # Build node ID to container_name mapping for link resolution
     node_id_to_name = {n.id: (n.container_name or n.name) for n in graph.nodes}
@@ -202,6 +266,25 @@ class TopologyService:
             .all()
         )
 
+    def get_interface_count_map(self, lab_id: str) -> dict[str, int]:
+        """Get desired interface count per node (keyed by container_name).
+
+        Strategy:
+        - Start with the device's configured maxPorts (UI overrides or vendor defaults).
+        - Ensure it's at least the highest interface index referenced by any link.
+        This guarantees interfaces exist at boot while still honoring UI config.
+        """
+        nodes = self.get_nodes(lab_id)
+        links = self.get_links(lab_id)
+        by_id = self._build_interface_index_map(nodes, links)
+        result: dict[str, int] = {}
+        for n in nodes:
+            kind = get_kind_for_device(n.device) if n.device else "linux"
+            max_ports = self._get_effective_max_ports(n.device, kind)
+            max_index = by_id.get(n.id, 0)
+            result[n.container_name] = max(max_ports, max_index)
+        return result
+
     def get_node_by_container_name(self, lab_id: str, name: str) -> models.Node | None:
         """Get a node by its container name (YAML key)."""
         return (
@@ -223,6 +306,58 @@ class TopologyService:
             )
             .first()
         )
+
+    def _build_interface_index_map(
+        self,
+        nodes: list[models.Node],
+        links: list[models.Link],
+    ) -> dict[str, int]:
+        """Build map of node_id -> max interface index from all links."""
+        max_by_node: dict[str, int] = {n.id: 0 for n in nodes}
+
+        for link in links:
+            for node_id, iface in (
+                (link.source_node_id, link.source_interface),
+                (link.target_node_id, link.target_interface),
+            ):
+                if node_id not in max_by_node:
+                    continue
+                if not iface:
+                    continue
+                iface_norm = _normalize_interface_name(iface)
+                match = re.search(r"(\d+)$", iface_norm)
+                if match:
+                    max_by_node[node_id] = max(max_by_node[node_id], int(match.group(1)))
+
+        return max_by_node
+
+    def _get_effective_max_ports(self, device_id: str | None, kind: str | None) -> int:
+        """Get effective maxPorts for a device, including overrides."""
+        base_ports: int | None = None
+
+        if device_id:
+            config = get_config_by_device(device_id)
+            if config:
+                base_ports = config.max_ports
+            else:
+                custom = find_custom_device(device_id)
+                if custom:
+                    base_ports = custom.get("maxPorts")
+
+        if base_ports is None and kind:
+            config = get_config_by_device(kind)
+            if config:
+                base_ports = config.max_ports
+
+        override = None
+        if device_id:
+            override = get_device_override(device_id)
+        if not override and kind and kind != device_id:
+            override = get_device_override(kind)
+        if override and "maxPorts" in override:
+            base_ports = override["maxPorts"]
+
+        return int(base_ports or 0)
 
     def get_node_by_any_id(self, lab_id: str, identifier: str) -> models.Node | None:
         """Get a node by container_name or gui_id."""
@@ -982,12 +1117,109 @@ class TopologyService:
         # Build node ID to container_name mapping for link endpoint resolution
         node_id_to_name = {n.id: n.container_name for n in host_nodes}
 
+        interface_count_map = self.get_interface_count_map(lab_id)
+
         return {
-            "nodes": [self._node_to_deploy_dict(n) for n in host_nodes],
+            "nodes": [
+                self._node_to_deploy_dict(n, interface_count_map.get(n.container_name))
+                for n in host_nodes
+            ],
             "links": [self._link_to_deploy_dict(l, node_id_to_name) for l in host_links],
         }
 
-    def _node_to_deploy_dict(self, node: models.Node) -> dict:
+    def normalize_links_for_lab(self, lab_id: str) -> int:
+        """Normalize link interface names and link names for a lab.
+
+        This backfills existing Link/LinkState records that still use
+        vendor-facing interface names (e.g., Ethernet1) to canonical
+        deploy-ready names (e.g., eth1).
+
+        Returns:
+            Number of Link/LinkState records updated.
+        """
+        links = self.get_links(lab_id)
+        if not links:
+            return 0
+
+        nodes = self.get_nodes(lab_id)
+        node_by_id = {n.id: n for n in nodes}
+
+        updates = 0
+
+        for link in links:
+            source_node = node_by_id.get(link.source_node_id)
+            target_node = node_by_id.get(link.target_node_id)
+            if not source_node or not target_node:
+                continue
+
+            old_link_name = link.link_name
+            old_source_iface = link.source_interface or ""
+            old_target_iface = link.target_interface or ""
+            src_iface_norm = _normalize_interface_name(old_source_iface) if old_source_iface else ""
+            tgt_iface_norm = _normalize_interface_name(old_target_iface) if old_target_iface else ""
+
+            source_name = source_node.container_name
+            target_name = target_node.container_name
+
+            new_link_name = generate_link_name(
+                source_name, src_iface_norm, target_name, tgt_iface_norm
+            )
+
+            expected_start = f"{source_name}:{src_iface_norm}"
+            swapped = not new_link_name.startswith(expected_start)
+
+            if swapped:
+                link.source_node_id, link.target_node_id = link.target_node_id, link.source_node_id
+                link.source_interface, link.target_interface = tgt_iface_norm, src_iface_norm
+            else:
+                link.source_interface = src_iface_norm
+                link.target_interface = tgt_iface_norm
+
+            link.link_name = new_link_name
+
+            if link.link_name != old_link_name or swapped or \
+               link.source_interface != old_source_iface or \
+               link.target_interface != old_target_iface:
+                updates += 1
+
+            # Update LinkState to match normalized link
+            link_state = (
+                self.db.query(models.LinkState)
+                .filter(
+                    or_(
+                        models.LinkState.link_definition_id == link.id,
+                        models.LinkState.link_name == old_link_name,
+                        models.LinkState.link_name == new_link_name,
+                    ),
+                    models.LinkState.lab_id == lab_id,
+                )
+                .first()
+            )
+            if link_state:
+                link_state.link_name = link.link_name
+
+                src_node = node_by_id.get(link.source_node_id)
+                tgt_node = node_by_id.get(link.target_node_id)
+                if src_node and tgt_node:
+                    link_state.source_node = src_node.container_name
+                    link_state.target_node = tgt_node.container_name
+                link_state.source_interface = link.source_interface
+                link_state.target_interface = link.target_interface
+
+                if swapped and link_state.source_host_id and link_state.target_host_id:
+                    link_state.source_host_id, link_state.target_host_id = (
+                        link_state.target_host_id,
+                        link_state.source_host_id,
+                    )
+
+                updates += 1
+
+        if updates > 0:
+            self.db.commit()
+
+        return updates
+
+    def _node_to_deploy_dict(self, node: models.Node, interface_count: int | None = None) -> dict:
         """Convert a Node model to deploy dict format.
 
         Args:
@@ -1021,7 +1253,7 @@ class TopologyService:
                 f"Please upload an image or specify one explicitly."
             )
 
-        return {
+        node_dict = {
             "name": node.container_name,
             "display_name": node.display_name,
             "kind": kind,
@@ -1032,6 +1264,9 @@ class TopologyService:
             "startup_config": startup_config,
             "exec_cmds": exec_cmds,
         }
+        if interface_count and interface_count > 0:
+            node_dict["interface_count"] = interface_count
+        return node_dict
 
     def _link_to_deploy_dict(
         self,

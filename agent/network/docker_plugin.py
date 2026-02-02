@@ -1864,15 +1864,27 @@ class DockerOVSPlugin:
                 logger.warning(f"No network found for {container_name}:{interface_name}")
                 return None
 
-            # Look through endpoints for one that matches by network interface
-            for ep in self.endpoints.values():
-                net = self.networks.get(ep.network_id)
-                if net and net.interface_name == interface_name:
-                    # Verify this endpoint belongs to this container
-                    # by checking if container is connected to this network
-                    if target_network.endswith(f"-{net.interface_name}"):
+            target_info = networks.get(target_network, {})
+            target_endpoint_id = target_info.get("EndpointID")
+            target_network_id = target_info.get("NetworkID")
+
+            # Best match: EndpointID from Docker
+            if target_endpoint_id and target_endpoint_id in self.endpoints:
+                ep = self.endpoints[target_endpoint_id]
+                ep.container_name = container_name
+                logger.info(
+                    f"Matched endpoint via EndpointID: {container_name}:{interface_name} -> {ep.host_veth}"
+                )
+                return ep
+
+            # Next best: match by Docker NetworkID + interface name
+            if target_network_id:
+                for ep in self.endpoints.values():
+                    if ep.network_id == target_network_id and ep.interface_name == interface_name:
                         ep.container_name = container_name
-                        logger.info(f"Matched endpoint via network: {container_name}:{interface_name} -> {ep.host_veth}")
+                        logger.info(
+                            f"Matched endpoint via NetworkID: {container_name}:{interface_name} -> {ep.host_veth}"
+                        )
                         return ep
 
             # Fallback: match by interface name for untracked endpoints
@@ -2195,7 +2207,11 @@ class DockerOVSPlugin:
             for ep in self.endpoints.values():
                 if ep.container_name == container and ep.interface_name == interface:
                     return ep.vlan_tag
-            return None
+
+        ep = await self._discover_endpoint(lab_id, container, interface)
+        if ep:
+            return ep.vlan_tag
+        return None
 
     def get_container_interface_mapping(
         self,
@@ -2268,6 +2284,29 @@ class DockerOVSPlugin:
                 endpoint.container_name = container_name
                 # Persist state after container name association
                 await self._mark_dirty_and_save()
+
+    async def get_endpoint_host_veth(
+        self,
+        lab_id: str,
+        container_name: str,
+        interface_name: str,
+    ) -> str | None:
+        """Get host veth name for a container interface.
+
+        Falls back to endpoint discovery if tracking state is missing.
+        """
+        async with self._lock:
+            for ep in self.endpoints.values():
+                network = self.networks.get(ep.network_id)
+                if not network or network.lab_id != lab_id:
+                    continue
+                if ep.container_name == container_name and ep.interface_name == interface_name:
+                    return ep.host_veth
+
+        ep = await self._discover_endpoint(lab_id, container_name, interface_name)
+        if ep:
+            return ep.host_veth
+        return None
 
     def get_lab_status(self, lab_id: str) -> dict[str, Any] | None:
         """Get status of a lab's networks and endpoints."""

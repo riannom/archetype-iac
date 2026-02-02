@@ -100,6 +100,47 @@ int_calc() {
     return 0
 }
 
+normalize_eth_names() {
+    if [ "$REQUIRED_INTFS_NUM" -le 0 ]; then
+        return 0
+    fi
+
+    missing=0
+    i=1
+    while [ "$i" -le "$REQUIRED_INTFS_NUM" ]; do
+        if [ ! -e "/sys/class/net/eth${i}" ]; then
+            missing=1
+            break
+        fi
+        i=$((i + 1))
+    done
+
+    if [ "$missing" -eq 0 ]; then
+        return 0
+    fi
+
+    echo "if-wait: Normalizing eth interface names before init"
+
+    tmpfile="/tmp/if-wait-eths"
+    ip -o link show | awk -F': ' '/: eth[0-9]+/ {name=$2; sub(/@.*/,"",name); print $1, name}' | sort -n > "$tmpfile"
+
+    # Rename all eth* to unique temp names to avoid collisions
+    while read -r idx name; do
+        ip link set "$name" down 2>/dev/null || true
+        ip link set "$name" name "tmp_ceos_${idx}" 2>/dev/null || true
+    done < "$tmpfile"
+
+    # Rename temp interfaces to eth1..ethN in ifindex order
+    i=1
+    while read -r idx _; do
+        if [ "$i" -le "$REQUIRED_INTFS_NUM" ]; then
+            ip link set "tmp_ceos_${idx}" name "eth${i}" 2>/dev/null || true
+            ip link set "eth${i}" up 2>/dev/null || true
+            i=$((i + 1))
+        fi
+    done < "$tmpfile"
+}
+
 # Only wait for interfaces if CLAB_INTFS is set
 if [ "$REQUIRED_INTFS_NUM" -gt 0 ]; then
     echo "if-wait: Waiting for $REQUIRED_INTFS_NUM interfaces (timeout: ${TIMEOUT}s)"
@@ -126,6 +167,8 @@ if [ "$REQUIRED_INTFS_NUM" -gt 0 ]; then
     if [ "$WAIT_TIME" -ge "$TIMEOUT" ]; then
         echo "if-wait: Timeout reached, proceeding with $AVAIL_INTFS_NUM interfaces"
     fi
+
+    normalize_eth_names
 fi
 
 echo "if-wait: Starting init"
@@ -156,6 +199,7 @@ class TopologyNode:
     display_name: str | None = None  # Human-readable name for logs
     image: str | None = None
     host: str | None = None
+    interface_count: int | None = None  # UI maxPorts (or higher if links demand it)
     binds: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     ports: list[str] = field(default_factory=list)
@@ -441,7 +485,9 @@ class DockerProvider(Provider):
 
         # Entry command - ensure entrypoint is a list for Docker SDK
         # For cEOS, we wrap the init process with if-wait.sh to wait for interfaces
-        # before starting init - this prevents the platform detection race condition
+        # before starting init - this prevents the platform detection race condition.
+        # interface_count comes from the controller's UI-configured port count,
+        # ensuring the device sees all ports at boot (not just linked ones).
         if is_ceos_kind(node.kind) and interface_count > 0:
             # Set CLAB_INTFS so the if-wait.sh script knows how many interfaces to wait for
             config["environment"]["CLAB_INTFS"] = str(interface_count)
@@ -564,10 +610,15 @@ username admin privilege 15 role network-admin nopassword
                 )
 
     def _calculate_required_interfaces(self, topology: ParsedTopology) -> int:
-        """Calculate the maximum interface index needed based on topology links.
+        """Calculate the maximum interface index needed for pre-provisioning.
 
-        Examines all links to find the highest interface number used,
-        then adds a small buffer for flexibility.
+        Strategy:
+        - The controller sends per-node interface_count based on the UI's
+          configured maxPorts (vendor defaults or overrides), ensuring interfaces
+          exist before boot for devices like cEOS.
+        - We size the lab's OVS networks to the maximum interface_count across
+          all nodes, and also consider any explicitly referenced link interfaces.
+        - Add a small buffer for flexibility when creating new links.
 
         Args:
             topology: Parsed topology with nodes and links
@@ -576,6 +627,11 @@ username admin privilege 15 role network-admin nopassword
             Number of interfaces to create (max index found + buffer)
         """
         max_index = 0
+
+        # Respect explicit interface counts (e.g., cross-host links not in topology.links)
+        for node in topology.nodes.values():
+            if node.interface_count and node.interface_count > max_index:
+                max_index = node.interface_count
 
         for link in topology.links:
             for endpoint in link.endpoints:
@@ -601,9 +657,13 @@ username admin privilege 15 role network-admin nopassword
             topology: Parsed topology with links
 
         Returns:
-            Number of interfaces this node has in the topology
+            Max interface index required for this node
         """
-        interfaces = set()
+        node = topology.nodes.get(node_name)
+        if node and node.interface_count:
+            return node.interface_count
+
+        max_index = 0
 
         for link in topology.links:
             for endpoint in link.endpoints:
@@ -613,9 +673,9 @@ username admin privilege 15 role network-admin nopassword
                         # Extract interface number
                         match = re.search(r"(\d+)$", interface)
                         if match:
-                            interfaces.add(int(match.group(1)))
+                            max_index = max(max_index, int(match.group(1)))
 
-        return len(interfaces)
+        return max_index
 
     async def _create_lab_networks(
         self,
@@ -1646,6 +1706,7 @@ username admin privilege 15 role network-admin nopassword
                 display_name=n.display_name,
                 image=n.image,
                 host=None,  # Not needed for execution; host routing done by controller
+                interface_count=n.interface_count,
                 binds=n.binds,
                 env=n.env,
                 ports=n.ports,
