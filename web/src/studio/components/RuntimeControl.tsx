@@ -79,21 +79,18 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
 
     setPendingOps(prev => new Set(prev).add('bulk'));
     try {
-      // Set all nodes' desired state
-      await studioRequest(`/labs/${labId}/nodes/desired-state`, {
-        method: 'PUT',
-        body: JSON.stringify({ state: action === 'running' ? 'running' : 'stopped' }),
-      });
-
       // Optimistically update UI (without triggering API calls)
       nodes.forEach(node => {
         onSetRuntimeStatus(node.id, action === 'running' ? 'booting' : 'stopping');
       });
 
-      // Trigger sync for all nodes
-      await studioRequest(`/labs/${labId}/sync`, { method: 'POST' });
+      // Set all nodes' desired state - this now auto-triggers sync
+      await studioRequest(`/labs/${labId}/nodes/desired-state`, {
+        method: 'PUT',
+        body: JSON.stringify({ state: action === 'running' ? 'running' : 'stopped' }),
+      });
 
-      // Refresh states after a short delay
+      // Refresh states after a short delay (WebSocket will also push updates)
       setTimeout(() => onRefreshStates(), 1000);
     } catch (error) {
       console.error('Bulk action failed:', error);

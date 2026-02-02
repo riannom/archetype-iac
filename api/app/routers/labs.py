@@ -111,13 +111,17 @@ def _upsert_node_states(
     database: Session,
     lab_id: str,
     graph: schemas.TopologyGraph,
-) -> None:
+) -> tuple[list[str], list[dict]]:
     """Create or update NodeState records for all nodes in a topology graph.
 
     New nodes are initialized with desired_state='stopped', actual_state='undeployed'.
     IMPORTANT: For existing nodes, node_name is NOT updated to preserve container identity.
     This allows display names to change in the UI without breaking container operations.
     Nodes removed from topology have their NodeState records deleted.
+
+    Returns:
+        Tuple of (added_node_ids, removed_node_info) for live node operations.
+        removed_node_info is a list of dicts with node details for teardown.
     """
     # Get current node IDs from graph
     current_node_ids = {node.id for node in graph.nodes}
@@ -129,6 +133,9 @@ def _upsert_node_states(
         .all()
     )
     existing_by_node_id = {ns.node_id: ns for ns in existing_states}
+
+    added_node_ids: list[str] = []
+    removed_node_info: list[dict] = []
 
     # Update or create node states
     for node in graph.nodes:
@@ -154,11 +161,29 @@ def _upsert_node_states(
                 actual_state="undeployed",
             )
             database.add(new_state)
+            added_node_ids.append(node.id)
 
-    # Delete node states for nodes no longer in topology
+    # Collect info about nodes being removed (for teardown)
     for existing_node_id, existing_state in existing_by_node_id.items():
         if existing_node_id not in current_node_ids:
+            # Get placement info for teardown
+            placement = (
+                database.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name == existing_state.node_name,
+                )
+                .first()
+            )
+            removed_node_info.append({
+                "node_id": existing_state.node_id,
+                "node_name": existing_state.node_name,
+                "actual_state": existing_state.actual_state,
+                "host_id": placement.host_id if placement else None,
+            })
             database.delete(existing_state)
+
+    return added_node_ids, removed_node_info
 
 
 def _ensure_node_states_exist(
@@ -366,17 +391,22 @@ def import_yaml(
 
     # Sync NodeState/LinkState records from database
     graph = service.export_to_graph(lab.id)
-    _upsert_node_states(database, lab.id, graph)
-    created, updated, added_names, removed_info = _upsert_link_states(
+    added_node_ids, removed_node_info = _upsert_node_states(database, lab.id, graph)
+    created, updated, added_link_names, removed_link_info = _upsert_link_states(
         database, lab.id, graph
     )
 
     database.commit()
 
     # Trigger live link operations in background if there are changes
-    if added_names or removed_info:
+    if added_link_names or removed_link_info:
         from app.tasks.live_links import process_link_changes
-        asyncio.create_task(process_link_changes(lab.id, added_names, removed_info))
+        asyncio.create_task(process_link_changes(lab.id, added_link_names, removed_link_info))
+
+    # Trigger live node operations in background if there are changes
+    if added_node_ids or removed_node_info:
+        from app.tasks.live_nodes import process_node_changes
+        asyncio.create_task(process_node_changes(lab.id, added_node_ids, removed_node_info))
 
     return schemas.LabOut.model_validate(lab)
 
@@ -415,19 +445,24 @@ def import_graph(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Create/update NodeState records for all nodes in the topology
-    _upsert_node_states(database, lab.id, payload)
+    added_node_ids, removed_node_info = _upsert_node_states(database, lab.id, payload)
 
     # Create/update LinkState records for all links in the topology
-    created, updated, added_names, removed_info = _upsert_link_states(
+    created, updated, added_link_names, removed_link_info = _upsert_link_states(
         database, lab.id, payload
     )
 
     database.commit()
 
     # Trigger live link operations in background if there are changes
-    if added_names or removed_info:
+    if added_link_names or removed_link_info:
         from app.tasks.live_links import process_link_changes
-        asyncio.create_task(process_link_changes(lab.id, added_names, removed_info))
+        asyncio.create_task(process_link_changes(lab.id, added_link_names, removed_link_info))
+
+    # Trigger live node operations in background if there are changes
+    if added_node_ids or removed_node_info:
+        from app.tasks.live_nodes import process_node_changes
+        asyncio.create_task(process_node_changes(lab.id, added_node_ids, removed_node_info))
 
     return schemas.LabOut.model_validate(lab)
 
@@ -632,7 +667,7 @@ def get_node_state(
 
 
 @router.put("/labs/{lab_id}/nodes/{node_id}/desired-state")
-def set_node_desired_state(
+async def set_node_desired_state(
     lab_id: str,
     node_id: str,
     payload: schemas.NodeStateUpdate,
@@ -641,8 +676,12 @@ def set_node_desired_state(
 ) -> schemas.NodeStateOut:
     """Set the desired state for a node (running or stopped).
 
-    This only updates the desired state - use /sync to actually apply the change.
+    Auto-triggers sync to immediately apply the change. This eliminates
+    the need for a separate "Sync" button in the UI.
     """
+    from app.tasks.jobs import run_node_sync
+    from app.utils.lab import get_lab_provider
+
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
     state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state=payload.state)
@@ -661,17 +700,45 @@ def set_node_desired_state(
             detail="Cannot stop: node is currently starting"
         )
 
+    # Check if state actually changed
+    needs_sync = state.desired_state != payload.state
+
     # Update desired state (may differ from initial if record already existed)
-    if state.desired_state != payload.state:
+    if needs_sync:
         state.desired_state = payload.state
         database.commit()
         database.refresh(state)
+
+        # Auto-sync: immediately trigger reconciliation for this node
+        # Check if there's already a conflicting job
+        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        if not has_conflict:
+            # Check if node is out of sync and needs action
+            is_out_of_sync = (
+                (payload.state == "running" and state.actual_state not in ("running", "pending", "starting"))
+                or (payload.state == "stopped" and state.actual_state not in ("stopped", "undeployed", "stopping"))
+            )
+
+            if is_out_of_sync:
+                provider = get_lab_provider(lab)
+                job = models.Job(
+                    lab_id=lab.id,
+                    user_id=current_user.id,
+                    action=f"sync:node:{node_id}",
+                    status="queued",
+                )
+                database.add(job)
+                database.commit()
+                database.refresh(job)
+
+                # Start background sync task
+                asyncio.create_task(run_node_sync(job.id, lab.id, [node_id], provider=provider))
 
     return _enrich_node_state(state)
 
 
 @router.put("/labs/{lab_id}/nodes/desired-state")
-def set_all_nodes_desired_state(
+async def set_all_nodes_desired_state(
     lab_id: str,
     payload: schemas.NodeStateUpdate,
     database: Session = Depends(db.get_db),
@@ -680,7 +747,11 @@ def set_all_nodes_desired_state(
     """Set the desired state for all nodes in a lab.
 
     Useful for "Start All" or "Stop All" operations.
+    Auto-triggers sync to immediately apply the changes.
     """
+    from app.tasks.jobs import run_node_sync
+    from app.utils.lab import get_lab_provider
+
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
 
@@ -721,9 +792,41 @@ def set_all_nodes_desired_state(
         .filter(models.NodeState.lab_id == lab_id)
         .all()
     )
+
+    # Track which nodes need syncing
+    nodes_needing_sync: list[str] = []
+
     for state in states:
+        old_desired = state.desired_state
         state.desired_state = payload.state
+
+        # Check if this node needs sync after update
+        is_out_of_sync = (
+            (payload.state == "running" and state.actual_state not in ("running", "pending", "starting"))
+            or (payload.state == "stopped" and state.actual_state not in ("stopped", "undeployed", "stopping"))
+        )
+        if is_out_of_sync:
+            nodes_needing_sync.append(state.node_id)
+
     database.commit()
+
+    # Auto-sync: immediately trigger reconciliation for all out-of-sync nodes
+    if nodes_needing_sync:
+        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        if not has_conflict:
+            provider = get_lab_provider(lab)
+            job = models.Job(
+                lab_id=lab.id,
+                user_id=current_user.id,
+                action=f"sync:lab:{','.join(nodes_needing_sync)}",
+                status="queued",
+            )
+            database.add(job)
+            database.commit()
+            database.refresh(job)
+
+            # Start background sync task
+            asyncio.create_task(run_node_sync(job.id, lab.id, nodes_needing_sync, provider=provider))
 
     # Refresh and return all states
     states = (

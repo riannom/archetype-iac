@@ -740,6 +740,42 @@ async def destroy_lab_on_agent(
         return {"status": "failed", "error": str(e)}
 
 
+async def destroy_container_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    container_name: str,
+) -> dict:
+    """Destroy a single container on a specific agent.
+
+    This is used for live node removal when a user deletes a node from
+    the canvas. It only removes the specified container, not the whole lab.
+
+    Args:
+        agent: The agent hosting the container
+        lab_id: Lab identifier
+        container_name: Name of the container to destroy
+
+    Returns:
+        Dict with 'success' bool and 'error' message if failed
+    """
+    url = f"{get_agent_url(agent)}/containers/{lab_id}/{container_name}"
+    logger.info(f"Destroying container {container_name} for lab {lab_id} on agent {agent.id}")
+
+    try:
+        client = get_http_client()
+        response = await client.delete(
+            url,
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info(f"Container {container_name} destroyed on agent {agent.id}")
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"Failed to destroy container {container_name} on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # --- Lock Management Functions ---
 
 async def get_agent_lock_status(agent: models.Host) -> dict:

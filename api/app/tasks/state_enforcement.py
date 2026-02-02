@@ -157,6 +157,9 @@ async def enforce_node_state(
     # Determine what action is needed
     if desired == "running" and actual in ("stopped", "undeployed", "exited"):
         action = "start"
+    elif desired == "running" and actual == "pending" and node_state.error_message == "Waiting for agent":
+        # Node was queued for deploy but agent wasn't available - retry now
+        action = "start"
     elif desired == "stopped" and actual == "running":
         action = "stop"
     else:
