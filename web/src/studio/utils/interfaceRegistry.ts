@@ -44,6 +44,21 @@ const FALLBACK_PATTERNS: Record<string, InterfacePattern> = {
 };
 
 /**
+ * Common device ID aliases that map to canonical IDs.
+ * This handles cases where devices are stored with alias names
+ * (e.g., from YAML imports using "eos" instead of "ceos").
+ */
+const DEVICE_ALIASES: Record<string, string> = {
+  // Arista EOS aliases
+  eos: 'ceos',
+  arista_eos: 'ceos',
+  arista_ceos: 'ceos',
+  // Nokia SR Linux aliases
+  srl: 'nokia_srlinux',
+  srlinux: 'nokia_srlinux',
+};
+
+/**
  * Runtime pattern registry populated from device models.
  * This is updated when device models are loaded from the API.
  */
@@ -106,13 +121,27 @@ export function initializePatterns(models: DeviceModel[]): void {
 }
 
 /**
+ * Resolve a device ID to its canonical form using aliases.
+ */
+function resolveAlias(modelId: string): string {
+  return DEVICE_ALIASES[modelId] || modelId;
+}
+
+/**
  * Get the pattern for a device model.
  * First checks runtime patterns (from API), then falls back to defaults.
+ * Also resolves common device aliases (e.g., "eos" -> "ceos").
  */
 export function getPattern(modelId: string): InterfacePattern {
   // Check runtime patterns first (populated from /vendors API)
   if (_runtimePatterns[modelId]) {
     return _runtimePatterns[modelId];
+  }
+
+  // Try resolving alias and check again
+  const canonicalId = resolveAlias(modelId);
+  if (canonicalId !== modelId && _runtimePatterns[canonicalId]) {
+    return _runtimePatterns[canonicalId];
   }
 
   // Check fallback patterns
