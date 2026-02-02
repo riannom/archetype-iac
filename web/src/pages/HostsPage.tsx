@@ -362,6 +362,15 @@ const HostsPage: React.FC = () => {
             </button>
 
             <button
+              onClick={() => navigate('/infrastructure')}
+              className="flex items-center gap-2 px-3 py-2 bg-sage-100 dark:bg-sage-900/30 hover:bg-sage-200 dark:hover:bg-sage-900/50 text-sage-700 dark:text-sage-400 border border-sage-300 dark:border-sage-700 rounded-lg transition-all"
+              title="Infrastructure Settings"
+            >
+              <i className="fa-solid fa-network-wired text-xs"></i>
+              <span className="text-[10px] font-bold uppercase">Infrastructure</span>
+            </button>
+
+            <button
               onClick={() => setShowThemeSelector(true)}
               className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
               title="Theme Settings"

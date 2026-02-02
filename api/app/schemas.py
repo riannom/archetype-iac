@@ -749,3 +749,98 @@ class LabLogsResponse(BaseModel):
     total_count: int
     error_count: int
     has_more: bool = False
+
+
+# =============================================================================
+# Infrastructure Settings Schemas
+# =============================================================================
+
+
+class InfraSettingsOut(BaseModel):
+    """Output schema for infrastructure settings."""
+
+    overlay_mtu: int = 1450
+    mtu_verification_enabled: bool = True
+    updated_at: datetime | None = None
+    updated_by_id: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class InfraSettingsUpdate(BaseModel):
+    """Input schema for updating infrastructure settings."""
+
+    overlay_mtu: int | None = Field(None, ge=68, le=9000, description="Overlay MTU (68-9000)")
+    mtu_verification_enabled: bool | None = None
+
+
+# =============================================================================
+# Agent Link / Mesh Schemas
+# =============================================================================
+
+
+class AgentLinkOut(BaseModel):
+    """Output schema for an agent-to-agent link."""
+
+    id: str
+    source_agent_id: str
+    source_agent_name: str | None = None
+    target_agent_id: str
+    target_agent_name: str | None = None
+    link_type: str  # "direct", "routed", "unknown"
+    configured_mtu: int
+    tested_mtu: int | None = None
+    last_test_at: datetime | None = None
+    test_status: str  # "pending", "success", "failed", "untested"
+    test_error: str | None = None
+    latency_ms: float | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class AgentMeshNode(BaseModel):
+    """Agent node in mesh visualization."""
+
+    id: str
+    name: str
+    address: str
+    status: str  # "online", "offline", "degraded"
+
+
+class AgentMeshResponse(BaseModel):
+    """Response for agent mesh visualization."""
+
+    agents: list[AgentMeshNode]
+    links: list[AgentLinkOut]
+    settings: InfraSettingsOut
+
+
+class MtuTestRequest(BaseModel):
+    """Request to test MTU between two agents."""
+
+    source_agent_id: str
+    target_agent_id: str
+
+
+class MtuTestResponse(BaseModel):
+    """Response from MTU test."""
+
+    success: bool
+    source_agent_id: str
+    target_agent_id: str
+    configured_mtu: int
+    tested_mtu: int | None = None
+    link_type: str | None = None  # "direct", "routed"
+    latency_ms: float | None = None
+    error: str | None = None
+
+
+class MtuTestAllResponse(BaseModel):
+    """Response from testing all agent pairs."""
+
+    total_pairs: int
+    successful: int
+    failed: int
+    results: list[MtuTestResponse]

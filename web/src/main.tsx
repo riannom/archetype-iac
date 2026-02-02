@@ -9,12 +9,14 @@ import { DeviceCatalogProvider } from "./contexts/DeviceCatalogContext";
 import { ToastContainer } from "./components/ui/ToastContainer";
 import StudioConsolePage from "./pages/StudioConsolePage";
 import HostsPage from "./pages/HostsPage";
+import InfrastructurePage from "./pages/InfrastructurePage";
 import NodesPage from "./pages/NodesPage";
 import StudioPage from "./studio/StudioPage";
 
 const router = createBrowserRouter([
   { path: "/", element: <StudioPage /> },
   { path: "/hosts", element: <HostsPage /> },
+  { path: "/infrastructure", element: <InfrastructurePage /> },
   { path: "/nodes", element: <NodesPage /> },
   { path: "/nodes/devices", element: <NodesPage /> },
   { path: "/nodes/images", element: <NodesPage /> },
