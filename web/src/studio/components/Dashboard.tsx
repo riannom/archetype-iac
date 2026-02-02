@@ -126,12 +126,12 @@ const Dashboard: React.FC<DashboardProps> = ({
           {isAdmin && (
             <>
               <button
-                onClick={() => navigate('/hosts')}
+                onClick={() => navigate('/infrastructure')}
                 className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
-                title="Manage Hosts"
+                title="Infrastructure Settings"
               >
-                <i className="fa-solid fa-server text-xs"></i>
-                <span className="text-[10px] font-bold uppercase">Hosts</span>
+                <i className="fa-solid fa-network-wired text-xs"></i>
+                <span className="text-[10px] font-bold uppercase">Infrastructure</span>
               </button>
               <button
                 onClick={() => navigate('/nodes')}
