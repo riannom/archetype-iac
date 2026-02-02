@@ -2277,6 +2277,43 @@ async def fix_node_interfaces(lab_id: str, node_name: str) -> FixInterfacesRespo
         )
 
 
+@app.get("/labs/{lab_id}/nodes/{node_name}/linux-interfaces")
+async def list_node_linux_interfaces(lab_id: str, node_name: str) -> dict:
+    """List Linux interface names inside a container network namespace."""
+    try:
+        provider = get_provider_for_request()
+        container_name = provider.get_container_name(lab_id, node_name)
+        container = provider.docker.containers.get(container_name)
+        pid = container.attrs.get("State", {}).get("Pid")
+        if not pid:
+            return {"container": container_name, "interfaces": [], "error": "Container not running"}
+
+        proc = await asyncio.create_subprocess_exec(
+            "nsenter", "-t", str(pid), "-n",
+            "ip", "-o", "link", "show",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            return {
+                "container": container_name,
+                "interfaces": [],
+                "error": stderr.decode().strip() or "Failed to list interfaces",
+            }
+
+        interfaces = []
+        for line in stdout.decode().strip().split("\n"):
+            parts = line.split(":", 2)
+            if len(parts) >= 2:
+                name = parts[1].strip().split("@")[0]
+                interfaces.append(name)
+
+        return {"container": container_name, "interfaces": interfaces, "error": None}
+    except Exception as e:
+        return {"container": node_name, "interfaces": [], "error": str(e)}
+
+
 # --- OVS Hot-Connect Link Management ---
 
 @app.post("/labs/{lab_id}/links")
