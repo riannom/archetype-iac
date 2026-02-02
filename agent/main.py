@@ -302,32 +302,37 @@ def get_provider_for_request(provider_name: str = "docker") -> Provider:
 
 async def _fix_running_interfaces() -> None:
     """Fix interface naming/attachments for already-running containers after agent restart."""
-    await asyncio.sleep(2)
+    # Allow plugin/network reconciliation to complete before renaming.
+    await asyncio.sleep(5)
 
     provider = get_provider("docker")
     if provider is None:
         return
 
-    try:
-        containers = await asyncio.to_thread(
-            provider.docker.containers.list,
-            all=True,
-            filters={"label": "archetype.lab_id"},
-        )
-    except Exception as e:
-        logger.warning(f"Failed to list containers for interface fixup: {e}")
-        return
-
-    for container in containers:
-        lab_id = container.labels.get("archetype.lab_id")
-        if not lab_id:
-            continue
+    for attempt in range(2):
         try:
-            await provider._fix_interface_names(container.name, lab_id)
-        except Exception as e:
-            logger.warning(
-                f"Failed to fix interfaces for {container.name}: {e}"
+            containers = await asyncio.to_thread(
+                provider.docker.containers.list,
+                all=True,
+                filters={"label": "archetype.lab_id"},
             )
+        except Exception as e:
+            logger.warning(f"Failed to list containers for interface fixup: {e}")
+            return
+
+        for container in containers:
+            lab_id = container.labels.get("archetype.lab_id")
+            if not lab_id:
+                continue
+            try:
+                await provider._fix_interface_names(container.name, lab_id)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to fix interfaces for {container.name}: {e}"
+                )
+
+        if attempt == 0:
+            await asyncio.sleep(5)
 
 
 def provider_status_to_schema(status: ProviderNodeStatus) -> NodeStatus:
