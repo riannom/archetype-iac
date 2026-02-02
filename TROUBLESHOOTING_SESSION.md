@@ -23,7 +23,7 @@ The Docker provider was creating containers with `network_mode: "none"`, which c
 ### Issue 2: Uninitialized `graph` variable in jobs.py
 **Location:** `api/app/tasks/jobs.py:1352`
 
-The `run_node_sync()` function used `if graph:` before `graph` was defined, causing:
+The `run_node_reconcile()` function used `if graph:` before `graph` was defined, causing:
 ```
 UnboundLocalError: cannot access local variable 'graph' where it is not associated with a value
 ```
@@ -67,7 +67,7 @@ Creating 64 networks per lab (for cEOS max_ports) exhausted Docker's predefined 
    - Simplified `_create_lab_networks()` to always use "eth" prefix
 
 2. **api/app/tasks/jobs.py**
-   - Added `graph = None` initialization in `run_node_sync()`
+   - Added `graph = None` initialization in `run_node_reconcile()`
 
 ## Commands Used for Cleanup
 

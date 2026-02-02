@@ -24,12 +24,12 @@
 - Add `GET /labs/{id}`.
 - Add `DELETE /labs/{id}` with workspace cleanup.
 - Add `POST /labs/{id}/clone`.
-- Add `POST /labs/{id}/import-yaml`.
+- Add `POST /labs/{id}/update-topology-from-yaml`.
 - Add `GET /labs/{id}/export-yaml`.
 
 ## Phase D — Backend: Topology Mapping
 - Add `topology_graph.json` schema (nodes/links/defaults).
-- Add `POST /labs/{id}/import-graph`.
+- Add `POST /labs/{id}/update-topology`.
 - Add `GET /labs/{id}/export-graph`.
 - Add graph→YAML serializer.
 - Add YAML→graph parser.

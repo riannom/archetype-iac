@@ -384,7 +384,7 @@ describe("ImageCard", () => {
 
       await waitFor(() => {
         expect(mockApiRequest).toHaveBeenCalledWith(
-          "/images/library/img-123/sync",
+          "/images/library/img-123/push",
           expect.objectContaining({
             method: "POST",
             body: JSON.stringify({}),

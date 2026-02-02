@@ -16,7 +16,7 @@ from app import models
 from app.tasks.jobs import (
     _broadcast_job_progress,
     run_agent_job,
-    run_node_sync,
+    run_node_reconcile,
 )
 
 
@@ -286,18 +286,18 @@ class TestRunAgentJobBroadcasts:
         )
 
 
-class TestRunNodeSyncBroadcasts:
-    """Tests for job progress broadcasting in run_node_sync.
+class TestRunNodeReconcileBroadcasts:
+    """Tests for job progress broadcasting in run_node_reconcile.
 
-    Note: Full integration tests for run_node_sync are in test_jobs_execution.py.
+    Note: Full integration tests for run_node_reconcile are in test_jobs_execution.py.
     These tests focus on the broadcasting behavior.
     """
 
     @pytest.mark.asyncio
-    async def test_run_node_sync_calls_broadcast_on_start(self, mock_broadcaster):
-        """Verify _broadcast_job_progress is called by run_node_sync (unit test)."""
+    async def test_run_node_reconcile_calls_broadcast_on_start(self, mock_broadcaster):
+        """Verify _broadcast_job_progress is called by run_node_reconcile (unit test)."""
         # We test the _broadcast_job_progress function directly since
-        # run_node_sync has complex dependencies. Full integration tests
+        # run_node_reconcile has complex dependencies. Full integration tests
         # are in test_jobs_execution.py.
         with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
             await _broadcast_job_progress(

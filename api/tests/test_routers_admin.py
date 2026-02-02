@@ -66,10 +66,10 @@ class TestReconcileState:
         assert response.status_code == 401
 
 
-class TestRefreshLabStatus:
-    """Tests for GET /labs/{lab_id}/refresh-status endpoint."""
+class TestRefreshLabState:
+    """Tests for POST /labs/{lab_id}/refresh-state endpoint."""
 
-    def test_refresh_lab_status_requires_access(
+    def test_refresh_lab_state_requires_access(
         self,
         test_client: TestClient,
         test_db: Session,
@@ -84,20 +84,20 @@ class TestRefreshLabStatus:
         test_db.add(lab)
         test_db.commit()
 
-        response = test_client.get(
-            f"/labs/{lab.id}/refresh-status", headers=auth_headers
+        response = test_client.post(
+            f"/labs/{lab.id}/refresh-state", headers=auth_headers
         )
         assert response.status_code == 404  # Appears as not found
 
-    def test_refresh_lab_status_no_agent(
+    def test_refresh_lab_state_no_agent(
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
         auth_headers: dict,
     ):
         """Test refresh when no healthy agent available."""
-        response = test_client.get(
-            f"/labs/{sample_lab.id}/refresh-status", headers=auth_headers
+        response = test_client.post(
+            f"/labs/{sample_lab.id}/refresh-state", headers=auth_headers
         )
         assert response.status_code == 200
         data = response.json()
@@ -106,7 +106,7 @@ class TestRefreshLabStatus:
 
     @patch("app.agent_client.get_healthy_agent")
     @patch("app.agent_client.get_lab_status_from_agent")
-    async def test_refresh_lab_status_updates_nodes(
+    async def test_refresh_lab_state_updates_nodes(
         self,
         mock_get_status,
         mock_get_agent,
@@ -127,8 +127,8 @@ class TestRefreshLabStatus:
             ]
         }
 
-        response = test_client.get(
-            f"/labs/{lab.id}/refresh-status", headers=auth_headers
+        response = test_client.post(
+            f"/labs/{lab.id}/refresh-state", headers=auth_headers
         )
         assert response.status_code == 200
 
@@ -136,8 +136,8 @@ class TestRefreshLabStatus:
         self, test_client: TestClient, auth_headers: dict
     ):
         """Test refresh for non-existent lab."""
-        response = test_client.get(
-            "/labs/nonexistent-lab/refresh-status", headers=auth_headers
+        response = test_client.post(
+            "/labs/nonexistent-lab/refresh-state", headers=auth_headers
         )
         assert response.status_code == 404
 

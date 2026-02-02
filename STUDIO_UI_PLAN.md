@@ -22,7 +22,7 @@ Goal: use the Visual Studio UI (from the archetype zip) as the primary Studio ex
   - `DELETE /labs/:labId` -> delete
 - Topology
   - `GET /labs/:labId/export-graph` -> graph nodes/links for canvas
-  - `POST /labs/:labId/import-graph` -> deploy graph to backend
+  - `POST /labs/:labId/update-topology` -> deploy graph to backend
   - `GET /labs/:labId/export-yaml` -> YAML preview
 - Runtime
   - `GET /labs/:labId/jobs` -> status of actions
@@ -50,7 +50,7 @@ Goal: use the Visual Studio UI (from the archetype zip) as the primary Studio ex
 - Device models are built from `/devices` + `/images/library`.
 - Device categories in the UI are derived from real data (single category for now).
 - Graph is loaded from `/labs/:id/export-graph` and mapped to canvas nodes/links.
-- Graph deploy posts to `/labs/:id/import-graph`.
+- Graph deploy posts to `/labs/:id/update-topology`.
 
 ### 2.3 Console integration
 - `TerminalSession` uses xterm and connects to `/labs/:id/nodes/:node/console` via WS.
@@ -173,7 +173,7 @@ These are intentionally deferred but required for full fidelity:
 - [x] Load labs, devices, images, library.
 - [x] Build models from catalog + library.
 - [x] Load graph from `export-graph`.
-- [x] Deploy graph to `import-graph`.
+- [x] Deploy graph to `update-topology`.
 - [x] YAML export modal.
 - [x] Runtime status from jobs.
 

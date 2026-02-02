@@ -93,7 +93,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
 
     This function converts the internal graph representation to the JSON
     format expected by the agent's DeployTopology schema. Used for partial
-    deploys in run_node_sync where a filtered graph needs to be deployed.
+    deploys in run_node_reconcile where a filtered graph needs to be deployed.
 
     NOTE: This function resolves images using the same 3-step logic as
     build_deploy_topology(): node.image → manifest → vendor default.
@@ -444,18 +444,18 @@ class TopologyService:
         return not analysis.single_host
 
     # =========================================================================
-    # Import Methods
+    # Update Methods
     # =========================================================================
 
-    def import_from_graph(self, lab_id: str, graph: TopologyGraph) -> tuple[int, int]:
-        """Import topology from a graph structure into the database.
+    def update_from_graph(self, lab_id: str, graph: TopologyGraph) -> tuple[int, int]:
+        """Update topology from a graph structure in the database.
 
         Creates/updates Node and Link records from the graph.
         Existing nodes/links not in the graph are deleted.
 
         Args:
-            lab_id: Lab ID to import into
-            graph: The topology graph to import
+            lab_id: Lab ID to update
+            graph: The topology graph to apply
 
         Returns:
             Tuple of (nodes_created, links_created)
@@ -685,11 +685,11 @@ class TopologyService:
 
         return nodes_created, links_created
 
-    def import_from_yaml(self, lab_id: str, yaml_content: str) -> tuple[int, int]:
-        """Import topology from YAML into the database.
+    def update_from_yaml(self, lab_id: str, yaml_content: str) -> tuple[int, int]:
+        """Update topology from YAML in the database.
 
         Args:
-            lab_id: Lab ID to import into
+            lab_id: Lab ID to update
             yaml_content: YAML topology content
 
         Returns:
@@ -697,7 +697,7 @@ class TopologyService:
         """
         from app.topology import yaml_to_graph
         graph = yaml_to_graph(yaml_content)
-        return self.import_from_graph(lab_id, graph)
+        return self.update_from_graph(lab_id, graph)
 
     # =========================================================================
     # Export Methods
@@ -939,7 +939,7 @@ class TopologyService:
         Returns:
             Tuple of (nodes_created, links_created)
         """
-        return self.import_from_yaml(lab_id, yaml_content)
+        return self.update_from_yaml(lab_id, yaml_content)
 
     # =========================================================================
     # Deploy Topology Generation

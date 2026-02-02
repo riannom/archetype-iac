@@ -1244,17 +1244,17 @@ def get_image_hosts(
     return ImageHostsResponse(image_id=image_id, hosts=result)
 
 
-@router.post("/library/{image_id}/sync")
-async def sync_image_to_hosts(
+@router.post("/library/{image_id}/push")
+async def push_image_to_hosts(
     image_id: str,
     request: SyncRequest,
     current_user: models.User = Depends(get_current_user),
     database: Session = Depends(db.get_db),
 ) -> dict:
-    """Trigger sync of an image to specific or all hosts.
+    """Push an image to specific or all hosts.
 
-    This creates sync jobs for each target host and starts the transfer
-    process in the background. Returns the created job IDs.
+    This creates transfer jobs for each target host and starts the image
+    push process in the background. Returns the created job IDs.
     """
     from urllib.parse import unquote
     image_id = unquote(image_id)

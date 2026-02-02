@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.tasks.jobs import run_node_sync
+from app.tasks.jobs import run_node_reconcile
 
 
 class TestEarlyTransitionalStateAssignment:
@@ -102,7 +102,7 @@ class TestEarlyTransitionalStateAssignment:
                 mock_agent.return_value = None
                 with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
                     with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_sync(job.id, lab.id, ["node-1"])
+                        await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # Verify the node went through "stopping" before "error"
         test_db.refresh(node_state)
@@ -160,7 +160,7 @@ class TestEarlyTransitionalStateAssignment:
                 mock_agent.return_value = None
                 with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
                     with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_sync(job.id, lab.id, ["node-1"])
+                        await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -215,7 +215,7 @@ class TestEarlyTransitionalStateAssignment:
                 mock_agent.return_value = None
                 with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
                     with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_sync(job.id, lab.id, ["node-1"])
+                        await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -291,7 +291,7 @@ class TestTransitionalStateTimestamps:
             with patch("app.tasks.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_agent:
                 mock_agent.return_value = None
                 with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
-                    await run_node_sync(job.id, lab.id, ["node-1"])
+                    await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         after_sync = datetime.now(timezone.utc)
         test_db.refresh(node_state)
@@ -333,7 +333,7 @@ class TestTransitionalStateTimestamps:
             with patch("app.tasks.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_agent:
                 mock_agent.return_value = None
                 with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
-                    await run_node_sync(job.id, lab.id, ["node-1"])
+                    await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # Node should have had starting_started_at set during the process
 
@@ -411,7 +411,7 @@ class TestCategorizationMatchesTransitionalStates:
             with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
                 with patch("app.tasks.jobs.agent_client.container_action", new_callable=AsyncMock) as mock_action:
                     mock_action.return_value = {"success": True}
-                    await run_node_sync(job.id, lab.id, ["node-1"])
+                    await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -460,7 +460,7 @@ class TestCategorizationMatchesTransitionalStates:
             with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
                 with patch("app.tasks.jobs.agent_client.container_action", new_callable=AsyncMock) as mock_action:
                     mock_action.return_value = {"success": True, "status": "running"}
-                    await run_node_sync(job.id, lab.id, ["node-1"])
+                    await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -554,7 +554,7 @@ class TestExplicitPlacementFailure:
         with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
             with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
                 with patch.object(test_db, "commit", tracking_commit):
-                    await run_node_sync(job.id, lab.id, ["node-1"])
+                    await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -641,7 +641,7 @@ class TestErrorMessageClearing:
                 mock_agent.return_value = None
                 with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
                     with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_sync(job.id, lab.id, ["node-1"])
+                        await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # Error message should have been cleared when entering stopping state
         assert error_cleared_in_stopping, (
@@ -691,7 +691,7 @@ class TestErrorMessageClearing:
                 mock_agent.return_value = None
                 with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
                     with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_sync(job.id, lab.id, ["node-1"])
+                        await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         assert error_cleared_in_starting, (
             "error_message should be cleared when entering 'starting' state"
@@ -755,7 +755,7 @@ class TestNoStateChangeWhenAlreadyInDesiredState:
         test_db.refresh(job)
 
         with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
-            await run_node_sync(job.id, lab.id, ["node-1"])
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -790,7 +790,7 @@ class TestNoStateChangeWhenAlreadyInDesiredState:
         test_db.refresh(job)
 
         with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
-            await run_node_sync(job.id, lab.id, ["node-1"])
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -879,7 +879,7 @@ class TestEarlyPlacementUpdate:
                 with patch("app.tasks.jobs.agent_client.container_action", new_callable=AsyncMock) as mock_action:
                     mock_action.return_value = {"success": True, "status": "running"}
                     with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_sync(job.id, lab.id, ["node-1"])
+                        await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # "starting" should appear in placement statuses before "deployed"
         assert "starting" in placement_statuses, (
@@ -916,16 +916,16 @@ class TestStateEnforcementJobAction:
             "enforce_node_state should NOT create legacy 'node:start/stop' jobs"
         )
 
-    def test_enforcement_calls_run_node_sync(self, test_db: Session):
-        """Verify that state_enforcement imports and calls run_node_sync."""
+    def test_enforcement_calls_run_node_reconcile(self, test_db: Session):
+        """Verify that state_enforcement imports and calls run_node_reconcile."""
         import inspect
         from app.tasks import state_enforcement
 
         source = inspect.getsource(state_enforcement.enforce_node_state)
 
-        # Should import run_node_sync
-        assert "run_node_sync" in source, (
-            "enforce_node_state should use run_node_sync"
+        # Should import run_node_reconcile
+        assert "run_node_reconcile" in source, (
+            "enforce_node_state should use run_node_reconcile"
         )
 
         # Should NOT use run_agent_job for node actions
@@ -952,9 +952,9 @@ class TestNodeActionEndpointJobAction:
             "node_action endpoint should create 'sync:node:' jobs"
         )
 
-        # Should call run_node_sync
-        assert "run_node_sync" in source, (
-            "node_action endpoint should call run_node_sync"
+        # Should call run_node_reconcile
+        assert "run_node_reconcile" in source, (
+            "node_action endpoint should call run_node_reconcile"
         )
 
         # Should NOT create legacy node:start/stop jobs

@@ -244,7 +244,7 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
 
     This imports and calls the appropriate task runner based on the job action.
     """
-    from app.tasks.jobs import run_agent_job, run_node_sync
+    from app.tasks.jobs import run_agent_job, run_node_reconcile
     from app.services.topology import TopologyService
     from app.utils.lab import get_lab_provider
 
@@ -304,7 +304,7 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
             node_ids = [ns.node_id for ns in node_states]
 
         if node_ids:
-            asyncio.create_task(run_node_sync(job.id, lab.id, node_ids, provider))
+            asyncio.create_task(run_node_reconcile(job.id, lab.id, node_ids, provider))
 
     else:
         logger.warning(f"Unknown action type for retry: {job.action}")

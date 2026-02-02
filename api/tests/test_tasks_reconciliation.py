@@ -106,21 +106,21 @@ topology:
         assert created == 0
 
 
-class TestReconcileLabStates:
-    """Tests for the reconcile_lab_states function."""
+class TestRefreshStatesFromAgents:
+    """Tests for the refresh_states_from_agents function."""
 
     @pytest.mark.asyncio
     async def test_handles_no_labs_to_reconcile(self, test_db: Session):
         """Should complete without error when no labs need reconciliation."""
-        from app.tasks.reconciliation import reconcile_lab_states
+        from app.tasks.reconciliation import refresh_states_from_agents
 
         with patch("app.tasks.reconciliation.SessionLocal", return_value=test_db):
-            await reconcile_lab_states()
+            await refresh_states_from_agents()
 
     @pytest.mark.asyncio
     async def test_skips_lab_with_active_job(self, test_db: Session, sample_lab: models.Lab, running_job: models.Job):
         """Should skip labs that have active jobs within timeout."""
-        from app.tasks.reconciliation import reconcile_lab_states
+        from app.tasks.reconciliation import refresh_states_from_agents
 
         # Set lab to transitional state
         sample_lab.state = "starting"
@@ -128,7 +128,7 @@ class TestReconcileLabStates:
 
         with patch("app.tasks.reconciliation.SessionLocal", return_value=test_db):
             with patch("app.tasks.reconciliation._reconcile_single_lab", new_callable=AsyncMock) as mock_reconcile:
-                await reconcile_lab_states()
+                await refresh_states_from_agents()
                 # Should not call reconcile for this lab
                 # (it has an active job)
 
@@ -228,11 +228,11 @@ class TestStateReconciliationMonitor:
     """Tests for the state_reconciliation_monitor background task."""
 
     @pytest.mark.asyncio
-    async def test_runs_reconcile_lab_states(self):
-        """Should call reconcile_lab_states each iteration."""
+    async def test_runs_refresh_states_from_agents(self):
+        """Should call refresh_states_from_agents each iteration."""
         from app.tasks.reconciliation import state_reconciliation_monitor
 
-        with patch("app.tasks.reconciliation.reconcile_lab_states", new_callable=AsyncMock) as mock_reconcile:
+        with patch("app.tasks.reconciliation.refresh_states_from_agents", new_callable=AsyncMock) as mock_reconcile:
             with patch("app.tasks.reconciliation.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 call_count = 0
                 async def sleep_and_cancel(seconds):
@@ -261,7 +261,7 @@ class TestStateReconciliationMonitor:
         """Should continue running after handling an exception."""
         from app.tasks.reconciliation import state_reconciliation_monitor
 
-        with patch("app.tasks.reconciliation.reconcile_lab_states", new_callable=AsyncMock) as mock_reconcile:
+        with patch("app.tasks.reconciliation.refresh_states_from_agents", new_callable=AsyncMock) as mock_reconcile:
             call_count = 0
             async def reconcile_with_error():
                 nonlocal call_count

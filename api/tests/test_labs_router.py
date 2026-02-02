@@ -238,13 +238,13 @@ class TestLabsCRUD:
 class TestTopologyImportExport:
     """Tests for topology import/export operations."""
 
-    def test_import_yaml(
+    def test_update_topology_from_yaml(
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
         auth_headers: dict,
     ):
-        """Test importing YAML topology."""
+        """Test updating topology from YAML."""
         yaml_content = """
 nodes:
   r1:
@@ -256,7 +256,7 @@ links:
     r2: {}
 """
         response = test_client.post(
-            f"/labs/{sample_lab.id}/import-yaml",
+            f"/labs/{sample_lab.id}/update-topology-from-yaml",
             json={"content": yaml_content},
             headers=auth_headers,
         )
@@ -319,7 +319,7 @@ links:
         )
         assert response.status_code == 404
 
-    def test_import_graph(
+    def test_update_topology(
         self,
         test_client: TestClient,
         test_db: Session,
@@ -328,7 +328,7 @@ links:
         tmp_path,
         monkeypatch,
     ):
-        """Test importing graph topology creates node states."""
+        """Test syncing topology creates node states."""
         from pathlib import Path
 
         workspace = tmp_path / sample_lab.id
@@ -356,7 +356,7 @@ links:
         }
 
         response = test_client.post(
-            f"/labs/{sample_lab.id}/import-graph",
+            f"/labs/{sample_lab.id}/update-topology",
             json=graph,
             headers=auth_headers,
         )
@@ -378,7 +378,7 @@ links:
         )
         assert len(link_states) == 1
 
-    def test_import_graph_preserves_container_names(
+    def test_update_topology_preserves_container_names(
         self,
         test_client: TestClient,
         test_db: Session,
@@ -387,7 +387,7 @@ links:
         tmp_path,
         monkeypatch,
     ):
-        """Test that import-graph uses container_name when available."""
+        """Test that update-topology uses container_name when available."""
         from pathlib import Path
 
         workspace = tmp_path / sample_lab.id
@@ -412,7 +412,7 @@ links:
         }
 
         response = test_client.post(
-            f"/labs/{sample_lab.id}/import-graph",
+            f"/labs/{sample_lab.id}/update-topology",
             json=graph,
             headers=auth_headers,
         )

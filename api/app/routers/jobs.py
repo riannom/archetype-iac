@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.netlab import run_netlab_command
 from app.services.topology import TopologyService
 from app.storage import lab_workspace
-from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy, run_node_sync
+from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy, run_node_reconcile
 from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
@@ -537,7 +537,7 @@ async def node_action(
     database.refresh(job)
 
     # Start sync job
-    asyncio.create_task(run_node_sync(job.id, lab.id, [node], provider=lab_provider))
+    asyncio.create_task(run_node_reconcile(job.id, lab.id, [node], provider=lab_provider))
 
     return schemas.JobOut.model_validate(job)
 

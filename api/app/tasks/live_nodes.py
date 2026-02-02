@@ -10,7 +10,7 @@ to nodes, enabling:
 4. Debouncing of rapid canvas changes to batch operations
 
 The main entry point is process_node_changes() which is called as a
-background task from the import-graph endpoint. Changes are debounced
+background task from the update-topology endpoint. Changes are debounced
 per lab to prevent firing separate operations for each rapid change.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ from app import agent_client, models
 from app.db import SessionLocal
 from app.services.broadcaster import broadcast_node_state_change
 from app.services.topology import TopologyService
-from app.tasks.jobs import run_node_sync
+from app.tasks.jobs import run_node_reconcile
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +201,7 @@ async def deploy_node_immediately(
     logger.info(f"Triggered immediate deploy for node {node_state.node_name} (job {job.id})")
 
     # Run sync in background
-    asyncio.create_task(run_node_sync(job.id, lab_id, [node_state.node_id], provider=provider))
+    asyncio.create_task(run_node_reconcile(job.id, lab_id, [node_state.node_id], provider=provider))
 
     return True
 
@@ -300,7 +300,7 @@ async def process_node_changes(
     added_node_ids: list[str],
     removed_node_info: list[dict],
 ) -> None:
-    """Background task to process node additions/removals from import-graph.
+    """Background task to process node additions/removals from update-topology.
 
     This function queues changes for debounced processing. Multiple rapid
     changes to the same lab will be batched together and processed after

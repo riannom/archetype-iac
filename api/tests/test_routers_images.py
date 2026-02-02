@@ -505,7 +505,7 @@ class TestImageHostsAndSync:
         )
 
         response = test_client.post(
-            "/images/library/qcow2:test.qcow2/sync",
+            "/images/library/qcow2:test.qcow2/push",
             json={},
             headers=auth_headers,
         )

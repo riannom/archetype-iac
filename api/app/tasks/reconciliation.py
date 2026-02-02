@@ -181,15 +181,19 @@ def _backfill_placement_node_ids(session, lab_id: str) -> int:
     return count
 
 
-async def reconcile_lab_states():
-    """Query agents and reconcile lab/node states with actual container status.
+async def refresh_states_from_agents():
+    """Query agents and refresh lab/node states with actual container status.
 
-    This function:
-    1. Finds labs in transitional states (starting, stopping)
-    2. Finds nodes in "pending" state with no active job
-    3. Queries agents for actual container status
-    4. Updates NodeState.actual_state to match reality
-    5. Updates Lab.state based on aggregated node states
+    This function refreshes the database state to match reality by:
+    1. Finding labs in transitional states (starting, stopping)
+    2. Finding nodes in "pending" state with no active job
+    3. Querying agents for actual container status
+    4. Updating NodeState.actual_state to match reality
+    5. Updating Lab.state based on aggregated node states
+
+    Note: This does NOT take corrective action - it only updates the database
+    to reflect the actual state. For enforcement of desired state, see
+    state_enforcement.py.
     """
     session = SessionLocal()
     try:
@@ -819,16 +823,23 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
         # Auto-connect pending links when both nodes become running
         # This handles links that were added while nodes were not yet deployed
+        # Also handles cross-host links where VXLAN tunnel is missing
         from app.tasks.live_links import create_link_if_ready
 
         for ls in link_states:
             # Check if link should be connected but isn't
-            if (
+            # Include "error" state for cross-host links with missing tunnels
+            should_auto_connect = (
                 ls.desired_state == "up"
-                and ls.actual_state in ("unknown", "pending", "down")
                 and node_actual_states.get(ls.source_node) == "running"
                 and node_actual_states.get(ls.target_node) == "running"
-            ):
+                and (
+                    ls.actual_state in ("unknown", "pending", "down")
+                    or (ls.actual_state == "error" and ls.is_cross_host
+                        and ls.error_message == "VXLAN tunnel not active")
+                )
+            )
+            if should_auto_connect:
                 # Both nodes running, link should be up but isn't - create it
                 logger.info(f"Auto-connecting pending link {ls.link_name}")
                 try:
@@ -864,7 +875,7 @@ async def state_reconciliation_monitor():
     while True:
         try:
             await asyncio.sleep(settings.reconciliation_interval)
-            await reconcile_lab_states()
+            await refresh_states_from_agents()
         except asyncio.CancelledError:
             logger.info("State reconciliation monitor stopped")
             break

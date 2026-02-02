@@ -518,7 +518,7 @@ const StudioPage: React.FC = () => {
         })),
       };
       try {
-        await studioRequest(`/labs/${labId}/import-graph`, {
+        await studioRequest(`/labs/${labId}/update-topology`, {
           method: 'POST',
           body: JSON.stringify(graph),
         });
@@ -1430,7 +1430,7 @@ const StudioPage: React.FC = () => {
       })),
     };
     try {
-      await studioRequest(`/labs/${activeLab.id}/import-graph`, {
+      await studioRequest(`/labs/${activeLab.id}/update-topology`, {
         method: 'POST',
         body: JSON.stringify(graph),
       });

@@ -277,12 +277,12 @@ class NodeStatesResponse(BaseModel):
     nodes: list[NodeStateOut]
 
 
-class SyncResponse(BaseModel):
-    """Response schema for sync operations."""
+class ReconcileResponse(BaseModel):
+    """Response schema for reconcile operations."""
 
     job_id: str
     message: str
-    nodes_to_sync: list[str] = []  # List of node IDs that will be synced
+    nodes_to_reconcile: list[str] = []  # List of node IDs that will be reconciled
 
 
 # =============================================================================
@@ -396,8 +396,8 @@ class LinkStatesResponse(BaseModel):
     links: list[LinkStateOut]
 
 
-class LinkStateSyncResponse(BaseModel):
-    """Response schema for link sync operations."""
+class LinkStateRefreshResponse(BaseModel):
+    """Response schema for link state refresh operations."""
 
     message: str
     links_updated: int = 0

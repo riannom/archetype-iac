@@ -244,7 +244,7 @@ async def enforce_node_state(
 
     Returns True if an enforcement job was started, False otherwise.
     """
-    from app.tasks.jobs import run_node_sync
+    from app.tasks.jobs import run_node_reconcile
 
     lab_id = lab.id
     node_name = node_state.node_name
@@ -396,7 +396,7 @@ async def enforce_node_state(
     provider = get_lab_provider(lab)
 
     # Start sync job - this sets transitional states (starting/stopping)
-    asyncio.create_task(run_node_sync(
+    asyncio.create_task(run_node_reconcile(
         job.id, lab_id, [node_id], provider=provider
     ))
 

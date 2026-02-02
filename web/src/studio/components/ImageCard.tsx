@@ -73,7 +73,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
 
     setSyncing(true);
     try {
-      await apiRequest(`/images/library/${encodeURIComponent(image.id)}/sync`, {
+      await apiRequest(`/images/library/${encodeURIComponent(image.id)}/push`, {
         method: 'POST',
         body: JSON.stringify({}),
       });
