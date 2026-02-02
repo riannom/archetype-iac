@@ -10,6 +10,7 @@ set -e
 #   --redis URL           Redis URL for distributed locks (required for multi-host)
 #   --ip IP               Local IP for multi-host networking (auto-detected if not set)
 #   --port PORT           Agent port (default: 8001)
+#   --mtu MTU             Target MTU for jumbo frames (default: 9000, 0 to skip)
 #   --no-docker           Skip Docker installation
 #   --update              Quick update: pull latest code and restart (no full reinstall)
 #   --uninstall           Remove the agent
@@ -43,6 +44,7 @@ AGENT_PORT="8001"
 INSTALL_DOCKER=true
 UNINSTALL=false
 UPDATE_ONLY=false
+TARGET_MTU="9000"  # Desired MTU for jumbo frames (0 = skip MTU config)
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -65,6 +67,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --port)
             AGENT_PORT="$2"
+            shift 2
+            ;;
+        --mtu)
+            TARGET_MTU="$2"
             shift 2
             ;;
         --no-docker)
@@ -230,6 +236,90 @@ fi
 # Create Docker plugin directories for OVS network plugin
 mkdir -p /run/docker/plugins /etc/docker/plugins
 
+# Configure MTU for jumbo frames (if requested)
+OVERLAY_MTU=1450  # Default fallback
+LOCAL_MTU=9000    # Local veth pairs (no physical limit)
+CONFIGURED_IFACE=""  # Will be set if MTU is configured
+
+if [ "$TARGET_MTU" != "0" ] && [ -n "$TARGET_MTU" ]; then
+    log_info "Configuring network MTU..."
+
+    # Detect primary network interface (the one with default route)
+    PRIMARY_IFACE=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'dev \K\S+' | head -1)
+
+    if [ -n "$PRIMARY_IFACE" ]; then
+        CURRENT_MTU=$(ip link show "$PRIMARY_IFACE" 2>/dev/null | grep -oP 'mtu \K\d+')
+        log_info "Primary interface: $PRIMARY_IFACE (current MTU: $CURRENT_MTU)"
+
+        if [ "$CURRENT_MTU" -lt "$TARGET_MTU" ]; then
+            log_info "Attempting to set $PRIMARY_IFACE MTU to $TARGET_MTU..."
+
+            # Try to set the MTU
+            if ip link set "$PRIMARY_IFACE" mtu "$TARGET_MTU" 2>/dev/null; then
+                NEW_MTU=$(ip link show "$PRIMARY_IFACE" 2>/dev/null | grep -oP 'mtu \K\d+')
+
+                if [ "$NEW_MTU" -eq "$TARGET_MTU" ]; then
+                    log_info "Successfully set $PRIMARY_IFACE MTU to $TARGET_MTU"
+
+                    # Calculate overlay MTU (path MTU - VXLAN overhead)
+                    OVERLAY_MTU=$((TARGET_MTU - 50))
+                    log_info "Overlay MTU set to $OVERLAY_MTU (jumbo frames enabled)"
+
+                    # Make MTU persistent with a boot-time service
+                    log_info "Creating MTU persistence service..."
+                    cat > /etc/systemd/system/archetype-mtu.service << MTUSVC
+[Unit]
+Description=Set network MTU for Archetype Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/ip link set $PRIMARY_IFACE mtu $TARGET_MTU
+ExecStart=/sbin/ip link set arch-ovs mtu $TARGET_MTU
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+MTUSVC
+                    systemctl daemon-reload
+                    systemctl enable archetype-mtu.service 2>/dev/null || true
+                    log_info "MTU will persist across reboots"
+                    CONFIGURED_IFACE="$PRIMARY_IFACE"
+                else
+                    log_warn "MTU change didn't stick (got $NEW_MTU). Infrastructure may not support jumbo frames."
+                fi
+            else
+                log_warn "Failed to set MTU to $TARGET_MTU. Infrastructure may not support jumbo frames."
+            fi
+        else
+            log_info "$PRIMARY_IFACE already has MTU >= $TARGET_MTU"
+            OVERLAY_MTU=$((TARGET_MTU - 50))
+            CONFIGURED_IFACE="$PRIMARY_IFACE"
+        fi
+    else
+        log_warn "Could not detect primary network interface. Skipping MTU configuration."
+    fi
+
+    # Create/configure OVS bridge with matching MTU
+    if command -v ovs-vsctl &> /dev/null; then
+        # Create bridge if it doesn't exist
+        ovs-vsctl --may-exist add-br arch-ovs 2>/dev/null || true
+
+        # Set bridge MTU (use current interface MTU, not target, in case it didn't work)
+        ACTUAL_MTU=$(ip link show "$PRIMARY_IFACE" 2>/dev/null | grep -oP 'mtu \K\d+' || echo "1500")
+        ip link set arch-ovs mtu "$ACTUAL_MTU" 2>/dev/null || true
+
+        # Set bridge to standalone mode for L2 switching
+        ovs-vsctl set-fail-mode arch-ovs standalone 2>/dev/null || true
+
+        # Bring bridge up
+        ip link set arch-ovs up 2>/dev/null || true
+
+        log_info "OVS bridge arch-ovs configured (MTU: $ACTUAL_MTU)"
+    fi
+fi
+
 # Install Docker
 if [ "$INSTALL_DOCKER" = true ]; then
     if command -v docker &> /dev/null; then
@@ -304,6 +394,12 @@ ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT
 ARCHETYPE_AGENT_ENABLE_DOCKER=true
 ARCHETYPE_AGENT_ENABLE_VXLAN=true
 ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
+
+# MTU settings
+# overlay_mtu: Used for VXLAN tenant interfaces (path MTU - 50 byte overhead)
+# local_mtu: Used for local veth pairs (no physical constraint)
+ARCHETYPE_AGENT_OVERLAY_MTU=$OVERLAY_MTU
+ARCHETYPE_AGENT_LOCAL_MTU=$LOCAL_MTU
 EOF
 
 # Create workspace directory
@@ -364,6 +460,11 @@ echo "Controller:    $CONTROLLER_URL"
 echo "Redis:         $REDIS_URL"
 echo "Local IP:      $LOCAL_IP"
 echo "Port:          $AGENT_PORT"
+echo "Overlay MTU:   $OVERLAY_MTU (VXLAN tenant interfaces)"
+echo "Local MTU:     $LOCAL_MTU (same-host veth pairs)"
+if [ -n "$CONFIGURED_IFACE" ]; then
+    echo "Network:       $CONFIGURED_IFACE @ MTU $TARGET_MTU (jumbo frames)"
+fi
 echo ""
 echo "Useful commands:"
 echo "  Check status:    systemctl status $SERVICE_NAME"
