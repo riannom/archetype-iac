@@ -679,12 +679,23 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
         # Ensure NodePlacement records exist for containers found on agents
         # This handles cases where deploy jobs failed after containers were created
+        # IMPORTANT: Don't blindly trust where containers are found - check node_def.host_id
         for node_name, agent_id in container_agent_map.items():
-            # Look up node definition for FK
+            # Look up node definition for FK and host assignment
             node_def = session.query(models.Node).filter(
                 models.Node.lab_id == lab_id,
                 models.Node.container_name == node_name,
             ).first()
+
+            # Check if container is on the WRONG agent according to node definition
+            if node_def and node_def.host_id and node_def.host_id != agent_id:
+                logger.warning(
+                    f"MISPLACED CONTAINER: {node_name} in lab {lab_id} found on agent {agent_id} "
+                    f"but should be on {node_def.host_id}. Skipping placement update. "
+                    f"Container may need cleanup."
+                )
+                # Don't update placement for misplaced containers - this would perpetuate the bug
+                continue
 
             existing_placement = (
                 session.query(models.NodePlacement)
@@ -695,7 +706,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 .first()
             )
             if existing_placement:
-                # Update if container moved to a different agent
+                # Update if container moved to a different agent (and move is valid per node_def)
                 if existing_placement.host_id != agent_id:
                     logger.info(
                         f"Updating placement for {node_name} in lab {lab_id}: "
