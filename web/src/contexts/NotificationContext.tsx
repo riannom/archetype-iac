@@ -185,6 +185,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           settings.metricsBarExpanded ?? preferences.canvas_settings.metricsBarExpanded,
       };
 
+      // Optimistic update - apply immediately for responsive UI
+      setPreferences({
+        ...preferences,
+        canvas_settings: newSettings,
+      });
+
       try {
         const res = await fetch(`${API_BASE_URL}/auth/preferences`, {
           method: 'PATCH',
