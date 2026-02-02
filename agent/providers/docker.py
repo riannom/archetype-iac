@@ -417,7 +417,7 @@ class DockerProvider(Provider):
         # Use host cgroup namespace to enable stats collection on cgroups v2
         # Without this, Docker can't read cgroup stats for containers that run
         # their own init system (like cEOS) due to cgroup namespace isolation
-        config["cgroupns_mode"] = "host"
+        config["cgroupns"] = "host"
 
         # Volume binds
         if binds:
