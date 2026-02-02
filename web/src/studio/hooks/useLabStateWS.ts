@@ -117,6 +117,7 @@ export function useLabStateWS(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const pingIntervalRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef(0);
 
   // Build WebSocket URL from API URL
   const getWSUrl = useCallback(() => {
@@ -226,6 +227,7 @@ export function useLabStateWS(
       ws.onopen = () => {
         console.log('WebSocket connected');
         setIsConnected(true);
+        reconnectAttemptsRef.current = 0;
         setReconnectAttempts(0);
 
         // Start ping interval to keep connection alive
@@ -248,12 +250,14 @@ export function useLabStateWS(
           pingIntervalRef.current = null;
         }
 
-        // Reconnect with exponential backoff
+        // Reconnect with exponential backoff (use ref to avoid stale closure)
         if (enabled && labId) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-          console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts + 1})`);
+          const attempts = reconnectAttemptsRef.current;
+          const delay = Math.min(1000 * Math.pow(2, attempts), 30000);
+          console.log(`Reconnecting in ${delay}ms (attempt ${attempts + 1})`);
           reconnectTimeoutRef.current = window.setTimeout(() => {
-            setReconnectAttempts((prev) => prev + 1);
+            reconnectAttemptsRef.current = attempts + 1;
+            setReconnectAttempts(attempts + 1);
             connect();
           }, delay);
         }
@@ -267,7 +271,7 @@ export function useLabStateWS(
     } catch (e) {
       console.error('Failed to create WebSocket:', e);
     }
-  }, [labId, enabled, getWSUrl, handleMessage, reconnectAttempts]);
+  }, [labId, enabled, getWSUrl, handleMessage]);
 
   // Request state refresh
   const refresh = useCallback(() => {
@@ -300,6 +304,7 @@ export function useLabStateWS(
     setNodeStates(new Map());
     setLinkStates(new Map());
     setLabState(null);
+    reconnectAttemptsRef.current = 0;
     setReconnectAttempts(0);
   }, [labId]);
 
