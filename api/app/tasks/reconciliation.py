@@ -417,6 +417,15 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
     except Exception as e:
         logger.debug(f"Failed to ensure link states for lab {lab_id}: {e}")
 
+    # Normalize link interface names for existing labs
+    try:
+        topo_service = TopologyService(session)
+        normalized = topo_service.normalize_links_for_lab(lab_id)
+        if normalized > 0:
+            logger.info(f"Normalized {normalized} link record(s) for lab {lab_id}")
+    except Exception as e:
+        logger.debug(f"Failed to normalize link interfaces for lab {lab_id}: {e}")
+
     # Backfill node_definition_id for placements (gradual migration)
     try:
         backfilled = _backfill_placement_node_ids(session, lab_id)

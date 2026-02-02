@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app import agent_client, models
 from app.services.link_manager import LinkManager, allocate_vni
 from app.services.topology import TopologyService
+from app.topology import _normalize_interface_name
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +85,6 @@ async def create_deployment_links(
         # Get or create LinkState
         if link.link_name in existing_states:
             link_state = existing_states[link.link_name]
-            # Skip links that are already up (idempotent)
-            if link_state.actual_state == "up":
-                logger.debug(f"Link {link.link_name} already up, skipping")
-                success_count += 1
-                continue
         else:
             link_state = models.LinkState(
                 lab_id=lab_id,
@@ -149,6 +145,13 @@ async def create_deployment_links(
         is_cross_host = source_host_id != target_host_id
         link_state.is_cross_host = is_cross_host
 
+        # Skip same-host links that are already up (idempotent)
+        # Cross-host links are re-applied to ensure tunnels are recreated after restarts.
+        if link_state.actual_state == "up" and not is_cross_host:
+            logger.debug(f"Link {link.link_name} already up, skipping")
+            success_count += 1
+            continue
+
         if is_cross_host:
             # Create cross-host link via VXLAN
             success = await create_cross_host_link(
@@ -192,13 +195,16 @@ async def create_same_host_link(
         return False
 
     try:
+        source_iface = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
+        target_iface = _normalize_interface_name(link_state.target_interface) if link_state.target_interface else ""
+
         result = await agent_client.create_link_on_agent(
             agent,
             lab_id=lab_id,
             source_node=link_state.source_node,
-            source_interface=link_state.source_interface,
+            source_interface=source_iface,
             target_node=link_state.target_node,
-            target_interface=link_state.target_interface,
+            target_interface=target_iface,
         )
 
         if result.get("success"):
@@ -250,6 +256,9 @@ async def create_cross_host_link(
     link_state.vni = vni
 
     try:
+        interface_a = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
+        interface_b = _normalize_interface_name(link_state.target_interface) if link_state.target_interface else ""
+
         result = await agent_client.setup_cross_host_link(
             database=session,
             lab_id=lab_id,
@@ -257,9 +266,9 @@ async def create_cross_host_link(
             agent_a=agent_a,
             agent_b=agent_b,
             node_a=link_state.source_node,
-            interface_a=link_state.source_interface,
+            interface_a=interface_a,
             node_b=link_state.target_node,
-            interface_b=link_state.target_interface,
+            interface_b=interface_b,
             vni=vni,
         )
 

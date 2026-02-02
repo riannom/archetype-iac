@@ -80,6 +80,65 @@ class TestLinkEndpointOrdering:
         assert config.get("ip_a") == "10.0.0.1/24"
         assert config.get("ip_b") == "10.0.0.2/24"
 
+
+class TestInterfaceCountMap:
+    """Tests for interface pre-provisioning counts."""
+
+    def test_interface_count_uses_device_defaults(self, test_db, sample_lab):
+        """Uses UI/vendor maxPorts even when there are no links."""
+        graph = TopologyGraph(
+            nodes=[
+                GraphNode(
+                    id="node-1",
+                    name="EOS-1",
+                    container_name="eos_1",
+                    device="ceos",
+                )
+            ],
+            links=[],
+        )
+
+        service = TopologyService(test_db)
+        service.update_from_graph(sample_lab.id, graph)
+        test_db.commit()
+
+        iface_map = service.get_interface_count_map(sample_lab.id)
+        assert iface_map["eos_1"] == 12  # ceos max_ports in vendors.py
+
+    def test_interface_count_raises_to_link_max(self, test_db, sample_lab):
+        """Interface count is raised when links reference higher indices."""
+        graph = TopologyGraph(
+            nodes=[
+                GraphNode(
+                    id="node-1",
+                    name="EOS-1",
+                    container_name="eos_1",
+                    device="ceos",
+                ),
+                GraphNode(
+                    id="node-2",
+                    name="EOS-2",
+                    container_name="eos_2",
+                    device="ceos",
+                ),
+            ],
+            links=[
+                GraphLink(
+                    endpoints=[
+                        GraphEndpoint(node="node-1", ifname="eth20"),
+                        GraphEndpoint(node="node-2", ifname="eth1"),
+                    ]
+                )
+            ],
+        )
+
+        service = TopologyService(test_db)
+        service.update_from_graph(sample_lab.id, graph)
+        test_db.commit()
+
+        iface_map = service.get_interface_count_map(sample_lab.id)
+        assert iface_map["eos_1"] == 20
+
     def test_link_endpoints_swapped_when_reverse_alphabetical(
         self, test_db, sample_lab, multiple_hosts
     ):

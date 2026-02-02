@@ -230,8 +230,90 @@ class TestCreateSameHostLink:
             )
 
             assert result is True
-            assert link_state.actual_state == "up"
-            assert link_state.vlan_tag == 100
+        assert link_state.actual_state == "up"
+        assert link_state.vlan_tag == 100
+
+    @pytest.mark.asyncio
+    async def test_normalizes_interfaces_for_same_host_link(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+    ):
+        """Should normalize vendor interface names before hot-connect."""
+        from app.tasks.link_orchestration import create_same_host_link
+
+        link_state = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:Ethernet1-R2:Ethernet2",
+            source_node="archetype-test-r1",
+            source_interface="Ethernet1",
+            target_node="archetype-test-r2",
+            target_interface="Ethernet2",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+            actual_state="pending",
+        )
+        test_db.add(link_state)
+        test_db.commit()
+
+        host_to_agent = {sample_host.id: sample_host}
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+            mock_client.create_link_on_agent = AsyncMock(return_value={
+                "success": True,
+                "vlan_tag": 100,
+            })
+
+            await create_same_host_link(test_db, sample_lab.id, link_state, host_to_agent, [])
+
+            mock_client.create_link_on_agent.assert_awaited_once()
+            _, kwargs = mock_client.create_link_on_agent.await_args
+            assert kwargs["source_interface"] == "eth1"
+            assert kwargs["target_interface"] == "eth2"
+
+
+class TestCreateCrossHostLink:
+    """Tests for the create_cross_host_link function."""
+
+    @pytest.mark.asyncio
+    async def test_normalizes_interfaces_for_cross_host_link(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+    ):
+        """Should normalize vendor interface names before VXLAN attach."""
+        from app.tasks.link_orchestration import create_cross_host_link
+
+        host_a, host_b = multiple_hosts[:2]
+        link_state = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:Ethernet1-R2:Ethernet1",
+            source_node="archetype-test-r1",
+            source_interface="Ethernet1",
+            target_node="archetype-test-r2",
+            target_interface="Ethernet1",
+            source_host_id=host_a.id,
+            target_host_id=host_b.id,
+            actual_state="pending",
+        )
+        test_db.add(link_state)
+        test_db.commit()
+
+        host_to_agent = {host_a.id: host_a, host_b.id: host_b}
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+            mock_client.setup_cross_host_link = AsyncMock(return_value={
+                "success": True,
+                "vlan_tag": 3884,
+            })
+
+            await create_cross_host_link(test_db, sample_lab.id, link_state, host_to_agent, [])
+
+            mock_client.setup_cross_host_link.assert_awaited_once()
+            _, kwargs = mock_client.setup_cross_host_link.await_args
+            assert kwargs["interface_a"] == "eth1"
+            assert kwargs["interface_b"] == "eth1"
+
+            test_db.refresh(link_state)
+            assert link_state.vlan_tag == 3884
             assert link_state.source_carrier_state == "on"
             assert link_state.target_carrier_state == "on"
 

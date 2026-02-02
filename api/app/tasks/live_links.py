@@ -25,6 +25,7 @@ from app.tasks.link_orchestration import (
     create_same_host_link,
     create_cross_host_link,
 )
+from app.topology import _normalize_interface_name
 
 logger = logging.getLogger(__name__)
 
@@ -237,8 +238,16 @@ async def teardown_link(
             logger.warning(f"Agent not available for link {link_name}")
             return True  # Can't clean up if agent is unavailable
 
+        source_node = link_info.get("source_node", "")
+        target_node = link_info.get("target_node", "")
+        source_iface = _normalize_interface_name(link_info.get("source_interface", "") or "")
+        target_iface = _normalize_interface_name(link_info.get("target_interface", "") or "")
+        normalized_link_id = link_name
+        if source_node and target_node and source_iface and target_iface:
+            normalized_link_id = f"{source_node}:{source_iface}-{target_node}:{target_iface}"
+
         try:
-            result = await agent_client.delete_link_on_agent(agent, lab_id, link_name)
+            result = await agent_client.delete_link_on_agent(agent, lab_id, normalized_link_id)
             if result.get("success"):
                 log_parts.append(f"  {link_name}: removed")
                 logger.info(f"Same-host link {link_name} torn down")

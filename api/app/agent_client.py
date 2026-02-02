@@ -1087,6 +1087,24 @@ async def cleanup_overlay_on_agent(agent: models.Host, lab_id: str) -> dict:
 
 
 async def get_overlay_status_from_agent(agent: models.Host) -> dict:
+    """Get overlay status from an agent.
+
+    Returns:
+        Dict with 'tunnels' and 'bridges' lists, or empty on error.
+    """
+    url = f"{get_agent_url(agent)}/overlay/status"
+
+    try:
+        client = get_http_client()
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Overlay status failed on agent {agent.id}: {e}")
+        return {"tunnels": [], "bridges": []}
+
+
+async def get_overlay_status_from_agent(agent: models.Host) -> dict:
     """Get overlay network status from an agent.
 
     Returns:
@@ -1588,6 +1606,7 @@ async def setup_cross_host_link(
 
     # Extract VNI from result to use same on both sides
     tunnel_vni = result_a.get("tunnel", {}).get("vni")
+    vlan_tag = result_a.get("tunnel", {}).get("vlan_tag")
 
     # Create tunnel on agent B (pointing to agent A) with same VNI
     result_b = await create_tunnel_on_agent(
@@ -1633,6 +1652,7 @@ async def setup_cross_host_link(
     return {
         "success": True,
         "vni": tunnel_vni,
+        "vlan_tag": vlan_tag,
         "agent_a": agent_a.id,
         "agent_b": agent_b.id,
         "attachments": {

@@ -1788,6 +1788,15 @@ async def run_node_reconcile(
                     if all(ep.node in filtered_node_identifiers for ep in link.endpoints)
                 ]
 
+                interface_count_map = topo_service.get_interface_count_map(lab_id)
+                for n in filtered_nodes:
+                    node_key = n.container_name or n.name
+                    iface_count = interface_count_map.get(node_key, 0)
+                    if iface_count > 0:
+                        vars_dict = dict(n.vars or {})
+                        vars_dict["interface_count"] = iface_count
+                        n.vars = vars_dict
+
                 filtered_graph = TopologyGraph(
                     nodes=filtered_nodes,
                     links=filtered_links,
@@ -2397,9 +2406,40 @@ async def _create_cross_host_links_if_ready(
     }
     new_links = [l for l in db_links if l.link_name not in existing_link_names]
 
+    # Determine if we need to force VXLAN recreation after agent restarts.
+    # If there are cross-host links but no tunnels reported for this lab, rebuild.
+    force_recreate = False
     if not pending_cross_host and not uncategorized_links and not new_links:
-        # No cross-host links need creation
-        return
+        cross_host_links = (
+            session.query(models.LinkState)
+            .filter(
+                models.LinkState.lab_id == lab_id,
+                models.LinkState.is_cross_host == True,
+            )
+            .count()
+        )
+        if cross_host_links > 0:
+            from app import agent_client
+
+            placements = (
+                session.query(models.NodePlacement)
+                .filter(models.NodePlacement.lab_id == lab_id)
+                .all()
+            )
+            host_ids = {p.host_id for p in placements}
+            for host_id in host_ids:
+                agent = session.get(models.Host, host_id)
+                if not agent or not agent_client.is_agent_online(agent):
+                    continue
+                status = await agent_client.get_overlay_status_from_agent(agent)
+                tunnels = [t for t in status.get("tunnels", []) if t.get("lab_id") == lab_id]
+                if not tunnels:
+                    force_recreate = True
+                    break
+
+        if not force_recreate:
+            # No cross-host links need creation
+            return
 
     logger.info(
         f"Checking cross-host links for lab {lab_id}: "

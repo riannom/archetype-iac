@@ -21,6 +21,8 @@ from sqlalchemy.orm import Session
 
 from app import db, models, schemas
 from app.utils.lab import update_lab_state
+from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map
+from app import agent_client
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +97,7 @@ async def job_completion_callback(
     if job.lab_id:
         lab = database.get(models.Lab, job.lab_id)
         if lab:
-            _update_lab_from_callback(database, lab, job, payload)
+            await _update_lab_from_callback(database, lab, job, payload)
 
     database.commit()
 
@@ -106,7 +108,7 @@ async def job_completion_callback(
     )
 
 
-def _update_lab_from_callback(
+async def _update_lab_from_callback(
     database: Session,
     lab: models.Lab,
     job: models.Job,
@@ -138,10 +140,10 @@ def _update_lab_from_callback(
 
     # Update node states if provided
     if payload.node_states:
-        _update_node_states(database, lab.id, payload.node_states)
+        await _update_node_states(database, lab.id, payload.node_states)
 
 
-def _update_node_states(
+async def _update_node_states(
     database: Session,
     lab_id: str,
     node_states: dict[str, str],
@@ -153,6 +155,8 @@ def _update_node_states(
         lab_id: Lab ID
         node_states: Dict mapping node_name -> actual_state
     """
+    nodes_became_running: list[str] = []
+
     for node_name, actual_state in node_states.items():
         node_state = (
             database.query(models.NodeState)
@@ -176,6 +180,86 @@ def _update_node_states(
                     f"Node {node_name} in lab {lab_id}: "
                     f"{old_state} -> {actual_state} (callback)"
                 )
+                if actual_state == "running" and old_state != "running":
+                    nodes_became_running.append(node_name)
+
+    if nodes_became_running:
+        try:
+            await _auto_connect_pending_links(database, lab_id, nodes_became_running)
+            await _auto_reattach_overlay_endpoints(database, lab_id, nodes_became_running)
+        except Exception as e:
+            logger.warning(f"Auto-connect pending links failed for lab {lab_id}: {e}")
+
+
+async def _auto_connect_pending_links(
+    database: Session,
+    lab_id: str,
+    node_names: list[str],
+) -> None:
+    """Attempt to connect pending links involving nodes that just became running."""
+    host_to_agent = await _build_host_to_agent_map(database, lab_id)
+    if not host_to_agent:
+        return
+
+    pending_links = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.desired_state == "up",
+            models.LinkState.actual_state.in_(["pending", "unknown", "down", "error"]),
+        )
+        .all()
+    )
+
+    node_set = set(node_names)
+    for ls in pending_links:
+        if ls.source_node in node_set or ls.target_node in node_set:
+            await create_link_if_ready(database, lab_id, ls, host_to_agent)
+
+
+async def _auto_reattach_overlay_endpoints(
+    database: Session,
+    lab_id: str,
+    node_names: list[str],
+) -> None:
+    """Re-attach overlay endpoints when nodes transition to running.
+
+    Cross-host links can fail to attach if endpoints aren't ready yet.
+    This replays the /overlay/attach step for any running endpoints to
+    ensure the VXLAN bridge is wired on both sides.
+    """
+    host_to_agent = await _build_host_to_agent_map(database, lab_id)
+    if not host_to_agent:
+        return
+
+    node_set = set(node_names)
+    cross_links = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.desired_state == "up",
+            models.LinkState.is_cross_host.is_(True),
+        )
+        .all()
+    )
+
+    for ls in cross_links:
+        if ls.source_node in node_set and ls.source_host_id in host_to_agent:
+            await agent_client.attach_container_on_agent(
+                host_to_agent[ls.source_host_id],
+                lab_id=lab_id,
+                link_id=ls.link_name,
+                container_name=ls.source_node,
+                interface_name=ls.source_interface,
+            )
+        if ls.target_node in node_set and ls.target_host_id in host_to_agent:
+            await agent_client.attach_container_on_agent(
+                host_to_agent[ls.target_host_id],
+                lab_id=lab_id,
+                link_id=ls.link_name,
+                container_name=ls.target_node,
+                interface_name=ls.target_interface,
+            )
 
 
 @router.post("/job/{job_id}/heartbeat")

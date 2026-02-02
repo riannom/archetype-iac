@@ -505,6 +505,35 @@ class OverlayManager:
         try:
             await self._ensure_ovs_bridge()
 
+            # Prefer using pre-provisioned OVS ports from the Docker OVS plugin.
+            # This preserves interfaces created before boot (critical for cEOS).
+            try:
+                from agent.network.docker_plugin import get_docker_ovs_plugin
+
+                plugin = get_docker_ovs_plugin()
+                host_veth = await plugin.get_endpoint_host_veth(
+                    bridge.lab_id, container_name, interface_name
+                )
+                if host_veth:
+                    code, _, stderr = await self._ovs_vsctl(
+                        "set", "port", host_veth, f"tag={bridge.vlan_tag}"
+                    )
+                    if code != 0:
+                        raise RuntimeError(f"Failed to set VLAN on {host_veth}: {stderr}")
+
+                    await self._run_cmd(["ip", "link", "set", host_veth, "up"])
+
+                    logger.info(
+                        f"Attached existing OVS port {host_veth} for "
+                        f"{container_name}:{interface_name} to VLAN {bridge.vlan_tag}"
+                    )
+                    return True
+            except Exception as e:
+                logger.warning(
+                    f"OVS plugin attach failed for {container_name}:{interface_name}, "
+                    f"falling back to veth attach: {e}"
+                )
+
             # Get container PID for network namespace (wrapped to avoid blocking)
             def _sync_get_container_info():
                 container = self.docker.containers.get(container_name)
