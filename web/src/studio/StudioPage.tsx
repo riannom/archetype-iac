@@ -207,8 +207,8 @@ const StudioPage: React.FC = () => {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  // Note: nodeStates and runtimeStates are now derived from the WebSocket hook's state
-  // See below where useLabStateWS is called;
+  const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeStatus>>({});
+  const [nodeStates, setNodeStates] = useState<Record<string, NodeStateEntry>>({});
   const [consoleWindows, setConsoleWindows] = useState<ConsoleWindow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showYamlModal, setShowYamlModal] = useState(false);
@@ -286,99 +286,90 @@ const StudioPage: React.FC = () => {
   // Port manager for interface auto-assignment
   const portManager = usePortManager(nodes, links);
 
-  // Get notification system for error toasts
-  const { addNotification } = useNotifications();
+  // WebSocket hook for real-time state updates
+  // Converts WebSocket node state updates to runtime status and nodeStates
+  const handleWSNodeStateChange = useCallback((nodeId: string, wsState: NodeStateData) => {
+    // Update nodeStates record
+    setNodeStates((prev) => ({
+      ...prev,
+      [nodeId]: {
+        id: wsState.node_id,
+        lab_id: activeLab?.id || '',
+        node_id: wsState.node_id,
+        node_name: wsState.node_name,
+        desired_state: wsState.desired_state,
+        actual_state: wsState.actual_state,
+        error_message: wsState.error_message,
+        is_ready: wsState.is_ready,
+        host_id: wsState.host_id,
+        host_name: wsState.host_name,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as NodeStateEntry,
+    }));
 
-  // Handle WebSocket node state errors - show toast for nodes entering error state
-  const handleWSNodeError = useCallback((nodeId: string, state: NodeStateData) => {
-    if (state.actual_state === 'error' && state.error_message) {
+    // Update runtime status for display
+    setRuntimeStates((prev) => {
+      let newStatus: RuntimeStatus | undefined;
+      if (wsState.actual_state === 'running') {
+        newStatus = 'running';
+      } else if (wsState.actual_state === 'stopping') {
+        newStatus = 'stopping';
+      } else if (wsState.actual_state === 'starting') {
+        newStatus = 'booting';
+      } else if (wsState.actual_state === 'pending') {
+        newStatus = wsState.desired_state === 'running' ? 'booting' : 'stopped';
+      } else if (wsState.actual_state === 'error') {
+        newStatus = 'error';
+      } else if (wsState.actual_state === 'stopped') {
+        newStatus = 'stopped';
+      }
+      // 'undeployed' - no status indicator
+
+      if (newStatus) {
+        return { ...prev, [nodeId]: newStatus };
+      } else {
+        const { [nodeId]: _, ...rest } = prev;
+        return rest;
+      }
+    });
+
+    // Show toast for nodes entering error state
+    if (wsState.actual_state === 'error' && wsState.error_message) {
       addNotification(
         'error',
-        `Node Error: ${state.node_name}`,
-        state.error_message,
-        { persistent: false }
+        `Node Error: ${wsState.node_name}`,
+        wsState.error_message
       );
     }
-  }, [addNotification]);
+  }, [activeLab?.id, addNotification]);
 
-  // Handle WebSocket job progress - show toast for job failures
+  // Handle WebSocket job progress - show toast for job failures/completions
   const handleWSJobProgress = useCallback((job: JobProgressData) => {
     if (job.status === 'failed' && job.error_message) {
       addNotification(
         'error',
         `Job Failed: ${job.action}`,
-        job.error_message,
-        { persistent: false }
+        job.error_message
       );
     } else if (job.status === 'completed') {
       addNotification(
         'success',
         `Job Completed: ${job.action}`,
-        job.progress_message || 'Operation completed successfully',
-        { persistent: false }
+        job.progress_message || 'Operation completed successfully'
       );
     }
   }, [addNotification]);
 
-  // WebSocket hook for real-time state updates - single source of truth for node state
   const {
-    nodeStates: wsNodeStates,
     isConnected: wsConnected,
     reconnectAttempts: wsReconnectAttempts,
     refresh: wsRefresh,
   } = useLabStateWS(activeLab?.id || null, {
-    enabled: !!activeLab,
-    onNodeStateChange: handleWSNodeError,
+    onNodeStateChange: handleWSNodeStateChange,
     onJobProgress: handleWSJobProgress,
+    enabled: !!activeLab,
   });
-
-  // Convert WebSocket Map to Record format for components that expect it
-  const nodeStates = useMemo((): Record<string, NodeStateEntry> => {
-    const result: Record<string, NodeStateEntry> = {};
-    wsNodeStates.forEach((state, nodeId) => {
-      result[nodeId] = {
-        id: state.node_id,
-        lab_id: activeLab?.id || '',
-        node_id: state.node_id,
-        node_name: state.node_name,
-        desired_state: state.desired_state,
-        actual_state: state.actual_state,
-        error_message: state.error_message,
-        is_ready: state.is_ready,
-        host_id: state.host_id,
-        host_name: state.host_name,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as NodeStateEntry;
-    });
-    return result;
-  }, [wsNodeStates, activeLab?.id]);
-
-  // Derive runtime states from node states - no separate state needed
-  const runtimeStates = useMemo((): Record<string, RuntimeStatus> => {
-    const result: Record<string, RuntimeStatus> = {};
-    wsNodeStates.forEach((state, nodeId) => {
-      let status: RuntimeStatus | undefined;
-      if (state.actual_state === 'running') {
-        status = 'running';
-      } else if (state.actual_state === 'stopping') {
-        status = 'stopping';
-      } else if (state.actual_state === 'starting') {
-        status = 'booting';
-      } else if (state.actual_state === 'pending') {
-        status = state.desired_state === 'running' ? 'booting' : 'stopped';
-      } else if (state.actual_state === 'error') {
-        status = 'error';
-      } else if (state.actual_state === 'stopped') {
-        status = 'stopped';
-      }
-      // 'undeployed' - no status indicator
-      if (status) {
-        result[nodeId] = status;
-      }
-    });
-    return result;
-  }, [wsNodeStates]);
 
   // Keep refs in sync with state for debounced saves (avoids stale closure issues)
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
