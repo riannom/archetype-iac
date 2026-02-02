@@ -614,8 +614,10 @@ username admin privilege 15 role network-admin nopassword
 
         Strategy:
         - The controller sends per-node interface_count based on the UI's
-          configured maxPorts (vendor defaults or overrides), ensuring interfaces
-          exist before boot for devices like cEOS.
+          configured maxPorts (vendor defaults or overrides). We use those
+          counts to pre-provision interfaces before boot for devices like cEOS.
+          If a link references a higher interface, we raise the count so the
+          device still boots with that interface present.
         - We size the lab's OVS networks to the maximum interface_count across
           all nodes, and also consider any explicitly referenced link interfaces.
         - Add a small buffer for flexibility when creating new links.
@@ -791,6 +793,8 @@ username admin privilege 15 role network-admin nopassword
             container: Docker container object
             lab_id: Lab identifier
             interface_count: Number of interfaces to attach
+                (from UI-configured maxPorts or vendor defaults, potentially
+                raised by explicit link references).
             interface_prefix: Interface naming prefix
             start_index: Starting interface number
 
