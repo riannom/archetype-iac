@@ -30,6 +30,8 @@ from agent.schemas import (
     AgentStatus,
     AttachContainerRequest,
     AttachContainerResponse,
+    CleanupLabOrphansRequest,
+    CleanupLabOrphansResponse,
     CleanupOrphansRequest,
     CleanupOrphansResponse,
     CleanupOverlayRequest,
@@ -59,6 +61,8 @@ from agent.schemas import (
     JobResult,
     JobStatus,
     LabStatusResponse,
+    MtuTestRequest,
+    MtuTestResponse,
     NodeReconcileRequest,
     NodeReconcileResponse,
     NodeReconcileResult,
@@ -1649,6 +1653,83 @@ async def cleanup_orphans(request: CleanupOrphansRequest) -> CleanupOrphansRespo
     )
 
 
+@app.post("/cleanup-lab-orphans")
+async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOrphansResponse:
+    """Remove orphaned containers for a specific lab.
+
+    Used when nodes are migrated between agents. Removes containers for
+    nodes that are no longer assigned to this agent.
+
+    Args:
+        request: Contains lab_id and list of node_names to keep
+
+    Returns:
+        Lists of removed and kept containers
+    """
+    import docker
+    from docker.errors import APIError
+
+    logger.info(f"Cleaning up orphan containers for lab {request.lab_id}, keeping {len(request.keep_node_names)} nodes")
+
+    removed = []
+    kept = []
+    errors = []
+    keep_set = set(request.keep_node_names)
+
+    try:
+        client = docker.from_env()
+
+        # Find all containers for this lab
+        # Try both archetype.lab_id (new) and containerlab prefix (legacy)
+        containers = client.containers.list(all=True, filters={
+            "label": f"archetype.lab_id={request.lab_id}"
+        })
+
+        # Also check for containerlab-style containers (legacy)
+        # These use a truncated lab_id as prefix
+        lab_prefix = request.lab_id[:20]
+        clab_containers = client.containers.list(all=True, filters={
+            "label": f"containerlab={lab_prefix}"
+        })
+
+        # Combine and dedupe
+        all_containers = {c.id: c for c in containers}
+        for c in clab_containers:
+            all_containers[c.id] = c
+
+        for container in all_containers.values():
+            labels = container.labels
+            node_name = labels.get("archetype.node_name") or labels.get("clab-node-name")
+
+            if not node_name:
+                continue
+
+            if node_name in keep_set:
+                kept.append(container.name)
+                logger.debug(f"Keeping container {container.name} (node {node_name} assigned to this agent)")
+            else:
+                # This container is for a node not assigned to this agent - remove it
+                try:
+                    logger.info(f"Removing orphan container {container.name} (node {node_name} not assigned to this agent)")
+                    container.remove(force=True)
+                    removed.append(container.name)
+                except APIError as e:
+                    error_msg = f"Failed to remove {container.name}: {e}"
+                    logger.warning(error_msg)
+                    errors.append(error_msg)
+
+    except Exception as e:
+        error_msg = f"Error during lab orphan cleanup: {e}"
+        logger.error(error_msg)
+        errors.append(error_msg)
+
+    return CleanupLabOrphansResponse(
+        removed_containers=removed,
+        kept_containers=kept,
+        errors=errors,
+    )
+
+
 @app.post("/prune-docker")
 async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
     """Prune Docker resources to reclaim disk space.
@@ -1954,6 +2035,128 @@ async def overlay_status() -> OverlayStatusResponse:
     except Exception as e:
         logger.error(f"Overlay status failed: {e}")
         return OverlayStatusResponse()
+
+
+@app.post("/network/test-mtu")
+async def test_mtu(request: MtuTestRequest) -> MtuTestResponse:
+    """Test MTU to a target IP address.
+
+    Runs ping with DF (Don't Fragment) bit set to verify the network path
+    supports the requested MTU. Also detects link type (direct/routed) via
+    TTL analysis.
+
+    Link type detection:
+    - TTL >= 64: Direct/switched (L2 adjacent)
+    - TTL < 64: Routed (TTL decremented by intermediate hops)
+
+    Args:
+        request: Target IP and MTU to test
+
+    Returns:
+        MtuTestResponse with test results
+    """
+    target_ip = request.target_ip
+    mtu = request.mtu
+
+    # Calculate ping payload size: MTU - 20 (IP header) - 8 (ICMP header)
+    payload_size = mtu - 28
+
+    if payload_size < 0:
+        return MtuTestResponse(
+            success=False,
+            error=f"MTU {mtu} too small (minimum 28 bytes for IP + ICMP headers)",
+        )
+
+    logger.info(f"Testing MTU {mtu} to {target_ip} (payload size: {payload_size})")
+
+    try:
+        # Run ping with DF bit set (-M do = don't fragment)
+        # -c 3: send 3 pings
+        # -W 5: 5 second timeout
+        # -s: payload size
+        process = await asyncio.create_subprocess_exec(
+            "ping",
+            "-M", "do",  # Don't fragment
+            "-c", "3",
+            "-W", "5",
+            "-s", str(payload_size),
+            target_ip,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=20.0,
+        )
+        stdout_text = stdout.decode(errors="replace")
+        stderr_text = stderr.decode(errors="replace")
+
+        if process.returncode != 0:
+            # Check for "message too long" which indicates MTU issue
+            combined = stdout_text + stderr_text
+            if "message too long" in combined.lower() or "frag needed" in combined.lower():
+                return MtuTestResponse(
+                    success=False,
+                    error=f"Path MTU too small for {mtu} bytes",
+                )
+            return MtuTestResponse(
+                success=False,
+                error=f"Ping failed: {stderr_text.strip() or stdout_text.strip() or 'Unknown error'}",
+            )
+
+        # Parse ping output for TTL and latency
+        ttl = None
+        latency_ms = None
+        link_type = "unknown"
+
+        # Parse TTL from "ttl=64" pattern
+        import re
+        ttl_match = re.search(r"ttl=(\d+)", stdout_text, re.IGNORECASE)
+        if ttl_match:
+            ttl = int(ttl_match.group(1))
+            # Determine link type based on TTL
+            # Common default TTLs: Linux=64, Windows=128, Cisco=255
+            # If TTL >= 64, likely direct; lower values suggest routing hops
+            if ttl >= 64:
+                link_type = "direct"
+            else:
+                link_type = "routed"
+
+        # Parse latency from rtt summary or individual ping
+        # Format: "rtt min/avg/max/mdev = 0.123/0.456/0.789/0.111 ms"
+        rtt_match = re.search(r"rtt min/avg/max/mdev = [\d.]+/([\d.]+)/", stdout_text)
+        if rtt_match:
+            latency_ms = float(rtt_match.group(1))
+        else:
+            # Try to get from individual ping line: "time=0.123 ms"
+            time_match = re.search(r"time=([\d.]+)\s*ms", stdout_text)
+            if time_match:
+                latency_ms = float(time_match.group(1))
+
+        logger.info(
+            f"MTU test to {target_ip}: success, "
+            f"mtu={mtu}, ttl={ttl}, latency={latency_ms}ms, type={link_type}"
+        )
+
+        return MtuTestResponse(
+            success=True,
+            tested_mtu=mtu,
+            link_type=link_type,
+            latency_ms=latency_ms,
+            ttl=ttl,
+        )
+
+    except asyncio.TimeoutError:
+        return MtuTestResponse(
+            success=False,
+            error="Ping timed out",
+        )
+    except Exception as e:
+        logger.error(f"MTU test failed: {e}")
+        return MtuTestResponse(
+            success=False,
+            error=str(e),
+        )
 
 
 # --- OVS Interface Management ---

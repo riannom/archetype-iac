@@ -920,6 +920,42 @@ async def cleanup_orphans_on_agent(agent: models.Host, valid_lab_ids: list[str])
         return {"removed_containers": [], "errors": [str(e)]}
 
 
+async def cleanup_lab_orphans(
+    agent: models.Host,
+    lab_id: str,
+    keep_node_names: list[str],
+) -> dict:
+    """Tell agent to clean up orphan containers for a specific lab.
+
+    Used when nodes are migrated between agents. Removes containers for
+    nodes that are no longer assigned to this agent.
+
+    Args:
+        agent: The agent to clean up
+        lab_id: Lab identifier
+        keep_node_names: List of node names that should be kept on this agent
+
+    Returns dict with 'removed_containers' and 'kept_containers' keys.
+    """
+    url = f"{get_agent_url(agent)}/cleanup-lab-orphans"
+
+    try:
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={
+                "lab_id": lab_id,
+                "keep_node_names": keep_node_names,
+            },
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Failed to cleanup lab orphans on agent {agent.id}: {e}")
+        return {"removed_containers": [], "kept_containers": [], "errors": [str(e)]}
+
+
 # --- Overlay Networking Functions ---
 
 async def create_tunnel_on_agent(
@@ -1216,6 +1252,49 @@ async def prune_docker_on_agent(
             "volumes_removed": 0,
             "space_reclaimed": 0,
             "errors": [str(e)],
+        }
+
+
+# --- MTU Testing Functions ---
+
+
+async def test_mtu_on_agent(
+    agent: models.Host,
+    target_ip: str,
+    mtu: int,
+) -> dict:
+    """Test MTU to a target IP from an agent.
+
+    Runs ping with DF (Don't Fragment) bit set to verify path MTU.
+    Also detects link type (direct/routed) via TTL analysis.
+
+    Args:
+        agent: The agent to run the test from
+        target_ip: Target IP address to test connectivity to
+        mtu: MTU size to test
+
+    Returns:
+        Dict with 'success', 'tested_mtu', 'link_type', 'latency_ms', 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/network/test-mtu"
+
+    try:
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={
+                "target_ip": target_ip,
+                "mtu": mtu,
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"MTU test failed on agent {agent.id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
         }
 
 
