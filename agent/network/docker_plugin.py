@@ -1875,6 +1875,53 @@ class DockerOVSPlugin:
                             )
                             return ep
 
+            # Attempt to reconstruct endpoint state when tracking is missing.
+            # This can happen after agent restarts where endpoints are not loaded,
+            # but Docker networks and OVS ports still exist.
+            code, stdout, _ = await self._ovs_vsctl("list-ports", settings.ovs_bridge_name)
+            ovs_ports = set(stdout.strip().split("\n")) if code == 0 and stdout.strip() else set()
+
+            for net_name, net_info in networks.items():
+                target_endpoint_id = net_info.get("EndpointID")
+                target_network_id = net_info.get("NetworkID")
+                if not target_endpoint_id or not target_network_id:
+                    continue
+
+                network = self.networks.get(target_network_id)
+                if not network or network.interface_name != interface_name:
+                    continue
+
+                port_prefix = f"vh{target_endpoint_id[:5]}"
+                host_veth = next((p for p in ovs_ports if p.startswith(port_prefix)), None)
+                if not host_veth:
+                    continue
+
+                vlan_tag = 0
+                code, tag_stdout, _ = await self._ovs_vsctl("get", "port", host_veth, "tag")
+                if code == 0:
+                    tag_str = tag_stdout.strip().strip("[]")
+                    if tag_str:
+                        try:
+                            vlan_tag = int(tag_str)
+                        except ValueError:
+                            vlan_tag = 0
+
+                endpoint = EndpointState(
+                    endpoint_id=target_endpoint_id,
+                    network_id=target_network_id,
+                    interface_name=interface_name,
+                    host_veth=host_veth,
+                    cont_veth="",
+                    vlan_tag=vlan_tag,
+                    container_name=container_name,
+                )
+                self.endpoints[target_endpoint_id] = endpoint
+                await self._mark_dirty_and_save()
+                logger.info(
+                    f"Reconstructed endpoint: {container_name}:{interface_name} -> {host_veth}"
+                )
+                return endpoint
+
             # Fallback: match by interface name for untracked endpoints
             for ep in self.endpoints.values():
                 if ep.interface_name == interface_name and not ep.container_name:
