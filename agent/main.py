@@ -688,14 +688,20 @@ async def lifespan(app: FastAPI):
     logger.info(f"Capabilities: {get_capabilities()}")
 
     # Initialize Redis lock manager
-    from agent.locks import DeployLockManager, set_lock_manager
+    from agent.locks import DeployLockManager, NoopDeployLockManager, set_lock_manager
     _lock_manager = DeployLockManager(
         redis_url=settings.redis_url,
         lock_ttl=settings.lock_ttl,
         agent_id=AGENT_ID,
     )
-    set_lock_manager(_lock_manager)
-    logger.info(f"Redis lock manager initialized (TTL: {settings.lock_ttl}s)")
+    try:
+        await _lock_manager.ping()
+        set_lock_manager(_lock_manager)
+        logger.info(f"Redis lock manager initialized (TTL: {settings.lock_ttl}s)")
+    except Exception as e:
+        logger.error(f"Redis unavailable ({e}); continuing without distributed locks")
+        _lock_manager = NoopDeployLockManager(agent_id=AGENT_ID)
+        set_lock_manager(_lock_manager)
 
     # Clean up any orphaned locks from previous run (crash recovery)
     try:

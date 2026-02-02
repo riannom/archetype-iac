@@ -75,6 +75,11 @@ class DeployLockManager:
             )
         return self._redis
 
+    async def ping(self) -> None:
+        """Verify Redis connectivity."""
+        r = await self._get_redis()
+        await r.ping()
+
     def _lock_key(self, lab_id: str) -> str:
         """Get Redis key for a lab's deploy lock.
 
@@ -373,16 +378,51 @@ class DeployLockManager:
             self._redis = None
 
 
+class NoopDeployLockManager:
+    """No-op lock manager for standalone agents without Redis."""
+
+    def __init__(self, agent_id: str = ""):
+        self.agent_id = agent_id
+
+    @asynccontextmanager
+    async def acquire(self, _lab_id: str, timeout: float = 30.0):
+        yield True
+
+    @asynccontextmanager
+    async def acquire_with_heartbeat(
+        self,
+        _lab_id: str,
+        timeout: float = 30.0,
+        extend_interval: float = 30.0,
+    ):
+        yield True
+
+    async def clear_agent_locks(self) -> list[str]:
+        return []
+
+    async def get_all_locks(self) -> list[dict]:
+        return []
+
+    async def get_lock_status(self, _lab_id: str) -> dict:
+        return {"lab_id": _lab_id, "held": False, "ttl": 0, "owner": None, "age_seconds": 0}
+
+    async def force_release(self, _lab_id: str) -> bool:
+        return True
+
+    async def close(self):
+        return None
+
+
 # Singleton instance for the agent
-_lock_manager: DeployLockManager | None = None
+_lock_manager: DeployLockManager | NoopDeployLockManager | None = None
 
 
-def get_lock_manager() -> DeployLockManager | None:
+def get_lock_manager() -> DeployLockManager | NoopDeployLockManager | None:
     """Get the global lock manager instance."""
     return _lock_manager
 
 
-def set_lock_manager(manager: DeployLockManager) -> None:
+def set_lock_manager(manager: DeployLockManager | NoopDeployLockManager | None) -> None:
     """Set the global lock manager instance."""
     global _lock_manager
     _lock_manager = manager
