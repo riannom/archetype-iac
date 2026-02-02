@@ -176,7 +176,7 @@ async def test_discover_endpoint_returns_none_when_missing(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_reconcile_recreates_missing_veth(monkeypatch, tmp_path):
+async def test_reconcile_queues_missing_veth(monkeypatch, tmp_path):
     monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
     plugin = DockerOVSPlugin()
 
@@ -201,16 +201,13 @@ async def test_reconcile_recreates_missing_veth(monkeypatch, tmp_path):
     async def _run_cmd(_args):
         return 1, "", ""
 
-    async def _recreate_missing_endpoint(_endpoint):
-        return True
-
     async def _save_state():
         return None
 
     monkeypatch.setattr(plugin, "_run_cmd", _run_cmd)
-    monkeypatch.setattr(plugin, "_recreate_missing_endpoint", _recreate_missing_endpoint)
     monkeypatch.setattr(plugin, "_save_state", _save_state)
 
     stats = await plugin._reconcile_state()
     assert endpoint_id not in plugin.endpoints
-    assert stats["endpoints_recreated"] == 1
+    assert stats["endpoints_queued"] == 1
+    assert plugin._pending_endpoint_reconnects
