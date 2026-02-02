@@ -2,9 +2,9 @@
 
 This module provides VXLAN tunnel management for connecting lab nodes
 across multiple hosts. It handles:
-- VXLAN interface creation and deletion
-- Linux bridge management
-- Attaching container interfaces to overlay bridges
+- VXLAN tunnel creation via OVS
+- OVS bridge port management with VLAN isolation
+- Attaching container interfaces to overlay
 - Tunnel establishment between hosts
 
 VXLAN Overview:
@@ -12,6 +12,12 @@ VXLAN Overview:
 - Uses VNI (VXLAN Network Identifier) for isolation
 - Each cross-host link gets a unique VNI
 - Point-to-point tunnels between agent hosts
+
+OVS Implementation:
+- Uses a single OVS bridge (arch-ovs) for all overlay traffic
+- VLAN tags isolate traffic between different links
+- VXLAN ports created on OVS for cross-host tunneling
+- Standalone fail-mode for normal L2 switching behavior
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +41,11 @@ logger = logging.getLogger(__name__)
 # VXLAN default port
 VXLAN_PORT = 4789
 
+# VLAN tag range for overlay isolation (within OVS)
+# Use a subset to avoid conflicts with other OVS users
+OVERLAY_VLAN_BASE = 3000
+OVERLAY_VLAN_MAX = 4000
+
 
 @dataclass
 class VxlanTunnel:
@@ -43,9 +54,10 @@ class VxlanTunnel:
     vni: int  # VXLAN Network Identifier
     local_ip: str  # Local host IP for VXLAN endpoint
     remote_ip: str  # Remote host IP for VXLAN endpoint
-    interface_name: str  # Name of the VXLAN interface (e.g., vxlan100000)
+    interface_name: str  # Name of the OVS VXLAN port (e.g., vxlan100000)
     lab_id: str  # Lab this tunnel belongs to
     link_id: str  # Identifier for the link (e.g., "node1:eth0-node2:eth0")
+    vlan_tag: int  # VLAN tag for OVS isolation
 
     @property
     def key(self) -> str:
@@ -55,10 +67,16 @@ class VxlanTunnel:
 
 @dataclass
 class OverlayBridge:
-    """Represents a Linux bridge for overlay connectivity."""
+    """Represents an OVS-based overlay for a link.
 
-    name: str  # Bridge name (e.g., archetype-br-100000)
+    Note: With OVS, we don't create separate bridges. Instead, we use
+    VLAN tags on the shared arch-ovs bridge for isolation. This class
+    tracks the VLAN tag and associated ports for a link.
+    """
+
+    name: str  # OVS bridge name (always arch-ovs)
     vni: int  # Associated VNI
+    vlan_tag: int  # VLAN tag for isolation
     lab_id: str
     link_id: str
     veth_pairs: list[tuple[str, str]] = field(default_factory=list)  # (host_end, container_end)
@@ -70,11 +88,16 @@ class OverlayBridge:
 
 
 class OverlayManager:
-    """Manages VXLAN overlay networks for multi-host labs.
+    """Manages VXLAN overlay networks for multi-host labs using OVS.
 
-    This class handles the creation and cleanup of VXLAN tunnels,
-    bridges, and container attachments. It uses Linux ip commands
-    for network configuration.
+    This class handles the creation and cleanup of VXLAN tunnels and
+    container attachments using Open vSwitch for improved reliability.
+
+    Key differences from Linux bridge implementation:
+    - Uses single OVS bridge (arch-ovs) with VLAN isolation
+    - VXLAN tunnels created as OVS ports, not Linux interfaces
+    - Standalone fail-mode enables normal L2 switching
+    - More reliable unicast forwarding
 
     Usage:
         manager = OverlayManager()
@@ -100,6 +123,8 @@ class OverlayManager:
         self._tunnels: dict[str, VxlanTunnel] = {}  # key -> tunnel
         self._bridges: dict[str, OverlayBridge] = {}  # key -> bridge
         self._vni_allocator = VniAllocator()
+        self._ovs_initialized = False
+        self._bridge_name = settings.ovs_bridge_name  # Default: "arch-ovs"
 
     @property
     def docker(self) -> docker.DockerClient:
@@ -122,14 +147,61 @@ class OverlayManager:
             stderr.decode(errors="replace"),
         )
 
+    async def _ovs_vsctl(self, *args: str) -> tuple[int, str, str]:
+        """Run ovs-vsctl command."""
+        cmd = ["ovs-vsctl"] + list(args)
+        return await self._run_cmd(cmd)
+
+    async def _ensure_ovs_bridge(self) -> None:
+        """Ensure OVS bridge exists and is configured for overlay use."""
+        if self._ovs_initialized:
+            return
+
+        # Check if OVS is available
+        code, _, stderr = await self._ovs_vsctl("--version")
+        if code != 0:
+            raise RuntimeError(f"OVS not available: {stderr}")
+
+        # Check if bridge exists
+        code, _, _ = await self._ovs_vsctl("br-exists", self._bridge_name)
+        if code != 0:
+            # Bridge doesn't exist, create it
+            logger.info(f"Creating OVS bridge for overlay: {self._bridge_name}")
+            code, _, stderr = await self._ovs_vsctl("add-br", self._bridge_name)
+            if code != 0:
+                raise RuntimeError(f"Failed to create OVS bridge: {stderr}")
+
+        # Set fail mode to standalone for normal L2 switching
+        # This is critical - secure mode drops all traffic without flows
+        code, stdout, _ = await self._ovs_vsctl("get", "bridge", self._bridge_name, "fail_mode")
+        current_mode = stdout.strip().strip('"')
+        if current_mode != "standalone":
+            logger.info(f"Setting OVS bridge {self._bridge_name} to standalone mode")
+            await self._ovs_vsctl("set-fail-mode", self._bridge_name, "standalone")
+
+        # Bring bridge up
+        await self._run_cmd(["ip", "link", "set", self._bridge_name, "up"])
+
+        self._ovs_initialized = True
+        logger.info(f"OVS bridge {self._bridge_name} ready for overlay")
+
     async def _ip_link_exists(self, name: str) -> bool:
         """Check if a network interface exists."""
         code, _, _ = await self._run_cmd(["ip", "link", "show", name])
         return code == 0
 
-    async def _bridge_exists(self, name: str) -> bool:
-        """Check if a bridge exists."""
-        return await self._ip_link_exists(name)
+    async def _ovs_port_exists(self, port_name: str) -> bool:
+        """Check if an OVS port exists on the bridge."""
+        code, stdout, _ = await self._ovs_vsctl("list-ports", self._bridge_name)
+        if code != 0:
+            return False
+        ports = stdout.strip().split("\n")
+        return port_name in ports
+
+    def _vni_to_vlan(self, vni: int) -> int:
+        """Convert VNI to a VLAN tag for OVS isolation."""
+        # Map VNI to VLAN range to avoid conflicts
+        return OVERLAY_VLAN_BASE + (vni % (OVERLAY_VLAN_MAX - OVERLAY_VLAN_BASE))
 
     async def create_tunnel(
         self,
@@ -139,7 +211,7 @@ class OverlayManager:
         remote_ip: str,
         vni: int | None = None,
     ) -> VxlanTunnel:
-        """Create a VXLAN tunnel to another host.
+        """Create a VXLAN tunnel to another host using OVS.
 
         Args:
             lab_id: Lab identifier
@@ -154,6 +226,8 @@ class OverlayManager:
         Raises:
             RuntimeError: If tunnel creation fails
         """
+        await self._ensure_ovs_bridge()
+
         key = f"{lab_id}:{link_id}"
 
         # Check if tunnel already exists
@@ -167,41 +241,29 @@ class OverlayManager:
 
         # Create interface name from VNI
         interface_name = f"vxlan{vni}"
+        vlan_tag = self._vni_to_vlan(vni)
 
-        # Check if interface already exists (from previous run)
+        # Delete existing OVS port if present (from previous run)
+        if await self._ovs_port_exists(interface_name):
+            logger.warning(f"VXLAN port {interface_name} already exists, deleting")
+            await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, interface_name)
+
+        # Also clean up any Linux VXLAN interface with same name
         if await self._ip_link_exists(interface_name):
-            logger.warning(f"VXLAN interface {interface_name} already exists, deleting")
+            logger.warning(f"Linux VXLAN interface {interface_name} exists, deleting")
             await self._run_cmd(["ip", "link", "delete", interface_name])
 
-        # Create VXLAN interface
-        # ip link add vxlan100000 type vxlan id 100000 local 192.168.1.10 remote 192.168.1.20 dstport 4789
-        cmd = [
-            "ip", "link", "add", interface_name,
-            "type", "vxlan",
-            "id", str(vni),
-            "local", local_ip,
-            "remote", remote_ip,
-            "dstport", str(VXLAN_PORT),
-        ]
-
-        code, stdout, stderr = await self._run_cmd(cmd)
+        # Create VXLAN port on OVS
+        # Format: ovs-vsctl -- add-port br vxlan123 tag=500 -- set interface vxlan123 type=vxlan options:...
+        code, _, stderr = await self._ovs_vsctl(
+            "--", "add-port", self._bridge_name, interface_name, f"tag={vlan_tag}",
+            "--", "set", "interface", interface_name, "type=vxlan",
+            f"options:remote_ip={remote_ip}",
+            f"options:local_ip={local_ip}",
+            f"options:key={vni}",
+        )
         if code != 0:
-            raise RuntimeError(f"Failed to create VXLAN interface: {stderr}")
-
-        # Set MTU if configured (to avoid fragmentation on 1500 MTU underlays)
-        if settings.overlay_mtu > 0:
-            code, _, stderr = await self._run_cmd([
-                "ip", "link", "set", interface_name, "mtu", str(settings.overlay_mtu)
-            ])
-            if code != 0:
-                logger.warning(f"Failed to set MTU on VXLAN interface: {stderr}")
-
-        # Bring interface up
-        code, _, stderr = await self._run_cmd(["ip", "link", "set", interface_name, "up"])
-        if code != 0:
-            # Clean up on failure
-            await self._run_cmd(["ip", "link", "delete", interface_name])
-            raise RuntimeError(f"Failed to bring up VXLAN interface: {stderr}")
+            raise RuntimeError(f"Failed to create VXLAN port on OVS: {stderr}")
 
         tunnel = VxlanTunnel(
             vni=vni,
@@ -210,11 +272,11 @@ class OverlayManager:
             interface_name=interface_name,
             lab_id=lab_id,
             link_id=link_id,
+            vlan_tag=vlan_tag,
         )
 
         self._tunnels[key] = tunnel
-        mtu_info = f", MTU {settings.overlay_mtu}" if settings.overlay_mtu > 0 else ""
-        logger.info(f"Created VXLAN tunnel: {interface_name} (VNI {vni}{mtu_info}) to {remote_ip}")
+        logger.info(f"Created OVS VXLAN tunnel: {interface_name} (VNI {vni}, VLAN {vlan_tag}) to {remote_ip}")
 
         return tunnel
 
@@ -228,11 +290,12 @@ class OverlayManager:
             True if deleted successfully, False otherwise
         """
         try:
-            # Delete VXLAN interface
-            code, _, stderr = await self._run_cmd(["ip", "link", "delete", tunnel.interface_name])
-            if code != 0 and "Cannot find device" not in stderr:
-                logger.warning(f"Failed to delete VXLAN interface {tunnel.interface_name}: {stderr}")
-                return False
+            # Delete OVS VXLAN port
+            code, _, stderr = await self._ovs_vsctl(
+                "--if-exists", "del-port", self._bridge_name, tunnel.interface_name
+            )
+            if code != 0:
+                logger.warning(f"Failed to delete OVS VXLAN port {tunnel.interface_name}: {stderr}")
 
             # Release VNI
             self._vni_allocator.release(tunnel.lab_id, tunnel.link_id)
@@ -249,7 +312,10 @@ class OverlayManager:
             return False
 
     async def create_bridge(self, tunnel: VxlanTunnel) -> OverlayBridge:
-        """Create a Linux bridge and attach the VXLAN interface.
+        """Create an overlay bridge entry for a tunnel.
+
+        With OVS, we don't create separate bridges. Instead, we use
+        VLAN tags on the shared arch-ovs bridge for isolation.
 
         Args:
             tunnel: The VXLAN tunnel to bridge
@@ -260,6 +326,8 @@ class OverlayManager:
         Raises:
             RuntimeError: If bridge creation fails
         """
+        await self._ensure_ovs_bridge()
+
         key = tunnel.key
 
         # Check if bridge already exists
@@ -267,52 +335,18 @@ class OverlayManager:
             logger.info(f"Bridge already exists for: {key}")
             return self._bridges[key]
 
-        # Linux interface names limited to 15 chars (IFNAMSIZ=16 includes null)
-        # Use short prefix: "abr" = archetype bridge
-        bridge_name = f"abr-{tunnel.vni}"
-
-        # Delete if exists from previous run
-        if await self._bridge_exists(bridge_name):
-            logger.warning(f"Bridge {bridge_name} already exists, deleting")
-            await self._run_cmd(["ip", "link", "set", bridge_name, "down"])
-            await self._run_cmd(["ip", "link", "delete", bridge_name])
-
-        # Create bridge
-        code, _, stderr = await self._run_cmd(["ip", "link", "add", bridge_name, "type", "bridge"])
-        if code != 0:
-            raise RuntimeError(f"Failed to create bridge: {stderr}")
-
-        # Set MTU on bridge if configured
-        if settings.overlay_mtu > 0:
-            code, _, stderr = await self._run_cmd([
-                "ip", "link", "set", bridge_name, "mtu", str(settings.overlay_mtu)
-            ])
-            if code != 0:
-                logger.warning(f"Failed to set MTU on bridge: {stderr}")
-
-        # Bring bridge up
-        code, _, stderr = await self._run_cmd(["ip", "link", "set", bridge_name, "up"])
-        if code != 0:
-            await self._run_cmd(["ip", "link", "delete", bridge_name])
-            raise RuntimeError(f"Failed to bring up bridge: {stderr}")
-
-        # Attach VXLAN interface to bridge
-        code, _, stderr = await self._run_cmd([
-            "ip", "link", "set", tunnel.interface_name, "master", bridge_name
-        ])
-        if code != 0:
-            await self._run_cmd(["ip", "link", "delete", bridge_name])
-            raise RuntimeError(f"Failed to attach VXLAN to bridge: {stderr}")
-
+        # With OVS, the "bridge" is just tracking - no actual bridge creation needed
+        # The VLAN tag provides isolation within the shared arch-ovs bridge
         bridge = OverlayBridge(
-            name=bridge_name,
+            name=self._bridge_name,
             vni=tunnel.vni,
+            vlan_tag=tunnel.vlan_tag,
             lab_id=tunnel.lab_id,
             link_id=tunnel.link_id,
         )
 
         self._bridges[key] = bridge
-        logger.info(f"Created bridge {bridge_name} with VXLAN {tunnel.interface_name}")
+        logger.info(f"Created overlay bridge entry for VNI {tunnel.vni} (VLAN {tunnel.vlan_tag})")
 
         return bridge
 
@@ -326,22 +360,18 @@ class OverlayManager:
             True if deleted successfully
         """
         try:
-            # Delete veth pairs first
+            # Delete veth pairs from OVS and system
             for host_end, _ in bridge.veth_pairs:
+                # Remove from OVS
+                await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, host_end)
+                # Delete the veth pair
                 await self._run_cmd(["ip", "link", "delete", host_end])
-
-            # Delete bridge
-            await self._run_cmd(["ip", "link", "set", bridge.name, "down"])
-            code, _, stderr = await self._run_cmd(["ip", "link", "delete", bridge.name])
-
-            if code != 0 and "Cannot find device" not in stderr:
-                logger.warning(f"Failed to delete bridge {bridge.name}: {stderr}")
 
             # Remove from tracking
             if bridge.key in self._bridges:
                 del self._bridges[bridge.key]
 
-            logger.info(f"Deleted bridge: {bridge.name}")
+            logger.info(f"Deleted overlay bridge entry: VNI {bridge.vni}")
             return True
 
         except Exception as e:
@@ -358,7 +388,7 @@ class OverlayManager:
         """Attach a container interface to the overlay bridge.
 
         This creates a veth pair, moves one end into the container namespace,
-        and attaches the other end to the bridge.
+        and attaches the other end to the OVS bridge with the appropriate VLAN tag.
 
         Args:
             bridge: The bridge to attach to
@@ -370,6 +400,8 @@ class OverlayManager:
             True if attached successfully
         """
         try:
+            await self._ensure_ovs_bridge()
+
             # Get container PID for network namespace (wrapped to avoid blocking)
             def _sync_get_container_info():
                 container = self.docker.containers.get(container_name)
@@ -386,12 +418,12 @@ class OverlayManager:
                 return False
 
             # Create unique veth names with random suffix to ensure unique MACs
-            import secrets
             suffix = secrets.token_hex(2)  # 4 hex chars
             veth_host = f"v{bridge.vni % 10000}{suffix}h"[:15]  # Max 15 chars
             veth_cont = f"v{bridge.vni % 10000}{suffix}c"[:15]
 
             # Delete if exists
+            await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, veth_host)
             await self._run_cmd(["ip", "link", "delete", veth_host])
 
             # Create veth pair
@@ -410,13 +442,13 @@ class OverlayManager:
                     "ip", "link", "set", veth_cont, "mtu", str(settings.overlay_mtu)
                 ])
 
-            # Attach host end to bridge
-            code, _, stderr = await self._run_cmd([
-                "ip", "link", "set", veth_host, "master", bridge.name
-            ])
+            # Add host end to OVS with VLAN tag
+            code, _, stderr = await self._ovs_vsctl(
+                "add-port", self._bridge_name, veth_host, f"tag={bridge.vlan_tag}"
+            )
             if code != 0:
                 await self._run_cmd(["ip", "link", "delete", veth_host])
-                raise RuntimeError(f"Failed to attach veth to bridge: {stderr}")
+                raise RuntimeError(f"Failed to add veth to OVS: {stderr}")
 
             # Bring host end up
             await self._run_cmd(["ip", "link", "set", veth_host, "up"])
@@ -426,6 +458,7 @@ class OverlayManager:
                 "ip", "link", "set", veth_cont, "netns", str(pid)
             ])
             if code != 0:
+                await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, veth_host)
                 await self._run_cmd(["ip", "link", "delete", veth_host])
                 raise RuntimeError(f"Failed to move veth to container namespace: {stderr}")
 
@@ -460,7 +493,7 @@ class OverlayManager:
             # Track the veth pair
             bridge.veth_pairs.append((veth_host, interface_name))
 
-            logger.info(f"Attached container {container_name} to bridge {bridge.name} via {interface_name}")
+            logger.info(f"Attached container {container_name} to OVS {self._bridge_name} via {interface_name} (VLAN {bridge.vlan_tag})")
             return True
 
         except NotFound:
@@ -496,7 +529,7 @@ class OverlayManager:
                 if await self.delete_bridge(bridge):
                     result["bridges_deleted"] += 1
             except Exception as e:
-                result["errors"].append(f"Bridge {bridge.name}: {e}")
+                result["errors"].append(f"Bridge VNI {bridge.vni}: {e}")
 
         # Delete tunnels
         for tunnel in tunnels_to_delete:
@@ -531,6 +564,7 @@ class OverlayManager:
     def get_tunnel_status(self) -> dict[str, Any]:
         """Get status of all tunnels for debugging/monitoring."""
         return {
+            "ovs_bridge": self._bridge_name,
             "tunnels": [
                 {
                     "vni": t.vni,
@@ -539,6 +573,7 @@ class OverlayManager:
                     "remote_ip": t.remote_ip,
                     "lab_id": t.lab_id,
                     "link_id": t.link_id,
+                    "vlan_tag": t.vlan_tag,
                 }
                 for t in self._tunnels.values()
             ],
@@ -546,6 +581,7 @@ class OverlayManager:
                 {
                     "name": b.name,
                     "vni": b.vni,
+                    "vlan_tag": b.vlan_tag,
                     "lab_id": b.lab_id,
                     "link_id": b.link_id,
                     "veth_pairs": b.veth_pairs,
@@ -629,7 +665,7 @@ class VniAllocator:
             logger.warning(f"Failed to save VNI allocations to disk: {e}")
 
     async def recover_from_system(self) -> int:
-        """Scan existing VXLAN interfaces and recover allocations.
+        """Scan existing VXLAN interfaces/ports and recover allocations.
 
         This should be called on agent startup to detect VNIs in use
         that may not be in the persisted file (e.g., after crash).
@@ -641,7 +677,30 @@ class VniAllocator:
         used_vnis = set(self._allocated.values())
 
         try:
-            # List all VXLAN interfaces
+            # Check OVS VXLAN ports first
+            proc = await asyncio.create_subprocess_exec(
+                "ovs-vsctl", "list-ports", settings.ovs_bridge_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+
+            if proc.returncode == 0 and stdout:
+                ports = stdout.decode().strip().split("\n")
+                for port in ports:
+                    if port.startswith("vxlan"):
+                        try:
+                            vni = int(port[5:])  # Extract VNI from name
+                            if self._base <= vni <= self._max and vni not in used_vnis:
+                                placeholder_key = f"_recovered:{port}"
+                                self._allocated[placeholder_key] = vni
+                                used_vnis.add(vni)
+                                recovered += 1
+                                logger.info(f"Recovered VNI {vni} from OVS port {port}")
+                        except ValueError:
+                            continue
+
+            # Also check Linux VXLAN interfaces (legacy)
             proc = await asyncio.create_subprocess_exec(
                 "ip", "-j", "link", "show", "type", "vxlan",
                 stdout=asyncio.subprocess.PIPE,
@@ -649,27 +708,22 @@ class VniAllocator:
             )
             stdout, _ = await proc.communicate()
 
-            if proc.returncode != 0:
-                return 0
+            if proc.returncode == 0 and stdout:
+                interfaces = json.loads(stdout.decode()) if stdout else []
 
-            interfaces = json.loads(stdout.decode()) if stdout else []
-
-            for iface in interfaces:
-                name = iface.get("ifname", "")
-                # Our VXLAN interfaces are named vxlan{vni}
-                if name.startswith("vxlan"):
-                    try:
-                        vni = int(name[5:])  # Extract VNI from name
-                        if self._base <= vni <= self._max and vni not in used_vnis:
-                            # Found an in-use VNI not in our allocations
-                            # Mark it as used with a placeholder key
-                            placeholder_key = f"_recovered:{name}"
-                            self._allocated[placeholder_key] = vni
-                            used_vnis.add(vni)
-                            recovered += 1
-                            logger.info(f"Recovered VNI {vni} from existing interface {name}")
-                    except ValueError:
-                        continue
+                for iface in interfaces:
+                    name = iface.get("ifname", "")
+                    if name.startswith("vxlan"):
+                        try:
+                            vni = int(name[5:])
+                            if self._base <= vni <= self._max and vni not in used_vnis:
+                                placeholder_key = f"_recovered:{name}"
+                                self._allocated[placeholder_key] = vni
+                                used_vnis.add(vni)
+                                recovered += 1
+                                logger.info(f"Recovered VNI {vni} from Linux interface {name}")
+                        except ValueError:
+                            continue
 
             if recovered > 0:
                 self._save_to_disk()

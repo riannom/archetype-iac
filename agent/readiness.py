@@ -9,11 +9,16 @@ to complete their boot configuration (zerotouch, AAA, management API, etc.).
 
 Solution: Vendor-configurable readiness probes that check for boot completion
 patterns in container logs or via CLI commands.
+
+Post-boot commands: Some vendors require workarounds after boot (e.g., cEOS
+needs iptables rules removed). These are run once when readiness is first
+detected, tracked via _post_boot_completed set.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -22,6 +27,13 @@ from typing import Optional
 import docker
 
 from agent.vendors import get_vendor_config, is_ceos_kind
+
+
+logger = logging.getLogger(__name__)
+
+# Track containers that have had post-boot commands executed
+# Key: container_name, Value: True if commands have been run
+_post_boot_completed: set[str] = set()
 
 
 @dataclass
@@ -263,3 +275,85 @@ def get_readiness_timeout(kind: str) -> int:
     if config:
         return config.readiness_timeout
     return 120  # Default 2 minutes
+
+
+async def run_post_boot_commands(container_name: str, kind: str) -> bool:
+    """Run post-boot commands for a container if not already done.
+
+    This function is idempotent - it tracks which containers have already
+    had their post-boot commands executed and skips them on subsequent calls.
+
+    Args:
+        container_name: Docker container name
+        kind: Device kind for looking up vendor config
+
+    Returns:
+        True if commands were run (or already completed), False on error
+    """
+    # Check if already completed
+    if container_name in _post_boot_completed:
+        return True
+
+    config = get_vendor_config(kind)
+    if config is None or not config.post_boot_commands:
+        # No commands to run, mark as complete
+        _post_boot_completed.add(container_name)
+        return True
+
+    def _sync_run_commands() -> bool:
+        try:
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+
+            if container.status != "running":
+                logger.warning(f"Container {container_name} not running, skipping post-boot commands")
+                return False
+
+            for cmd in config.post_boot_commands:
+                logger.info(f"Running post-boot command on {container_name}: {cmd}")
+                exit_code, output = container.exec_run(
+                    ["sh", "-c", cmd],
+                    demux=False,
+                )
+                output_str = output.decode("utf-8", errors="replace") if output else ""
+                if exit_code != 0:
+                    logger.warning(
+                        f"Post-boot command returned {exit_code} on {container_name}: {cmd}\n{output_str}"
+                    )
+                else:
+                    logger.debug(f"Post-boot command succeeded on {container_name}: {cmd}")
+
+            return True
+
+        except docker.errors.NotFound:
+            logger.warning(f"Container {container_name} not found for post-boot commands")
+            return False
+        except Exception as e:
+            logger.error(f"Error running post-boot commands on {container_name}: {e}")
+            return False
+
+    success = await asyncio.to_thread(_sync_run_commands)
+    if success:
+        _post_boot_completed.add(container_name)
+        logger.info(f"Post-boot commands completed for {container_name}")
+    return success
+
+
+def clear_post_boot_state(container_name: str) -> None:
+    """Clear post-boot completion state for a container.
+
+    Call this when a container is restarted so post-boot commands
+    will run again on next readiness check.
+
+    Args:
+        container_name: Docker container name
+    """
+    _post_boot_completed.discard(container_name)
+
+
+def clear_all_post_boot_state() -> None:
+    """Clear all post-boot completion state.
+
+    Call this on agent restart.
+    """
+    _post_boot_completed.clear()

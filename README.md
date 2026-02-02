@@ -87,6 +87,7 @@ After installation, you'll see:
 #### Prerequisites
 
 - Docker Engine 24.0+ with Docker Compose
+- Open vSwitch 2.17+ (`apt install openvswitch-switch` or `dnf install openvswitch`)
 - Linux host (Ubuntu 22.04+, Debian 12+, RHEL 9+, or similar)
 - 4GB RAM minimum (8GB+ recommended for multiple labs)
 - Root/sudo access (required for container networking)
@@ -425,6 +426,51 @@ The OVS plugin manages per-lab bridges and interface provisioning. If containers
 1. Check OVS is running: `ovs-vsctl show`
 2. View plugin logs: `docker compose -f docker-compose.gui.yml logs agent | grep -i ovs`
 3. See `TROUBLESHOOTING_OVS_PLUGIN.md` for detailed debugging
+
+### Cross-Host Connectivity Issues
+
+If nodes on different hosts can't communicate:
+
+1. **Check VXLAN tunnel status**:
+   ```bash
+   curl http://localhost:8001/overlay/status
+   ```
+
+2. **Verify OVS bridge fail-mode is `standalone`**:
+   ```bash
+   ovs-vsctl get bridge arch-ovs fail_mode
+   # Should return: standalone
+   # If it shows "secure", fix with:
+   ovs-vsctl set-fail-mode arch-ovs standalone
+   ```
+
+3. **Check VLAN tags match** (VXLAN port and veth should have same tag):
+   ```bash
+   ovs-vsctl list-ports arch-ovs
+   ovs-vsctl get port <port_name> tag
+   ```
+
+4. **Verify underlay connectivity**:
+   ```bash
+   ping <remote-agent-ip>
+   ```
+
+See `VXLAN_TROUBLESHOOTING.md` for detailed cross-host debugging.
+
+### Arista cEOS Connectivity Issues
+
+cEOS has specific firewall rules that can block traffic:
+
+1. **Check iptables rules inside container**:
+   ```bash
+   docker exec <container> iptables -L EOS_FORWARD -n -v
+   ```
+
+2. **Remove blocking rule if present**:
+   ```bash
+   docker exec <container> iptables -D EOS_FORWARD -i eth1 -j DROP
+   ```
+   Note: This rule is recreated on container restart.
 
 ## Contributing
 
