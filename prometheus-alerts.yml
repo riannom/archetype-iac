@@ -1,0 +1,107 @@
+# Prometheus Alert Rules for Archetype
+#
+# These rules define alerting conditions for the Archetype platform.
+# Configure Alertmanager to route these alerts to your notification channels.
+
+groups:
+  - name: archetype-jobs
+    rules:
+      # Alert when a job has been running for more than 20 minutes
+      - alert: StuckJob
+        expr: archetype_jobs_active > 0 and archetype_job_duration_seconds_count == 0
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job stuck for more than 20 minutes"
+          description: "A job has been running for over 20 minutes without completing. Check job logs for issues."
+
+      # Alert when job failure rate is high
+      - alert: HighJobFailureRate
+        expr: |
+          (
+            sum(rate(archetype_jobs_total{status="failed"}[5m])) /
+            sum(rate(archetype_jobs_total[5m]))
+          ) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High job failure rate detected"
+          description: "More than 30% of jobs are failing in the last 5 minutes."
+
+  - name: archetype-agents
+    rules:
+      # Alert when no agents are online
+      - alert: NoHealthyAgents
+        expr: archetype_agents_online == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No healthy agents available"
+          description: "All agents are offline or unhealthy. Lab operations will fail."
+
+      # Alert when agent is experiencing high CPU
+      - alert: AgentHighCPU
+        expr: archetype_agent_cpu_percent > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent {{ $labels.host_name }} has high CPU usage"
+          description: "Agent CPU usage has been above 90% for 5 minutes."
+
+      # Alert when agent is experiencing high memory usage
+      - alert: AgentHighMemory
+        expr: archetype_agent_memory_percent > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent {{ $labels.host_name }} has high memory usage"
+          description: "Agent memory usage has been above 90% for 5 minutes."
+
+  - name: archetype-enforcement
+    rules:
+      # Alert when enforcement failure rate is high
+      - alert: HighEnforcementFailures
+        expr: rate(archetype_enforcement_failures_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High state enforcement failure rate"
+          description: "Multiple nodes are exceeding max enforcement retries. Manual intervention may be required."
+
+      # Alert when many nodes have pending enforcement
+      - alert: ManyPendingEnforcements
+        expr: archetype_enforcement_pending > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many nodes with pending state enforcement"
+          description: "{{ $value }} nodes have mismatched desired/actual states for over 10 minutes."
+
+  - name: archetype-labs
+    rules:
+      # Alert when labs are stuck in transitional states
+      - alert: LabsStuckInTransition
+        expr: sum(archetype_labs_total{state=~"starting|stopping"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Labs stuck in transitional state"
+          description: "One or more labs have been in a starting/stopping state for over 30 minutes."
+
+      # Alert when many labs are in error state
+      - alert: ManyLabsInError
+        expr: sum(archetype_labs_total{state="error"}) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Multiple labs in error state"
+          description: "{{ $value }} labs are in error state."

@@ -210,6 +210,13 @@ class NodeState(Base):
     management_ip: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # JSON array of all IP addresses (for nodes with multiple IPs)
     management_ips_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # State enforcement tracking
+    # Number of enforcement attempts on this node (reset on success or manual intervention)
+    enforcement_attempts: Mapped[int] = mapped_column(default=0)
+    # When the last enforcement action was attempted
+    last_enforcement_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When enforcement was marked as failed (after max retries exhausted)
+    enforcement_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

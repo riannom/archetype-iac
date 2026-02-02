@@ -592,6 +592,200 @@ class TestRunNodeSync:
         assert job.status == "completed" or job.status == "failed"  # May fail due to test setup
 
 
+class TestSyncAgentJobParentTracking:
+    """Tests for parent_job_id tracking in sync:agent jobs."""
+
+    def test_sync_agent_job_creation_with_parent_id(self, test_db: Session, test_user: models.User):
+        """sync:agent jobs can be created with parent_job_id set."""
+        # Create lab
+        lab = models.Lab(
+            id="lab-parent-test",
+            name="Parent Test Lab",
+            owner_id=test_user.id,
+            provider="docker",
+            state="running",
+        )
+        test_db.add(lab)
+        test_db.commit()
+
+        # Create parent sync job
+        parent_job = models.Job(
+            id="parent-sync-job",
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="sync:lab",
+            status="running",
+        )
+        test_db.add(parent_job)
+        test_db.commit()
+
+        # Create child sync:agent job with parent_job_id (simulating what jobs.py does)
+        child_job = models.Job(
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="sync:agent:host2:node1,node2",
+            status="queued",
+            parent_job_id=parent_job.id,  # This is what jobs.py sets
+        )
+        test_db.add(child_job)
+        test_db.commit()
+        test_db.refresh(child_job)
+
+        # Verify the relationship
+        assert child_job.parent_job_id == parent_job.id
+        assert "sync:agent" in child_job.action
+
+        # Query children by parent
+        children = test_db.query(models.Job).filter(
+            models.Job.parent_job_id == parent_job.id
+        ).all()
+        assert len(children) == 1
+        assert children[0].id == child_job.id
+
+    def test_multiple_sync_agent_jobs_share_parent(self, test_db: Session, test_user: models.User):
+        """Multiple sync:agent jobs can share the same parent_job_id."""
+        lab = models.Lab(
+            id="lab-multi-child",
+            name="Multi Child Lab",
+            owner_id=test_user.id,
+        )
+        test_db.add(lab)
+        test_db.commit()
+
+        # Create parent job
+        parent_job = models.Job(
+            id="parent-multi-child",
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="sync:lab",
+            status="running",
+        )
+        test_db.add(parent_job)
+        test_db.commit()
+
+        # Create multiple child jobs
+        for i in range(3):
+            child = models.Job(
+                lab_id=lab.id,
+                user_id=test_user.id,
+                action=f"sync:agent:host{i}:node{i}",
+                status="queued",
+                parent_job_id=parent_job.id,
+            )
+            test_db.add(child)
+        test_db.commit()
+
+        # Query all children
+        children = test_db.query(models.Job).filter(
+            models.Job.parent_job_id == parent_job.id
+        ).all()
+        assert len(children) == 3
+        for child in children:
+            assert child.parent_job_id == parent_job.id
+            assert "sync:agent" in child.action
+
+    def test_job_model_has_parent_job_id_field(self, test_db: Session, test_user: models.User):
+        """Job model should have parent_job_id field."""
+        lab = models.Lab(
+            id="lab-field-test",
+            name="Field Test Lab",
+            owner_id=test_user.id,
+        )
+        test_db.add(lab)
+        test_db.commit()
+
+        # Create parent job
+        parent = models.Job(
+            id="parent-field-test",
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="sync:lab",
+            status="running",
+        )
+        test_db.add(parent)
+        test_db.commit()
+
+        # Create child job with parent_job_id
+        child = models.Job(
+            id="child-field-test",
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="sync:agent:host1:node1",
+            status="queued",
+            parent_job_id=parent.id,
+        )
+        test_db.add(child)
+        test_db.commit()
+        test_db.refresh(child)
+
+        assert child.parent_job_id == parent.id
+
+    def test_job_model_has_superseded_by_id_field(self, test_db: Session, test_user: models.User):
+        """Job model should have superseded_by_id field."""
+        lab = models.Lab(
+            id="lab-superseded-test",
+            name="Superseded Test Lab",
+            owner_id=test_user.id,
+        )
+        test_db.add(lab)
+        test_db.commit()
+
+        # Create original job
+        original = models.Job(
+            id="original-job",
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="failed",
+        )
+        test_db.add(original)
+        test_db.commit()
+
+        # Create retry job
+        retry = models.Job(
+            id="retry-job",
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="queued",
+            retry_count=1,
+        )
+        test_db.add(retry)
+        test_db.commit()
+
+        # Link original to retry
+        original.superseded_by_id = retry.id
+        test_db.commit()
+        test_db.refresh(original)
+
+        assert original.superseded_by_id == retry.id
+
+    def test_parent_job_id_nullable(self, test_db: Session, test_user: models.User):
+        """parent_job_id should be nullable for standalone jobs."""
+        lab = models.Lab(
+            id="lab-nullable-test",
+            name="Nullable Test Lab",
+            owner_id=test_user.id,
+        )
+        test_db.add(lab)
+        test_db.commit()
+
+        # Create job without parent
+        job = models.Job(
+            id="standalone-job-test",
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="queued",
+            parent_job_id=None,  # Explicitly None
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+
+        assert job.parent_job_id is None
+
+
 class TestJobErrorHandling:
     """Tests for job error handling scenarios."""
 

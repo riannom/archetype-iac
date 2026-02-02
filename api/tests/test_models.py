@@ -170,6 +170,114 @@ class TestJobModel:
         jobs = test_db.query(models.Job).filter(models.Job.lab_id == sample_lab.id).all()
         assert len(jobs) == len(valid_statuses)
 
+    def test_job_parent_job_id(self, test_db: Session, sample_lab: models.Lab, test_user: models.User):
+        """Job can have parent_job_id for parent-child relationships."""
+        # Create parent job
+        parent = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:lab",
+            status="running",
+        )
+        test_db.add(parent)
+        test_db.commit()
+        test_db.refresh(parent)
+
+        # Create child job with parent_job_id
+        child = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:agent:host1:node1",
+            status="queued",
+            parent_job_id=parent.id,
+        )
+        test_db.add(child)
+        test_db.commit()
+        test_db.refresh(child)
+
+        assert child.parent_job_id == parent.id
+
+        # Query children by parent
+        children = test_db.query(models.Job).filter(
+            models.Job.parent_job_id == parent.id
+        ).all()
+        assert len(children) == 1
+        assert children[0].id == child.id
+
+    def test_job_parent_job_id_nullable(self, test_db: Session, sample_lab: models.Lab, test_user: models.User):
+        """parent_job_id should be nullable (most jobs don't have parents)."""
+        job = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="queued",
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+
+        assert job.parent_job_id is None
+
+    def test_job_superseded_by_id(self, test_db: Session, sample_lab: models.Lab, test_user: models.User):
+        """Job can have superseded_by_id for retry tracking."""
+        # Create original job
+        original = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="failed",
+        )
+        test_db.add(original)
+        test_db.commit()
+        test_db.refresh(original)
+
+        # Create retry job
+        retry = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="queued",
+            retry_count=1,
+        )
+        test_db.add(retry)
+        test_db.commit()
+        test_db.refresh(retry)
+
+        # Link original to retry
+        original.superseded_by_id = retry.id
+        test_db.commit()
+        test_db.refresh(original)
+
+        assert original.superseded_by_id == retry.id
+
+    def test_job_superseded_by_id_nullable(self, test_db: Session, sample_lab: models.Lab, test_user: models.User):
+        """superseded_by_id should be nullable (most jobs aren't superseded)."""
+        job = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="completed",
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+
+        assert job.superseded_by_id is None
+
+    def test_job_defaults_include_parent_tracking(self, test_db: Session, sample_lab: models.Lab, test_user: models.User):
+        """Job defaults should include None for parent tracking fields."""
+        job = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="down",
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+
+        assert job.parent_job_id is None
+        assert job.superseded_by_id is None
+
 
 class TestHostModel:
     """Tests for Host model."""

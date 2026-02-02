@@ -530,3 +530,100 @@ def active_link_state_with_carrier(
     test_db.commit()
     test_db.refresh(link)
     return link
+
+
+# --- Fixtures for Live Node Management Tests ---
+
+
+@pytest.fixture(scope="function")
+def mock_broadcaster():
+    """Mock broadcaster for verifying publish calls.
+
+    Use this fixture to verify that state changes are being broadcast
+    correctly through the StateBroadcaster pub/sub system.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock = MagicMock()
+    mock.publish_node_state = AsyncMock(return_value=1)
+    mock.publish_link_state = AsyncMock(return_value=1)
+    mock.publish_lab_state = AsyncMock(return_value=1)
+    mock.publish_job_progress = AsyncMock(return_value=1)
+    return mock
+
+
+@pytest.fixture(scope="function")
+def debouncer():
+    """Fresh debouncer instance for testing.
+
+    Creates a new NodeChangeDebouncer instance for each test,
+    isolated from the global singleton.
+    """
+    from app.tasks.live_nodes import NodeChangeDebouncer
+
+    return NodeChangeDebouncer()
+
+
+@pytest.fixture(scope="function")
+def running_lab(test_db: Session, test_user: models.User) -> models.Lab:
+    """Create a lab in running state for live node tests."""
+    lab = models.Lab(
+        name="Running Lab",
+        owner_id=test_user.id,
+        provider="docker",
+        state="running",
+        workspace_path="/tmp/running-lab",
+    )
+    test_db.add(lab)
+    test_db.commit()
+    test_db.refresh(lab)
+    return lab
+
+
+@pytest.fixture(scope="function")
+def stopped_lab(test_db: Session, test_user: models.User) -> models.Lab:
+    """Create a lab in stopped state for live node tests."""
+    lab = models.Lab(
+        name="Stopped Lab",
+        owner_id=test_user.id,
+        provider="docker",
+        state="stopped",
+        workspace_path="/tmp/stopped-lab",
+    )
+    test_db.add(lab)
+    test_db.commit()
+    test_db.refresh(lab)
+    return lab
+
+
+@pytest.fixture(scope="function")
+def deployed_node_state(test_db: Session, running_lab: models.Lab) -> models.NodeState:
+    """Create a deployed node state for testing destruction."""
+    node = models.NodeState(
+        lab_id=running_lab.id,
+        node_id="n1",
+        node_name="archetype-running-lab-r1",
+        desired_state="running",
+        actual_state="running",
+        is_ready=True,
+    )
+    test_db.add(node)
+    test_db.commit()
+    test_db.refresh(node)
+    return node
+
+
+@pytest.fixture(scope="function")
+def undeployed_node_state(test_db: Session, running_lab: models.Lab) -> models.NodeState:
+    """Create an undeployed node state for testing deployment."""
+    node = models.NodeState(
+        lab_id=running_lab.id,
+        node_id="n2",
+        node_name="archetype-running-lab-r2",
+        desired_state="stopped",
+        actual_state="undeployed",
+    )
+    test_db.add(node)
+    test_db.commit()
+    test_db.refresh(node)
+    return node

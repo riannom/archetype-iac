@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     state_enforcement_interval: int = 60
     # Cooldown before retrying enforcement on the same node (seconds)
     state_enforcement_cooldown: int = 300  # 5 minutes
+    # Maximum number of enforcement retry attempts before giving up
+    state_enforcement_max_retries: int = 3
+    # Base backoff time for retries (seconds), doubles each attempt
+    state_enforcement_retry_backoff: int = 60
+    # Cooldown after a node crashes or fails before auto-restart (seconds)
+    state_enforcement_crash_cooldown: int = 600  # 10 minutes
+    # Enable auto-restart of crashed nodes (set to False to require manual intervention)
+    state_enforcement_auto_restart_enabled: bool = True
 
     # Job health monitoring settings
     # How often the job health monitor checks for stuck jobs (seconds)
@@ -97,6 +105,8 @@ class Settings(BaseSettings):
     # Feature flags
     feature_multihost_labs: bool = True
     feature_vxlan_overlay: bool = True
+    # Auto-extract configs before destroy operations
+    feature_auto_extract_on_destroy: bool = True
 
     # Logging configuration
     log_format: str = "json"  # "json" or "text"

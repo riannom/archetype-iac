@@ -25,7 +25,8 @@ from app.logging_config import (
     set_correlation_id,
     setup_logging,
 )
-from app.middleware import CurrentUserMiddleware
+from app.middleware import CurrentUserMiddleware, DeprecationMiddleware
+from app.routers.v1 import router as v1_router
 from app.routers import admin, agents, auth, callbacks, console, events, images, iso, jobs, labs, permissions, state_ws, system, webhooks
 from app.tasks.health import agent_health_monitor
 from app.tasks.job_health import job_health_monitor
@@ -199,6 +200,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(CurrentUserMiddleware)
+app.add_middleware(DeprecationMiddleware, sunset_date="2026-12-01")
 
 # Include routers
 app.include_router(auth.router)
@@ -215,6 +217,7 @@ app.include_router(iso.router)
 app.include_router(webhooks.router)
 app.include_router(system.router)
 app.include_router(state_ws.router)
+app.include_router(v1_router, prefix="/api/v1")
 
 
 # Simple endpoints that remain in main.py
@@ -226,6 +229,23 @@ def health(request: Request) -> dict[str, str]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "user": user.email if user else "",
     }
+
+
+@app.get("/metrics")
+def metrics(database: Session = Depends(db.get_db)):
+    """Prometheus metrics endpoint.
+
+    Returns metrics in Prometheus text format for scraping.
+    Automatically updates all metrics from database before returning.
+    """
+    from app.metrics import get_metrics, update_all_metrics
+
+    # Update all metrics from current database state
+    update_all_metrics(database)
+
+    # Generate and return metrics
+    content, content_type = get_metrics()
+    return Response(content=content, media_type=content_type)
 
 
 @app.get("/devices")

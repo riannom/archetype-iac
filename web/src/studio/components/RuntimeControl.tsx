@@ -14,6 +14,7 @@ interface NodeStateEntry {
   node_name: string;
   host_id?: string | null;
   host_name?: string | null;
+  error_message?: string | null;
 }
 
 interface RuntimeControlProps {
@@ -230,9 +231,23 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                       <div className="text-[10px] text-stone-500 italic">{node.version}</div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border transition-all ${getStatusColor(status)}`}>
-                        {status}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border transition-all ${getStatusColor(status)}`}>
+                          {status}
+                        </span>
+                        {/* Enforcement failure warning indicator */}
+                        {status === 'error' && nodeState?.error_message?.includes('enforcement') && (
+                          <div className="relative group/tooltip">
+                            <i className="fa-solid fa-triangle-exclamation text-amber-500 text-sm animate-pulse cursor-help"></i>
+                            <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 hidden group-hover/tooltip:block z-50">
+                              <div className="bg-stone-900 text-white text-xs px-3 py-2 rounded-lg shadow-lg max-w-xs whitespace-nowrap">
+                                <div className="font-bold text-amber-400 mb-1">Restart Attempts Exhausted</div>
+                                <div className="text-stone-300">{nodeState.error_message}</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       <div className="space-y-1.5">
