@@ -1498,6 +1498,17 @@ username admin privilege 15 role network-admin nopassword
 
         return created
 
+    async def _run_post_boot_commands(self, container_name: str, kind: str) -> None:
+        """Run vendor-specific post-boot commands on a container.
+
+        This handles workarounds like removing cEOS iptables DROP rules.
+        """
+        from agent.readiness import run_post_boot_commands
+        try:
+            await run_post_boot_commands(container_name, kind)
+        except Exception as e:
+            logger.warning(f"Post-boot commands failed for {container_name}: {e}")
+
     async def _wait_for_readiness(
         self,
         topology: ParsedTopology,
@@ -1554,6 +1565,8 @@ username admin privilege 15 role network-admin nopassword
                             if re.search(config.readiness_pattern, logs):
                                 ready_status[node_name] = True
                                 logger.info(f"Node {log_name} is ready")
+                                # Run post-boot commands (e.g., remove cEOS iptables rules)
+                                await self._run_post_boot_commands(container.name, node.kind)
                             else:
                                 all_ready = False
                         else:
