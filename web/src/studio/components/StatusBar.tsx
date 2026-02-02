@@ -63,7 +63,7 @@ const StatusBar: React.FC<StatusBarProps> = ({ nodeStates, wsConnected, reconnec
           <div
             className={`flex items-center gap-1.5 px-2 py-0.5 rounded border ${
               wsConnected
-                ? 'bg-sage-50 dark:bg-sage-900/30 border-sage-200 dark:border-sage-800 text-sage-600 dark:text-sage-300'
+                ? 'bg-sage-100 dark:bg-sage-900 border-sage-300 dark:border-sage-700 text-sage-700 dark:text-sage-300'
                 : reconnectAttempts > 0
                   ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400'
                   : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-500'
