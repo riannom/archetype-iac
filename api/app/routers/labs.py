@@ -11,7 +11,7 @@ from typing import Literal
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
@@ -2797,8 +2797,8 @@ def get_lab_logs(
 
 class CleanupOrphansResponse(BaseModel):
     """Response from orphan cleanup."""
-    removed_by_agent: dict[str, list[str]] = {}
-    errors: list[str] = []
+    removed_by_agent: dict[str, list[str]] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
 
 
 @router.post("/labs/{lab_id}/cleanup-orphans", response_model=CleanupOrphansResponse)
@@ -2818,7 +2818,7 @@ async def cleanup_lab_orphans(
     Returns:
         Dict mapping agent names to lists of removed containers
     """
-    lab = get_lab_or_404(database, lab_id)
+    lab = get_lab_or_404(lab_id, database, current_user)
 
     # Get all node placements for this lab
     placements = (
