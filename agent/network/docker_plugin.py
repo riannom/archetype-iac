@@ -849,17 +849,18 @@ class DockerOVSPlugin:
         # since all labs share the same bridge. Labs will be re-registered when
         # Docker networks are created.
         logger.info("No persisted state found, ensuring shared bridge exists...")
+        await self._ensure_shared_bridge()
 
-        # Ensure the shared bridge exists and is configured
+        logger.info("State recovery complete (no lab state to recover)")
+
+    async def _ensure_shared_bridge(self) -> None:
+        """Ensure the shared arch-ovs bridge exists and is configured."""
         bridge_name = settings.ovs_bridge_name
         code, _, _ = await self._ovs_vsctl("br-exists", bridge_name)
         if code != 0:
-            # Create the shared bridge
             code, _, stderr = await self._ovs_vsctl("add-br", bridge_name)
             if code != 0:
-                logger.error(f"Failed to create shared OVS bridge: {stderr}")
-                return
-
+                raise RuntimeError(f"Failed to create shared OVS bridge: {stderr}")
             await self._ovs_vsctl("set-fail-mode", bridge_name, "standalone")
             await self._run_cmd([
                 "ovs-ofctl", "add-flow", bridge_name,
@@ -870,7 +871,49 @@ class DockerOVSPlugin:
         else:
             logger.info(f"Shared OVS bridge {bridge_name} exists")
 
-        logger.info("State recovery complete (no lab state to recover)")
+    async def _migrate_per_lab_bridges(self) -> None:
+        """Move ports from legacy per-lab bridges (ovs-*) to shared arch-ovs."""
+        bridge_name = settings.ovs_bridge_name
+        code, stdout, _ = await self._ovs_vsctl("list-br")
+        if code != 0:
+            return
+
+        bridges = [b.strip() for b in stdout.strip().split("\n") if b.strip()]
+        for old_bridge in bridges:
+            if old_bridge == bridge_name:
+                continue
+            if not old_bridge.startswith(OVS_BRIDGE_PREFIX):
+                continue
+
+            # Move ports from old bridge to shared bridge
+            code, ports_out, _ = await self._ovs_vsctl("list-ports", old_bridge)
+            ports = [p.strip() for p in ports_out.strip().split("\n") if p.strip()] if code == 0 else []
+            if not ports:
+                # Remove empty legacy bridge
+                await self._ovs_vsctl("--if-exists", "del-br", old_bridge)
+                logger.info(f"Removed empty legacy bridge {old_bridge}")
+                continue
+
+            for port in ports:
+                # Preserve VLAN tag if present
+                vlan_tag = None
+                code, tag_out, _ = await self._ovs_vsctl("get", "port", port, "tag")
+                if code == 0:
+                    tag_str = tag_out.strip().strip("[]")
+                    if tag_str:
+                        try:
+                            vlan_tag = int(tag_str)
+                        except ValueError:
+                            vlan_tag = None
+
+                await self._ovs_vsctl("--if-exists", "del-port", old_bridge, port)
+                if vlan_tag is not None:
+                    await self._ovs_vsctl("add-port", bridge_name, port, f"tag={vlan_tag}")
+                else:
+                    await self._ovs_vsctl("add-port", bridge_name, port)
+
+            await self._ovs_vsctl("--if-exists", "del-br", old_bridge)
+            logger.info(f"Migrated ports from {old_bridge} to {bridge_name}")
 
     async def _recover_bridge_state(self, bridge_name: str, skip_endpoints: bool = False) -> None:
         """Recover state for a single OVS bridge."""
@@ -2653,6 +2696,10 @@ class DockerOVSPlugin:
         # Remove stale socket
         if os.path.exists(socket_path):
             os.remove(socket_path)
+
+        # Ensure shared bridge and migrate legacy per-lab bridges.
+        await self._ensure_shared_bridge()
+        await self._migrate_per_lab_bridges()
 
         # Discover existing state on startup (enables recovery after restart)
         await self._discover_existing_state()
