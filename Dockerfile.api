@@ -42,6 +42,10 @@ COPY agent/vendors.py ./agent/vendors.py
 COPY agent/VERSION ./agent/VERSION
 RUN touch agent/__init__.py
 
+ARG GIT_SHA=unknown
+ENV ARCHETYPE_GIT_SHA=$GIT_SHA
+RUN echo "$GIT_SHA" > /app/GIT_SHA
+
 ENV PYTHONUNBUFFERED=1
 ENV WORKSPACE=/var/lib/archetype
 

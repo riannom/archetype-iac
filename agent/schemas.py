@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from agent.version import __version__
+from agent.version import __version__, get_commit
 
 
 class AgentStatus(str, Enum):
@@ -63,6 +63,7 @@ class AgentInfo(BaseModel):
     address: str  # host:port for controller to reach agent
     capabilities: AgentCapabilities
     version: str = __version__
+    commit: str = Field(default_factory=get_commit)
     started_at: datetime | None = None  # When the agent process started
     is_local: bool = False  # True if co-located with controller (enables rebuild)
     deployment_mode: str = "unknown"  # systemd, docker, unknown - for update strategy

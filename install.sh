@@ -407,6 +407,7 @@ EOF
     fi
 
     # Start services
+    export GIT_SHA=$(cd $INSTALL_DIR && git rev-parse HEAD 2>/dev/null || echo "unknown")
     log_info "Building and starting controller services..."
     log_info "(First run may take several minutes to build containers)"
     docker compose -f docker-compose.gui.yml up -d --build
@@ -468,6 +469,7 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
     log_info "Python dependencies installed"
 
     # Config
+    AGENT_COMMIT=$(cd $AGENT_INSTALL_DIR/repo && git rev-parse HEAD 2>/dev/null || echo "unknown")
     cat > $AGENT_INSTALL_DIR/agent.env << EOF
 ARCHETYPE_AGENT_AGENT_NAME=$AGENT_NAME
 ARCHETYPE_AGENT_CONTROLLER_URL=$CONTROLLER_URL
@@ -476,8 +478,11 @@ ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT
 ARCHETYPE_AGENT_ENABLE_CONTAINERLAB=true
 ARCHETYPE_AGENT_ENABLE_VXLAN=true
 ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
+ARCHETYPE_GIT_SHA=$AGENT_COMMIT
 EOF
     chmod 644 $AGENT_INSTALL_DIR/agent.env
+
+    echo "$AGENT_COMMIT" > $AGENT_INSTALL_DIR/repo/agent/GIT_SHA
 
     mkdir -p /var/lib/archetype-agent
 

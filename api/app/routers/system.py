@@ -8,6 +8,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+import os
 from typing import Any
 
 import httpx
@@ -46,13 +47,33 @@ def get_version() -> str:
     return "0.0.0"  # Fallback if VERSION file not found
 
 
+def get_commit() -> str:
+    """Read commit SHA from env or GIT_SHA file."""
+    env_sha = os.getenv("ARCHETYPE_GIT_SHA", "").strip()
+    if env_sha:
+        return env_sha
+
+    possible_paths = [
+        Path(__file__).parent.parent.parent.parent / "GIT_SHA",
+        Path("/app/GIT_SHA"),
+        Path("GIT_SHA"),
+    ]
+    for commit_path in possible_paths:
+        if commit_path.exists():
+            try:
+                return commit_path.read_text().strip()
+            except Exception:
+                pass
+    return "unknown"
+
+
 @router.get("/version", response_model=VersionInfo)
 def get_version_info() -> VersionInfo:
     """Get current application version.
 
     Returns the version string read from the VERSION file at the repository root.
     """
-    return VersionInfo(version=get_version())
+    return VersionInfo(version=get_version(), commit=get_commit())
 
 
 @router.get("/updates", response_model=UpdateInfo)

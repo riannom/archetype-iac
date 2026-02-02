@@ -14,6 +14,7 @@ services:
       dockerfile: Dockerfile.api
       args:
         NETLAB_REF: ${NETLAB_REF:-release_26.01.01}
+        GIT_SHA: ${GIT_SHA:-unknown}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -130,6 +131,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     network_mode: host
     pid: host  # Required for overlay networking to access container namespaces
     privileged: true
