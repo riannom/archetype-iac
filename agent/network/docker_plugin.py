@@ -237,6 +237,16 @@ class DockerOVSPlugin:
         if code != 0:
             logger.error(f"Failed to create veth pair {host_name}/{cont_name}: {stderr}")
             return False
+
+        # Set MTU on veth pair for jumbo frame support
+        if settings.local_mtu > 0:
+            await self._run_cmd([
+                "ip", "link", "set", host_name, "mtu", str(settings.local_mtu)
+            ])
+            await self._run_cmd([
+                "ip", "link", "set", cont_name, "mtu", str(settings.local_mtu)
+            ])
+
         return True
 
     async def _attach_to_ovs(self, bridge_name: str, port_name: str, vlan_tag: int) -> bool:

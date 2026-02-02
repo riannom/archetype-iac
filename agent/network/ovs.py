@@ -723,6 +723,15 @@ class OVSNetworkManager:
             if code != 0:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
 
+            # Set MTU on veth pair for jumbo frame support
+            if settings.local_mtu > 0:
+                await self._run_cmd([
+                    "ip", "link", "set", port_name, "mtu", str(settings.local_mtu)
+                ])
+                await self._run_cmd([
+                    "ip", "link", "set", veth_cont, "mtu", str(settings.local_mtu)
+                ])
+
             # Add host-side to OVS bridge with VLAN tag
             code, _, stderr = await self._ovs_vsctl(
                 "add-port", self._bridge_name, port_name,
