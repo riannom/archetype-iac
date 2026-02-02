@@ -264,6 +264,24 @@ class CleanupOrphansResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class CleanupLabOrphansRequest(BaseModel):
+    """Request to clean up orphan containers for a specific lab.
+
+    Used when nodes are migrated between agents - removes containers
+    for nodes that are no longer assigned to this agent.
+    """
+    lab_id: str
+    keep_node_names: list[str] = Field(default_factory=list)
+    """Node names that should be kept on this agent. All other containers for this lab will be removed."""
+
+
+class CleanupLabOrphansResponse(BaseModel):
+    """Response from lab orphan cleanup endpoint."""
+    removed_containers: list[str] = Field(default_factory=list)
+    kept_containers: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 # --- Overlay Networking ---
 
 class CreateTunnelRequest(BaseModel):
@@ -323,6 +341,25 @@ class OverlayStatusResponse(BaseModel):
     """Agent -> Controller: Status of all overlay networks."""
     tunnels: list[TunnelInfo] = Field(default_factory=list)
     bridges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# --- MTU Testing ---
+
+
+class MtuTestRequest(BaseModel):
+    """Controller -> Agent: Test MTU to a target IP."""
+    target_ip: str
+    mtu: int = 1450  # MTU to test
+
+
+class MtuTestResponse(BaseModel):
+    """Agent -> Controller: MTU test result."""
+    success: bool
+    tested_mtu: int | None = None  # Verified working MTU
+    link_type: str | None = None  # "direct", "routed", "unknown"
+    latency_ms: float | None = None  # Round-trip time
+    ttl: int | None = None  # TTL from ping response (for link type detection)
+    error: str | None = None
 
 
 # --- Config Extraction ---

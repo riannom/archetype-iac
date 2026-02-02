@@ -2793,3 +2793,79 @@ def get_lab_logs(
         error_count=error_count,
         has_more=has_more,
     )
+
+
+class CleanupOrphansResponse(BaseModel):
+    """Response from orphan cleanup."""
+    removed_by_agent: dict[str, list[str]] = {}
+    errors: list[str] = []
+
+
+@router.post("/labs/{lab_id}/cleanup-orphans", response_model=CleanupOrphansResponse)
+async def cleanup_lab_orphans(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> CleanupOrphansResponse:
+    """Clean up orphaned containers for a lab across all agents.
+
+    Removes containers for nodes that are no longer assigned to a given agent.
+    This happens when nodes are migrated between agents.
+
+    Args:
+        lab_id: Lab identifier
+
+    Returns:
+        Dict mapping agent names to lists of removed containers
+    """
+    lab = get_lab_or_404(database, lab_id)
+
+    # Get all node placements for this lab
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id)
+        .all()
+    )
+
+    # Build a mapping of host_id -> list of node_names
+    nodes_by_host: dict[str, list[str]] = {}
+    for placement in placements:
+        if placement.host_id not in nodes_by_host:
+            nodes_by_host[placement.host_id] = []
+        nodes_by_host[placement.host_id].append(placement.node_name)
+
+    # Get all online agents
+    agents = (
+        database.query(models.Host)
+        .filter(models.Host.status == "online")
+        .all()
+    )
+
+    removed_by_agent: dict[str, list[str]] = {}
+    errors: list[str] = []
+
+    # Call each agent to clean up orphans
+    for agent in agents:
+        # Get the list of nodes that SHOULD be on this agent
+        keep_nodes = nodes_by_host.get(agent.id, [])
+
+        try:
+            result = await agent_client.cleanup_lab_orphans(
+                agent, lab_id, keep_nodes
+            )
+            if result.get("removed_containers"):
+                removed_by_agent[agent.name] = result["removed_containers"]
+                logger.info(
+                    f"Cleaned up {len(result['removed_containers'])} orphan containers on {agent.name}"
+                )
+            if result.get("errors"):
+                errors.extend(result["errors"])
+        except Exception as e:
+            error_msg = f"Failed to cleanup orphans on {agent.name}: {e}"
+            logger.warning(error_msg)
+            errors.append(error_msg)
+
+    return CleanupOrphansResponse(
+        removed_by_agent=removed_by_agent,
+        errors=errors,
+    )
