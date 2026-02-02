@@ -376,6 +376,7 @@ async def _process_node_changes_impl(
 
     except Exception as e:
         logger.error(f"Error processing node changes for lab {lab_id}: {e}")
+        session.rollback()
     finally:
         session.close()
 

@@ -22,6 +22,9 @@ async def agent_health_monitor():
                 marked_offline = await agent_client.update_stale_agents(session)
                 if marked_offline:
                     logger.info(f"Marked {len(marked_offline)} agent(s) as offline")
+            except Exception as e:
+                logger.error(f"Error updating stale agents: {e}")
+                session.rollback()
             finally:
                 session.close()
         except asyncio.CancelledError:

@@ -303,6 +303,7 @@ async def refresh_states_from_agents():
 
     except Exception as e:
         logger.error(f"Error in state reconciliation: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -869,6 +870,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
     except Exception as e:
         logger.error(f"Failed to reconcile lab {lab_id}: {e}")
+        session.rollback()
         # Don't update state on error - leave it for next cycle
 
 
