@@ -428,7 +428,7 @@ links:
             .first()
         )
         assert node_state is not None
-        assert node_state.node_name == "actual-clab-name"
+        assert node_state.node_name == "archetype-lab1-router1"
 
     def test_export_graph(
         self,

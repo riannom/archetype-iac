@@ -290,7 +290,7 @@ async def _capture_node_ips(session, lab_id: str, agent: models.Host) -> None:
     """Capture management IPs from agent and persist to NodeState records.
 
     This is called after a successful deploy to capture the container IPs
-    assigned by containerlab/docker for use in IaC workflows.
+    assigned by docker for use in IaC workflows.
     """
     try:
         status = await agent_client.get_lab_status_from_agent(agent, lab_id)
@@ -1979,8 +1979,8 @@ async def run_node_reconcile(
                     release_deploy_lock(lab_id, all_topology_nodes)
 
         # Phase 2: Start nodes that are stopped but should be running
-        # For containerlab: docker start doesn't recreate network interfaces,
-        # so we MUST use clab deploy --reconfigure to properly restart nodes.
+        # Docker start doesn't recreate network interfaces,
+        # so we MUST redeploy to properly restart nodes.
         # This redeploys the full topology which recreates all veth pairs.
         if nodes_need_start:
             log_parts.append("")
@@ -2449,27 +2449,20 @@ async def _create_cross_host_links_if_ready(
 
 
 def _get_container_name(lab_id: str, node_name: str, provider: str = "docker") -> str:
-    """Get the container name for a node based on the provider.
+    """Get the container name for a node.
 
-    Container naming conventions:
-    - containerlab: clab-{lab_id}-{node_name}
-    - docker: archetype-{lab_id}-{node_name}
+    Container naming convention: archetype-{lab_id}-{node_name}
 
     Lab ID is sanitized and truncated to ~20 chars.
 
     Args:
         lab_id: Lab identifier
         node_name: Node name in the topology
-        provider: Infrastructure provider (containerlab, docker)
+        provider: Infrastructure provider (unused, kept for compatibility)
 
     Returns:
         Full container name
     """
     safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
     safe_node = re.sub(r'[^a-zA-Z0-9_-]', '', node_name)
-
-    if provider == "docker":
-        return f"archetype-{safe_lab_id}-{safe_node}"
-    else:
-        # Default: containerlab naming
-        return f"clab-{safe_lab_id}-{node_name}"
+    return f"archetype-{safe_lab_id}-{safe_node}"

@@ -210,7 +210,7 @@ async def get_healthy_agent(
 
     Args:
         database: Database session
-        required_provider: Provider the agent must support (e.g., "docker", "containerlab", "libvirt")
+        required_provider: Provider the agent must support (e.g., "docker", "libvirt")
         prefer_agent_id: Agent ID to prefer for affinity (e.g., lab's current agent)
         exclude_agents: Agent IDs to exclude (e.g., previously failed agents)
 
@@ -1142,7 +1142,7 @@ async def container_action(
 
     Args:
         agent: The agent where the container is running
-        container_name: Full container name (e.g., "clab-labid-nodename")
+        container_name: Full container name (e.g., "archetype-labid-nodename")
         action: "start" or "stop"
 
     Returns:

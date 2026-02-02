@@ -419,7 +419,7 @@ class TestLabPrefixMatching:
         test_client: TestClient,
         test_db: Session,
     ):
-        """Test that truncated lab IDs (legacy containerlab behavior) are matched."""
+        """Test that truncated lab IDs are matched."""
         # Create lab with long ID (UUID format)
         lab = models.Lab(name="Test Lab", provider="docker")
         test_db.add(lab)

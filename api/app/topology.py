@@ -22,9 +22,9 @@ from agent.vendors import get_kind_for_device, get_default_image, get_vendor_con
 
 
 def _normalize_interface_name(iface_name: str) -> str:
-    """Normalize interface name to containerlab format.
+    """Normalize interface name to deployment format.
 
-    Converts vendor-specific names like 'Ethernet1' to 'eth1' for containerlab.
+    Converts vendor-specific names like 'Ethernet1' to 'eth1' for deployment.
     This ensures cEOS and other platforms properly map the interfaces.
     """
     # Convert Ethernet1 -> eth1, Ethernet2 -> eth2, etc.
@@ -36,7 +36,7 @@ def _normalize_interface_name(iface_name: str) -> str:
 
 
 def _denormalize_interface_name(iface_name: str, device: str | None) -> str:
-    """Convert containerlab interface name to vendor-specific format for UI display.
+    """Convert normalized interface name to vendor-specific format for UI display.
 
     This is the reverse of _normalize_interface_name(). It converts generic
     interface names like 'eth1' to the vendor's preferred naming convention
@@ -207,7 +207,7 @@ def _safe_node_name(name: str, used: set[str]) -> str:
 
 
 def _format_external_endpoint(endpoint: GraphEndpoint) -> str:
-    """Format an external endpoint for containerlab YAML.
+    """Format an external endpoint for topology YAML.
 
     External endpoints use format: type:name (e.g., bridge:br-ext, macvlan:eth0)
     """
@@ -372,7 +372,7 @@ def _parse_link_item(item: Any) -> GraphLink | None:
 def yaml_to_graph(content: str) -> TopologyGraph:
     data = yaml.safe_load(content) or {}
 
-    # Handle both graph format (nodes at top level) and containerlab format (topology.nodes)
+    # Handle both graph format (nodes at top level) and nested format (topology.nodes)
     topology = data.get("topology", {})
     defaults = data.get("defaults", {})
     nodes_data = data.get("nodes") or topology.get("nodes", {})
@@ -384,7 +384,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
         "_gui_id", "_display_name",
         # External network fields
         "node_type", "connection_type", "parent_interface", "vlan_id", "bridge_name",
-        # Containerlab-specific fields
+        # Additional fields
         "kind", "labels",
     }
 
@@ -405,13 +405,13 @@ def yaml_to_graph(content: str) -> TopologyGraph:
             node_id = attrs.get("_gui_id", name)
             # Use _display_name if present, otherwise use the YAML key
             display_name = attrs.get("_display_name", name)
-            # YAML key is the containerlab container name
+            # YAML key is the container name
             yaml_key = str(name)
             container_to_gui_id[yaml_key] = str(node_id)
             # Track device type for interface name denormalization
             device = attrs.get("device") or attrs.get("kind")
             container_to_device[yaml_key] = device
-            # Get host from direct attribute or from containerlab labels
+            # Get host from direct attribute or from labels
             host = attrs.get("host")
             if not host:
                 labels = attrs.get("labels", {})
@@ -424,7 +424,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
                     container_name=yaml_key,
                     # Node type (device or external)
                     node_type=attrs.get("node_type", "device"),
-                    # Device node fields - support both 'device' and containerlab 'kind'
+                    # Device node fields - support both 'device' and 'kind'
                     device=attrs.get("device") or attrs.get("kind"),
                     image=attrs.get("image"),
                     version=attrs.get("version"),
@@ -523,7 +523,7 @@ def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> T
 
         # If both endpoints have hosts and they differ, it's a cross-host link
         if host_a and host_b and host_a != host_b:
-            # Normalize interface names (e.g., Ethernet1 -> eth1) for containerlab compatibility
+            # Normalize interface names (e.g., Ethernet1 -> eth1) for deployment
             iface_a = _normalize_interface_name(ep_a.ifname) if ep_a.ifname else f"eth{link_counter}"
             iface_b = _normalize_interface_name(ep_b.ifname) if ep_b.ifname else f"eth{link_counter}"
             link_id = f"{ep_a.node}:{iface_a}-{ep_b.node}:{iface_b}"
@@ -557,19 +557,19 @@ def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> T
 # Use get_kind_for_device() and get_default_image() functions imported above
 
 
-def graph_to_containerlab_yaml(
+def graph_to_topology_yaml(
     graph: TopologyGraph,
     lab_id: str,
     reserved_interfaces: set[tuple[str, str]] | None = None,
 ) -> str:
-    """Convert topology graph to containerlab YAML format.
+    """Convert topology graph to deployment YAML format.
 
-    Containerlab uses a different format than netlab:
+    The deployment YAML format uses:
     - 'kind' instead of 'device'
     - Links use 'endpoints' array format
     - Topology is nested under 'topology' key
     - External network nodes are not added to the nodes section
-    - Links to external networks use containerlab external endpoint format
+    - Links to external networks use external endpoint format (type:name)
 
     Args:
         graph: The topology graph to convert
@@ -615,7 +615,7 @@ def graph_to_containerlab_yaml(
             external_network_configs.append(ext_config)
 
     for node in graph.nodes:
-        # Skip external network nodes - they don't become containerlab nodes
+        # Skip external network nodes - they don't become container nodes
         if getattr(node, 'node_type', 'device') == 'external':
             continue
         # Use container_name if provided (immutable after first creation),
@@ -632,7 +632,7 @@ def graph_to_containerlab_yaml(
 
         node_data: dict[str, Any] = {}
 
-        # Map device to containerlab kind using centralized vendor registry
+        # Map device to kind using centralized vendor registry
         kind = "linux"  # default
         if node.device:
             kind = get_kind_for_device(node.device)
@@ -676,7 +676,7 @@ def graph_to_containerlab_yaml(
             # Config persistence for cEOS requires saving startup-config to the container
             # via 'write memory' which cEOS handles internally
 
-        # Add any other vars that containerlab might use
+        # Add any other vars from the node
         if node.vars:
             for k, v in node.vars.items():
                 # Skip netlab-specific fields
@@ -685,7 +685,7 @@ def graph_to_containerlab_yaml(
 
         nodes[safe_name] = node_data if node_data else {}
 
-    # Build links in containerlab format
+    # Build links in endpoints format
     links = []
     interface_counters: dict[str, int] = {name: 1 for name in used_names}
     # Track used interface indices per node for dummy link generation
@@ -697,7 +697,7 @@ def graph_to_containerlab_yaml(
         return int(match.group(1)) if match else None
 
     def _get_external_endpoint(ext_node: GraphNode) -> str:
-        """Generate containerlab external endpoint string for an external network node.
+        """Generate external endpoint string for an external network node.
 
         Returns format like 'macvlan:eth0.100' for VLAN or 'bridge:br-prod' for bridge.
         """
@@ -774,7 +774,7 @@ def graph_to_containerlab_yaml(
         node_a = name_map.get(ep_a.node, ep_a.node)
         node_b = name_map.get(ep_b.node, ep_b.node)
 
-        # Get or assign interface names (normalize to containerlab format)
+        # Get or assign interface names (normalize to eth format)
         if ep_a.ifname:
             iface_a = _normalize_interface_name(ep_a.ifname)
         else:
@@ -837,11 +837,11 @@ def graph_to_containerlab_yaml(
     if octet3 == 0:
         octet3 = 1
 
-    # Build containerlab topology structure
+    # Build topology structure
     topology: dict[str, Any] = {
         "name": safe_lab_name,
         "mgmt": {
-            "network": f"clab-{safe_lab_name}",
+            "network": f"arch-{safe_lab_name}",
             "ipv4-subnet": f"10.{octet2}.{octet3}.0/24",
         },
         "topology": {
@@ -853,12 +853,16 @@ def graph_to_containerlab_yaml(
         topology["topology"]["links"] = links
 
     # Add external network configurations for agent's VLAN setup
-    # This is a custom section that containerlab ignores but the agent uses
+    # This is a custom section the agent uses for external network setup
     if external_network_configs:
         topology["_external_networks"] = external_network_configs
 
     # Use custom dumper for proper block scalar style on multi-line strings
     return yaml.dump(topology, Dumper=_BlockScalarDumper, sort_keys=False)
+
+
+# Backward compatibility alias
+graph_to_containerlab_yaml = graph_to_topology_yaml
 
 
 def split_topology_by_host(

@@ -157,7 +157,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         # Resolve node references - could be GUI ID or container name
         source = node_id_to_name.get(ep1.node, ep1.node)
         target = node_id_to_name.get(ep2.node, ep2.node)
-        # Normalize interface names to containerlab format (e.g., Ethernet1 -> eth1)
+        # Normalize interface names (e.g., Ethernet1 -> eth1)
         source_iface = _normalize_interface_name(ep1.ifname) if ep1.ifname else ""
         target_iface = _normalize_interface_name(ep2.ifname) if ep2.ifname else ""
         links.append({
@@ -807,12 +807,12 @@ class TopologyService:
         graph = self.export_to_graph(lab_id)
         return graph_to_yaml(graph)
 
-    def to_containerlab_yaml(
+    def to_topology_yaml(
         self,
         lab_id: str,
         reserved_interfaces: set[tuple[str, str]] | None = None,
     ) -> str:
-        """Generate containerlab YAML from database topology.
+        """Generate deployment YAML from database topology.
 
         Args:
             lab_id: Lab ID to generate for
@@ -820,19 +820,22 @@ class TopologyService:
                 that should be treated as used (for cross-host links)
 
         Returns:
-            Containerlab-format YAML string
+            Deployment YAML string
         """
-        from app.topology import graph_to_containerlab_yaml
+        from app.topology import graph_to_topology_yaml
         graph = self.export_to_graph(lab_id)
-        return graph_to_containerlab_yaml(graph, lab_id, reserved_interfaces)
+        return graph_to_topology_yaml(graph, lab_id, reserved_interfaces)
 
-    def to_containerlab_yaml_for_host(
+    # Backward compatibility alias
+    to_containerlab_yaml = to_topology_yaml
+
+    def to_topology_yaml_for_host(
         self,
         lab_id: str,
         host_id: str,
         reserved_interfaces: set[tuple[str, str]] | None = None,
     ) -> str:
-        """Generate containerlab YAML for nodes on a specific host.
+        """Generate deployment YAML for nodes on a specific host.
 
         Used for multi-host deployments where each host gets a sub-topology.
 
@@ -842,9 +845,9 @@ class TopologyService:
             reserved_interfaces: Optional set of reserved interfaces
 
         Returns:
-            Containerlab-format YAML string for nodes on this host
+            Deployment YAML string for nodes on this host
         """
-        from app.topology import graph_to_containerlab_yaml
+        from app.topology import graph_to_topology_yaml
 
         # Get full topology graph
         full_graph = self.export_to_graph(lab_id)
@@ -868,7 +871,10 @@ class TopologyService:
             defaults=full_graph.defaults,
         )
 
-        return graph_to_containerlab_yaml(filtered_graph, lab_id, reserved_interfaces)
+        return graph_to_topology_yaml(filtered_graph, lab_id, reserved_interfaces)
+
+    # Backward compatibility alias
+    to_containerlab_yaml_for_host = to_topology_yaml_for_host
 
     # =========================================================================
     # Helper Methods
@@ -1041,7 +1047,7 @@ class TopologyService:
         Returns:
             Dict matching DeployLink schema
         """
-        # Normalize interface names to containerlab format (e.g., Ethernet1 -> eth1)
+        # Normalize interface names (e.g., Ethernet1 -> eth1)
         source_iface = _normalize_interface_name(link.source_interface) if link.source_interface else ""
         target_iface = _normalize_interface_name(link.target_interface) if link.target_interface else ""
         return {

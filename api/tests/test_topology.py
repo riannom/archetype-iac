@@ -10,7 +10,7 @@ from app.schemas import (
 )
 from app.topology import (
     analyze_topology,
-    graph_to_containerlab_yaml,
+    graph_to_topology_yaml,
     graph_to_yaml,
     split_topology_by_host,
     yaml_to_graph,
@@ -528,10 +528,10 @@ def test_mixed_internal_and_external_links():
     assert external_count == 2
 
 
-# --- Containerlab YAML Generation Tests ---
+# --- Topology YAML Generation Tests ---
 
-def test_containerlab_yaml_ceos_has_startup_config():
-    """Test that cEOS nodes get startup-config in containerlab YAML."""
+def test_topology_yaml_ceos_has_startup_config():
+    """Test that cEOS nodes get startup-config in topology YAML."""
     graph = TopologyGraph(
         nodes=[
             GraphNode(id="r1", name="R1", device="ceos"),
@@ -539,7 +539,7 @@ def test_containerlab_yaml_ceos_has_startup_config():
         links=[],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
 
     # Verify startup-config is present with required elements
     assert "startup-config:" in yaml_str
@@ -551,7 +551,7 @@ def test_containerlab_yaml_ceos_has_startup_config():
     assert "no aaa root" in yaml_str
 
 
-def test_containerlab_yaml_ceos_uses_block_scalar():
+def test_topology_yaml_ceos_uses_block_scalar():
     """Test that startup-config uses YAML block scalar style."""
     graph = TopologyGraph(
         nodes=[
@@ -560,13 +560,13 @@ def test_containerlab_yaml_ceos_uses_block_scalar():
         links=[],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
 
     # Block scalar style uses '|' indicator
     assert "startup-config: |" in yaml_str
 
 
-def test_containerlab_yaml_linux_no_startup_config():
+def test_topology_yaml_linux_no_startup_config():
     """Test that non-cEOS nodes don't get startup-config."""
     graph = TopologyGraph(
         nodes=[
@@ -575,13 +575,13 @@ def test_containerlab_yaml_linux_no_startup_config():
         links=[],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
 
     # Linux nodes shouldn't have startup-config
     assert "startup-config:" not in yaml_str
 
 
-def test_containerlab_yaml_mixed_nodes():
+def test_topology_yaml_mixed_nodes():
     """Test topology with both cEOS and non-cEOS nodes."""
     graph = TopologyGraph(
         nodes=[
@@ -602,21 +602,21 @@ def test_containerlab_yaml_mixed_nodes():
         ],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
 
     # Count occurrences of startup-config (should be 2 for R1 and R2)
     startup_config_count = yaml_str.count("startup-config: |")
     assert startup_config_count == 2, f"Expected 2 startup-configs, got {startup_config_count}"
 
 
-def test_containerlab_yaml_ceos_config_has_required_lines():
+def test_topology_yaml_ceos_config_has_required_lines():
     """Test that cEOS startup-config contains all required configuration."""
     # Generate a config and verify it has required lines
     graph = TopologyGraph(
         nodes=[GraphNode(id="r1", name="TestRouter", device="ceos")],
         links=[],
     )
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
 
     assert "zerotouch cancel" in yaml_str
     assert "hostname TestRouter" in yaml_str
@@ -624,8 +624,8 @@ def test_containerlab_yaml_ceos_config_has_required_lines():
     assert "end" in yaml_str
 
 
-def test_containerlab_yaml_structure():
-    """Test that containerlab YAML has correct structure."""
+def test_topology_yaml_structure():
+    """Test that topology YAML has correct structure."""
     graph = TopologyGraph(
         nodes=[
             GraphNode(id="r1", name="R1", device="ceos"),
@@ -639,7 +639,7 @@ def test_containerlab_yaml_structure():
         ],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "my-lab-123")
+    yaml_str = graph_to_topology_yaml(graph, "my-lab-123")
 
     # Verify basic structure
     assert "name:" in yaml_str
@@ -648,12 +648,12 @@ def test_containerlab_yaml_structure():
     assert "links:" in yaml_str
     assert "endpoints:" in yaml_str
 
-    # Verify kind is set (containerlab uses kind, not device)
+    # Verify kind is set (uses kind, not device)
     assert "kind: ceos" in yaml_str
     assert "kind: linux" in yaml_str
 
 
-def test_containerlab_yaml_ceos_alias_resolution():
+def test_topology_yaml_ceos_alias_resolution():
     """Test that cEOS aliases (eos, arista_eos, etc.) get startup-config."""
     # Test with 'eos' alias
     graph = TopologyGraph(
@@ -663,7 +663,7 @@ def test_containerlab_yaml_ceos_alias_resolution():
         links=[],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
 
     # Should still get startup-config since 'eos' resolves to 'ceos'
     assert "startup-config: |" in yaml_str
@@ -671,7 +671,7 @@ def test_containerlab_yaml_ceos_alias_resolution():
     assert "hostname R1" in yaml_str
 
 
-def test_containerlab_yaml_ceos_has_binds_for_persistence():
+def test_topology_yaml_ceos_has_binds_for_persistence():
     """Test that cEOS nodes have binds for config persistence."""
     import yaml as pyyaml
     from app.config import settings
@@ -683,7 +683,7 @@ def test_containerlab_yaml_ceos_has_binds_for_persistence():
         links=[],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
     parsed = pyyaml.safe_load(yaml_str)
 
     # Verify the cEOS node has binds configured
@@ -702,7 +702,7 @@ def test_containerlab_yaml_ceos_has_binds_for_persistence():
     assert settings.workspace in flash_bind, "Bind should use workspace path"
 
 
-def test_containerlab_yaml_linux_has_no_binds():
+def test_topology_yaml_linux_has_no_binds():
     """Test that non-cEOS nodes don't get persistence binds."""
     import yaml as pyyaml
 
@@ -713,7 +713,7 @@ def test_containerlab_yaml_linux_has_no_binds():
         links=[],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
     parsed = pyyaml.safe_load(yaml_str)
 
     # Linux nodes shouldn't have binds for config persistence
@@ -723,7 +723,7 @@ def test_containerlab_yaml_linux_has_no_binds():
     assert "binds" not in h1_node, "Linux node should not have persistence binds"
 
 
-def test_containerlab_yaml_mixed_nodes_binds():
+def test_topology_yaml_mixed_nodes_binds():
     """Test that only cEOS nodes get persistence binds in mixed topology."""
     import yaml as pyyaml
 
@@ -736,7 +736,7 @@ def test_containerlab_yaml_mixed_nodes_binds():
         links=[],
     )
 
-    yaml_str = graph_to_containerlab_yaml(graph, "test-lab")
+    yaml_str = graph_to_topology_yaml(graph, "test-lab")
     parsed = pyyaml.safe_load(yaml_str)
 
     nodes = parsed.get("topology", {}).get("nodes", {})
@@ -751,7 +751,7 @@ def test_containerlab_yaml_mixed_nodes_binds():
 
 # --- Additional YAML Generation Edge Cases ---
 
-def test_containerlab_yaml_with_link_attributes():
+def test_topology_yaml_with_link_attributes():
     """Test that link attributes (MTU, bandwidth) are preserved."""
     graph = TopologyGraph(
         nodes=[
@@ -779,7 +779,7 @@ def test_containerlab_yaml_with_link_attributes():
     assert link.get("mtu") == 9000 or any(v.get("mtu") == 9000 for v in link.values() if isinstance(v, dict))
 
 
-def test_containerlab_yaml_with_pool_and_prefix():
+def test_topology_yaml_with_pool_and_prefix():
     """Test that IP pool and prefix settings are preserved."""
     graph = TopologyGraph(
         nodes=[
@@ -806,7 +806,7 @@ def test_containerlab_yaml_with_pool_and_prefix():
     assert link.get("prefix") == "10.0.0.0/24"
 
 
-def test_containerlab_yaml_preserves_node_vars():
+def test_topology_yaml_preserves_node_vars():
     """Test that node vars are preserved in YAML."""
     graph = TopologyGraph(
         nodes=[
@@ -828,7 +828,7 @@ def test_containerlab_yaml_preserves_node_vars():
     assert node.get("memory") == "4G"
 
 
-def test_containerlab_yaml_node_name_sanitization():
+def test_topology_yaml_node_name_sanitization():
     """Test that node names with special characters are sanitized."""
     graph = TopologyGraph(
         nodes=[
@@ -845,11 +845,11 @@ def test_containerlab_yaml_node_name_sanitization():
     # Node names should be sanitized
     node_names = list(parsed["nodes"].keys())
     for name in node_names:
-        # Verify names match containerlab requirements
+        # Verify names are valid identifiers
         assert re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) or "_gui_id" in parsed["nodes"][name]
 
 
-def test_containerlab_yaml_long_node_name_truncation():
+def test_topology_yaml_long_node_name_truncation():
     """Test that very long node names are truncated properly."""
     long_name = "ThisIsAVeryLongNodeNameThatExceeds16Characters"
     graph = TopologyGraph(
@@ -868,7 +868,7 @@ def test_containerlab_yaml_long_node_name_truncation():
     assert len(node_name) <= 16
 
 
-def test_containerlab_yaml_with_image_override():
+def test_topology_yaml_with_image_override():
     """Test that explicit image setting is preserved."""
     graph = TopologyGraph(
         nodes=[
@@ -886,7 +886,7 @@ def test_containerlab_yaml_with_image_override():
     assert "custom-ceos:4.30.0" in yaml_str
 
 
-def test_containerlab_yaml_roundtrip_preserves_ids():
+def test_topology_yaml_roundtrip_preserves_ids():
     """Test that node IDs survive YAML roundtrip via _gui_id."""
     original = TopologyGraph(
         nodes=[
