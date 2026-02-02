@@ -586,6 +586,76 @@ class DockerOVSPlugin:
                     f"Failed to reconnect {container_name}:{interface_name} to {network_id}"
                 )
 
+    async def _reconnect_missing_endpoints_from_docker(self) -> None:
+        """Reconnect containers where Docker thinks a network is attached but no host veth exists."""
+
+        def _sync_reconnect_missing() -> list[tuple[str, str, str, bool]]:
+            import docker
+            from docker.errors import NotFound, APIError
+
+            client = docker.from_env(timeout=30)
+
+            def _host_veth_exists(endpoint_id: str) -> bool:
+                if not endpoint_id:
+                    return False
+                prefix = f"vh{endpoint_id[:5]}"
+                try:
+                    for name in os.listdir("/sys/class/net"):
+                        if name.startswith(prefix):
+                            return True
+                except Exception:
+                    return False
+                return False
+
+            actions: list[tuple[str, str, str, bool]] = []
+            for network_state in self.networks.values():
+                network = None
+                try:
+                    network = client.networks.get(network_state.network_id)
+                except NotFound:
+                    network_name = f"{network_state.lab_id}-{network_state.interface_name}"
+                    try:
+                        network = client.networks.get(network_name)
+                    except NotFound:
+                        continue
+
+                containers = network.attrs.get("Containers") or {}
+                for container_id, info in containers.items():
+                    endpoint_id = info.get("EndpointID", "")
+                    if endpoint_id and _host_veth_exists(endpoint_id):
+                        continue
+
+                    try:
+                        network.disconnect(container_id, force=True)
+                    except (NotFound, APIError):
+                        pass
+
+                    try:
+                        network.connect(container_id)
+                        actions.append((container_id, network_state.interface_name, endpoint_id, True))
+                    except Exception:
+                        actions.append((container_id, network_state.interface_name, endpoint_id, False))
+
+            return actions
+
+        try:
+            actions = await asyncio.to_thread(_sync_reconnect_missing)
+        except Exception as e:
+            logger.warning(f"Failed to scan Docker networks for missing veths: {e}")
+            return
+
+        for container_id, interface_name, endpoint_id, ok in actions:
+            if ok:
+                logger.info(
+                    f"Reconnected container {container_id[:12]}:{interface_name} "
+                    f"(endpoint {endpoint_id[:12] if endpoint_id else 'unknown'})"
+                )
+            else:
+                logger.warning(
+                    f"Failed to reconnect container {container_id[:12]}:{interface_name} "
+                    f"(endpoint {endpoint_id[:12] if endpoint_id else 'unknown'})"
+                )
+
     async def _reconnect_container_to_network(
         self, container_name: str, network_id: str, interface_name: str
     ) -> bool:
@@ -2535,6 +2605,7 @@ class DockerOVSPlugin:
 
         # Reconnect missing endpoints after plugin is listening.
         asyncio.create_task(self._reconnect_pending_endpoints())
+        asyncio.create_task(self._reconnect_missing_endpoints_from_docker())
 
         return runner
 
