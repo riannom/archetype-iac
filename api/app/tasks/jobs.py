@@ -28,6 +28,32 @@ from app.utils.lab import update_lab_state
 logger = logging.getLogger(__name__)
 
 
+async def _broadcast_job_progress(
+    lab_id: str,
+    job_id: str,
+    action: str,
+    status: str,
+    progress_message: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Broadcast job progress update via WebSocket.
+
+    Fire-and-forget wrapper that catches exceptions to avoid disrupting job execution.
+    """
+    try:
+        broadcaster = get_broadcaster()
+        await broadcaster.publish_job_progress(
+            lab_id=lab_id,
+            job_id=job_id,
+            action=action,
+            status=status,
+            progress_message=progress_message,
+            error_message=error_message,
+        )
+    except Exception as e:
+        logger.debug(f"Failed to broadcast job progress: {e}")
+
+
 def _get_node_info_for_webhook(session, lab_id: str) -> list[dict]:
     """Get node info for webhook payload."""
     nodes = (
@@ -325,6 +351,12 @@ async def run_agent_job(
         job.started_at = datetime.now(timezone.utc)
         session.commit()
 
+        # Broadcast job started
+        await _broadcast_job_progress(
+            lab_id, job_id, action, "running",
+            progress_message=f"Job started on agent {agent.name or agent.id}"
+        )
+
         # Update lab state based on action
         if action == "up":
             update_lab_state(session, lab_id, "starting", agent_id=agent.id)
@@ -358,6 +390,12 @@ async def run_agent_job(
                 job.status = "completed"
                 log_content = f"Job completed successfully.\n\n"
 
+                # Broadcast job completed
+                await _broadcast_job_progress(
+                    lab_id, job_id, action, "completed",
+                    progress_message="Job completed successfully"
+                )
+
                 # Update lab state based on completed action
                 if action == "up":
                     update_lab_state(session, lab_id, "running", agent_id=agent.id)
@@ -374,6 +412,12 @@ async def run_agent_job(
                 job.status = "failed"
                 error_msg = result.get('error_message', 'Unknown error')
                 log_content = f"Job failed.\n\nError: {error_msg}\n\n"
+
+                # Broadcast job failed
+                await _broadcast_job_progress(
+                    lab_id, job_id, action, "failed",
+                    error_message=error_msg
+                )
 
                 # Update lab state to error
                 update_lab_state(session, lab_id, "error", error=error_msg)
@@ -539,6 +583,12 @@ async def run_multihost_deploy(
         job.started_at = datetime.now(timezone.utc)
         session.commit()
 
+        # Broadcast job started
+        await _broadcast_job_progress(
+            lab_id, job_id, "up", "running",
+            progress_message=f"Starting multi-host deployment ({len(analysis.placements)} hosts)"
+        )
+
         update_lab_state(session, lab_id, "starting")
 
         # Dispatch webhook for deploy started
@@ -684,6 +734,12 @@ async def run_multihost_deploy(
         job.status = "completed"
         job.completed_at = datetime.now(timezone.utc)
         job.log_path = "\n".join(log_parts)
+
+        # Broadcast job completed
+        await _broadcast_job_progress(
+            lab_id, job_id, "up", "completed",
+            progress_message="Multi-host deployment completed successfully"
+        )
 
         # Update lab state - use first agent as primary
         first_agent = list(host_to_agent.values())[0] if host_to_agent else None
@@ -1190,6 +1246,12 @@ async def run_node_sync(
         job.agent_id = agent.id
         job.started_at = datetime.now(timezone.utc)
         session.commit()
+
+        # Broadcast job started
+        await _broadcast_job_progress(
+            lab_id, job_id, job.action, "running",
+            progress_message=f"Syncing {len(node_states)} node(s) on {agent.name or agent.id}"
+        )
 
         log_parts = []
         log_parts.append(f"=== Node Sync Job ===")
@@ -1918,9 +1980,19 @@ async def run_node_sync(
         if error_count > 0:
             job.status = "failed"
             log_parts.append(f"\nCompleted with {error_count} error(s)")
+            # Broadcast job failed
+            await _broadcast_job_progress(
+                lab_id, job_id, job.action, "failed",
+                error_message=f"Node sync failed: {error_count} error(s)"
+            )
         else:
             job.status = "completed"
             log_parts.append("\nAll nodes synced successfully")
+            # Broadcast job completed
+            await _broadcast_job_progress(
+                lab_id, job_id, job.action, "completed",
+                progress_message=f"Node sync completed successfully"
+            )
 
         job.completed_at = datetime.now(timezone.utc)
         job.log_path = "\n".join(log_parts)
