@@ -1138,6 +1138,7 @@ username admin privilege 15 role network-admin nopassword
             if not pid:
                 result["errors"].append("Container not running")
                 return result
+            node_kind = container.labels.get(LABEL_NODE_KIND)
 
             # Get container's network attachments
             networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
@@ -1275,6 +1276,10 @@ username admin privilege 15 role network-admin nopassword
 
             except Exception as e:
                 result["errors"].append(f"Error processing network {network_name}: {e}")
+
+        # Re-apply vendor post-boot commands if needed (e.g., cEOS iptables)
+        if node_kind:
+            await self._run_post_boot_commands(container_name, node_kind)
 
         if result["fixed"] > 0:
             logger.info(
