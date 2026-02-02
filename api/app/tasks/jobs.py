@@ -2419,8 +2419,6 @@ async def _create_cross_host_links_if_ready(
             .count()
         )
         if cross_host_links > 0:
-            from app import agent_client
-
             placements = (
                 session.query(models.NodePlacement)
                 .filter(models.NodePlacement.lab_id == lab_id)
