@@ -25,6 +25,7 @@ import redis
 from app import agent_client, models
 from app.config import settings
 from app.db import SessionLocal, get_redis
+from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 from app.utils.link import generate_link_name
@@ -648,14 +649,28 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                         f"{expected_agent or 'unknown'} was not successfully queried"
                     )
 
-            if ns.actual_state != old_state:
+            if ns.actual_state != old_state or (ns.is_ready != old_is_ready and ns.is_ready):
                 logger.info(
                     f"Reconciled node {ns.node_name} in lab {lab_id}: "
                     f"{old_state} -> {ns.actual_state}"
+                    + (f" (ready)" if ns.is_ready and not old_is_ready else "")
                 )
-            if ns.is_ready != old_is_ready and ns.is_ready:
-                logger.info(
-                    f"Node {ns.node_name} in lab {lab_id} boot complete"
+                # Broadcast state change to WebSocket clients
+                # Look up host info for this node
+                node_host_id = container_agent_map.get(ns.node_name)
+                node_host_name = host_to_agent.get(node_host_id).name if node_host_id and node_host_id in host_to_agent else None
+                asyncio.create_task(
+                    broadcast_node_state_change(
+                        lab_id=lab_id,
+                        node_id=ns.node_id,
+                        node_name=ns.node_name,
+                        desired_state=ns.desired_state,
+                        actual_state=ns.actual_state,
+                        is_ready=ns.is_ready,
+                        error_message=ns.error_message,
+                        host_id=node_host_id,
+                        host_name=node_host_name,
+                    )
                 )
 
         # Ensure NodePlacement records exist for containers found on agents
@@ -788,6 +803,18 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 logger.debug(
                     f"Reconciled link {ls.link_name} in lab {lab_id}: "
                     f"{old_actual} -> {ls.actual_state}"
+                )
+                # Broadcast link state change to WebSocket clients
+                asyncio.create_task(
+                    broadcast_link_state_change(
+                        lab_id=lab_id,
+                        link_name=ls.link_name,
+                        desired_state=ls.desired_state,
+                        actual_state=ls.actual_state,
+                        source_node=ls.source_node,
+                        target_node=ls.target_node,
+                        error_message=ls.error_message,
+                    )
                 )
 
         # Auto-connect pending links when both nodes become running

@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.db import SessionLocal
+from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
 from app.services.topology import TopologyService, graph_to_deploy_topology
 from app.utils.lab import update_lab_state
 
@@ -955,6 +956,7 @@ async def run_node_sync(
         # Set transitional states EARLY, before any agent lookup can fail.
         # This ensures users see "stopping" or "starting" before "error" if agent lookup fails.
         for ns in node_states:
+            old_state = ns.actual_state
             if ns.desired_state == "stopped" and ns.actual_state == "running":
                 ns.actual_state = "stopping"
                 ns.stopping_started_at = datetime.now(timezone.utc)
@@ -966,6 +968,20 @@ async def run_node_sync(
             elif ns.desired_state == "running" and ns.actual_state in ("undeployed", "pending"):
                 ns.actual_state = "pending"
                 ns.error_message = None
+
+            # Broadcast transitional state change to WebSocket clients
+            if ns.actual_state != old_state:
+                asyncio.create_task(
+                    broadcast_node_state_change(
+                        lab_id=lab_id,
+                        node_id=ns.node_id,
+                        node_name=ns.node_name,
+                        desired_state=ns.desired_state,
+                        actual_state=ns.actual_state,
+                        is_ready=ns.is_ready,
+                        error_message=ns.error_message,
+                    )
+                )
         session.commit()
 
         # Get the node names we're syncing

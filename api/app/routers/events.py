@@ -4,10 +4,12 @@ This module provides endpoints for agents to push state change events
 to the controller, enabling real-time state synchronization without polling.
 
 Events are processed immediately and NodeState records are updated
-to reflect the actual container/VM state.
+to reflect the actual container/VM state. State changes are broadcast
+to connected WebSocket clients for real-time UI updates.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -15,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import db, models, schemas
+from app.services.broadcaster import broadcast_node_state_change
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +194,20 @@ async def receive_node_event(
         )
 
     database.commit()
+
+    # Broadcast state change to WebSocket clients
+    if old_state != new_state:
+        asyncio.create_task(
+            broadcast_node_state_change(
+                lab_id=lab.id,
+                node_id=node_state.node_id,
+                node_name=node_state.node_name,
+                desired_state=node_state.desired_state,
+                actual_state=new_state,
+                is_ready=node_state.is_ready,
+                error_message=node_state.error_message,
+            )
+        )
 
     return schemas.NodeEventResponse(
         success=True,

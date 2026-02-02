@@ -18,6 +18,7 @@ import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, Lab
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
+import { useLabStateWS, NodeStateData } from './hooks/useLabStateWS';
 import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -284,6 +285,63 @@ const StudioPage: React.FC = () => {
 
   // Port manager for interface auto-assignment
   const portManager = usePortManager(nodes, links);
+
+  // WebSocket hook for real-time state updates
+  // Converts WebSocket node state updates to runtime status and nodeStates
+  const handleWSNodeStateChange = useCallback((nodeId: string, wsState: NodeStateData) => {
+    // Update nodeStates record
+    setNodeStates((prev) => ({
+      ...prev,
+      [nodeId]: {
+        id: wsState.node_id,
+        lab_id: activeLab?.id || '',
+        node_id: wsState.node_id,
+        node_name: wsState.node_name,
+        desired_state: wsState.desired_state,
+        actual_state: wsState.actual_state,
+        error_message: wsState.error_message,
+        is_ready: wsState.is_ready,
+        host_id: wsState.host_id,
+        host_name: wsState.host_name,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as NodeStateEntry,
+    }));
+
+    // Update runtime status for display
+    setRuntimeStates((prev) => {
+      let newStatus: RuntimeStatus | undefined;
+      if (wsState.actual_state === 'running') {
+        newStatus = 'running';
+      } else if (wsState.actual_state === 'stopping') {
+        newStatus = 'stopping';
+      } else if (wsState.actual_state === 'starting') {
+        newStatus = 'booting';
+      } else if (wsState.actual_state === 'pending') {
+        newStatus = wsState.desired_state === 'running' ? 'booting' : 'stopped';
+      } else if (wsState.actual_state === 'error') {
+        newStatus = 'error';
+      } else if (wsState.actual_state === 'stopped') {
+        newStatus = 'stopped';
+      }
+      // 'undeployed' - no status indicator
+
+      if (newStatus) {
+        return { ...prev, [nodeId]: newStatus };
+      } else {
+        const { [nodeId]: _, ...rest } = prev;
+        return rest;
+      }
+    });
+  }, [activeLab?.id]);
+
+  const {
+    isConnected: wsConnected,
+    refresh: wsRefresh,
+  } = useLabStateWS(activeLab?.id || null, {
+    onNodeStateChange: handleWSNodeStateChange,
+    enabled: !!activeLab,
+  });
 
   // Keep refs in sync with state for debounced saves (avoids stale closure issues)
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
@@ -695,14 +753,19 @@ const StudioPage: React.FC = () => {
   }, [activeLab, nodes, loadNodeStates, loadJobs]);
 
   // Poll for node state and job updates
+  // When WebSocket is connected, poll less frequently as a fallback
+  // When disconnected, poll at normal rate for state updates
   useEffect(() => {
     if (!activeLab || nodes.length === 0) return;
+    // Use longer interval when WebSocket is connected (fallback only)
+    // Shorter interval when disconnected (primary update mechanism)
+    const interval = wsConnected ? 15000 : 4000;
     const timer = setInterval(() => {
       loadNodeStates(activeLab.id, nodes);
       loadJobs(activeLab.id, nodes);
-    }, 4000);
+    }, interval);
     return () => clearInterval(timer);
-  }, [activeLab, nodes, loadNodeStates, loadJobs]);
+  }, [activeLab, nodes, loadNodeStates, loadJobs, wsConnected]);
 
   // Cleanup: save layout/topology and clear timeouts on unmount
   useEffect(() => {
@@ -932,28 +995,18 @@ const StudioPage: React.FC = () => {
     addTaskLogEntry('info', `Setting "${nodeName}" to ${desiredState}...`);
 
     try {
-      // Step 1: Set desired state
+      // Optimistically update UI to show pending/booting state
+      setRuntimeStates((prev) => ({ ...prev, [nodeId]: status === 'stopped' ? 'stopping' : 'booting' }));
+
+      // Set desired state - this now auto-triggers sync
       await studioRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/desired-state`, {
         method: 'PUT',
         body: JSON.stringify({ state: desiredState }),
       });
 
-      // Optimistically update UI to show pending/booting state
-      setRuntimeStates((prev) => ({ ...prev, [nodeId]: status === 'stopped' ? 'stopped' : 'booting' }));
+      addTaskLogEntry('success', `${action === 'start' ? 'Starting' : 'Stopping'} "${nodeName}"...`);
 
-      // Step 2: Trigger sync to apply the change
-      const syncResult = await studioRequest<{ job_id: string; message: string; nodes_to_sync: string[] }>(
-        `/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/sync`,
-        { method: 'POST' }
-      );
-
-      if (syncResult.job_id) {
-        addTaskLogEntry('success', `Sync job queued for "${nodeName}"`);
-      } else {
-        addTaskLogEntry('info', syncResult.message || `"${nodeName}" already in sync`);
-      }
-
-      // Reload states to get updated actual state
+      // Reload states after a short delay (WebSocket will also push updates)
       setTimeout(() => loadNodeStates(activeLab.id, nodes), 1000);
       loadJobs(activeLab.id, nodes);
     } catch (error) {

@@ -26,7 +26,7 @@ from app.logging_config import (
     setup_logging,
 )
 from app.middleware import CurrentUserMiddleware
-from app.routers import admin, agents, auth, callbacks, console, events, images, iso, jobs, labs, permissions, system, webhooks
+from app.routers import admin, agents, auth, callbacks, console, events, images, iso, jobs, labs, permissions, state_ws, system, webhooks
 from app.tasks.health import agent_health_monitor
 from app.tasks.job_health import job_health_monitor
 from app.tasks.reconciliation import state_reconciliation_monitor
@@ -214,6 +214,7 @@ app.include_router(events.router)
 app.include_router(iso.router)
 app.include_router(webhooks.router)
 app.include_router(system.router)
+app.include_router(state_ws.router)
 
 
 # Simple endpoints that remain in main.py
