@@ -29,11 +29,18 @@ from app.tasks.link_orchestration import (
 logger = logging.getLogger(__name__)
 
 
+def _update_job_log(session: Session, job: models.Job, log_parts: list[str]) -> None:
+    """Update job log with current log_parts content."""
+    job.log_path = "\n".join(log_parts)
+    session.commit()
+
+
 async def create_link_if_ready(
     session: Session,
     lab_id: str,
     link_state: models.LinkState,
     host_to_agent: dict[str, models.Host],
+    log_parts: list[str] | None = None,
 ) -> bool:
     """Create link if both endpoint nodes are running.
 
@@ -46,10 +53,14 @@ async def create_link_if_ready(
         lab_id: Lab identifier
         link_state: The LinkState record to potentially connect
         host_to_agent: Map of host_id to Host objects for available agents
+        log_parts: Optional list to append log messages to
 
     Returns:
         True if link was created successfully, False otherwise
     """
+    if log_parts is None:
+        log_parts = []
+
     # Check NodeState.actual_state for both endpoints
     source_state = (
         session.query(models.NodeState)
@@ -76,10 +87,15 @@ async def create_link_if_ready(
         # One or both nodes not running - mark link as pending for later auto-connect
         link_state.actual_state = "pending"
         link_state.error_message = None
+        src_status = source_state.actual_state if source_state else "unknown"
+        tgt_status = target_state.actual_state if target_state else "unknown"
+        log_parts.append(
+            f"  {link_state.link_name}: PENDING - waiting for nodes "
+            f"(source={src_status}, target={tgt_status})"
+        )
         logger.info(
             f"Link {link_state.link_name} queued - waiting for nodes "
-            f"(source={source_state.actual_state if source_state else 'unknown'}, "
-            f"target={target_state.actual_state if target_state else 'unknown'})"
+            f"(source={src_status}, target={tgt_status})"
         )
         return False
 
@@ -89,6 +105,7 @@ async def create_link_if_ready(
     if not source_host_id or not target_host_id:
         link_state.actual_state = "error"
         link_state.error_message = "Cannot determine endpoint host placement"
+        log_parts.append(f"  {link_state.link_name}: FAILED - missing host placement")
         logger.warning(f"Link {link_state.link_name} missing host placement")
         return False
 
@@ -99,9 +116,6 @@ async def create_link_if_ready(
     # Check if this is a same-host or cross-host link
     is_cross_host = source_host_id != target_host_id
     link_state.is_cross_host = is_cross_host
-
-    # Create log_parts for the link creation functions
-    log_parts: list[str] = []
 
     if is_cross_host:
         success = await create_cross_host_link(
@@ -128,6 +142,7 @@ async def teardown_link(
     lab_id: str,
     link_info: dict,
     host_to_agent: dict[str, models.Host],
+    log_parts: list[str] | None = None,
 ) -> bool:
     """Tear down an existing link.
 
@@ -142,16 +157,21 @@ async def teardown_link(
         lab_id: Lab identifier
         link_info: Dict with link details from the removed LinkState
         host_to_agent: Map of host_id to Host objects
+        log_parts: Optional list to append log messages to
 
     Returns:
         True if teardown was successful, False otherwise
     """
+    if log_parts is None:
+        log_parts = []
+
     link_name = link_info.get("link_name", "unknown")
     is_cross_host = link_info.get("is_cross_host", False)
     actual_state = link_info.get("actual_state", "unknown")
 
     # Only tear down if link was actually up
     if actual_state not in ("up", "error", "pending"):
+        log_parts.append(f"  {link_name}: skipped (was {actual_state})")
         logger.debug(f"Link {link_name} was not active, skipping teardown")
         return True
 
@@ -198,31 +218,40 @@ async def teardown_link(
                 session.delete(tunnel)
 
         if success:
+            log_parts.append(f"  {link_name}: removed (cross-host VXLAN)")
             logger.info(f"Cross-host link {link_name} torn down")
+        else:
+            log_parts.append(f"  {link_name}: FAILED (cross-host cleanup error)")
         return success
     else:
         # Same-host link - call agent to delete it
         host_id = source_host_id or target_host_id
         if not host_id:
+            log_parts.append(f"  {link_name}: skipped (no host ID)")
             logger.warning(f"No host ID for same-host link {link_name}")
             return True  # Nothing to clean up
 
         agent = host_to_agent.get(host_id)
         if not agent:
+            log_parts.append(f"  {link_name}: skipped (agent unavailable)")
             logger.warning(f"Agent not available for link {link_name}")
             return True  # Can't clean up if agent is unavailable
 
         try:
             result = await agent_client.delete_link_on_agent(agent, lab_id, link_name)
             if result.get("success"):
+                log_parts.append(f"  {link_name}: removed")
                 logger.info(f"Same-host link {link_name} torn down")
                 return True
             else:
+                error = result.get("error", "unknown error")
+                log_parts.append(f"  {link_name}: FAILED - {error}")
                 logger.warning(
-                    f"Same-host link {link_name} teardown failed: {result.get('error')}"
+                    f"Same-host link {link_name} teardown failed: {error}"
                 )
                 return False
         except Exception as e:
+            log_parts.append(f"  {link_name}: FAILED - {e}")
             logger.error(f"Failed to tear down link {link_name}: {e}")
             return False
 
@@ -231,6 +260,7 @@ async def process_link_changes(
     lab_id: str,
     added_link_names: list[str],
     removed_link_info: list[dict],
+    user_id: str | None = None,
 ) -> None:
     """Background task to process link additions/removals from import-graph.
 
@@ -243,22 +273,65 @@ async def process_link_changes(
         lab_id: Lab identifier
         added_link_names: List of link names that were added
         removed_link_info: List of dicts with info about removed links
+        user_id: User who triggered the change (for job tracking)
     """
     session = SessionLocal()
+    job = None
+    log_parts: list[str] = []
+
     try:
+        # Create a job to track this operation
+        add_count = len(added_link_names)
+        remove_count = len(removed_link_info)
+        action_desc = []
+        if add_count > 0:
+            action_desc.append(f"add:{add_count}")
+        if remove_count > 0:
+            action_desc.append(f"remove:{remove_count}")
+
+        job = models.Job(
+            lab_id=lab_id,
+            user_id=user_id,
+            action=f"links:{','.join(action_desc)}",
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
+        session.add(job)
+        session.commit()
+        session.refresh(job)
+
+        log_parts.append("=== Live Link Update ===")
+        log_parts.append(f"Lab: {lab_id}")
+        log_parts.append(f"Links to add: {add_count}")
+        log_parts.append(f"Links to remove: {remove_count}")
+        log_parts.append("")
+
         # Build host_to_agent mapping
         host_to_agent = await _build_host_to_agent_map(session, lab_id)
 
         if not host_to_agent:
+            log_parts.append("WARNING: No agents available, skipping link operations")
             logger.warning(f"No agents available for lab {lab_id}, skipping live link operations")
+            job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
+            _update_job_log(session, job, log_parts)
             return
 
+        error_count = 0
+
         # Process removed links first (teardown)
-        for link_info in removed_link_info:
-            try:
-                await teardown_link(session, lab_id, link_info, host_to_agent)
-            except Exception as e:
-                logger.error(f"Error tearing down link {link_info.get('link_name')}: {e}")
+        if removed_link_info:
+            log_parts.append("=== Removing Links ===")
+            for link_info in removed_link_info:
+                try:
+                    success = await teardown_link(session, lab_id, link_info, host_to_agent, log_parts)
+                    if not success:
+                        error_count += 1
+                except Exception as e:
+                    error_count += 1
+                    log_parts.append(f"  {link_info.get('link_name')}: FAILED - {e}")
+                    logger.error(f"Error tearing down link {link_info.get('link_name')}: {e}")
+            log_parts.append("")
 
         # Now delete the LinkState records for removed links
         for link_info in removed_link_info:
@@ -276,28 +349,54 @@ async def process_link_changes(
                     session.delete(ls)
 
         # Process added links
-        for link_name in added_link_names:
-            link_state = (
-                session.query(models.LinkState)
-                .filter(
-                    models.LinkState.lab_id == lab_id,
-                    models.LinkState.link_name == link_name,
+        if added_link_names:
+            log_parts.append("=== Adding Links ===")
+            for link_name in added_link_names:
+                link_state = (
+                    session.query(models.LinkState)
+                    .filter(
+                        models.LinkState.lab_id == lab_id,
+                        models.LinkState.link_name == link_name,
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if link_state:
-                try:
-                    await create_link_if_ready(session, lab_id, link_state, host_to_agent)
-                except Exception as e:
-                    logger.error(f"Error creating link {link_name}: {e}")
-                    link_state.actual_state = "error"
-                    link_state.error_message = str(e)
+                if link_state:
+                    try:
+                        success = await create_link_if_ready(
+                            session, lab_id, link_state, host_to_agent, log_parts
+                        )
+                        if not success and link_state.actual_state == "error":
+                            error_count += 1
+                    except Exception as e:
+                        error_count += 1
+                        log_parts.append(f"  {link_name}: FAILED - {e}")
+                        logger.error(f"Error creating link {link_name}: {e}")
+                        link_state.actual_state = "error"
+                        link_state.error_message = str(e)
+            log_parts.append("")
 
+        # Summary
+        log_parts.append("=== Summary ===")
+        if error_count > 0:
+            log_parts.append(f"Completed with {error_count} error(s)")
+            job.status = "completed"  # Still completed, just with errors
+        else:
+            log_parts.append("All link operations completed successfully")
+            job.status = "completed"
+
+        job.completed_at = datetime.now(timezone.utc)
+        _update_job_log(session, job, log_parts)
         session.commit()
 
     except Exception as e:
         logger.error(f"Error processing link changes for lab {lab_id}: {e}")
+        log_parts.append(f"\nFATAL ERROR: {e}")
+        if job:
+            job.status = "failed"
+            job.completed_at = datetime.now(timezone.utc)
+            _update_job_log(session, job, log_parts)
         session.rollback()
+        session.commit()  # Commit the job status update
     finally:
         session.close()
 
