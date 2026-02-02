@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.netlab import run_netlab_command
 from app.services.topology import TopologyService
 from app.storage import lab_workspace
-from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
+from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy, run_node_sync
 from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
@@ -481,6 +481,11 @@ async def node_action(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
+    """Start or stop a specific node.
+
+    This endpoint sets the desired state and triggers a sync job.
+    The sync job handles transitional states (starting/stopping) properly.
+    """
     if action not in ("start", "stop"):
         raise HTTPException(status_code=400, detail="Unsupported node action")
 
@@ -489,20 +494,50 @@ async def node_action(
     # Get the provider for this lab
     lab_provider = get_lab_provider(lab)
 
-    # Check for healthy agent with required capability, respecting affinity
-    # Node actions must go to the same agent running the lab
+    # Check for healthy agent
     agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
     if not agent:
         raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
-    # Create job record
-    job = models.Job(lab_id=lab.id, user_id=current_user.id, action=f"node:{action}:{node}", status="queued")
+    # Set desired state for the node
+    desired_state = "running" if action == "start" else "stopped"
+    node_state = (
+        database.query(models.NodeState)
+        .filter(
+            models.NodeState.lab_id == lab.id,
+            models.NodeState.node_id == node,
+        )
+        .first()
+    )
+    if not node_state:
+        # Try by node_name (container name)
+        node_state = (
+            database.query(models.NodeState)
+            .filter(
+                models.NodeState.lab_id == lab.id,
+                models.NodeState.node_name == node,
+            )
+            .first()
+        )
+    if not node_state:
+        raise HTTPException(status_code=404, detail=f"Node '{node}' not found")
+
+    node_state.desired_state = desired_state
+    database.commit()
+
+    # Create sync job (uses transitional states)
+    job = models.Job(
+        lab_id=lab.id,
+        user_id=current_user.id,
+        action=f"sync:node:{node}",
+        status="queued",
+    )
     database.add(job)
     database.commit()
     database.refresh(job)
 
-    # Start background task
-    asyncio.create_task(run_agent_job(job.id, lab.id, f"node:{action}:{node}", provider=lab_provider))
+    # Start sync job
+    asyncio.create_task(run_node_sync(job.id, lab.id, [node], provider=lab_provider))
 
     return schemas.JobOut.model_validate(job)
 

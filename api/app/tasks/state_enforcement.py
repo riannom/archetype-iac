@@ -147,7 +147,7 @@ async def enforce_node_state(
 
     Returns True if an enforcement job was started, False otherwise.
     """
-    from app.tasks.jobs import run_agent_job
+    from app.tasks.jobs import run_node_sync
 
     lab_id = lab.id
     node_name = node_state.node_name
@@ -235,11 +235,13 @@ async def enforce_node_state(
     # This ensures other enforcement loop iterations see the cooldown immediately
     _set_cooldown(lab_id, node_name)
 
-    # Create enforcement job
+    # Create enforcement job using sync path for proper transitional states
+    # Use node_id (GUI ID) for sync job, which will resolve to container_name
+    node_id = node_state.node_id
     job = models.Job(
         lab_id=lab_id,
         user_id=None,  # System-initiated
-        action=f"node:{action}:{node_name}",
+        action=f"sync:node:{node_id}",
         status="queued",
     )
     session.add(job)
@@ -255,9 +257,9 @@ async def enforce_node_state(
     from app.utils.lab import get_lab_provider
     provider = get_lab_provider(lab)
 
-    # Start the job
-    asyncio.create_task(run_agent_job(
-        job.id, lab_id, f"node:{action}:{node_name}", provider=provider
+    # Start sync job - this sets transitional states (starting/stopping)
+    asyncio.create_task(run_node_sync(
+        job.id, lab_id, [node_id], provider=provider
     ))
 
     return True

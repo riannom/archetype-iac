@@ -66,7 +66,6 @@ from agent.schemas import (
     LinkInfo,
     LinkListResponse,
     LinkState,
-    NodeActionRequest,
     NodeInfo,
     NodeStatus,
     OVSPortInfo,
@@ -1236,73 +1235,6 @@ async def _execute_destroy_with_callback(
         await deliver_callback(callback_url, payload)
     finally:
         _decrement_active_jobs()
-
-
-@app.post("/jobs/node-action")
-async def node_action(request: NodeActionRequest) -> JobResult:
-    """Start or stop a specific node."""
-    from agent.locks import LockAcquisitionTimeout
-
-    logger.info(f"Node action: lab={request.lab_id}, node={request.log_name()}, action={request.action}")
-
-    lock_manager = get_lock_manager()
-    if lock_manager is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Lock manager not initialized"
-        )
-
-    try:
-        # Use shorter timeout for node actions since they are quick
-        async with lock_manager.acquire_with_heartbeat(
-            request.lab_id,
-            timeout=10.0,  # Shorter timeout for node ops
-            extend_interval=settings.lock_extend_interval,
-        ):
-            # Use default provider for node actions
-            provider = get_provider_for_request()
-            workspace = get_workspace(request.lab_id)
-
-            if request.action == "start":
-                result = await provider.start_node(
-                    lab_id=request.lab_id,
-                    node_name=request.node_name,
-                    workspace=workspace,
-                )
-            elif request.action == "stop":
-                result = await provider.stop_node(
-                    lab_id=request.lab_id,
-                    node_name=request.node_name,
-                    workspace=workspace,
-                )
-            else:
-                return JobResult(
-                    job_id=request.job_id,
-                    status=JobStatus.FAILED,
-                    error_message=f"Unknown action: {request.action}",
-                )
-
-            if result.success:
-                return JobResult(
-                    job_id=request.job_id,
-                    status=JobStatus.COMPLETED,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
-                )
-            else:
-                return JobResult(
-                    job_id=request.job_id,
-                    status=JobStatus.FAILED,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
-                    error_message=result.error,
-                )
-    except LockAcquisitionTimeout:
-        logger.warning(f"Timeout waiting for lock on lab {request.lab_id} for node action")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Another operation is in progress for lab {request.lab_id}, try again later"
-        )
 
 
 # --- Status Endpoints ---

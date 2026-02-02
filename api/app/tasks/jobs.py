@@ -27,28 +27,6 @@ from app.utils.lab import update_lab_state
 logger = logging.getLogger(__name__)
 
 
-def _get_node_display_name_from_db(session, lab_id: str, node_name: str) -> str | None:
-    """Get display name for a node from the database.
-
-    Args:
-        session: Database session
-        lab_id: Lab identifier
-        node_name: The internal node name (container_name)
-
-    Returns:
-        The display name if found, None otherwise
-    """
-    node = (
-        session.query(models.Node)
-        .filter(
-            models.Node.lab_id == lab_id,
-            models.Node.container_name == node_name,
-        )
-        .first()
-    )
-    return node.display_name if node else None
-
-
 def _get_node_info_for_webhook(session, lab_id: str) -> list[dict]:
     """Get node info for webhook payload."""
     nodes = (
@@ -140,16 +118,20 @@ async def _update_node_placements(
     lab_id: str,
     agent_id: str,
     node_names: list[str],
+    status: str = "deployed",
 ) -> None:
-    """Update NodePlacement records after successful deploy.
+    """Update NodePlacement records for tracking node-to-agent affinity.
 
-    This tracks which agent is running which nodes for affinity.
+    Called early with status="starting" when agent is selected, then
+    again with status="deployed" after successful deploy. This ensures
+    the UI shows the correct target host during transitional states.
 
     Args:
         session: Database session
         lab_id: Lab identifier
-        agent_id: Agent that deployed the nodes
-        node_names: List of node names that were deployed
+        agent_id: Agent that will run/is running the nodes
+        node_names: List of node names
+        status: Placement status ("starting", "deployed", etc.)
     """
     try:
         for node_name in node_names:
@@ -176,7 +158,7 @@ async def _update_node_placements(
             if existing:
                 # Update existing placement
                 existing.host_id = agent_id
-                existing.status = "deployed"
+                existing.status = status
                 # Backfill node_definition_id if missing
                 if node_def and not existing.node_definition_id:
                     existing.node_definition_id = node_def.id
@@ -187,7 +169,7 @@ async def _update_node_placements(
                     node_name=node_name,
                     node_definition_id=node_def.id if node_def else None,
                     host_id=agent_id,
-                    status="deployed",
+                    status=status,
                 )
                 session.add(placement)
 
@@ -364,58 +346,8 @@ async def run_agent_job(
                 )
             elif action == "down":
                 result = await agent_client.destroy_on_agent(agent, job_id, lab_id)
-            elif action.startswith("node:"):
-                # Parse node action: "node:start:nodename" or "node:stop:nodename"
-                parts = action.split(":", 2)
-                node_action_type = parts[1] if len(parts) > 1 else ""
-                node = parts[2] if len(parts) > 2 else ""
-
-                # For system-initiated (enforcement) jobs, re-check desired_state
-                # to avoid executing stale actions when user changed their mind
-                if job.user_id is None and node_action_type in ("start", "stop"):
-                    node_state = (
-                        session.query(models.NodeState)
-                        .filter(
-                            models.NodeState.lab_id == lab_id,
-                            models.NodeState.node_name == node,
-                        )
-                        .first()
-                    )
-                    if node_state:
-                        desired = node_state.desired_state
-                        # Skip if desired_state no longer matches the action
-                        if node_action_type == "stop" and desired == "running":
-                            logger.info(
-                                f"Skipping stale enforcement job {job_id}: "
-                                f"node {node} desired_state changed to 'running'"
-                            )
-                            job.status = "cancelled"
-                            job.completed_at = datetime.now(timezone.utc)
-                            job.log_path = (
-                                f"Job cancelled: desired_state changed to '{desired}' "
-                                f"before job executed. No action taken."
-                            )
-                            session.commit()
-                            return
-                        elif node_action_type == "start" and desired == "stopped":
-                            logger.info(
-                                f"Skipping stale enforcement job {job_id}: "
-                                f"node {node} desired_state changed to 'stopped'"
-                            )
-                            job.status = "cancelled"
-                            job.completed_at = datetime.now(timezone.utc)
-                            job.log_path = (
-                                f"Job cancelled: desired_state changed to '{desired}' "
-                                f"before job executed. No action taken."
-                            )
-                            session.commit()
-                            return
-
-                display_name = _get_node_display_name_from_db(session, lab_id, node)
-                result = await agent_client.node_action_on_agent(
-                    agent, job_id, lab_id, node, node_action_type, display_name
-                )
             else:
+                # Note: node:start/stop actions are deprecated - use sync:node:{id} instead
                 result = {"status": "failed", "error_message": f"Unknown action: {action}"}
 
             # Update job based on result
@@ -1439,6 +1371,13 @@ async def run_node_sync(
                             )
 
                     log_parts.append("")
+
+            # Update placements EARLY with "starting" status so UI shows correct target host
+            # This runs after migration detection but before actual deploy/start
+            node_names_for_placement = [ns.node_name for ns in nodes_to_start_or_deploy]
+            await _update_node_placements(
+                session, lab_id, agent.id, node_names_for_placement, status="starting"
+            )
 
         # Phase 1: If any nodes need deploy, we need to deploy the full topology
         # Containerlab doesn't support per-node deploy, so we deploy all and then stop unwanted

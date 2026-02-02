@@ -290,10 +290,6 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
     elif job.action == "down":
         asyncio.create_task(run_agent_job(job.id, lab.id, "down", provider=provider))
 
-    elif job.action.startswith("node:"):
-        # Node action: node:start:nodename or node:stop:nodename
-        asyncio.create_task(run_agent_job(job.id, lab.id, job.action, provider=provider))
-
     elif job.action.startswith("sync:"):
         # Sync action: sync:node:nodeid or sync:lab
         # Parse node IDs from action if present (sync:node:nodeid)
