@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AgentsPopup from './AgentsPopup';
 import ContainersPopup from './ContainersPopup';
@@ -6,6 +6,7 @@ import ResourcesPopup from './ResourcesPopup';
 import StoragePopup from './StoragePopup';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
 import { formatUptimeFromBoot } from '../../utils/format';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 interface PerHostMetrics {
   id: string;
@@ -59,10 +60,17 @@ interface SystemStatusStripProps {
 type PopupType = 'agents' | 'containers' | 'cpu' | 'memory' | 'storage' | null;
 
 const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
+  const { preferences, updateCanvasSettings } = useNotifications();
   const [activePopup, setActivePopup] = useState<PopupType>(null);
-  const [isExpanded, setIsExpanded] = useState(false);
   const [containerHostFilter, setContainerHostFilter] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  // Use preferences for expanded state with fallback to false
+  const isExpanded = preferences?.canvas_settings?.metricsBarExpanded ?? false;
+
+  const handleToggleExpanded = useCallback(() => {
+    updateCanvasSettings({ metricsBarExpanded: !isExpanded });
+  }, [isExpanded, updateCanvasSettings]);
 
   const handleCloseContainersPopup = () => {
     setActivePopup(null);
@@ -201,7 +209,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
         {/* Multi-host indicator - clickable to expand/collapse */}
         {metrics.is_multi_host && (
           <button
-            onClick={() => setIsExpanded(!isExpanded)}
+            onClick={handleToggleExpanded}
             aria-expanded={isExpanded}
             className="flex items-center gap-1.5 ml-2 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 rounded-md hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors"
           >
