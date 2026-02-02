@@ -374,8 +374,8 @@ def clone_lab(
     return schemas.LabOut.model_validate(clone)
 
 
-@router.post("/labs/{lab_id}/import-yaml")
-def import_yaml(
+@router.post("/labs/{lab_id}/update-topology-from-yaml")
+async def update_topology_from_yaml(
     lab_id: str,
     payload: schemas.LabYamlIn,
     database: Session = Depends(db.get_db),
@@ -387,7 +387,7 @@ def import_yaml(
 
     # Store topology in database (source of truth)
     service = TopologyService(database)
-    service.import_from_yaml(lab.id, payload.content)
+    service.update_from_yaml(lab.id, payload.content)
 
     # Sync NodeState/LinkState records from database
     graph = service.export_to_graph(lab.id)
@@ -427,8 +427,8 @@ def export_yaml(
     return schemas.LabYamlOut(content=service.export_to_yaml(lab.id))
 
 
-@router.post("/labs/{lab_id}/import-graph")
-def import_graph(
+@router.post("/labs/{lab_id}/update-topology")
+async def update_topology(
     lab_id: str,
     payload: schemas.TopologyGraph,
     database: Session = Depends(db.get_db),
@@ -441,7 +441,7 @@ def import_graph(
     # Store topology in database (source of truth)
     service = TopologyService(database)
     try:
-        service.import_from_graph(lab.id, payload)
+        service.update_from_graph(lab.id, payload)
     except ValueError as e:
         # Invalid host assignment or other validation error
         raise HTTPException(status_code=400, detail=str(e))
@@ -683,7 +683,7 @@ async def set_node_desired_state(
     Auto-triggers sync to immediately apply the change. This eliminates
     the need for a separate "Sync" button in the UI.
     """
-    from app.tasks.jobs import run_node_sync
+    from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
@@ -736,7 +736,7 @@ async def set_node_desired_state(
                 database.refresh(job)
 
                 # Start background sync task
-                asyncio.create_task(run_node_sync(job.id, lab.id, [node_id], provider=provider))
+                asyncio.create_task(run_node_reconcile(job.id, lab.id, [node_id], provider=provider))
 
     return _enrich_node_state(state)
 
@@ -753,7 +753,7 @@ async def set_all_nodes_desired_state(
     Useful for "Start All" or "Stop All" operations.
     Auto-triggers sync to immediately apply the changes.
     """
-    from app.tasks.jobs import run_node_sync
+    from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
@@ -830,7 +830,7 @@ async def set_all_nodes_desired_state(
             database.refresh(job)
 
             # Start background sync task
-            asyncio.create_task(run_node_sync(job.id, lab.id, nodes_needing_sync, provider=provider))
+            asyncio.create_task(run_node_reconcile(job.id, lab.id, nodes_needing_sync, provider=provider))
 
     # Refresh and return all states
     states = (
@@ -1004,21 +1004,21 @@ def _get_out_of_sync_nodes(
     return out_of_sync
 
 
-@router.post("/labs/{lab_id}/nodes/{node_id}/sync")
-async def sync_node(
+@router.post("/labs/{lab_id}/nodes/{node_id}/reconcile")
+async def reconcile_node(
     lab_id: str,
     node_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> schemas.SyncResponse:
-    """Trigger a sync job for a single node.
+) -> schemas.ReconcileResponse:
+    """Trigger a reconcile job for a single node.
 
-    This will reconcile the node's actual state with its desired state.
-    If the node is already in sync, no job is created.
+    This will bring the node's actual state in line with its desired state.
+    If the node is already in the correct state, no job is created.
     """
     import asyncio
     from app import agent_client
-    from app.tasks.jobs import run_node_sync
+    from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
@@ -1027,13 +1027,13 @@ async def sync_node(
     # Get or create the node state with correct naming
     state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state="running")
 
-    # Check if node is out of sync
+    # Check if node needs reconciliation
     out_of_sync = _get_out_of_sync_nodes(database, lab_id, [node_id])
     if not out_of_sync:
-        return schemas.SyncResponse(
+        return schemas.ReconcileResponse(
             job_id="",
-            message="Node is already in sync",
-            nodes_to_sync=[],
+            message="Node is already in correct state",
+            nodes_to_reconcile=[],
         )
 
     # Get agent for this lab
@@ -1045,61 +1045,61 @@ async def sync_node(
     # Note: Don't set state to pending here - let the task handle state transitions
     # after it reads the current state to determine what action is needed
 
-    # Create sync job
+    # Create reconcile job
     job = models.Job(
         lab_id=lab.id,
         user_id=current_user.id,
-        action=f"sync:node:{node_id}",
+        action=f"reconcile:node:{node_id}",
         status="queued",
     )
     database.add(job)
     database.commit()
     database.refresh(job)
 
-    # Start background sync task
-    asyncio.create_task(run_node_sync(job.id, lab.id, [node_id], provider=lab_provider))
+    # Start background reconcile task
+    asyncio.create_task(run_node_reconcile(job.id, lab.id, [node_id], provider=lab_provider))
 
-    return schemas.SyncResponse(
+    return schemas.ReconcileResponse(
         job_id=job.id,
-        message="Sync job queued",
-        nodes_to_sync=[node_id],
+        message="Reconcile job queued",
+        nodes_to_reconcile=[node_id],
     )
 
 
-@router.post("/labs/{lab_id}/sync")
-async def sync_lab(
+@router.post("/labs/{lab_id}/reconcile")
+async def reconcile_lab(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> schemas.SyncResponse:
-    """Trigger a sync job for all out-of-sync nodes in a lab.
+) -> schemas.ReconcileResponse:
+    """Trigger a reconcile job for all out-of-state nodes in a lab.
 
-    This will reconcile all nodes' actual states with their desired states.
-    If all nodes are already in sync, no job is created.
+    This will bring all nodes' actual states in line with their desired states.
+    If all nodes are already in the correct state, no job is created.
     """
     import asyncio
     from app import agent_client
-    from app.tasks.jobs import run_node_sync
+    from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
 
     # Check for conflicting jobs before proceeding
-    has_conflict, conflicting_action = has_conflicting_job(lab_id, "sync")
+    has_conflict, conflicting_action = has_conflicting_job(lab_id, "reconcile")
     if has_conflict:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot sync lab: '{conflicting_action}' operation already in progress"
+            detail=f"Cannot reconcile lab: '{conflicting_action}' operation already in progress"
         )
     _ensure_node_states_exist(database, lab.id)
 
-    # Find all out-of-sync nodes
+    # Find all nodes needing reconciliation
     out_of_sync = _get_out_of_sync_nodes(database, lab_id)
     if not out_of_sync:
-        return schemas.SyncResponse(
+        return schemas.ReconcileResponse(
             job_id="",
-            message="All nodes are already in sync",
-            nodes_to_sync=[],
+            message="All nodes are already in correct state",
+            nodes_to_reconcile=[],
         )
 
     node_ids = [s.node_id for s in out_of_sync]
@@ -1113,24 +1113,24 @@ async def sync_lab(
     # Note: Don't set states to pending here - let the task handle state transitions
     # after it reads the current states to determine what actions are needed
 
-    # Create sync job
+    # Create reconcile job
     job = models.Job(
         lab_id=lab.id,
         user_id=current_user.id,
-        action=f"sync:lab:{','.join(node_ids)}",
+        action=f"reconcile:lab:{','.join(node_ids)}",
         status="queued",
     )
     database.add(job)
     database.commit()
     database.refresh(job)
 
-    # Start background sync task
-    asyncio.create_task(run_node_sync(job.id, lab.id, node_ids, provider=lab_provider))
+    # Start background reconcile task
+    asyncio.create_task(run_node_reconcile(job.id, lab.id, node_ids, provider=lab_provider))
 
-    return schemas.SyncResponse(
+    return schemas.ReconcileResponse(
         job_id=job.id,
-        message=f"Sync job queued for {len(node_ids)} node(s)",
-        nodes_to_sync=node_ids,
+        message=f"Reconcile job queued for {len(node_ids)} node(s)",
+        nodes_to_reconcile=node_ids,
     )
 
 
@@ -1891,6 +1891,9 @@ async def extract_configs(
     containers in the lab. The configs are received from the agent and saved
     to the API's workspace for persistence.
 
+    For multi-host labs, this queries all agents that have nodes for the lab
+    and extracts configs from each agent concurrently.
+
     Args:
         create_snapshot: If True, creates config snapshots after extraction
         snapshot_type: Type of snapshot to create ("manual" or "auto_stop")
@@ -1899,24 +1902,58 @@ async def extract_configs(
         Dict with 'success', 'extracted_count', 'snapshots_created', and optionally 'error' keys
     """
     lab = get_lab_or_404(lab_id, database, current_user)
-
-    # Get agent for this lab
     lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
-    if not agent:
-        raise HTTPException(status_code=503, detail="No healthy agent available")
 
-    # Call agent to extract configs
-    result = await agent_client.extract_configs_on_agent(agent, lab.id)
+    # Get all agents that have nodes for this lab (multi-host support)
+    placements = (
+        database.query(models.NodePlacement.host_id)
+        .filter(models.NodePlacement.lab_id == lab.id)
+        .distinct()
+        .all()
+    )
+    host_ids = [p.host_id for p in placements]
 
-    if not result.get("success"):
+    # If no placements exist, fall back to lab's default agent
+    if not host_ids:
+        agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+        if agent:
+            host_ids = [agent.id]
+
+    # Get all healthy agents for these host_ids
+    agents = []
+    for host_id in host_ids:
+        agent = database.get(models.Host, host_id)
+        if agent and agent_client.is_agent_online(agent):
+            agents.append(agent)
+
+    if not agents:
+        raise HTTPException(status_code=503, detail="No healthy agents available")
+
+    # Call all agents concurrently to extract configs
+    tasks = [agent_client.extract_configs_on_agent(agent, lab.id) for agent in agents]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Merge configs from all agents
+    configs = []
+    extracted_count = 0
+    errors = []
+
+    for agent, result in zip(agents, results):
+        if isinstance(result, Exception):
+            errors.append(f"Agent {agent.id}: {result}")
+            continue
+        if not result.get("success"):
+            errors.append(f"Agent {agent.id}: {result.get('error', 'Unknown error')}")
+            continue
+        extracted_count += result.get("extracted_count", 0)
+        configs.extend(result.get("configs", []))
+
+    # If all agents failed, raise error
+    if not configs and errors:
         raise HTTPException(
             status_code=500,
-            detail=f"Config extraction failed: {result.get('error', 'Unknown error')}"
+            detail=f"Config extraction failed on all agents: {'; '.join(errors)}"
         )
-
-    extracted_count = result.get("extracted_count", 0)
-    configs = result.get("configs", [])
     snapshots_created = 0
 
     # Save configs to API workspace and create snapshots
