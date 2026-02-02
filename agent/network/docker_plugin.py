@@ -1820,6 +1820,78 @@ class DockerOVSPlugin:
     # VLAN Management API (for hot-connect / topology links)
     # =========================================================================
 
+    async def _discover_endpoint(
+        self,
+        lab_id: str,
+        container_name: str,
+        interface_name: str,
+    ) -> "EndpointState | None":
+        """Discover an endpoint by matching interface name to untracked endpoints.
+
+        After agent restart, endpoints may have container_name=None because
+        the recovery couldn't match veth pairs back to containers. This method
+        uses the Docker network membership to find the right veth port.
+
+        Args:
+            lab_id: Lab identifier
+            container_name: Container name
+            interface_name: Interface name inside container
+
+        Returns:
+            EndpointState if found, None otherwise
+        """
+        import docker
+
+        try:
+            # Get container's network memberships
+            def _get_container_networks():
+                client = docker.from_env()
+                container = client.containers.get(container_name)
+                return container.attrs["NetworkSettings"]["Networks"]
+
+            networks = await asyncio.to_thread(_get_container_networks)
+
+            # Find the network for this interface
+            # Network names follow pattern: {lab_id}-{interface_name}
+            network_suffix = f"-{interface_name}"
+
+            target_network = None
+            for net_name in networks.keys():
+                if net_name.endswith(network_suffix):
+                    target_network = net_name
+                    break
+
+            if not target_network:
+                logger.warning(f"No network found for {container_name}:{interface_name}")
+                return None
+
+            # Look through endpoints for one that matches by network interface
+            for ep in self.endpoints.values():
+                net = self.networks.get(ep.network_id)
+                if net and net.interface_name == interface_name:
+                    # Verify this endpoint belongs to this container
+                    # by checking if container is connected to this network
+                    if target_network.endswith(f"-{net.interface_name}"):
+                        ep.container_name = container_name
+                        logger.info(f"Matched endpoint via network: {container_name}:{interface_name} -> {ep.host_veth}")
+                        return ep
+
+            # Fallback: match by interface name for untracked endpoints
+            for ep in self.endpoints.values():
+                if ep.interface_name == interface_name and not ep.container_name:
+                    code, _, _ = await self._ovs_vsctl("get", "port", ep.host_veth, "tag")
+                    if code == 0:
+                        ep.container_name = container_name
+                        logger.info(f"Matched endpoint by interface: {container_name}:{interface_name} -> {ep.host_veth}")
+                        return ep
+
+            logger.warning(f"Could not find endpoint for {container_name}:{interface_name}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error discovering endpoint {container_name}:{interface_name}: {e}")
+            return None
+
     async def hot_connect(
         self,
         lab_id: str,
@@ -1855,6 +1927,13 @@ class DockerOVSPlugin:
                     ep_a = endpoint
                 elif endpoint.container_name == container_b and endpoint.interface_name == iface_b:
                     ep_b = endpoint
+
+            # If endpoints not found, try to discover them on-demand
+            # This handles cases where agent restarted and lost tracking state
+            if not ep_a:
+                ep_a = await self._discover_endpoint(lab_id, container_a, iface_a)
+            if not ep_b:
+                ep_b = await self._discover_endpoint(lab_id, container_b, iface_b)
 
             if not ep_a or not ep_b:
                 logger.error(f"Endpoints not found for {container_a}:{iface_a} or {container_b}:{iface_b}")

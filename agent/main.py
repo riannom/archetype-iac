@@ -2311,8 +2311,8 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
     """Hot-connect two interfaces in a running lab.
 
     This creates a Layer 2 link between two container interfaces by
-    assigning them the same VLAN tag on the OVS bridge. Requires OVS
-    to be enabled and interfaces to be pre-provisioned.
+    assigning them the same VLAN tag on the OVS bridge. Uses the Docker
+    OVS plugin which manages per-lab OVS bridges.
 
     Args:
         lab_id: Lab identifier
@@ -2334,23 +2334,26 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
     )
 
     try:
-        ovs = get_ovs_manager()
-        if not ovs._initialized:
-            await ovs.initialize()
-
         # Get container names from provider
         provider = get_provider_for_request()
         container_a = provider.get_container_name(lab_id, link.source_node)
         container_b = provider.get_container_name(lab_id, link.target_node)
 
-        # Hot-connect via OVS
-        vlan_tag = await ovs.hot_connect(
+        # Hot-connect via Docker OVS plugin (uses per-lab OVS bridges)
+        plugin = _get_docker_ovs_plugin()
+        vlan_tag = await plugin.hot_connect(
+            lab_id=lab_id,
             container_a=container_a,
             iface_a=link.source_interface,
             container_b=container_b,
             iface_b=link.target_interface,
-            lab_id=lab_id,
         )
+
+        if vlan_tag is None:
+            return LinkCreateResponse(
+                success=False,
+                error="hot_connect failed - endpoints not found",
+            )
 
         link_id = f"{link.source_node}:{link.source_interface}-{link.target_node}:{link.target_interface}"
 
@@ -2381,7 +2384,7 @@ async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
     """Hot-disconnect a link in a running lab.
 
     This breaks a Layer 2 link between two container interfaces by
-    assigning them separate VLAN tags.
+    assigning them separate VLAN tags. Uses the Docker OVS plugin.
 
     Args:
         lab_id: Lab identifier
@@ -2399,13 +2402,6 @@ async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
     logger.info(f"Hot-disconnect request: lab={lab_id}, link={link_id}")
 
     try:
-        ovs = get_ovs_manager()
-        if not ovs._initialized:
-            return LinkDeleteResponse(
-                success=False,
-                error="OVS not initialized",
-            )
-
         # Parse link_id to get endpoints
         # Format: "node1:iface1-node2:iface2"
         parts = link_id.split("-")
@@ -2432,13 +2428,11 @@ async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
         container_a = provider.get_container_name(lab_id, node_a)
         container_b = provider.get_container_name(lab_id, node_b)
 
-        # Hot-disconnect via OVS
-        await ovs.hot_disconnect(
-            container_a=container_a,
-            iface_a=iface_a,
-            container_b=container_b,
-            iface_b=iface_b,
-        )
+        # Hot-disconnect via Docker OVS plugin
+        # Disconnect both endpoints by giving each a unique VLAN
+        plugin = _get_docker_ovs_plugin()
+        await plugin.hot_disconnect(lab_id, container_a, iface_a)
+        await plugin.hot_disconnect(lab_id, container_b, iface_b)
 
         return LinkDeleteResponse(success=True)
 
