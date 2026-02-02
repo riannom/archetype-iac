@@ -338,12 +338,23 @@ class DockerProvider(Provider):
         for node_name, node_config in (nodes_raw or {}).items():
             if not isinstance(node_config, dict):
                 continue
+            kind = node_config.get("kind", "linux")
+            interface_count = node_config.get("interface_count")
+            if is_ceos_kind(kind) and (not interface_count or interface_count <= 0):
+                config = get_config_by_device(kind)
+                fallback = config.max_ports if config else 0
+                if fallback > 0:
+                    interface_count = fallback
+                    logger.warning(
+                        f"cEOS {node_name}: interface_count missing; defaulting to {fallback} for pre-provisioning"
+                    )
             nodes[node_name] = TopologyNode(
                 name=node_name,
-                kind=node_config.get("kind", "linux"),
+                kind=kind,
                 display_name=node_config.get("_display_name"),
                 image=node_config.get("image"),
                 host=node_config.get("host"),
+                interface_count=interface_count,
                 binds=node_config.get("binds", []),
                 env=node_config.get("env", {}),
                 ports=node_config.get("ports", []),
@@ -1723,13 +1734,22 @@ username admin privilege 15 role network-admin nopassword
         """
         nodes = {}
         for n in deploy_topology.nodes:
+            interface_count = n.interface_count
+            if is_ceos_kind(n.kind) and (not interface_count or interface_count <= 0):
+                config = get_config_by_device(n.kind)
+                fallback = config.max_ports if config else 0
+                if fallback > 0:
+                    interface_count = fallback
+                    logger.warning(
+                        f"cEOS {n.name}: interface_count missing; defaulting to {fallback} for pre-provisioning"
+                    )
             nodes[n.name] = TopologyNode(
                 name=n.name,
                 kind=n.kind,
                 display_name=n.display_name,
                 image=n.image,
                 host=None,  # Not needed for execution; host routing done by controller
-                interface_count=n.interface_count,
+                interface_count=interface_count,
                 binds=n.binds,
                 env=n.env,
                 ports=n.ports,
