@@ -52,6 +52,7 @@ export interface CanvasSettings {
   errorIndicator: CanvasErrorIndicatorSettings;
   showAgentIndicators: boolean;
   sidebarFilters: SidebarFilterSettings;
+  consoleInBottomPanel: boolean;
 }
 
 export interface UserPreferences {
@@ -98,6 +99,7 @@ export const DEFAULT_CANVAS_SETTINGS: CanvasSettings = {
   errorIndicator: DEFAULT_CANVAS_ERROR_SETTINGS,
   showAgentIndicators: true,
   sidebarFilters: DEFAULT_SIDEBAR_FILTER_SETTINGS,
+  consoleInBottomPanel: false,
 };
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
