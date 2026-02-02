@@ -577,13 +577,14 @@ class DockerOVSPlugin:
             ok = await self._reconnect_container_to_network(
                 container_name, network_id, interface_name
             )
+            lab_id = self.networks[network_id].lab_id if network_id in self.networks else "unknown"
             if ok:
                 logger.info(
-                    f"Reconnected {container_name}:{interface_name} to {network_id}"
+                    f"[lab {lab_id}] Reconnected {container_name}:{interface_name} to {network_id}"
                 )
             else:
                 logger.warning(
-                    f"Failed to reconnect {container_name}:{interface_name} to {network_id}"
+                    f"[lab {lab_id}] Failed to reconnect {container_name}:{interface_name} to {network_id}"
                 )
 
     async def _ensure_lab_network_attachments(self) -> None:
@@ -639,10 +640,13 @@ class DockerOVSPlugin:
             return
 
         for container_name, network_name, ok in actions:
+            lab_id = "unknown"
+            if "-" in network_name:
+                lab_id = network_name.split("-", 1)[0]
             if ok:
-                logger.info(f"Attached {container_name} to {network_name}")
+                logger.info(f"[lab {lab_id}] Attached {container_name} to {network_name}")
             else:
-                logger.warning(f"Failed to attach {container_name} to {network_name}")
+                logger.warning(f"[lab {lab_id}] Failed to attach {container_name} to {network_name}")
 
     async def _reconnect_missing_endpoints_from_docker(self) -> None:
         """Reconnect containers where Docker thinks a network is attached but no host veth exists."""
@@ -703,14 +707,19 @@ class DockerOVSPlugin:
             return
 
         for container_id, interface_name, endpoint_id, ok in actions:
+            lab_id = None
+            if endpoint_id and endpoint_id in self.endpoints:
+                network_id = self.endpoints[endpoint_id].network_id
+                lab_id = self.networks.get(network_id).lab_id if network_id in self.networks else None
+            lab_label = lab_id or "unknown"
             if ok:
                 logger.info(
-                    f"Reconnected container {container_id[:12]}:{interface_name} "
+                    f"[lab {lab_label}] Reconnected container {container_id[:12]}:{interface_name} "
                     f"(endpoint {endpoint_id[:12] if endpoint_id else 'unknown'})"
                 )
             else:
                 logger.warning(
-                    f"Failed to reconnect container {container_id[:12]}:{interface_name} "
+                    f"[lab {lab_label}] Failed to reconnect container {container_id[:12]}:{interface_name} "
                     f"(endpoint {endpoint_id[:12] if endpoint_id else 'unknown'})"
                 )
 
