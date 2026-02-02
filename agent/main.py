@@ -483,9 +483,9 @@ def _sync_get_resource_usage() -> dict:
                                                     memory_cache = int(line.split()[1])
                                                     break
                                     memory_actual = memory_usage - memory_cache
-                                    logger.info(f"Used cgroup fallback for {c.name}: {memory_actual} bytes ({round(memory_actual / (1024*1024), 1)} MB)")
+                                    logger.debug(f"Used cgroup fallback for {c.name}: {memory_actual} bytes")
                             except Exception as e:
-                                logger.warning(f"Cgroup fallback failed for {c.name}: {e}")
+                                logger.debug(f"Cgroup fallback failed for {c.name}: {e}")
 
                         # On cgroups v2, a very large limit (close to max int64) means no limit
                         # Use host memory as the reference in that case
