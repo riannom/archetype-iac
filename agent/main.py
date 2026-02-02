@@ -1398,6 +1398,60 @@ async def remove_container(container_name: str, force: bool = False) -> dict:
         return {"success": False, "error": str(e)}
 
 
+@app.delete("/containers/{lab_id}/{container_name}")
+async def remove_container_for_lab(
+    lab_id: str, container_name: str, force: bool = False
+) -> dict:
+    """Remove a specific container for a lab.
+
+    This endpoint is used for live node removal when a user deletes a node
+    from the canvas. The lab_id is used for logging and validation.
+
+    Args:
+        lab_id: Lab identifier (for logging/validation)
+        container_name: Name of the container to remove
+        force: Whether to force removal of running container
+
+    Returns:
+        Dict with success status and message/error
+    """
+    logger.info(f"Removing container {container_name} for lab {lab_id} (force={force})")
+
+    try:
+        import docker
+
+        client = docker.from_env()
+        container = await asyncio.to_thread(client.containers.get, container_name)
+
+        # Validate container belongs to the lab (optional safety check)
+        labels = container.labels or {}
+        container_lab_id = labels.get("archetype.lab_id", labels.get("clab-lab-name"))
+        if container_lab_id and container_lab_id != lab_id:
+            logger.warning(
+                f"Container {container_name} belongs to lab {container_lab_id}, "
+                f"not {lab_id} - proceeding anyway"
+            )
+
+        # Stop first if running, then remove
+        if container.status == "running":
+            logger.info(f"Stopping running container {container_name} before removal")
+            await asyncio.to_thread(container.stop, timeout=10)
+
+        await asyncio.to_thread(container.remove, force=force)
+        logger.info(f"Successfully removed container {container_name} for lab {lab_id}")
+        return {"success": True, "message": "Container removed"}
+
+    except docker.errors.NotFound:
+        logger.info(f"Container {container_name} not found (already removed)")
+        return {"success": True, "message": "Container not found (already removed)"}
+    except docker.errors.APIError as e:
+        logger.error(f"Docker API error removing {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error(f"Error removing container {container_name}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # --- Reconciliation Endpoints ---
 
 @app.get("/discover-labs")

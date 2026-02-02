@@ -18,9 +18,11 @@ interface NodeStateEntry {
 
 interface StatusBarProps {
   nodeStates: Record<string, NodeStateEntry>;
+  wsConnected?: boolean;
+  reconnectAttempts?: number;
 }
 
-const StatusBar: React.FC<StatusBarProps> = ({ nodeStates }) => {
+const StatusBar: React.FC<StatusBarProps> = ({ nodeStates, wsConnected, reconnectAttempts = 0 }) => {
   const [uptime, setUptime] = useState<string>('--:--:--');
 
   useEffect(() => {
@@ -56,7 +58,38 @@ const StatusBar: React.FC<StatusBarProps> = ({ nodeStates }) => {
   return (
     <div className="h-8 bg-white/90 dark:bg-stone-900/90 backdrop-blur-md border-t border-stone-200 dark:border-stone-700 flex items-center justify-between px-4 z-50 shrink-0 text-[10px] font-bold tracking-tight">
       <div className="flex items-center gap-6">
-        {/* Left side intentionally empty - CPU/MEM/System Health removed as redundant with SystemStatusStrip */}
+        {/* WebSocket connection indicator */}
+        {wsConnected !== undefined && (
+          <div
+            className={`flex items-center gap-1.5 px-2 py-0.5 rounded border ${
+              wsConnected
+                ? 'bg-sage-50 dark:bg-sage-900/30 border-sage-200 dark:border-sage-800 text-sage-600 dark:text-sage-400'
+                : reconnectAttempts > 0
+                  ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400'
+                  : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-500'
+            } transition-colors`}
+            title={
+              wsConnected
+                ? 'Connected - Receiving real-time updates'
+                : reconnectAttempts > 0
+                  ? `Reconnecting... (attempt ${reconnectAttempts})`
+                  : 'Disconnected - Using polling fallback'
+            }
+          >
+            <i
+              className={`fa-solid ${
+                wsConnected
+                  ? 'fa-signal'
+                  : reconnectAttempts > 0
+                    ? 'fa-rotate fa-spin'
+                    : 'fa-signal text-stone-400 dark:text-stone-600'
+              } text-[8px]`}
+            ></i>
+            <span className="uppercase">
+              {wsConnected ? 'LIVE' : reconnectAttempts > 0 ? 'RECONNECTING' : 'POLLING'}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-6">

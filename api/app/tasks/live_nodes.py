@@ -7,15 +7,19 @@ to nodes, enabling:
 1. Immediate node deployment when a new node is added to the canvas
 2. Immediate node destruction when a node is removed from the canvas
 3. Queuing of operations when agents are unavailable
+4. Debouncing of rapid canvas changes to batch operations
 
 The main entry point is process_node_changes() which is called as a
-background task from the import-graph endpoint.
+background task from the import-graph endpoint. Changes are debounced
+per lab to prevent firing separate operations for each rapid change.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
+from typing import Dict, List, Set
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -27,6 +31,101 @@ from app.services.topology import TopologyService
 from app.tasks.jobs import run_node_sync
 
 logger = logging.getLogger(__name__)
+
+
+# Debounce delay in seconds (500ms default)
+DEBOUNCE_DELAY = 0.5
+
+
+class NodeChangeDebouncer:
+    """Debounces rapid node changes per lab.
+
+    Accumulates node additions and removals for a short delay before
+    processing them as a batch. This prevents excessive API calls when
+    a user makes multiple rapid changes to the canvas.
+    """
+
+    def __init__(self):
+        # Pending changes per lab_id
+        self._pending_adds: Dict[str, Set[str]] = defaultdict(set)
+        self._pending_removes: Dict[str, List[dict]] = defaultdict(list)
+        self._debounce_tasks: Dict[str, asyncio.Task] = {}
+        self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+    async def add_changes(
+        self,
+        lab_id: str,
+        added_node_ids: List[str],
+        removed_node_info: List[dict],
+    ) -> None:
+        """Queue changes for debounced processing.
+
+        Args:
+            lab_id: Lab identifier
+            added_node_ids: Nodes that were added
+            removed_node_info: Info about nodes that were removed
+        """
+        async with self._locks[lab_id]:
+            # Accumulate changes
+            for node_id in added_node_ids:
+                self._pending_adds[lab_id].add(node_id)
+            for info in removed_node_info:
+                # Check if already in pending removes (by node_name)
+                node_name = info.get("node_name", "")
+                if not any(r.get("node_name") == node_name for r in self._pending_removes[lab_id]):
+                    self._pending_removes[lab_id].append(info)
+
+            # Cancel existing debounce task if any
+            if lab_id in self._debounce_tasks:
+                self._debounce_tasks[lab_id].cancel()
+                try:
+                    await self._debounce_tasks[lab_id]
+                except asyncio.CancelledError:
+                    pass
+
+            # Start new debounce task
+            self._debounce_tasks[lab_id] = asyncio.create_task(
+                self._process_after_delay(lab_id)
+            )
+
+    async def _process_after_delay(self, lab_id: str) -> None:
+        """Wait for debounce delay, then process accumulated changes."""
+        try:
+            await asyncio.sleep(DEBOUNCE_DELAY)
+
+            async with self._locks[lab_id]:
+                # Get and clear pending changes
+                added = list(self._pending_adds.pop(lab_id, set()))
+                removed = list(self._pending_removes.pop(lab_id, []))
+
+                # Remove task reference
+                self._debounce_tasks.pop(lab_id, None)
+
+            # Process changes if any
+            if added or removed:
+                logger.info(
+                    f"Processing debounced changes for lab {lab_id}: "
+                    f"{len(added)} added, {len(removed)} removed"
+                )
+                await _process_node_changes_impl(lab_id, added, removed)
+
+        except asyncio.CancelledError:
+            logger.debug(f"Debounce cancelled for lab {lab_id}, changes merged")
+            raise
+        except Exception as e:
+            logger.error(f"Error in debounced processing for lab {lab_id}: {e}")
+
+
+# Global debouncer instance
+_debouncer: NodeChangeDebouncer | None = None
+
+
+def get_debouncer() -> NodeChangeDebouncer:
+    """Get the singleton debouncer instance."""
+    global _debouncer
+    if _debouncer is None:
+        _debouncer = NodeChangeDebouncer()
+    return _debouncer
 
 
 async def deploy_node_immediately(
@@ -203,10 +302,28 @@ async def process_node_changes(
 ) -> None:
     """Background task to process node additions/removals from import-graph.
 
-    This function is called as a background task when the topology is modified.
-    It handles:
-    1. Deploying new nodes immediately (if lab is running)
-    2. Destroying removed nodes and cleaning up their resources
+    This function queues changes for debounced processing. Multiple rapid
+    changes to the same lab will be batched together and processed after
+    a short delay (500ms by default).
+
+    Args:
+        lab_id: Lab identifier
+        added_node_ids: List of node IDs that were added
+        removed_node_info: List of dicts with info about removed nodes
+    """
+    debouncer = get_debouncer()
+    await debouncer.add_changes(lab_id, added_node_ids, removed_node_info)
+
+
+async def _process_node_changes_impl(
+    lab_id: str,
+    added_node_ids: list[str],
+    removed_node_info: list[dict],
+) -> None:
+    """Implementation of node change processing after debouncing.
+
+    This function handles the actual deployment and destruction of nodes.
+    It's called by the debouncer after collecting all pending changes.
 
     Args:
         lab_id: Lab identifier
