@@ -6,7 +6,7 @@ the agent and the controller via HTTP/WebSocket.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -193,6 +193,34 @@ class LabStatusResponse(BaseModel):
     """Agent -> Controller: Lab status."""
     lab_id: str
     nodes: list[NodeInfo] = Field(default_factory=list)
+    error: str | None = None
+
+
+# --- Node Reconciliation ---
+
+class NodeReconcileTarget(BaseModel):
+    """A node to reconcile with its desired state."""
+    container_name: str
+    desired_state: Literal["running", "stopped"]
+
+
+class NodeReconcileRequest(BaseModel):
+    """Controller -> Agent: Reconcile nodes to desired states."""
+    nodes: list[NodeReconcileTarget]
+
+
+class NodeReconcileResult(BaseModel):
+    """Result of reconciling a single node."""
+    container_name: str
+    action: Literal["started", "stopped", "already_running", "already_stopped", "error"]
+    success: bool
+    error: str | None = None
+
+
+class NodeReconcileResponse(BaseModel):
+    """Agent -> Controller: Reconcile results."""
+    lab_id: str
+    results: list[NodeReconcileResult] = Field(default_factory=list)
     error: str | None = None
 
 

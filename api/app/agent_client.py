@@ -546,12 +546,11 @@ async def destroy_on_agent(
         raise
 
 
-async def _do_get_status(url: str, lab_id: str) -> dict:
+async def _do_get_status(url: str) -> dict:
     """Internal status request (for retry wrapper)."""
     client = get_http_client()
-    response = await client.post(
+    response = await client.get(
         url,
-        json={"lab_id": lab_id},
         timeout=settings.agent_status_timeout,
     )
     response.raise_for_status()
@@ -563,13 +562,51 @@ async def get_lab_status_from_agent(
     lab_id: str,
 ) -> dict:
     """Get lab status from agent with retry logic."""
-    url = f"{get_agent_url(agent)}/labs/status"
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/status"
 
     try:
-        return await with_retry(_do_get_status, url, lab_id, max_retries=1)
+        return await with_retry(_do_get_status, url, max_retries=1)
     except AgentError as e:
         e.agent_id = agent.id
         raise
+
+
+async def reconcile_nodes_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    nodes: list[dict],
+) -> dict:
+    """Reconcile nodes to their desired states on an agent.
+
+    Args:
+        agent: The agent managing the nodes
+        lab_id: Lab identifier
+        nodes: List of dicts with 'container_name' and 'desired_state' keys
+
+    Returns:
+        Dict with 'lab_id', 'results' list, and optionally 'error' key
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/reconcile"
+    client = get_http_client()
+
+    try:
+        response = await client.post(
+            url,
+            json={"nodes": nodes},
+            timeout=settings.agent_deploy_timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError as e:
+        raise AgentError(
+            f"Reconcile request failed: {e.response.status_code}",
+            agent_id=agent.id,
+        )
+    except httpx.RequestError as e:
+        raise AgentError(
+            f"Reconcile request failed: {e}",
+            agent_id=agent.id,
+        )
 
 
 def get_agent_console_url(agent: models.Host, lab_id: str, node_name: str) -> str:
