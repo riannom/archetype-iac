@@ -675,6 +675,7 @@ class CanvasSettings(BaseModel):
     errorIndicator: CanvasErrorIndicatorSettings = CanvasErrorIndicatorSettings()
     showAgentIndicators: bool = True
     sidebarFilters: SidebarFilterSettings = SidebarFilterSettings()
+    consoleInBottomPanel: bool = False
 
 
 class UserPreferencesOut(BaseModel):
