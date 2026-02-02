@@ -122,7 +122,7 @@ from agent.schemas import (
     PortRestoreResponse,
     PortVlanResponse,
 )
-from agent.version import __version__
+from agent.version import __version__, get_commit
 from agent.updater import (
     DeploymentMode,
     detect_deployment_mode,
@@ -805,6 +805,7 @@ def health():
     return {
         "status": "ok",
         "agent_id": AGENT_ID,
+        "commit": get_commit(),
         "registered": _registered,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

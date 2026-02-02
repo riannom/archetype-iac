@@ -700,6 +700,7 @@ class VersionInfo(BaseModel):
     """Current version information."""
     version: str
     build_time: str | None = None
+    commit: str | None = None
 
 
 class UpdateInfo(BaseModel):

@@ -28,6 +28,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Agent code
 COPY agent/ ./agent/
 
+# Commit SHA (optional build arg)
+ARG GIT_SHA=unknown
+ENV ARCHETYPE_GIT_SHA=$GIT_SHA
+RUN echo "$GIT_SHA" > /app/agent/GIT_SHA
+
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 

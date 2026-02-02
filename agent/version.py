@@ -5,6 +5,7 @@ This module provides version information that can be read from:
 2. Git tags as fallback
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -51,3 +52,38 @@ def get_version() -> str:
 
 # Cache the version at import time
 __version__ = get_version()
+
+
+def get_commit() -> str:
+    """Get the agent commit SHA.
+
+    Reads from ARCHETYPE_GIT_SHA env var first, then GIT_SHA file,
+    falls back to git rev-parse if available.
+    """
+    env_sha = os.getenv("ARCHETYPE_GIT_SHA", "").strip()
+    if env_sha:
+        return env_sha
+
+    commit_file = Path(__file__).parent / "GIT_SHA"
+    if commit_file.exists():
+        try:
+            commit = commit_file.read_text().strip()
+            if commit:
+                return commit
+        except Exception:
+            pass
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=Path(__file__).parent,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    return "unknown"
