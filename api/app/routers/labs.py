@@ -401,7 +401,9 @@ def import_yaml(
     # Trigger live link operations in background if there are changes
     if added_link_names or removed_link_info:
         from app.tasks.live_links import process_link_changes
-        asyncio.create_task(process_link_changes(lab.id, added_link_names, removed_link_info))
+        asyncio.create_task(
+            process_link_changes(lab.id, added_link_names, removed_link_info, current_user.id)
+        )
 
     # Trigger live node operations in background if there are changes
     if added_node_ids or removed_node_info:
@@ -457,7 +459,9 @@ def import_graph(
     # Trigger live link operations in background if there are changes
     if added_link_names or removed_link_info:
         from app.tasks.live_links import process_link_changes
-        asyncio.create_task(process_link_changes(lab.id, added_link_names, removed_link_info))
+        asyncio.create_task(
+            process_link_changes(lab.id, added_link_names, removed_link_info, current_user.id)
+        )
 
     # Trigger live node operations in background if there are changes
     if added_node_ids or removed_node_info:
