@@ -1515,7 +1515,7 @@ username admin privilege 15 role network-admin nopassword
     ) -> int:
         """Create links between containers.
 
-        When OVS plugin is enabled, uses plugin's per-lab bridge with VLAN matching.
+        When OVS plugin is enabled, uses shared OVS bridge with VLAN matching.
         When legacy OVS is enabled, uses global OVS bridge with hot-connect.
         When OVS is disabled, uses traditional veth pairs.
 
@@ -1546,7 +1546,7 @@ username admin privilege 15 role network-admin nopassword
 
             try:
                 if self.use_ovs_plugin:
-                    # Use OVS plugin's per-lab bridge
+                    # Use OVS plugin's shared bridge
                     await self._plugin_hot_connect(
                         lab_id=lab_id,
                         container_a=container_a,

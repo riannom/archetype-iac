@@ -14,7 +14,7 @@ Architecture:
     - Cross-host links work automatically (VXLAN tunnels on same bridge)
 
 Docker Plugin Lifecycle:
-    CreateNetwork  → Create OVS bridge (once per lab) or register interface network
+    CreateNetwork  → Register interface network on shared OVS bridge
     CreateEndpoint → Create veth pair, attach to OVS with unique VLAN
     Join           → Return interface name, Docker moves veth into container
     Leave          → Container disconnecting
@@ -77,7 +77,7 @@ VLAN_RANGE_END = 4000
 
 @dataclass
 class LabBridge:
-    """State for a lab's OVS bridge."""
+    """State for a lab's VLAN allocations on the shared OVS bridge."""
 
     lab_id: str
     bridge_name: str
