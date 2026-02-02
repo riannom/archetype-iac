@@ -190,8 +190,9 @@ class DockerOVSPlugin:
             if code != 0:
                 raise RuntimeError(f"Failed to create OVS bridge {bridge_name}: {stderr}")
 
-            # Set fail mode to secure (drop unknown traffic by default)
-            await self._ovs_vsctl("set-fail-mode", bridge_name, "secure")
+            # Set fail mode to standalone for normal L2 switching
+            # Secure mode drops all traffic without explicit OpenFlow rules
+            await self._ovs_vsctl("set-fail-mode", bridge_name, "standalone")
 
             # Add default flow to allow traffic within same VLAN
             await self._run_cmd([
