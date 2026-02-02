@@ -493,6 +493,7 @@ class DockerOVSPlugin:
         stats = {
             "endpoints_removed": 0,
             "endpoints_recovered": 0,
+            "endpoints_recreated": 0,
             "bridges_recreated": 0,
             "ports_orphaned": 0,
         }
@@ -523,31 +524,83 @@ class DockerOVSPlugin:
             ovs_ports = set(stdout.strip().split("\n")) if stdout.strip() else set()
 
         # Verify each endpoint's host veth exists
-        endpoints_to_remove = []
+        endpoints_to_remove: list[tuple[str, bool]] = []
         for ep_id, endpoint in self.endpoints.items():
             # Check if host veth exists
             code, _, _ = await self._run_cmd(["ip", "link", "show", endpoint.host_veth])
             if code != 0:
-                # Host veth doesn't exist
-                logger.info(f"Endpoint {ep_id[:12]} veth {endpoint.host_veth} missing, removing from state")
-                endpoints_to_remove.append(ep_id)
+                # Host veth doesn't exist - try to recreate it by reconnecting
+                # the container to the Docker network (this re-triggers the plugin).
+                recreated = await self._recreate_missing_endpoint(endpoint)
+                if recreated:
+                    logger.info(
+                        f"Endpoint {ep_id[:12]} veth {endpoint.host_veth} missing, reconnected"
+                    )
+                    endpoints_to_remove.append((ep_id, True))
+                    stats["endpoints_recreated"] += 1
+                else:
+                    logger.info(
+                        f"Endpoint {ep_id[:12]} veth {endpoint.host_veth} missing, removing from state"
+                    )
+                    endpoints_to_remove.append((ep_id, False))
+                    stats["endpoints_removed"] += 1
 
-        for ep_id in endpoints_to_remove:
-            endpoint = self.endpoints.pop(ep_id, None)
-            if endpoint:
-                # Also clean up network tracking
-                network = self.networks.get(endpoint.network_id)
-                if network:
-                    lab_bridge = self.lab_bridges.get(network.lab_id)
-                    if lab_bridge:
-                        lab_bridge.network_ids.discard(endpoint.network_id)
-            stats["endpoints_removed"] += 1
+        for ep_id, _recreated in endpoints_to_remove:
+            self.endpoints.pop(ep_id, None)
 
         if any(v > 0 for v in stats.values()):
             await self._save_state()
             logger.info(f"State reconciliation complete: {stats}")
 
         return stats
+
+    async def _recreate_missing_endpoint(self, endpoint: EndpointState) -> bool:
+        """Reconnect container to network to recreate a missing host veth.
+
+        Returns True if reconnection was attempted successfully.
+        """
+        if not endpoint.container_name:
+            return False
+
+        network_state = self.networks.get(endpoint.network_id)
+        network_name = None
+        if network_state:
+            network_name = f"{network_state.lab_id}-{network_state.interface_name}"
+
+        def _sync_reconnect() -> bool:
+            import docker
+            from docker.errors import NotFound, APIError
+
+            client = docker.from_env()
+
+            try:
+                network = client.networks.get(endpoint.network_id)
+            except NotFound:
+                if network_name:
+                    network = client.networks.get(network_name)
+                else:
+                    return False
+
+            try:
+                container = client.containers.get(endpoint.container_name)
+            except NotFound:
+                return False
+
+            try:
+                network.disconnect(container, force=True)
+            except (NotFound, APIError):
+                pass
+
+            network.connect(container)
+            return True
+
+        try:
+            return await asyncio.to_thread(_sync_reconnect)
+        except Exception as e:
+            logger.warning(
+                f"Failed to reconnect {endpoint.container_name} to {endpoint.network_id}: {e}"
+            )
+            return False
 
     async def _cleanup_orphaned_ovs_ports(self) -> int:
         """Remove OVS ports that are not tracked in our state.

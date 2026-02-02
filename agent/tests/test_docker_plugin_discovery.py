@@ -173,3 +173,44 @@ async def test_discover_endpoint_returns_none_when_missing(monkeypatch, tmp_path
 
     ep = await plugin._discover_endpoint("lab", "container-3", "eth3")
     assert ep is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recreates_missing_veth(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+
+    endpoint_id = "ep-missing"
+    network_id = "net-1"
+    plugin.endpoints[endpoint_id] = EndpointState(
+        endpoint_id=endpoint_id,
+        network_id=network_id,
+        interface_name="eth1",
+        host_veth="vhmissing",
+        cont_veth="vcmissing",
+        vlan_tag=100,
+        container_name="container-1",
+    )
+    plugin.networks[network_id] = NetworkState(
+        network_id=network_id,
+        lab_id="lab",
+        interface_name="eth1",
+        bridge_name="arch-ovs",
+    )
+
+    async def _run_cmd(_args):
+        return 1, "", ""
+
+    async def _recreate_missing_endpoint(_endpoint):
+        return True
+
+    async def _save_state():
+        return None
+
+    monkeypatch.setattr(plugin, "_run_cmd", _run_cmd)
+    monkeypatch.setattr(plugin, "_recreate_missing_endpoint", _recreate_missing_endpoint)
+    monkeypatch.setattr(plugin, "_save_state", _save_state)
+
+    stats = await plugin._reconcile_state()
+    assert endpoint_id not in plugin.endpoints
+    assert stats["endpoints_recreated"] == 1
