@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     mgmt_network_subnet_base: str = "172.20.0.0/16"  # /24 allocated per lab
     mgmt_network_enable_nat: bool = True
 
-    # VXLAN settings for per-lab bridges (multi-host support)
+    # VXLAN settings for shared bridge (multi-host support)
     plugin_vxlan_vni_base: int = 200000  # Different range from overlay.py
     plugin_vxlan_vni_max: int = 299999
     plugin_vxlan_dst_port: int = 4789

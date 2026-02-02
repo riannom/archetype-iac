@@ -2358,7 +2358,7 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
 
     This creates a Layer 2 link between two container interfaces by
     assigning them the same VLAN tag on the OVS bridge. Uses the Docker
-    OVS plugin which manages per-lab OVS bridges.
+    OVS plugin which manages the shared OVS bridge.
 
     Args:
         lab_id: Lab identifier
@@ -2385,7 +2385,7 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
         container_a = provider.get_container_name(lab_id, link.source_node)
         container_b = provider.get_container_name(lab_id, link.target_node)
 
-        # Hot-connect via Docker OVS plugin (uses per-lab OVS bridges)
+        # Hot-connect via Docker OVS plugin (uses shared OVS bridge)
         plugin = _get_docker_ovs_plugin()
         vlan_tag = await plugin.hot_connect(
             lab_id=lab_id,

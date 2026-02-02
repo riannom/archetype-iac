@@ -56,7 +56,7 @@ Manages cross-host VXLAN tunnels:
 Docker network plugin for pre-boot interface provisioning:
 - Creates real interfaces (not dummy) before container init
 - Required for cEOS which enumerates interfaces at boot
-- Attaches to per-lab OVS bridge
+- Attaches to shared OVS bridge (`arch-ovs`)
 
 ### `local.py` - LocalNetworkManager
 
