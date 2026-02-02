@@ -625,7 +625,7 @@ username admin privilege 15 role network-admin nopassword
         """Create Docker networks for lab interfaces via OVS plugin.
 
         Creates one network per interface (eth1, eth2, ..., ethN).
-        All networks share the same OVS bridge (ovs-{lab_id}).
+        All networks share the same OVS bridge (arch-ovs).
 
         Args:
             lab_id: Lab identifier
@@ -1091,8 +1091,8 @@ username admin privilege 15 role network-admin nopassword
             logger.debug(f"No OVS networks found for lab {lab_id}")
             return result
 
-        # Get OVS ports for this lab's bridge
-        bridge_name = f"ovs-{lab_id[:12]}"
+        # Get OVS ports for the shared bridge
+        bridge_name = settings.ovs_bridge_name
         proc = await asyncio.create_subprocess_exec(
             "ovs-vsctl", "list-ports", bridge_name,
             stdout=asyncio.subprocess.PIPE,
@@ -1325,12 +1325,12 @@ username admin privilege 15 role network-admin nopassword
         container_b: str,
         iface_b: str,
     ) -> bool:
-        """Connect two interfaces using the OVS plugin's per-lab bridge.
+        """Connect two interfaces using the shared OVS bridge.
 
         Finds OVS ports by container endpoint and sets matching VLAN tags.
 
         Args:
-            lab_id: Lab identifier
+            lab_id: Lab identifier (unused, kept for API compatibility)
             container_a: First container name
             iface_a: Interface on first container
             container_b: Second container name
@@ -1339,7 +1339,7 @@ username admin privilege 15 role network-admin nopassword
         Returns:
             True if successful, False otherwise
         """
-        bridge_name = f"ovs-{lab_id[:12]}"
+        bridge_name = settings.ovs_bridge_name  # Shared bridge (arch-ovs)
 
         # Find OVS ports attached to this container's interfaces
         # Ports are named with pattern: vh{endpoint_prefix}{random}
