@@ -171,7 +171,7 @@ class TestRunAgentJob:
                 mock_get_agent.return_value = sample_host
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                     mock_deploy.return_value = {"status": "completed", "stdout": "Lab deployed"}
-                    await run_agent_job(job.id, lab.id, "up", topology_yaml="name: test")
+                    await run_agent_job(job.id, lab.id, "up")
 
         test_db.refresh(job)
         test_db.refresh(lab)
@@ -211,7 +211,7 @@ class TestRunAgentJob:
                         "error_message": "Image not found",
                         "stderr": "Error: image ceos not found"
                     }
-                    await run_agent_job(job.id, lab.id, "up", topology_yaml="name: test")
+                    await run_agent_job(job.id, lab.id, "up")
 
         test_db.refresh(job)
         test_db.refresh(lab)
@@ -353,7 +353,7 @@ class TestRunAgentJob:
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                     mock_deploy.side_effect = AgentUnavailableError("Connection refused", agent_id=sample_host.id)
                     with patch("app.tasks.jobs.agent_client.mark_agent_offline", new_callable=AsyncMock) as mock_offline:
-                        await run_agent_job(job.id, lab.id, "up", topology_yaml="name: test")
+                        await run_agent_job(job.id, lab.id, "up")
                         mock_offline.assert_called_once()
 
         test_db.refresh(job)
@@ -397,7 +397,7 @@ class TestRunAgentJob:
                         stdout="Starting...",
                         stderr="Error: image not found"
                     )
-                    await run_agent_job(job.id, lab.id, "up", topology_yaml="name: test")
+                    await run_agent_job(job.id, lab.id, "up")
 
         test_db.refresh(job)
         assert job.status == "failed"
@@ -431,25 +431,29 @@ class TestRunMultihostDeploy:
         test_db.commit()
         test_db.refresh(job)
 
-        # Topology with nodes on different hosts
-        topology_yaml = """
-name: multihost
-topology:
-  nodes:
-    r1:
-      kind: linux
-      labels:
-        netlab.host: host1
-    r2:
-      kind: linux
-      labels:
-        netlab.host: host2
-"""
+        node1 = models.Node(
+            lab_id=lab.id,
+            gui_id="r1",
+            display_name="r1",
+            container_name="r1",
+            node_type="device",
+            device="linux",
+            host_id="host1",
+        )
+        node2 = models.Node(
+            lab_id=lab.id,
+            gui_id="r2",
+            display_name="r2",
+            container_name="r2",
+            node_type="device",
+            device="linux",
+            host_id="host2",
+        )
+        test_db.add_all([node1, node2])
+        test_db.commit()
 
         with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
-            with patch("app.tasks.jobs.agent_client.get_agent_by_name", new_callable=AsyncMock) as mock_get_agent:
-                mock_get_agent.return_value = None  # No agents found
-                await run_multihost_deploy(job.id, lab.id, topology_yaml)
+            await run_multihost_deploy(job.id, lab.id)
 
         test_db.refresh(job)
         assert job.status == "failed"
@@ -482,20 +486,20 @@ class TestRunMultihostDestroy:
         test_db.commit()
         test_db.refresh(job)
 
-        topology_yaml = """
-name: multihost
-topology:
-  nodes:
-    r1:
-      kind: linux
-      labels:
-        netlab.host: missing-host
-"""
+        node1 = models.Node(
+            lab_id=lab.id,
+            gui_id="r1",
+            display_name="r1",
+            container_name="r1",
+            node_type="device",
+            device="linux",
+            host_id="missing-host",
+        )
+        test_db.add(node1)
+        test_db.commit()
 
         with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
-            with patch("app.tasks.jobs.agent_client.get_agent_by_name", new_callable=AsyncMock) as mock_get_agent:
-                mock_get_agent.return_value = None
-                await run_multihost_destroy(job.id, lab.id, topology_yaml)
+            await run_multihost_destroy(job.id, lab.id)
 
         test_db.refresh(job)
         assert job.status == "failed"
@@ -817,7 +821,7 @@ class TestJobErrorHandling:
                 mock_get_agent.return_value = sample_host
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                     mock_deploy.side_effect = RuntimeError("Unexpected error")
-                    await run_agent_job(job.id, lab.id, "up", topology_yaml="name: test")
+                    await run_agent_job(job.id, lab.id, "up")
 
         test_db.refresh(job)
         assert job.status == "failed"
