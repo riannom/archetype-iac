@@ -1956,6 +1956,16 @@ async def extract_configs(
         )
     snapshots_created = 0
 
+    # Build node -> agent mapping from placements for cross-agent sync
+    node_to_agent: dict[str, models.Host] = {}
+    for placement in database.query(models.NodePlacement).filter(
+        models.NodePlacement.lab_id == lab.id
+    ).all():
+        node_def = database.get(models.Node, placement.node_definition_id)
+        agent = database.get(models.Host, placement.host_id)
+        if node_def and agent:
+            node_to_agent[node_def.container_name] = agent
+
     # Save configs to API workspace and create snapshots
     if configs:
         workspace = lab_workspace(lab.id)
@@ -2002,10 +2012,29 @@ async def extract_configs(
 
             database.commit()
 
+    # Sync configs to all agents to ensure agent workspaces match API workspace
+    # This handles cases where configs are modified in API workspace or extracted
+    # from a different agent than where the node is currently placed
+    sync_errors = []
+    for config_data in configs:
+        node_name = config_data.get("node_name")
+        content = config_data.get("content")
+        if not node_name or not content:
+            continue
+
+        agent = node_to_agent.get(node_name)
+        if agent and agent_client.is_agent_online(agent):
+            result = await agent_client.update_config_on_agent(
+                agent, lab.id, node_name, content
+            )
+            if not result.get("success"):
+                sync_errors.append(f"{node_name}: {result.get('error', 'unknown')}")
+
     return {
         "success": True,
         "extracted_count": extracted_count,
         "snapshots_created": snapshots_created,
+        "sync_errors": sync_errors if sync_errors else None,
         "message": f"Extracted {extracted_count} cEOS configs, created {snapshots_created} snapshot(s)",
     }
 
