@@ -586,6 +586,64 @@ class DockerOVSPlugin:
                     f"Failed to reconnect {container_name}:{interface_name} to {network_id}"
                 )
 
+    async def _ensure_lab_network_attachments(self) -> None:
+        """Ensure containers are attached to all lab OVS networks (eth1..ethN)."""
+
+        def _sync_attach_all() -> list[tuple[str, str, bool]]:
+            import docker
+            from docker.errors import NotFound, APIError
+
+            client = docker.from_env(timeout=30)
+            actions: list[tuple[str, str, bool]] = []
+
+            networks_by_lab: dict[str, list[NetworkState]] = {}
+            for network_state in self.networks.values():
+                if network_state.interface_name == "eth0":
+                    continue
+                networks_by_lab.setdefault(network_state.lab_id, []).append(network_state)
+
+            for lab_id, networks in networks_by_lab.items():
+                try:
+                    containers = client.containers.list(
+                        all=True, filters={"label": f"archetype.lab_id={lab_id}"}
+                    )
+                except Exception:
+                    continue
+
+                for container in containers:
+                    attached = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+                    for network_state in networks:
+                        network_name = f"{lab_id}-{network_state.interface_name}"
+                        if network_name in attached:
+                            continue
+                        try:
+                            try:
+                                network = client.networks.get(network_state.network_id)
+                            except NotFound:
+                                network = client.networks.get(network_name)
+                            network.connect(container)
+                            actions.append((container.name, network_name, True))
+                        except APIError as e:
+                            if "already exists" in str(e).lower():
+                                continue
+                            actions.append((container.name, network_name, False))
+                        except Exception:
+                            actions.append((container.name, network_name, False))
+
+            return actions
+
+        try:
+            actions = await asyncio.to_thread(_sync_attach_all)
+        except Exception as e:
+            logger.warning(f"Failed to ensure lab network attachments: {e}")
+            return
+
+        for container_name, network_name, ok in actions:
+            if ok:
+                logger.info(f"Attached {container_name} to {network_name}")
+            else:
+                logger.warning(f"Failed to attach {container_name} to {network_name}")
+
     async def _reconnect_missing_endpoints_from_docker(self) -> None:
         """Reconnect containers where Docker thinks a network is attached but no host veth exists."""
 
@@ -655,6 +713,11 @@ class DockerOVSPlugin:
                     f"Failed to reconnect container {container_id[:12]}:{interface_name} "
                     f"(endpoint {endpoint_id[:12] if endpoint_id else 'unknown'})"
                 )
+
+    async def _post_start_reconcile(self) -> None:
+        await self._ensure_lab_network_attachments()
+        await self._reconnect_pending_endpoints()
+        await self._reconnect_missing_endpoints_from_docker()
 
     async def _reconnect_container_to_network(
         self, container_name: str, network_id: str, interface_name: str
@@ -2603,9 +2666,8 @@ class DockerOVSPlugin:
         # Start TTL cleanup if enabled
         await self._start_ttl_cleanup()
 
-        # Reconnect missing endpoints after plugin is listening.
-        asyncio.create_task(self._reconnect_pending_endpoints())
-        asyncio.create_task(self._reconnect_missing_endpoints_from_docker())
+        # Reconcile after plugin is listening.
+        asyncio.create_task(self._post_start_reconcile())
 
         return runner
 

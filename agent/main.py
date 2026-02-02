@@ -300,6 +300,36 @@ def get_provider_for_request(provider_name: str = "docker") -> Provider:
     return provider
 
 
+async def _fix_running_interfaces() -> None:
+    """Fix interface naming/attachments for already-running containers after agent restart."""
+    await asyncio.sleep(2)
+
+    provider = get_provider("docker")
+    if provider is None:
+        return
+
+    try:
+        containers = await asyncio.to_thread(
+            provider.docker.containers.list,
+            all=True,
+            filters={"label": "archetype.lab_id"},
+        )
+    except Exception as e:
+        logger.warning(f"Failed to list containers for interface fixup: {e}")
+        return
+
+    for container in containers:
+        lab_id = container.labels.get("archetype.lab_id")
+        if not lab_id:
+            continue
+        try:
+            await provider._fix_interface_names(container.name, lab_id)
+        except Exception as e:
+            logger.warning(
+                f"Failed to fix interfaces for {container.name}: {e}"
+            )
+
+
 def provider_status_to_schema(status: ProviderNodeStatus) -> NodeStatus:
     """Convert provider NodeStatus to schema NodeStatus."""
     mapping = {
@@ -727,6 +757,7 @@ async def lifespan(app: FastAPI):
             plugin = get_docker_ovs_plugin()
             _docker_plugin_runner = await plugin.start()
             logger.info("Docker OVS network plugin started")
+            asyncio.create_task(_fix_running_interfaces())
         except Exception as e:
             logger.error(f"Failed to start Docker OVS plugin: {e}")
 
