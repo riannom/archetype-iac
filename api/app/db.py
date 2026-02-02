@@ -38,10 +38,19 @@ def get_redis() -> redis.Redis:
 
 
 def get_db():
+    """FastAPI dependency for database sessions.
+
+    Ensures proper cleanup with rollback before close to prevent
+    'idle in transaction' connections.
+    """
     db = SessionLocal()
     try:
         yield db
     finally:
+        try:
+            db.rollback()  # Release any uncommitted transaction
+        except Exception:
+            pass
         db.close()
 
 
