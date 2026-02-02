@@ -152,6 +152,7 @@ class DockerOVSPlugin:
         self._started_at = datetime.now(timezone.utc)
         self._cleanup_task: asyncio.Task | None = None
         self._next_mgmt_subnet_index = 1  # For allocating management subnets
+        self._pending_endpoint_reconnects: list[tuple[str, str, str]] = []
 
         # State persistence
         workspace = Path(settings.workspace_path)
@@ -493,7 +494,7 @@ class DockerOVSPlugin:
         stats = {
             "endpoints_removed": 0,
             "endpoints_recovered": 0,
-            "endpoints_recreated": 0,
+            "endpoints_queued": 0,
             "bridges_recreated": 0,
             "ports_orphaned": 0,
         }
@@ -529,23 +530,21 @@ class DockerOVSPlugin:
             # Check if host veth exists
             code, _, _ = await self._run_cmd(["ip", "link", "show", endpoint.host_veth])
             if code != 0:
-                # Host veth doesn't exist - try to recreate it by reconnecting
-                # the container to the Docker network (this re-triggers the plugin).
-                recreated = await self._recreate_missing_endpoint(endpoint)
-                if recreated:
+                # Host veth doesn't exist - queue reconnect after plugin starts.
+                queued = self._queue_missing_endpoint_reconnect(endpoint)
+                if queued:
                     logger.info(
-                        f"Endpoint {ep_id[:12]} veth {endpoint.host_veth} missing, reconnected"
+                        f"Endpoint {ep_id[:12]} veth {endpoint.host_veth} missing, queued reconnect"
                     )
-                    endpoints_to_remove.append((ep_id, True))
-                    stats["endpoints_recreated"] += 1
+                    stats["endpoints_queued"] += 1
                 else:
                     logger.info(
                         f"Endpoint {ep_id[:12]} veth {endpoint.host_veth} missing, removing from state"
                     )
-                    endpoints_to_remove.append((ep_id, False))
                     stats["endpoints_removed"] += 1
+                endpoints_to_remove.append((ep_id, queued))
 
-        for ep_id, _recreated in endpoints_to_remove:
+        for ep_id, _queued in endpoints_to_remove:
             self.endpoints.pop(ep_id, None)
 
         if any(v > 0 for v in stats.values()):
@@ -554,27 +553,56 @@ class DockerOVSPlugin:
 
         return stats
 
-    async def _recreate_missing_endpoint(self, endpoint: EndpointState) -> bool:
-        """Reconnect container to network to recreate a missing host veth.
-
-        Returns True if reconnection was attempted successfully.
-        """
+    def _queue_missing_endpoint_reconnect(self, endpoint: EndpointState) -> bool:
         if not endpoint.container_name:
             return False
 
         network_state = self.networks.get(endpoint.network_id)
+        if not network_state:
+            return False
+
+        self._pending_endpoint_reconnects.append(
+            (endpoint.container_name, endpoint.network_id, network_state.interface_name)
+        )
+        return True
+
+    async def _reconnect_pending_endpoints(self) -> None:
+        if not self._pending_endpoint_reconnects:
+            return
+
+        pending = list(self._pending_endpoint_reconnects)
+        self._pending_endpoint_reconnects.clear()
+
+        for container_name, network_id, interface_name in pending:
+            ok = await self._reconnect_container_to_network(
+                container_name, network_id, interface_name
+            )
+            if ok:
+                logger.info(
+                    f"Reconnected {container_name}:{interface_name} to {network_id}"
+                )
+            else:
+                logger.warning(
+                    f"Failed to reconnect {container_name}:{interface_name} to {network_id}"
+                )
+
+    async def _reconnect_container_to_network(
+        self, container_name: str, network_id: str, interface_name: str
+    ) -> bool:
+        """Reconnect container to network to recreate a missing host veth."""
+        network_state = self.networks.get(network_id)
         network_name = None
         if network_state:
-            network_name = f"{network_state.lab_id}-{network_state.interface_name}"
+            network_name = f"{network_state.lab_id}-{interface_name}"
 
         def _sync_reconnect() -> bool:
             import docker
             from docker.errors import NotFound, APIError
 
-            client = docker.from_env()
+            client = docker.from_env(timeout=30)
 
             try:
-                network = client.networks.get(endpoint.network_id)
+                network = client.networks.get(network_id)
             except NotFound:
                 if network_name:
                     network = client.networks.get(network_name)
@@ -582,7 +610,7 @@ class DockerOVSPlugin:
                     return False
 
             try:
-                container = client.containers.get(endpoint.container_name)
+                container = client.containers.get(container_name)
             except NotFound:
                 return False
 
@@ -598,7 +626,7 @@ class DockerOVSPlugin:
             return await asyncio.to_thread(_sync_reconnect)
         except Exception as e:
             logger.warning(
-                f"Failed to reconnect {endpoint.container_name} to {endpoint.network_id}: {e}"
+                f"Failed to reconnect {container_name}:{interface_name} to {network_id}: {e}"
             )
             return False
 
@@ -2504,6 +2532,9 @@ class DockerOVSPlugin:
 
         # Start TTL cleanup if enabled
         await self._start_ttl_cleanup()
+
+        # Reconnect missing endpoints after plugin is listening.
+        asyncio.create_task(self._reconnect_pending_endpoints())
 
         return runner
 
