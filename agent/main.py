@@ -1700,7 +1700,39 @@ async def attach_container(request: AttachContainerRequest) -> AttachContainerRe
             error="VXLAN overlay not enabled on this agent",
         )
 
-    logger.info(f"Attaching container: {request.container_name} to bridge for {request.link_id}")
+    # Convert short container name to full Docker container name
+    # The API sends short names like "eos_1", but Docker needs the full name
+    # like "archetype-d35ec857-eos_1"
+    provider = get_provider("docker")
+    if provider is None:
+        return AttachContainerResponse(
+            success=False,
+            error="Docker provider not available",
+        )
+    full_container_name = provider.get_container_name(request.lab_id, request.container_name)
+
+    # Convert interface name for cEOS containers
+    # cEOS uses INTFTYPE=eth, meaning CLI "Ethernet1" maps to Linux "eth1"
+    interface_name = request.interface_name
+    try:
+        container = provider.docker.containers.get(full_container_name)
+        env_vars = container.attrs.get("Config", {}).get("Env", [])
+        intftype = None
+        for env in env_vars:
+            if env.startswith("INTFTYPE="):
+                intftype = env.split("=", 1)[1]
+                break
+        if intftype == "eth" and interface_name.startswith("Ethernet"):
+            # Convert Ethernet1 -> eth1, Ethernet2 -> eth2, etc.
+            import re
+            match = re.match(r"Ethernet(\d+)", interface_name)
+            if match:
+                interface_name = f"eth{match.group(1)}"
+                logger.info(f"Converted interface name: {request.interface_name} -> {interface_name}")
+    except Exception as e:
+        logger.warning(f"Could not check container env for interface conversion: {e}")
+
+    logger.info(f"Attaching container: {full_container_name} to bridge for {request.link_id}")
 
     try:
         overlay = get_overlay_manager()
@@ -1722,8 +1754,8 @@ async def attach_container(request: AttachContainerRequest) -> AttachContainerRe
         # Attach container
         success = await overlay.attach_container(
             bridge=bridge,
-            container_name=request.container_name,
-            interface_name=request.interface_name,
+            container_name=full_container_name,
+            interface_name=interface_name,
             ip_address=request.ip_address,
         )
 
@@ -2963,8 +2995,15 @@ async def check_node_ready(lab_id: str, node_name: str) -> dict:
 
     Returns readiness status based on vendor-specific probes that check
     container logs or CLI output for boot completion patterns.
+
+    When a node first becomes ready, any configured post-boot commands
+    are executed (e.g., cEOS iptables fixes).
     """
-    from agent.readiness import get_probe_for_vendor, get_readiness_timeout
+    from agent.readiness import (
+        get_probe_for_vendor,
+        get_readiness_timeout,
+        run_post_boot_commands,
+    )
 
     # Get container name from provider
     provider = get_provider("docker")
@@ -2994,6 +3033,10 @@ async def check_node_ready(lab_id: str, node_name: str) -> dict:
     # Get and run the appropriate probe
     probe = get_probe_for_vendor(kind)
     result = await probe.check(container_name)
+
+    # If ready, run post-boot commands (idempotent - only runs once per container)
+    if result.is_ready:
+        await run_post_boot_commands(container_name, kind)
 
     return {
         "is_ready": result.is_ready,

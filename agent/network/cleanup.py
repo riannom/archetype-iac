@@ -186,6 +186,7 @@ class NetworkCleanupManager:
                         "ifindex": iface.get("ifindex"),
                         "link_index": iface.get("link_index"),  # Peer's ifindex
                         "state": iface.get("operstate", ""),
+                        "master": iface.get("master"),  # Bridge/OVS master if attached
                     })
 
         except Exception as e:
@@ -199,9 +200,18 @@ class NetworkCleanupManager:
         A veth is orphaned if:
         1. Its peer doesn't exist (peer was deleted with container)
         2. Its peer is not in any running archetype container's namespace
+        3. It's not attached to any bridge (overlay veths are attached to bridges)
         """
         name = interface["name"]
         link_index = interface.get("link_index")
+
+        # If veth is attached to a bridge/OVS, it's not orphaned
+        # This is important for overlay veths where the peer is in a container namespace
+        # and not visible from the host
+        master = interface.get("master")
+        if master:
+            logger.debug(f"Veth {name} has master {master}, not orphaned")
+            return False
 
         if not link_index:
             # No peer link index - might be orphaned

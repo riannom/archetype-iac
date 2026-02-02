@@ -65,8 +65,27 @@ alembic revision --autogenerate -m "description"
 - **Framework**: FastAPI (runs on each compute host)
 - **Entry point**: `agent/main.py` - REST API for lab operations
 - **Providers**: `agent/providers/` - DockerProvider (containers), LibvirtProvider (VMs)
-- **Networking**: `agent/network/` - LocalNetworkManager (veth pairs), OverlayManager (VXLAN)
+- **Networking**: `agent/network/` - OVS-based networking (see Multi-Host Networking below)
 - **Vendors**: `agent/vendors.py` - Device-specific configurations (cEOS, SR Linux, etc.)
+
+### Multi-Host Networking (`agent/network/`)
+
+The agent uses Open vSwitch (OVS) for all container networking:
+
+- **`ovs.py`**: OVSNetworkManager for local container networking with hot-plug support
+  - Single OVS bridge (`arch-ovs`) per host
+  - VLAN tags for per-link isolation
+  - Supports hot-connect/disconnect without container restart
+
+- **`overlay.py`**: OverlayManager for cross-host VXLAN tunnels
+  - Creates VXLAN ports on OVS (not Linux bridge - Linux bridge has unicast forwarding issues)
+  - Uses VLAN tags (3000-4000 range) for overlay link isolation
+  - OVS must be in `standalone` fail-mode for L2 switching
+
+- **`docker_plugin.py`**: OVS Docker network plugin for pre-boot interface provisioning
+  - Creates interfaces before container init (required for cEOS interface enumeration)
+
+**Key requirement**: OVS bridge must use `fail_mode: standalone`. The default `secure` mode drops all traffic without explicit OpenFlow rules.
 
 ### Frontend (`web/`)
 - **Framework**: React 18 + TypeScript + Vite
@@ -99,6 +118,8 @@ Copy `.env.example` to `.env`. Key settings:
 - `ARCHETYPE_AGENT_ENABLE_DOCKER`: Enable DockerProvider (default: true)
 - `ARCHETYPE_AGENT_ENABLE_LIBVIRT`: Enable LibvirtProvider for VMs (default: false)
 - `ARCHETYPE_AGENT_ENABLE_VXLAN`: Enable VXLAN overlay for multi-host (default: true)
+- `ARCHETYPE_AGENT_ENABLE_OVS`: Enable OVS-based networking (default: true)
+- `ARCHETYPE_AGENT_OVS_BRIDGE_NAME`: OVS bridge name (default: "arch-ovs")
 
 ## Data Sources of Truth
 
@@ -155,6 +176,18 @@ Background tasks run periodically to reconcile state:
 - **State Reconciliation** (`app/tasks/reconciliation.py`): Syncs `node_states` and `link_states` with actual container status
 - **Image Reconciliation** (`app/tasks/image_reconciliation.py`): Syncs `image_hosts` table with `manifest.json`
 - **Job Health** (`app/tasks/job_health.py`): Detects stuck jobs and marks them failed
+
+## Known Issues & Vendor Quirks
+
+### Arista cEOS
+- **iptables DROP rule**: cEOS adds `iptables -A EOS_FORWARD -i eth1 -j DROP` which blocks data plane traffic on eth1+. This rule is recreated on container restart.
+  - Workaround: `docker exec <container> iptables -D EOS_FORWARD -i eth1 -j DROP`
+- **IP routing disabled**: cEOS has `no ip routing` by default. Must enable via CLI: `configure terminal` → `ip routing` → `end`
+- **Interface naming**: Uses `INTFTYPE=eth` env var so Linux eth1 maps to EOS Ethernet1
+
+### Linux Bridge vs OVS
+- Linux bridge has issues forwarding unicast packets to VXLAN ports (broadcast works, unicast doesn't)
+- Always use OVS for VXLAN overlay - the `OverlayManager` in `overlay.py` uses OVS
 
 ## Conventions
 

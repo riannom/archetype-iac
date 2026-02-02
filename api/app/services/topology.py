@@ -600,7 +600,7 @@ class TopologyService:
                 logger.warning(f"Skipping link with unknown node: {ep_a.node} -> {ep_b.node}")
                 continue
 
-            # Generate link name
+            # Generate link name (alphabetically sorted for canonical naming)
             source_name = gui_id_to_container_name.get(ep_a.node, ep_a.node)
             target_name = gui_id_to_container_name.get(ep_b.node, ep_b.node)
             source_iface = ep_a.ifname or "eth0"
@@ -609,6 +609,17 @@ class TopologyService:
                 source_name, source_iface, target_name, target_iface
             )
             seen_link_names.add(link_name)
+
+            # Check if endpoints were swapped by generate_link_name (alphabetical sort)
+            # If link_name starts with target endpoint, endpoints were swapped
+            expected_start = f"{source_name}:{source_iface}"
+            endpoints_swapped = not link_name.startswith(expected_start)
+
+            if endpoints_swapped:
+                # Swap node IDs and interfaces to match canonical link name
+                source_node_id, target_node_id = target_node_id, source_node_id
+                source_name, target_name = target_name, source_name
+                source_iface, target_iface = target_iface, source_iface
 
             # Build config_json for extra link attributes
             link_config: dict[str, Any] = {}
@@ -622,10 +633,17 @@ class TopologyService:
                 link_config["prefix"] = graph_link.prefix
             if graph_link.bridge:
                 link_config["bridge"] = graph_link.bridge
-            if ep_a.ipv4:
-                link_config["ip_a"] = ep_a.ipv4
-            if ep_b.ipv4:
-                link_config["ip_b"] = ep_b.ipv4
+            # Store IPs matching the canonical endpoint order
+            if endpoints_swapped:
+                if ep_b.ipv4:
+                    link_config["ip_a"] = ep_b.ipv4
+                if ep_a.ipv4:
+                    link_config["ip_b"] = ep_a.ipv4
+            else:
+                if ep_a.ipv4:
+                    link_config["ip_a"] = ep_a.ipv4
+                if ep_b.ipv4:
+                    link_config["ip_b"] = ep_b.ipv4
             link_config_json = json.dumps(link_config) if link_config else None
 
             if link_name in existing_links:

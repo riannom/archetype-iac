@@ -2102,12 +2102,17 @@ username admin privilege 15 role network-admin nopassword
         workspace: Path,
     ) -> NodeActionResult:
         """Stop a specific node."""
+        from agent.readiness import clear_post_boot_state
+
         container_name = self._container_name(lab_id, node_name)
 
         try:
             container = await asyncio.to_thread(self.docker.containers.get, container_name)
             await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
             await asyncio.to_thread(container.reload)
+
+            # Clear post-boot state so commands run again on restart
+            clear_post_boot_state(container_name)
 
             return NodeActionResult(
                 success=True,

@@ -154,6 +154,11 @@ class VendorConfig:
     # Hostname template - use {node} for node name
     hostname_template: str = "{node}"
 
+    # Post-boot commands to run after container is ready
+    # These commands are executed inside the container once after boot completion
+    # Use for vendor-specific workarounds (e.g., removing iptables rules)
+    post_boot_commands: list[str] = field(default_factory=list)
+
 
 # =============================================================================
 # VENDOR CONFIGURATIONS - Single Source of Truth
@@ -437,6 +442,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "net.ipv6.conf.default.accept_dad": "0",
             "net.ipv6.conf.all.autoconf": "0",
         },
+        # Post-boot commands to fix cEOS iptables rules that block data plane traffic
+        # EOS adds DROP rules for eth1+ interfaces in the EOS_FORWARD chain
+        # We remove these to allow traffic forwarding on data plane interfaces
+        post_boot_commands=[
+            # Remove DROP rules for eth1-eth12 (ignore errors if rule doesn't exist)
+            "for i in $(seq 1 12); do iptables -D EOS_FORWARD -i eth$i -j DROP 2>/dev/null || true; done",
+        ],
     ),
     "nokia_srlinux": VendorConfig(
         kind="nokia_srlinux",
