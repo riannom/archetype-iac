@@ -1347,7 +1347,21 @@ username admin privilege 15 role network-admin nopassword
             # Interface may already exist with that name (from docker_gwbridge)
             if "File exists" in error_msg:
                 # Need to rename the conflicting interface first
-                temp_name = f"_old_{intended_name}"
+                temp_base = f"_old_{intended_name}"
+                temp_name = temp_base
+                # Ensure unique temp name
+                for i in range(1, 6):
+                    check = await asyncio.create_subprocess_exec(
+                        "nsenter", "-t", str(pid), "-n",
+                        "ip", "link", "show", temp_name,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await check.communicate()
+                    if check.returncode != 0:
+                        break
+                    temp_name = f"{temp_base}_{i}"
+
                 await asyncio.create_subprocess_exec(
                     "nsenter", "-t", str(pid), "-n",
                     "ip", "link", "set", intended_name, "down",
