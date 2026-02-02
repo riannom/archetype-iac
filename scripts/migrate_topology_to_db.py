@@ -78,7 +78,7 @@ def migrate_lab(session: Session, lab: models.Lab) -> tuple[int, int]:
     # Use TopologyService to import
     service = TopologyService(session)
     try:
-        nodes_created, links_created = service.import_from_yaml(lab.id, yaml_content)
+        nodes_created, links_created = service.update_from_yaml(lab.id, yaml_content)
         logger.info(
             f"Migrated lab {lab.id} ({lab.name}): "
             f"{nodes_created} nodes, {links_created} links"

@@ -1,7 +1,7 @@
 """Tests for TopologyService database operations.
 
 These tests verify:
-1. import_from_graph correctly handles link endpoint ordering
+1. update_from_graph correctly handles link endpoint ordering
 2. Canonical link naming swaps source/target IDs when needed
 3. Cross-host link analysis correctly identifies links
 """
@@ -52,7 +52,7 @@ class TestLinkEndpointOrdering:
         )
 
         service = TopologyService(test_db)
-        nodes_created, links_created = service.import_from_graph(sample_lab.id, graph)
+        nodes_created, links_created = service.update_from_graph(sample_lab.id, graph)
         test_db.commit()
 
         assert nodes_created == 2
@@ -108,7 +108,7 @@ class TestLinkEndpointOrdering:
         )
 
         service = TopologyService(test_db)
-        nodes_created, links_created = service.import_from_graph(sample_lab.id, graph)
+        nodes_created, links_created = service.update_from_graph(sample_lab.id, graph)
         test_db.commit()
 
         links = service.get_links(sample_lab.id)
@@ -160,7 +160,7 @@ class TestLinkEndpointOrdering:
         )
 
         service = TopologyService(test_db)
-        service.import_from_graph(sample_lab.id, graph)
+        service.update_from_graph(sample_lab.id, graph)
         test_db.commit()
 
         links = service.get_links(sample_lab.id)
@@ -206,7 +206,7 @@ class TestLinkEndpointOrdering:
         )
 
         service = TopologyService(test_db)
-        service.import_from_graph(sample_lab.id, graph)
+        service.update_from_graph(sample_lab.id, graph)
         test_db.commit()
 
         # Analyze placements - should correctly identify cross-host link
@@ -285,13 +285,13 @@ class TestImportFromGraphIdempotent:
         service = TopologyService(test_db)
 
         # First import
-        nodes1, links1 = service.import_from_graph(sample_lab.id, graph)
+        nodes1, links1 = service.update_from_graph(sample_lab.id, graph)
         test_db.commit()
         assert nodes1 == 2
         assert links1 == 1
 
         # Second import (same graph)
-        nodes2, links2 = service.import_from_graph(sample_lab.id, graph)
+        nodes2, links2 = service.update_from_graph(sample_lab.id, graph)
         test_db.commit()
         # Should update, not create new
         assert nodes2 == 0

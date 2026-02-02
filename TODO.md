@@ -258,8 +258,8 @@ LAB_ID=$(curl -s -X POST http://localhost:8000/labs \
   -H "Content-Type: application/json" \
   -d '{"name": "test-lab"}' | jq -r '.id')
 
-# Import multi-host topology with IPs
-curl -s -X POST "http://localhost:8000/labs/${LAB_ID}/import-yaml" \
+# Update topology from YAML (multi-host with IPs)
+curl -s -X POST "http://localhost:8000/labs/${LAB_ID}/update-topology-from-yaml" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"content": "nodes:\n  r1:\n    kind: linux\n    image: alpine:latest\n    host: local-agent\n  r2:\n    kind: linux\n    image: alpine:latest\n    host: host-b\nlinks:\n  - r1:\n      ifname: eth1\n      ipv4: 10.0.0.1/24\n    r2:\n      ifname: eth1\n      ipv4: 10.0.0.2/24"}'

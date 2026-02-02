@@ -72,10 +72,10 @@ Content-Type: application/json
 }
 ```
 
-### Import Topology (YAML)
+### Update Topology from YAML
 
 ```bash
-POST /labs/{lab_id}/import-yaml
+POST /labs/{lab_id}/update-topology-from-yaml
 Authorization: Bearer <token>
 Content-Type: application/json
 
@@ -217,10 +217,10 @@ LAB_ID=$(curl -s -X POST http://localhost:8000/labs \
   -d '{"name": "test-lab"}' | jq -r '.id')
 ```
 
-### 3. Import multi-host topology with IPs
+### 3. Update topology from YAML (multi-host with IPs)
 
 ```bash
-curl -s -X POST "http://localhost:8000/labs/${LAB_ID}/import-yaml" \
+curl -s -X POST "http://localhost:8000/labs/${LAB_ID}/update-topology-from-yaml" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

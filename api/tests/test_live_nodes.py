@@ -96,7 +96,7 @@ class TestDeployNodeImmediately:
         with patch("app.tasks.live_nodes.broadcast_node_state_change", new_callable=AsyncMock) as mock_broadcast:
             with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                 mock_agent.get_agent_for_lab = AsyncMock(return_value=sample_host)
-                with patch("app.tasks.live_nodes.run_node_sync", new_callable=AsyncMock):
+                with patch("app.tasks.live_nodes.run_node_reconcile", new_callable=AsyncMock):
                     result = await deploy_node_immediately(
                         test_db, running_lab.id, undeployed_node_state, running_lab
                     )
@@ -114,7 +114,7 @@ class TestDeployNodeImmediately:
         with patch("app.tasks.live_nodes.broadcast_node_state_change", new_callable=AsyncMock) as mock_broadcast:
             with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                 mock_agent.get_agent_for_lab = AsyncMock(return_value=sample_host)
-                with patch("app.tasks.live_nodes.run_node_sync", new_callable=AsyncMock):
+                with patch("app.tasks.live_nodes.run_node_reconcile", new_callable=AsyncMock):
                     await deploy_node_immediately(
                         test_db, running_lab.id, undeployed_node_state, running_lab
                     )
@@ -148,7 +148,7 @@ class TestDeployNodeImmediately:
         with patch("app.tasks.live_nodes.broadcast_node_state_change", new_callable=AsyncMock):
             with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                 mock_agent.get_agent_for_lab = AsyncMock(return_value=sample_host)
-                with patch("app.tasks.live_nodes.run_node_sync", new_callable=AsyncMock):
+                with patch("app.tasks.live_nodes.run_node_reconcile", new_callable=AsyncMock):
                     await deploy_node_immediately(
                         test_db, running_lab.id, undeployed_node_state, running_lab
                     )

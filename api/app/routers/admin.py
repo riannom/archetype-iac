@@ -155,17 +155,17 @@ async def reconcile_state(
     return result
 
 
-@router.get("/labs/{lab_id}/refresh-status")
-async def refresh_lab_status(
+@router.post("/labs/{lab_id}/refresh-state")
+async def refresh_lab_state(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
-    """Refresh a single lab's status from all agents that have nodes for it.
+    """Refresh a single lab's state from all agents that have nodes for it.
 
-    This updates both the lab state and individual NodeState records
-    in the database based on actual container status. Queries all agents
-    with NodePlacement records for multi-host lab support.
+    This queries agents for actual container status and updates both
+    the lab state and individual NodeState records in the database.
+    Supports multi-host labs by querying all agents with NodePlacement records.
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 

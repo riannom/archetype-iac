@@ -33,7 +33,7 @@
 - Auth: `POST /auth/login` (local), `GET /auth/oidc/*` (OIDC).
 - Catalog: `GET /devices`, `GET /images`.
 - Labs: `POST /labs`, `GET /labs`, `GET/PUT /labs/{id}`.
-- YAML: `POST /labs/{id}/import-yaml`, `GET /labs/{id}/export-yaml`.
+- YAML: `POST /labs/{id}/update-topology-from-yaml`, `GET /labs/{id}/export-yaml`.
 - Lifecycle: `POST /labs/{id}/up`, `POST /labs/{id}/down`, `GET /labs/{id}/status`.
 - Console: `GET /labs/{id}/nodes/{node}/console` (websocket).
 

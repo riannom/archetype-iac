@@ -1830,17 +1830,17 @@ def set_all_links_desired_state(
     )
 
 
-@router.post("/labs/{lab_id}/links/sync")
-def sync_link_states(
+@router.post("/labs/{lab_id}/links/refresh")
+def refresh_link_states(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> schemas.LinkStateSyncResponse:
-    """Sync link states from the current topology.
+) -> schemas.LinkStateRefreshResponse:
+    """Refresh link states from the current topology.
 
-    This refreshes the LinkState records to match the current topology.
+    This updates LinkState records to match the current topology.
     New links are created, removed links are deleted.
-    Uses database as source of truth.
+    Uses database topology as source of truth.
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 
@@ -1852,8 +1852,8 @@ def sync_link_states(
     created, updated = _upsert_link_states(database, lab.id, graph)
     database.commit()
 
-    return schemas.LinkStateSyncResponse(
-        message=f"Link states synchronized",
+    return schemas.LinkStateRefreshResponse(
+        message=f"Link states refreshed",
         links_created=created,
         links_updated=updated,
     )

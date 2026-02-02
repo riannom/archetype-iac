@@ -94,7 +94,7 @@ The agent uses Open vSwitch (OVS) for all container networking:
 - **Pages**: `web/src/pages/` - LabsPage (list), LabDetailPage (canvas + controls), CatalogPage (devices/images)
 
 ### Data Flow
-1. GUI canvas state (nodes/links) → `POST /labs/{id}/import-graph` → converted to `topology.yml`
+1. GUI canvas state (nodes/links) → `POST /labs/{id}/update-topology` → syncs to database, triggers live operations
 2. `POST /labs/{id}/deploy` → enqueues RQ job → agent deploys containers via DockerProvider
 3. Console: WebSocket at `/labs/{id}/nodes/{node}/console` → spawns SSH/docker exec to node
 

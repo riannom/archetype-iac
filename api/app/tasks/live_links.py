@@ -9,7 +9,7 @@ topology is modified through the UI while nodes are running. It enables:
 3. Immediate link teardown when links are removed from the topology
 
 The main entry point is process_link_changes() which is called as a
-background task from the import-graph endpoint.
+background task from the update-topology endpoint.
 """
 from __future__ import annotations
 
@@ -262,7 +262,7 @@ async def process_link_changes(
     removed_link_info: list[dict],
     user_id: str | None = None,
 ) -> None:
-    """Background task to process link additions/removals from import-graph.
+    """Background task to process link additions/removals from update-topology.
 
     This function is called as a background task when the topology is modified.
     It handles:

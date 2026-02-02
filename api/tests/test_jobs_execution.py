@@ -4,7 +4,7 @@ This module tests the core job execution functions including:
 - run_agent_job: Single-host job execution
 - run_multihost_deploy: Multi-host deployment
 - run_multihost_destroy: Multi-host teardown
-- run_node_sync: Node state synchronization
+- run_node_reconcile: Node state synchronization
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from app.tasks.jobs import (
     run_agent_job,
     run_multihost_deploy,
     run_multihost_destroy,
-    run_node_sync,
+    run_node_reconcile,
 )
 
 
@@ -502,8 +502,8 @@ topology:
         assert "No agents found" in job.log_path
 
 
-class TestRunNodeSync:
-    """Tests for run_node_sync function."""
+class TestRunNodeReconcile:
+    """Tests for run_node_reconcile function."""
 
     @pytest.mark.asyncio
     async def test_no_nodes_to_sync(self, test_db: Session, test_user: models.User):
@@ -529,7 +529,7 @@ class TestRunNodeSync:
         test_db.refresh(job)
 
         with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
-            await run_node_sync(job.id, lab.id, ["nonexistent-node"])
+            await run_node_reconcile(job.id, lab.id, ["nonexistent-node"])
 
         test_db.refresh(job)
         assert job.status == "completed"
@@ -586,7 +586,7 @@ class TestRunNodeSync:
                         mock_deploy.return_value = {"status": "completed"}
                         with patch("app.tasks.jobs.topology_path") as mock_topo_path:
                             mock_topo_path.return_value = topo_file
-                            await run_node_sync(job.id, lab.id, ["node-1"])
+                            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(job)
         assert job.status == "completed" or job.status == "failed"  # May fail due to test setup
