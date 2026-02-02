@@ -72,20 +72,23 @@ alembic revision --autogenerate -m "description"
 
 The agent uses Open vSwitch (OVS) for all container networking:
 
-- **`ovs.py`**: OVSNetworkManager for local container networking with hot-plug support
-  - Single OVS bridge (`arch-ovs`) per host
-  - VLAN tags for per-link isolation
-  - Supports hot-connect/disconnect without container restart
+- **`docker_plugin.py`**: OVS Docker network plugin for pre-boot interface provisioning
+  - Creates **per-lab OVS bridges** (`ovs-{lab_id[:12]}`)
+  - Each interface gets a unique VLAN tag initially (isolated)
+  - `hot_connect()` matches VLAN tags to create L2 links between interfaces
+  - Required for cEOS which enumerates interfaces at boot time
+
+- **`ovs.py`**: OVSNetworkManager for external connections and VXLAN
+  - Uses single OVS bridge (`arch-ovs`) for VXLAN tunnels and external interfaces
+  - **Note**: Same-host links use docker_plugin's per-lab bridges, not arch-ovs
 
 - **`overlay.py`**: OverlayManager for cross-host VXLAN tunnels
   - Creates VXLAN ports on OVS (not Linux bridge - Linux bridge has unicast forwarding issues)
   - Uses VLAN tags (3000-4000 range) for overlay link isolation
-  - OVS must be in `standalone` fail-mode for L2 switching
 
-- **`docker_plugin.py`**: OVS Docker network plugin for pre-boot interface provisioning
-  - Creates interfaces before container init (required for cEOS interface enumeration)
-
-**Key requirement**: OVS bridge must use `fail_mode: standalone`. The default `secure` mode drops all traffic without explicit OpenFlow rules.
+**Key requirements**:
+- OVS bridges must use `fail_mode: standalone`. The default `secure` mode drops all traffic without explicit OpenFlow rules.
+- Same-host link creation uses `DockerOVSPlugin.hot_connect()`, not `OVSNetworkManager.hot_connect()`
 
 ### Frontend (`web/`)
 - **Framework**: React 18 + TypeScript + Vite
@@ -104,6 +107,24 @@ The agent uses Open vSwitch (OVS) for all container networking:
 - Agents run with `network_mode: host` and `privileged: true` to manage containers/networking
 - Provider-specific logic isolated in `agent/providers/`
 - Vendor-specific configs (console shell, boot detection) in `agent/vendors.py`
+
+### Workspace Architecture
+
+There are **two separate workspaces** that store startup configs:
+
+| Workspace | Path | Owner | Purpose |
+|-----------|------|-------|---------|
+| API workspace | `/var/lib/archetype/{lab_id}/` | API container | Config snapshots, extracted configs |
+| Agent workspace | `/var/lib/archetype-agent/{lab_id}/` | Agent container | Configs used during container deployment |
+
+**Config sync flow**:
+1. "Extract Configs" pulls running configs from containers via agent
+2. Agent saves to agent workspace AND returns to API
+3. API saves to API workspace and database (config_snapshots table)
+4. API pushes configs back to agents to ensure sync (`update_config_on_agent()`)
+
+On container deploy, the agent reads startup configs from its workspace (`configs/{node}/startup-config`).
+The `config_snapshots` database table is for history/backup only - not used during deployment.
 
 ## Environment Variables
 
