@@ -75,18 +75,24 @@ class Settings(BaseSettings):
     vxlan_vni_base: int = 100000
     vxlan_vni_max: int = 199999
 
-    # Overlay MTU settings
+    # Overlay MTU settings (fallback when path MTU discovery fails)
     # VXLAN adds ~50 bytes overhead (8 VXLAN + 8 UDP + 20 IP + 14 Ethernet)
-    # If underlay MTU is 1500, tenant MTU should be ~1450 to avoid fragmentation
+    # Path MTU discovery runs automatically when creating VXLAN tunnels.
+    # If discovery succeeds, tenant MTU = path_mtu - 50 (e.g., 9000 -> 8950, 1500 -> 1450)
+    # If discovery fails, this fallback value is used.
     # Set to 0 to disable explicit MTU configuration (inherit from system)
-    # For full 1500 MTU inside tunnels, configure jumbo frames (9000+) on underlay
-    overlay_mtu: int = 1450  # MTU for tenant interfaces on overlay links
+    overlay_mtu: int = 1450  # Fallback MTU for tenant interfaces on overlay links
 
     # OVS networking (hot-plug support)
     enable_ovs: bool = True  # Enable OVS-based networking for hot-plug
     ovs_bridge_name: str = "arch-ovs"  # Name of OVS bridge
     ovs_vlan_start: int = 100  # Starting VLAN for port isolation
     ovs_vlan_end: int = 4000  # Ending VLAN for port isolation
+
+    # Local link MTU (veth pairs on same host)
+    # Default to jumbo frames since veth pairs are virtual and have no physical limits
+    # Set to 0 to disable explicit MTU configuration (inherit system default of 1500)
+    local_mtu: int = 9000  # MTU for local L2 links (veth pairs)
 
     # OVS Docker plugin (pre-boot interface provisioning)
     # When enabled, uses Docker network plugin for interface provisioning

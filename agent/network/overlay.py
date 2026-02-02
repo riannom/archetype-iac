@@ -58,6 +58,7 @@ class VxlanTunnel:
     lab_id: str  # Lab this tunnel belongs to
     link_id: str  # Identifier for the link (e.g., "node1:eth0-node2:eth0")
     vlan_tag: int  # VLAN tag for OVS isolation
+    tenant_mtu: int = 0  # Discovered tenant MTU (path MTU - VXLAN overhead), 0 = use default
 
     @property
     def key(self) -> str:
@@ -79,6 +80,7 @@ class OverlayBridge:
     vlan_tag: int  # VLAN tag for isolation
     lab_id: str
     link_id: str
+    tenant_mtu: int = 0  # MTU for tenant interfaces (0 = use default)
     veth_pairs: list[tuple[str, str]] = field(default_factory=list)  # (host_end, container_end)
 
     @property
@@ -118,6 +120,10 @@ class OverlayManager:
         await manager.cleanup_lab("lab123")
     """
 
+    # VXLAN encapsulation overhead in bytes
+    # 14 (outer Ethernet) + 20 (IP) + 8 (UDP) + 8 (VXLAN) = 50 bytes
+    VXLAN_OVERHEAD = 50
+
     def __init__(self):
         self._docker: docker.DockerClient | None = None
         self._tunnels: dict[str, VxlanTunnel] = {}  # key -> tunnel
@@ -125,6 +131,7 @@ class OverlayManager:
         self._vni_allocator = VniAllocator()
         self._ovs_initialized = False
         self._bridge_name = settings.ovs_bridge_name  # Default: "arch-ovs"
+        self._mtu_cache: dict[str, int] = {}  # remote_ip -> discovered path MTU
 
     @property
     def docker(self) -> docker.DockerClient:
@@ -198,6 +205,88 @@ class OverlayManager:
         ports = stdout.strip().split("\n")
         return port_name in ports
 
+    async def _discover_path_mtu(self, remote_ip: str) -> int:
+        """Discover the path MTU to a remote IP address.
+
+        Uses ping with DF (Don't Fragment) bit set to find the maximum
+        MTU that works on the path. Starts with jumbo frame size and
+        does binary search down to find working MTU.
+
+        Args:
+            remote_ip: Target IP address to test
+
+        Returns:
+            Discovered path MTU, or 0 if discovery fails (use fallback)
+        """
+        # Check cache first
+        if remote_ip in self._mtu_cache:
+            cached = self._mtu_cache[remote_ip]
+            logger.debug(f"Using cached MTU {cached} for {remote_ip}")
+            return cached
+
+        # MTU candidates to test (common values)
+        # Start high and work down - most infrastructure supports at least 1500
+        test_mtus = [9000, 4000, 1500]
+
+        async def test_mtu(mtu: int) -> bool:
+            """Test if a specific MTU works."""
+            # Payload = MTU - 20 (IP header) - 8 (ICMP header)
+            payload_size = mtu - 28
+            if payload_size < 0:
+                return False
+
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "ping",
+                    "-M", "do",  # Don't fragment
+                    "-c", "1",  # Single ping
+                    "-W", "2",  # 2 second timeout
+                    "-s", str(payload_size),
+                    remote_ip,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=5.0,
+                )
+
+                if process.returncode == 0:
+                    return True
+
+                # Check for fragmentation error (MTU too large)
+                combined = stdout.decode() + stderr.decode()
+                if "message too long" in combined.lower() or "frag needed" in combined.lower():
+                    return False
+
+                # Other errors (host unreachable, etc.)
+                return False
+
+            except asyncio.TimeoutError:
+                return False
+            except Exception as e:
+                logger.debug(f"MTU test error for {remote_ip} at {mtu}: {e}")
+                return False
+
+        # Test each MTU candidate
+        discovered_mtu = 0
+        for mtu in test_mtus:
+            logger.debug(f"Testing MTU {mtu} to {remote_ip}")
+            if await test_mtu(mtu):
+                discovered_mtu = mtu
+                logger.info(f"Path MTU to {remote_ip}: {mtu} bytes")
+                break
+
+        if discovered_mtu == 0:
+            logger.warning(
+                f"MTU discovery failed for {remote_ip}, will use fallback overlay_mtu={settings.overlay_mtu}"
+            )
+        else:
+            # Cache the result
+            self._mtu_cache[remote_ip] = discovered_mtu
+
+        return discovered_mtu
+
     def _vni_to_vlan(self, vni: int) -> int:
         """Convert VNI to a VLAN tag for OVS isolation."""
         # Map VNI to VLAN range to avoid conflicts
@@ -239,6 +328,16 @@ class OverlayManager:
         if vni is None:
             vni = self._vni_allocator.allocate(lab_id, link_id)
 
+        # Discover path MTU to remote peer
+        path_mtu = await self._discover_path_mtu(remote_ip)
+        if path_mtu > 0:
+            tenant_mtu = path_mtu - self.VXLAN_OVERHEAD
+            logger.info(f"Calculated tenant MTU for {remote_ip}: {tenant_mtu} (path MTU {path_mtu} - {self.VXLAN_OVERHEAD} overhead)")
+        else:
+            # Discovery failed, use fallback
+            tenant_mtu = settings.overlay_mtu
+            logger.info(f"Using fallback tenant MTU for {remote_ip}: {tenant_mtu}")
+
         # Create interface name from VNI
         interface_name = f"vxlan{vni}"
         vlan_tag = self._vni_to_vlan(vni)
@@ -273,10 +372,13 @@ class OverlayManager:
             lab_id=lab_id,
             link_id=link_id,
             vlan_tag=vlan_tag,
+            tenant_mtu=tenant_mtu,
         )
 
         self._tunnels[key] = tunnel
-        logger.info(f"Created OVS VXLAN tunnel: {interface_name} (VNI {vni}, VLAN {vlan_tag}) to {remote_ip}")
+        logger.info(
+            f"Created OVS VXLAN tunnel: {interface_name} (VNI {vni}, VLAN {vlan_tag}, tenant MTU {tenant_mtu}) to {remote_ip}"
+        )
 
         return tunnel
 
@@ -343,10 +445,11 @@ class OverlayManager:
             vlan_tag=tunnel.vlan_tag,
             lab_id=tunnel.lab_id,
             link_id=tunnel.link_id,
+            tenant_mtu=tunnel.tenant_mtu,
         )
 
         self._bridges[key] = bridge
-        logger.info(f"Created overlay bridge entry for VNI {tunnel.vni} (VLAN {tunnel.vlan_tag})")
+        logger.info(f"Created overlay bridge entry for VNI {tunnel.vni} (VLAN {tunnel.vlan_tag}, MTU {tunnel.tenant_mtu})")
 
         return bridge
 
@@ -433,14 +536,16 @@ class OverlayManager:
             if code != 0:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
 
-            # Set MTU on veth pair if configured
-            if settings.overlay_mtu > 0:
+            # Set MTU on veth pair using discovered tenant MTU
+            mtu_to_use = bridge.tenant_mtu if bridge.tenant_mtu > 0 else settings.overlay_mtu
+            if mtu_to_use > 0:
                 await self._run_cmd([
-                    "ip", "link", "set", veth_host, "mtu", str(settings.overlay_mtu)
+                    "ip", "link", "set", veth_host, "mtu", str(mtu_to_use)
                 ])
                 await self._run_cmd([
-                    "ip", "link", "set", veth_cont, "mtu", str(settings.overlay_mtu)
+                    "ip", "link", "set", veth_cont, "mtu", str(mtu_to_use)
                 ])
+                logger.debug(f"Set veth MTU to {mtu_to_use} for overlay link")
 
             # Add host end to OVS with VLAN tag
             code, _, stderr = await self._ovs_vsctl(
@@ -565,6 +670,7 @@ class OverlayManager:
         """Get status of all tunnels for debugging/monitoring."""
         return {
             "ovs_bridge": self._bridge_name,
+            "mtu_cache": dict(self._mtu_cache),
             "tunnels": [
                 {
                     "vni": t.vni,
@@ -574,6 +680,7 @@ class OverlayManager:
                     "lab_id": t.lab_id,
                     "link_id": t.link_id,
                     "vlan_tag": t.vlan_tag,
+                    "tenant_mtu": t.tenant_mtu,
                 }
                 for t in self._tunnels.values()
             ],
@@ -584,6 +691,7 @@ class OverlayManager:
                     "vlan_tag": b.vlan_tag,
                     "lab_id": b.lab_id,
                     "link_id": b.link_id,
+                    "tenant_mtu": b.tenant_mtu,
                     "veth_pairs": b.veth_pairs,
                 }
                 for b in self._bridges.values()
