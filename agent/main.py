@@ -463,6 +463,29 @@ def _sync_get_resource_usage() -> dict:
                         memory_actual = memory_usage - memory_cache
                         memory_limit = memory_stats.get("limit", 0)
 
+                        # Fallback: if Docker API returns empty stats, read cgroup files directly
+                        # This happens with systemd-based containers (like cEOS) on cgroups v2
+                        if memory_usage == 0 and not memory_stats:
+                            try:
+                                container_id = c.id
+                                cgroup_base = f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope"
+                                mem_current_path = f"{cgroup_base}/memory.current"
+                                if os.path.exists(mem_current_path):
+                                    with open(mem_current_path) as f:
+                                        memory_usage = int(f.read().strip())
+                                    # Try to get inactive_file from memory.stat
+                                    mem_stat_path = f"{cgroup_base}/memory.stat"
+                                    if os.path.exists(mem_stat_path):
+                                        with open(mem_stat_path) as f:
+                                            for line in f:
+                                                if line.startswith("inactive_file"):
+                                                    memory_cache = int(line.split()[1])
+                                                    break
+                                    memory_actual = memory_usage - memory_cache
+                                    logger.debug(f"Used cgroup fallback for {c.name}: {memory_actual} bytes")
+                            except Exception as e:
+                                logger.debug(f"Cgroup fallback failed for {c.name}: {e}")
+
                         # On cgroups v2, a very large limit (close to max int64) means no limit
                         # Use host memory as the reference in that case
                         if memory_limit > 0 and memory_limit < (1 << 62):
