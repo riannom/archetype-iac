@@ -353,8 +353,22 @@ def _sync_get_resource_usage() -> dict:
         container_details = []
         try:
             import docker
+            from docker.errors import NotFound, APIError
             client = docker.from_env()
-            all_containers = client.containers.list(all=True)
+
+            # Use low-level API to get container list, then fetch each individually
+            # This handles "Dead" or corrupted containers gracefully
+            container_list = client.api.containers(all=True)
+            all_containers = []
+            for container_info in container_list:
+                try:
+                    c = client.containers.get(container_info["Id"])
+                    all_containers.append(c)
+                except (NotFound, APIError) as e:
+                    # Skip dead/corrupted containers that can't be inspected
+                    container_name = container_info.get("Names", ["unknown"])[0].lstrip("/")
+                    logger.warning(f"Skipping corrupted/dead container {container_name}: {e}")
+                    continue
 
             # Collect detailed container info with lab associations
             # Include DockerProvider nodes (archetype.*), legacy clab-* nodes, and system containers
