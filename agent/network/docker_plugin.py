@@ -1850,42 +1850,30 @@ class DockerOVSPlugin:
 
             networks = await asyncio.to_thread(_get_container_networks)
 
-            # Find the network for this interface
-            # Network names follow pattern: {lab_id}-{interface_name}
-            network_suffix = f"-{interface_name}"
+            # Try each attached network to match EndpointID or NetworkID
+            for net_name, net_info in networks.items():
+                target_endpoint_id = net_info.get("EndpointID")
+                target_network_id = net_info.get("NetworkID")
 
-            target_network = None
-            for net_name in networks.keys():
-                if net_name.endswith(network_suffix):
-                    target_network = net_name
-                    break
-
-            if not target_network:
-                logger.warning(f"No network found for {container_name}:{interface_name}")
-                return None
-
-            target_info = networks.get(target_network, {})
-            target_endpoint_id = target_info.get("EndpointID")
-            target_network_id = target_info.get("NetworkID")
-
-            # Best match: EndpointID from Docker
-            if target_endpoint_id and target_endpoint_id in self.endpoints:
-                ep = self.endpoints[target_endpoint_id]
-                ep.container_name = container_name
-                logger.info(
-                    f"Matched endpoint via EndpointID: {container_name}:{interface_name} -> {ep.host_veth}"
-                )
-                return ep
-
-            # Next best: match by Docker NetworkID + interface name
-            if target_network_id:
-                for ep in self.endpoints.values():
-                    if ep.network_id == target_network_id and ep.interface_name == interface_name:
+                # Best match: EndpointID from Docker
+                if target_endpoint_id and target_endpoint_id in self.endpoints:
+                    ep = self.endpoints[target_endpoint_id]
+                    if ep.interface_name == interface_name:
                         ep.container_name = container_name
                         logger.info(
-                            f"Matched endpoint via NetworkID: {container_name}:{interface_name} -> {ep.host_veth}"
+                            f"Matched endpoint via EndpointID: {container_name}:{interface_name} -> {ep.host_veth}"
                         )
                         return ep
+
+                # Next best: match by Docker NetworkID + interface name
+                if target_network_id:
+                    for ep in self.endpoints.values():
+                        if ep.network_id == target_network_id and ep.interface_name == interface_name:
+                            ep.container_name = container_name
+                            logger.info(
+                                f"Matched endpoint via NetworkID: {container_name}:{interface_name} -> {ep.host_veth}"
+                            )
+                            return ep
 
             # Fallback: match by interface name for untracked endpoints
             for ep in self.endpoints.values():
