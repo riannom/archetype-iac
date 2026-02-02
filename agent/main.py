@@ -58,8 +58,10 @@ from agent.schemas import (
     ImageReceiveResponse,
     JobResult,
     JobStatus,
-    LabStatusRequest,
     LabStatusResponse,
+    NodeReconcileRequest,
+    NodeReconcileResponse,
+    NodeReconcileResult,
     LinkCreate,
     LinkCreateResponse,
     LinkDeleteResponse,
@@ -386,6 +388,40 @@ def _sync_get_resource_usage() -> dict:
                     node_name = labels.get("clab-node-name")
                     node_kind = labels.get("clab-node-kind")
 
+                # Collect per-container CPU/memory stats for running containers
+                container_cpu_percent = None
+                container_memory_percent = None
+                container_memory_mb = None
+                if c.status == "running" and not is_archetype_system:
+                    try:
+                        stats = c.stats(stream=False)
+                        # Calculate CPU percentage
+                        cpu_stats = stats.get("cpu_stats", {})
+                        precpu_stats = stats.get("precpu_stats", {})
+                        cpu_usage = cpu_stats.get("cpu_usage", {})
+                        precpu_usage = precpu_stats.get("cpu_usage", {})
+
+                        cpu_delta = cpu_usage.get("total_usage", 0) - precpu_usage.get("total_usage", 0)
+                        system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
+                        online_cpus = cpu_stats.get("online_cpus") or len(cpu_usage.get("percpu_usage", [])) or 1
+
+                        if system_delta > 0 and cpu_delta > 0:
+                            container_cpu_percent = round((cpu_delta / system_delta) * online_cpus * 100, 1)
+
+                        # Calculate memory percentage and usage
+                        memory_stats = stats.get("memory_stats", {})
+                        memory_usage = memory_stats.get("usage", 0)
+                        # Subtract cache from usage for more accurate "real" memory
+                        memory_cache = memory_stats.get("stats", {}).get("cache", 0)
+                        memory_actual = memory_usage - memory_cache
+                        memory_limit = memory_stats.get("limit", 0)
+
+                        if memory_limit > 0:
+                            container_memory_percent = round((memory_actual / memory_limit) * 100, 1)
+                            container_memory_mb = round(memory_actual / (1024 * 1024), 1)
+                    except Exception:
+                        pass  # Stats collection failed, leave as None
+
                 container_details.append({
                     "name": c.name,
                     "status": c.status,
@@ -394,6 +430,9 @@ def _sync_get_resource_usage() -> dict:
                     "node_kind": node_kind,
                     "image": c.image.tags[0] if c.image.tags else c.image.short_id,
                     "is_system": is_archetype_system,
+                    "cpu_percent": container_cpu_percent,
+                    "memory_percent": container_memory_percent,
+                    "memory_mb": container_memory_mb,
                 })
         except Exception:
             pass
@@ -1239,16 +1278,16 @@ async def _execute_destroy_with_callback(
 
 # --- Status Endpoints ---
 
-@app.post("/labs/status")
-async def lab_status(request: LabStatusRequest) -> LabStatusResponse:
+@app.get("/labs/{lab_id}/status")
+async def lab_status(lab_id: str) -> LabStatusResponse:
     """Get status of all nodes in a lab."""
-    logger.debug(f"Status request: lab={request.lab_id}")
+    logger.debug(f"Status request: lab={lab_id}")
 
     # Use default provider for status queries
     provider = get_provider_for_request()
-    workspace = get_workspace(request.lab_id)
+    workspace = get_workspace(lab_id)
     result = await provider.status(
-        lab_id=request.lab_id,
+        lab_id=lab_id,
         workspace=workspace,
     )
 
@@ -1265,9 +1304,96 @@ async def lab_status(request: LabStatusRequest) -> LabStatusResponse:
     ]
 
     return LabStatusResponse(
-        lab_id=request.lab_id,
+        lab_id=lab_id,
         nodes=nodes,
         error=result.error,
+    )
+
+
+@app.post("/labs/{lab_id}/nodes/reconcile")
+async def reconcile_nodes(
+    lab_id: str,
+    request: NodeReconcileRequest,
+) -> NodeReconcileResponse:
+    """Reconcile nodes to their desired states.
+
+    For each node in the request, this endpoint will:
+    - Start the container if desired_state is "running" and it's stopped
+    - Stop the container if desired_state is "stopped" and it's running
+    - Skip if already in the desired state
+
+    This is more efficient than individual start/stop calls when reconciling
+    multiple nodes at once.
+    """
+    logger.info(f"Reconcile request: lab={lab_id}, nodes={len(request.nodes)}")
+
+    results: list[NodeReconcileResult] = []
+
+    for target in request.nodes:
+        container_name = target.container_name
+        desired = target.desired_state
+
+        try:
+            # Get current container status
+            container = await asyncio.to_thread(
+                lambda: docker_client.containers.get(container_name)
+            )
+            current_status = container.status
+
+            if desired == "running":
+                if current_status == "running":
+                    results.append(NodeReconcileResult(
+                        container_name=container_name,
+                        action="already_running",
+                        success=True,
+                    ))
+                else:
+                    # Start the container
+                    await asyncio.to_thread(container.start)
+                    logger.info(f"Started container {container_name}")
+                    results.append(NodeReconcileResult(
+                        container_name=container_name,
+                        action="started",
+                        success=True,
+                    ))
+
+            elif desired == "stopped":
+                if current_status in ("exited", "created", "dead"):
+                    results.append(NodeReconcileResult(
+                        container_name=container_name,
+                        action="already_stopped",
+                        success=True,
+                    ))
+                else:
+                    # Stop the container
+                    await asyncio.to_thread(container.stop, timeout=30)
+                    logger.info(f"Stopped container {container_name}")
+                    results.append(NodeReconcileResult(
+                        container_name=container_name,
+                        action="stopped",
+                        success=True,
+                    ))
+
+        except docker.errors.NotFound:
+            logger.warning(f"Container {container_name} not found")
+            results.append(NodeReconcileResult(
+                container_name=container_name,
+                action="error",
+                success=False,
+                error=f"Container not found: {container_name}",
+            ))
+        except Exception as e:
+            logger.error(f"Error reconciling {container_name}: {e}")
+            results.append(NodeReconcileResult(
+                container_name=container_name,
+                action="error",
+                success=False,
+                error=str(e),
+            ))
+
+    return NodeReconcileResponse(
+        lab_id=lab_id,
+        results=results,
     )
 
 
