@@ -602,5 +602,140 @@ async def test_get_agent_for_lab_without_existing_agent():
     assert result == agent1
 
 
+# --- Unit Tests for destroy_container_on_agent ---
+
+@pytest.mark.asyncio
+async def test_destroy_container_on_agent_success():
+    """Test successful container destruction on agent."""
+    mock_agent = MockAgent("agent1", "localhost:8001")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"success": True, "message": "Container removed"}
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.delete.return_value = mock_response
+
+    with patch("app.agent_client.get_http_client", return_value=mock_client):
+        result = await agent_client.destroy_container_on_agent(
+            mock_agent, "test-lab", "test-container"
+        )
+
+    assert result["success"] is True
+    mock_client.delete.assert_called_once()
+
+    # Verify URL construction
+    call_args = mock_client.delete.call_args
+    url = call_args[0][0]
+    assert "test-lab" in url
+    assert "test-container" in url
+
+
+@pytest.mark.asyncio
+async def test_destroy_container_on_agent_http_error():
+    """Test container destruction handles HTTP errors."""
+    mock_agent = MockAgent("agent1", "localhost:8001")
+
+    mock_client = AsyncMock()
+    mock_client.delete.side_effect = httpx.HTTPStatusError(
+        "Server error",
+        request=MagicMock(),
+        response=MagicMock(status_code=500),
+    )
+
+    with patch("app.agent_client.get_http_client", return_value=mock_client):
+        result = await agent_client.destroy_container_on_agent(
+            mock_agent, "test-lab", "test-container"
+        )
+
+    assert result["success"] is False
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_destroy_container_on_agent_timeout():
+    """Test container destruction handles timeout."""
+    mock_agent = MockAgent("agent1", "localhost:8001")
+
+    mock_client = AsyncMock()
+    mock_client.delete.side_effect = httpx.ReadTimeout("Request timed out")
+
+    with patch("app.agent_client.get_http_client", return_value=mock_client):
+        result = await agent_client.destroy_container_on_agent(
+            mock_agent, "test-lab", "test-container"
+        )
+
+    assert result["success"] is False
+    assert "error" in result
+    assert "timed out" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_destroy_container_on_agent_already_removed():
+    """Test that 404 from agent is handled (container already gone)."""
+    mock_agent = MockAgent("agent1", "localhost:8001")
+
+    # Agent returns 200 with success message for not found (idempotent)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "success": True,
+        "message": "Container not found (already removed)"
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.delete.return_value = mock_response
+
+    with patch("app.agent_client.get_http_client", return_value=mock_client):
+        result = await agent_client.destroy_container_on_agent(
+            mock_agent, "test-lab", "already-gone"
+        )
+
+    # Should still be success (idempotent operation)
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_destroy_container_on_agent_connection_error():
+    """Test container destruction handles connection errors."""
+    mock_agent = MockAgent("agent1", "localhost:8001")
+
+    mock_client = AsyncMock()
+    mock_client.delete.side_effect = httpx.ConnectError("Connection refused")
+
+    with patch("app.agent_client.get_http_client", return_value=mock_client):
+        result = await agent_client.destroy_container_on_agent(
+            mock_agent, "test-lab", "test-container"
+        )
+
+    assert result["success"] is False
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_destroy_container_on_agent_url_construction():
+    """Test URL is correctly constructed with lab_id and container_name."""
+    mock_agent = MockAgent("agent1", "http://192.168.1.10:8080")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"success": True}
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.delete.return_value = mock_response
+
+    with patch("app.agent_client.get_http_client", return_value=mock_client):
+        await agent_client.destroy_container_on_agent(
+            mock_agent, "my-lab-123", "archetype-my-lab-123-router1"
+        )
+
+    call_args = mock_client.delete.call_args
+    url = call_args[0][0]
+    assert url == "http://192.168.1.10:8080/containers/my-lab-123/archetype-my-lab-123-router1"
+
+
 # To run these tests:
 # cd api && pytest tests/test_agent_client.py -v

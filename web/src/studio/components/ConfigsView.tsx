@@ -447,10 +447,23 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                           className={`px-1.5 py-0.5 text-[9px] font-bold uppercase rounded ${
                             snapshot.snapshot_type === 'manual'
                               ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                              : snapshot.snapshot_type === 'auto_stop'
+                              ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400'
                               : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'
                           }`}
+                          title={
+                            snapshot.snapshot_type === 'auto_stop'
+                              ? 'Auto-saved before lab stop'
+                              : snapshot.snapshot_type === 'manual'
+                              ? 'Manually extracted'
+                              : 'Auto-saved'
+                          }
                         >
-                          {snapshot.snapshot_type === 'manual' ? 'Manual' : 'Auto'}
+                          {snapshot.snapshot_type === 'manual'
+                            ? 'Manual'
+                            : snapshot.snapshot_type === 'auto_stop'
+                            ? 'Pre-Stop'
+                            : 'Auto'}
                         </span>
                         <span className="text-[10px] text-stone-400 font-mono truncate">
                           {snapshot.content_hash.slice(0, 8)}

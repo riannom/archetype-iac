@@ -5,6 +5,13 @@ triggers corrective actions (start/stop) to bring actual state in line with desi
 
 Unlike the reconciliation task (which is read-only and just updates the database),
 this task takes corrective action by triggering jobs.
+
+Enhanced features:
+- Retry tracking: Tracks enforcement attempts per node in the database
+- Exponential backoff: Uses min(base * 2^attempts, max) for retry delays
+- Max retries: After N attempts, marks node as error and stops retrying
+- Crash cooldown: Nodes that crash within cooldown are not auto-restarted
+- Broadcaster integration: Notifies UI of enforcement failures
 """
 from __future__ import annotations
 
@@ -22,6 +29,89 @@ from app.db import SessionLocal, get_redis
 from app import agent_client
 
 logger = logging.getLogger(__name__)
+
+
+def _calculate_backoff(attempts: int) -> int:
+    """Calculate exponential backoff delay for retry attempts.
+
+    Uses min(base * 2^attempts, max_cooldown) formula.
+
+    Args:
+        attempts: Number of previous attempts (0-based)
+
+    Returns:
+        Delay in seconds before next retry
+    """
+    base = settings.state_enforcement_retry_backoff
+    max_delay = settings.state_enforcement_cooldown
+    delay = base * (2 ** attempts)
+    return min(delay, max_delay)
+
+
+def _should_skip_enforcement(node_state: models.NodeState) -> tuple[bool, str]:
+    """Check if enforcement should be skipped for a node.
+
+    Args:
+        node_state: The node state to check
+
+    Returns:
+        Tuple of (should_skip, reason)
+    """
+    now = datetime.now(timezone.utc)
+
+    # Skip if max retries exhausted
+    if node_state.enforcement_attempts >= settings.state_enforcement_max_retries:
+        if node_state.enforcement_failed_at:
+            return True, "max retries exhausted"
+        # Mark as failed if not already marked
+        return True, "max retries reached"
+
+    # Skip if within crash cooldown
+    if node_state.enforcement_failed_at:
+        cooldown_end = node_state.enforcement_failed_at + timedelta(
+            seconds=settings.state_enforcement_crash_cooldown
+        )
+        if now < cooldown_end:
+            remaining = (cooldown_end - now).seconds
+            return True, f"in crash cooldown ({remaining}s remaining)"
+
+    # Skip if within backoff delay
+    if node_state.last_enforcement_at and node_state.enforcement_attempts > 0:
+        backoff = _calculate_backoff(node_state.enforcement_attempts - 1)
+        backoff_end = node_state.last_enforcement_at + timedelta(seconds=backoff)
+        if now < backoff_end:
+            remaining = (backoff_end - now).seconds
+            return True, f"in backoff delay ({remaining}s remaining)"
+
+    return False, ""
+
+
+async def _notify_enforcement_failure(
+    lab_id: str, node_state: models.NodeState
+) -> None:
+    """Notify the UI of an enforcement failure via broadcaster.
+
+    Args:
+        lab_id: Lab identifier
+        node_state: The node that failed enforcement
+    """
+    try:
+        from app.services.broadcaster import get_broadcaster
+
+        broadcaster = get_broadcaster()
+        await broadcaster.publish_node_state(lab_id, {
+            "node_id": node_state.node_id,
+            "node_name": node_state.node_name,
+            "desired_state": node_state.desired_state,
+            "actual_state": "error",
+            "is_ready": False,
+            "error_message": (
+                f"State enforcement failed after {node_state.enforcement_attempts} attempts. "
+                f"Manual intervention required."
+            ),
+        })
+    except Exception as e:
+        logger.warning(f"Failed to notify UI of enforcement failure: {e}")
 
 
 def _cooldown_key(lab_id: str, node_name: str) -> str:
@@ -145,6 +235,13 @@ async def enforce_node_state(
 ) -> bool:
     """Attempt to correct a single node's state mismatch.
 
+    This function:
+    1. Determines the appropriate corrective action (start/stop)
+    2. Checks if enforcement should be skipped (max retries, cooldown, backoff)
+    3. Tracks enforcement attempts in the database
+    4. Triggers a sync job to correct the state
+    5. Notifies UI if max retries are exhausted
+
     Returns True if an enforcement job was started, False otherwise.
     """
     from app.tasks.jobs import run_node_sync
@@ -153,12 +250,19 @@ async def enforce_node_state(
     node_name = node_state.node_name
     desired = node_state.desired_state
     actual = node_state.actual_state
+    now = datetime.now(timezone.utc)
 
     # Determine what action is needed
     if desired == "running" and actual in ("stopped", "undeployed", "exited"):
         action = "start"
     elif desired == "running" and actual == "pending" and node_state.error_message == "Waiting for agent":
         # Node was queued for deploy but agent wasn't available - retry now
+        action = "start"
+    elif desired == "running" and actual == "error":
+        # Auto-restart crashed nodes if enabled
+        if not settings.state_enforcement_auto_restart_enabled:
+            logger.debug(f"Auto-restart disabled for {node_name}, skipping")
+            return False
         action = "start"
     elif desired == "stopped" and actual == "running":
         action = "stop"
@@ -169,7 +273,29 @@ async def enforce_node_state(
         )
         return False
 
-    # Check cooldown
+    # Check if enforcement should be skipped (max retries, backoff, cooldown)
+    should_skip, reason = _should_skip_enforcement(node_state)
+    if should_skip:
+        # If max retries reached and not yet marked as failed, mark it now
+        if "max retries" in reason and not node_state.enforcement_failed_at:
+            node_state.enforcement_failed_at = now
+            node_state.actual_state = "error"
+            node_state.error_message = (
+                f"State enforcement failed after {node_state.enforcement_attempts} attempts. "
+                f"Manual intervention required."
+            )
+            session.commit()
+            logger.warning(
+                f"Node {node_name} in lab {lab_id} exceeded max enforcement retries "
+                f"({node_state.enforcement_attempts}). Marking as error."
+            )
+            # Notify UI of the failure
+            asyncio.create_task(_notify_enforcement_failure(lab_id, node_state))
+        else:
+            logger.debug(f"Node {node_name} in lab {lab_id}: {reason}")
+        return False
+
+    # Check legacy Redis cooldown (for backward compatibility)
     if _is_on_cooldown(lab_id, node_name):
         logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
         return False
@@ -238,6 +364,14 @@ async def enforce_node_state(
     # This ensures other enforcement loop iterations see the cooldown immediately
     _set_cooldown(lab_id, node_name)
 
+    # Track enforcement attempt in database
+    node_state.enforcement_attempts += 1
+    node_state.last_enforcement_at = now
+    # Clear failed marker since we're retrying
+    if node_state.enforcement_failed_at:
+        logger.info(f"Retrying failed node {node_name} after crash cooldown")
+        node_state.enforcement_failed_at = None
+
     # Create enforcement job using sync path for proper transitional states
     # Use node_id (GUI ID) for sync job, which will resolve to container_name
     node_id = node_state.node_id
@@ -253,7 +387,8 @@ async def enforce_node_state(
 
     logger.info(
         f"State enforcement: {action} node {node_name} in lab {lab_id} "
-        f"(desired={desired}, actual={actual}, job={job.id})"
+        f"(desired={desired}, actual={actual}, attempt={node_state.enforcement_attempts}, "
+        f"job={job.id})"
     )
 
     # Get lab provider

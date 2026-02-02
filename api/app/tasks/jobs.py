@@ -20,12 +20,98 @@ from datetime import datetime, timezone
 
 from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
+from app.config import settings
 from app.db import SessionLocal
 from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
 from app.services.topology import TopologyService, graph_to_deploy_topology
 from app.utils.lab import update_lab_state
 
 logger = logging.getLogger(__name__)
+
+
+async def _auto_extract_configs_before_destroy(
+    session,
+    lab: models.Lab,
+    agent: models.Host,
+) -> None:
+    """Auto-extract configs from running nodes before destroy.
+
+    This is called before destroying a lab to preserve running configs.
+    Creates snapshots with type 'auto_stop' to distinguish from manual extracts.
+
+    Args:
+        session: Database session
+        lab: Lab being destroyed
+        agent: Agent running the lab
+    """
+    if not settings.feature_auto_extract_on_destroy:
+        return
+
+    try:
+        logger.info(f"Auto-extracting configs before destroy for lab {lab.id}")
+
+        # Call agent to extract configs
+        result = await agent_client.extract_configs_on_agent(agent, lab.id)
+
+        if not result.get("success"):
+            logger.warning(
+                f"Auto-extract before destroy failed for lab {lab.id}: "
+                f"{result.get('error', 'Unknown error')}"
+            )
+            return
+
+        configs = result.get("configs", [])
+        if not configs:
+            logger.debug(f"No configs extracted before destroy for lab {lab.id}")
+            return
+
+        # Create snapshots with auto_stop type
+        import hashlib
+
+        snapshots_created = 0
+        for config_data in configs:
+            node_name = config_data.get("node_name")
+            content = config_data.get("content")
+            if not node_name or not content:
+                continue
+
+            content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+
+            # Check for duplicate - skip if content hash matches most recent snapshot
+            latest_snapshot = (
+                session.query(models.ConfigSnapshot)
+                .filter(
+                    models.ConfigSnapshot.lab_id == lab.id,
+                    models.ConfigSnapshot.node_name == node_name,
+                )
+                .order_by(models.ConfigSnapshot.created_at.desc())
+                .first()
+            )
+
+            if latest_snapshot and latest_snapshot.content_hash == content_hash:
+                # Content unchanged, skip creating duplicate
+                continue
+
+            # Create new snapshot
+            snapshot = models.ConfigSnapshot(
+                lab_id=lab.id,
+                node_name=node_name,
+                content=content,
+                content_hash=content_hash,
+                snapshot_type="auto_stop",
+            )
+            session.add(snapshot)
+            snapshots_created += 1
+
+        session.commit()
+        logger.info(
+            f"Auto-extracted {len(configs)} configs, "
+            f"created {snapshots_created} snapshots before destroy for lab {lab.id}"
+        )
+
+    except Exception as e:
+        logger.warning(f"Error during auto-extract before destroy: {e}")
+        # Continue with destroy even if extraction fails
 
 
 async def _broadcast_job_progress(
@@ -378,6 +464,8 @@ async def run_agent_job(
                     provider=provider,
                 )
             elif action == "down":
+                # Auto-extract configs before destroying (if enabled)
+                await _auto_extract_configs_before_destroy(session, lab, agent)
                 result = await agent_client.destroy_on_agent(agent, job_id, lab_id)
             else:
                 # Note: node:start/stop actions are deprecated - use sync:node:{id} instead

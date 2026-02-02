@@ -1,0 +1,33 @@
+# Prometheus configuration for Archetype
+#
+# This configuration scrapes metrics from the Archetype API service.
+# Deploy Prometheus alongside your Archetype stack to enable monitoring.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Rule files for alerts
+rule_files:
+  - /etc/prometheus/prometheus-alerts.yml
+
+# Scrape configurations
+scrape_configs:
+  # Archetype API metrics
+  - job_name: "archetype-api"
+    static_configs:
+      - targets: ["api:8000"]
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

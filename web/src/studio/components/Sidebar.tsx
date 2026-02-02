@@ -283,7 +283,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
       onClick={() => onAddDevice(model)}
       className="group flex items-center p-2 bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 border border-transparent hover:border-stone-200 dark:hover:border-stone-700 rounded-lg cursor-grab active:cursor-grabbing transition-all"
     >
-      <div className="w-8 h-8 rounded bg-white dark:bg-stone-800 flex items-center justify-center mr-3 group-hover:bg-sage-100 dark:group-hover:bg-sage-900/50 group-hover:text-sage-600 dark:group-hover:text-sage-500 transition-colors border border-stone-200 dark:border-stone-700 shadow-sm relative">
+      <div className="w-8 h-8 rounded bg-white dark:bg-stone-800 flex items-center justify-center mr-3 group-hover:bg-sage-100 dark:group-hover:bg-stone-700 group-hover:text-sage-600 dark:group-hover:text-sage-400 transition-colors border border-stone-200 dark:border-stone-700 shadow-sm relative">
         <i className={`fa-solid ${model.icon} text-xs`}></i>
         {/* Image status indicator */}
         <div className="absolute -top-0.5 -right-0.5">
