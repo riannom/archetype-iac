@@ -293,8 +293,15 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
 
+      // Wait for initial metrics fetch to complete, then clear mocks
+      await waitFor(() => {
+        expect(mockStudioRequest).toHaveBeenCalledWith('/dashboard/metrics/containers');
+      });
+      mockStudioRequest.mockClear();
+
       await user.click(screen.getByRole("button", { name: /stop all/i }));
 
+      // After cancelling confirmation, no stop-related requests should be made
       expect(mockStudioRequest).not.toHaveBeenCalled();
     });
   });
@@ -471,7 +478,7 @@ describe("RuntimeControl", () => {
       expect(offlineTexts).toHaveLength(2);
     });
 
-    it("shows Metrics unavailable for running nodes", () => {
+    it("shows Loading for running nodes without metrics data", () => {
       const runtimeStates: Record<string, RuntimeStatus> = {
         "node-1": "running",
         "node-2": "running",
@@ -479,8 +486,8 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
 
-      const metricsTexts = screen.getAllByText("Metrics unavailable");
-      expect(metricsTexts).toHaveLength(2);
+      const loadingTexts = screen.getAllByText("Loading...");
+      expect(loadingTexts).toHaveLength(2);
     });
   });
 });

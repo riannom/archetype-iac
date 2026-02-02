@@ -25,6 +25,16 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
+// Mock useNotifications to avoid needing NotificationProvider
+vi.mock("../../contexts/NotificationContext", () => ({
+  useNotifications: () => ({
+    notifications: [],
+    addNotification: vi.fn(),
+    dismissNotification: vi.fn(),
+    dismissAllNotifications: vi.fn(),
+  }),
+}));
+
 // Wrapper component with providers
 const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <BrowserRouter>
@@ -231,17 +241,33 @@ describe("Dashboard", () => {
   });
 
   describe("Navigation buttons", () => {
-    it("shows Nodes button", () => {
+    beforeEach(() => {
+      // Set token so UserProvider makes the fetch request
+      localStorage.setItem('token', 'test-token');
+      // Mock authenticated admin user for navigation button tests
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: 1, email: "admin@test.com", is_admin: true }),
+      });
+    });
+
+    afterEach(() => {
+      localStorage.removeItem('token');
+    });
+
+    it("shows Infrastructure button for admin users", async () => {
       render(
         <TestWrapper>
           <Dashboard {...defaultProps} />
         </TestWrapper>
       );
 
-      expect(screen.getByText("Nodes")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText("Infrastructure")).toBeInTheDocument();
+      });
     });
 
-    it("navigates to nodes page when Nodes is clicked", async () => {
+    it("navigates to infrastructure page when Infrastructure is clicked", async () => {
       const user = userEvent.setup();
 
       render(
@@ -250,12 +276,16 @@ describe("Dashboard", () => {
         </TestWrapper>
       );
 
-      const nodesButton = screen.getByText("Nodes").closest("button");
-      if (nodesButton) {
-        await user.click(nodesButton);
+      await waitFor(() => {
+        expect(screen.getByText("Infrastructure")).toBeInTheDocument();
+      });
+
+      const infraButton = screen.getByText("Infrastructure").closest("button");
+      if (infraButton) {
+        await user.click(infraButton);
       }
 
-      expect(mockNavigate).toHaveBeenCalledWith("/nodes");
+      expect(mockNavigate).toHaveBeenCalledWith("/infrastructure");
     });
   });
 
