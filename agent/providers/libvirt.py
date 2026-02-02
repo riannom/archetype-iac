@@ -421,7 +421,7 @@ class LibvirtProvider(Provider):
                 if not isinstance(node_config, dict):
                     continue
 
-                # Skip non-VM nodes (let containerlab handle containers)
+                # Skip non-VM nodes (DockerProvider handles containers)
                 kind = node_config.get("kind", "")
                 supported_vm_kinds = node_config.get("supported_image_kinds", [])
                 if "qcow2" not in supported_vm_kinds and kind not in (

@@ -745,10 +745,6 @@ class DockerOVSPlugin:
                     lab_id = labels.get("archetype.lab_id", "")
                     if lab_id and lab_id.startswith(lab_id_prefix):
                         return lab_id
-                    # Also check legacy containerlab label
-                    clab_prefix = labels.get("containerlab", "")
-                    if clab_prefix and clab_prefix.startswith(lab_id_prefix):
-                        return clab_prefix
             except Exception as e:
                 logger.debug(f"Error finding lab_id from containers: {e}")
             return None
@@ -769,8 +765,6 @@ class DockerOVSPlugin:
                 for container in client.containers.list():
                     labels = container.labels
                     lab_id = labels.get("archetype.lab_id", "")
-                    if not lab_id:
-                        lab_id = labels.get("containerlab", "")
                     if lab_id and lab_id.startswith(lab_bridge.lab_id[:12]):
                         pids[container.name] = (
                             container.id,

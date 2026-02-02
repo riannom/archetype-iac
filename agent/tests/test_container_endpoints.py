@@ -185,28 +185,6 @@ class TestRemoveContainerForLab:
         assert result["success"] is False
         assert "error" in result
 
-    def test_delete_container_with_clab_label(
-        self,
-        test_client: TestClient,
-        mock_docker_client: MagicMock,
-        mock_container: MagicMock,
-    ):
-        """Should also check clab-lab-name label for lab ID."""
-        mock_container.status = "exited"
-        # ContainerLab uses clab-lab-name instead of archetype.lab_id
-        mock_container.labels = {"clab-lab-name": "test-lab"}
-        mock_docker_client.containers.get.return_value = mock_container
-
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = [mock_container, None]
-
-                response = test_client.delete("/containers/test-lab/clab-container")
-
-        assert response.status_code == 200
-        result = response.json()
-        assert result["success"] is True
-
     def test_delete_container_no_labels(
         self,
         test_client: TestClient,

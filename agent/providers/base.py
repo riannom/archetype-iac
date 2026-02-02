@@ -79,7 +79,7 @@ class Provider(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Provider name (e.g., 'containerlab', 'libvirt')."""
+        """Provider name (e.g., 'docker', 'libvirt')."""
         ...
 
     @property

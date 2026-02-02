@@ -1171,7 +1171,7 @@ def get_console_shell(kind: str) -> str:
     """Get the console shell command for a device kind.
 
     Args:
-        kind: The device kind (from archetype.node_kind or clab-node-kind label)
+        kind: The device kind (from archetype.node_kind label)
 
     Returns:
         Shell command to use for console access
@@ -1190,7 +1190,7 @@ def get_console_method(kind: str) -> str:
     """Get the console access method for a device kind.
 
     Args:
-        kind: The device kind (from archetype.node_kind or clab-node-kind label)
+        kind: The device kind (from archetype.node_kind label)
 
     Returns:
         Console method: "docker_exec" or "ssh"
@@ -1209,7 +1209,7 @@ def get_console_credentials(kind: str) -> tuple[str, str]:
     """Get the console credentials for SSH-based console access.
 
     Args:
-        kind: The device kind (from archetype.node_kind or clab-node-kind label)
+        kind: The device kind (from archetype.node_kind label)
 
     Returns:
         Tuple of (username, password)

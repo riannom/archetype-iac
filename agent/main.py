@@ -355,7 +355,7 @@ def _sync_get_resource_usage() -> dict:
         disk_total_gb = round(disk.total / (1024 ** 3), 2)
 
         # Docker container counts and details
-        # Only count Archetype-related containers (docker provider nodes, containerlab nodes, or archetype system)
+        # Only count Archetype-managed containers (node containers and system containers)
         containers_running = 0
         containers_total = 0
         container_details = []
@@ -381,20 +381,15 @@ def _sync_get_resource_usage() -> dict:
                     continue
 
             # Collect detailed container info with lab associations
-            # Include DockerProvider nodes (archetype.*), legacy clab-* nodes, and system containers
+            # Include Archetype node containers and system containers
             for c in all_containers:
                 labels = c.labels
-                # DockerProvider labels (primary)
                 is_archetype_node = bool(labels.get("archetype.node_name"))
-                archetype_lab_id = labels.get("archetype.lab_id", "")
-                # Legacy containerlab labels (for backward compatibility with existing containers)
-                is_clab_node = bool(labels.get("clab-node-name"))
-                clab_lab_prefix = labels.get("containerlab", "")
-                # System containers
+                # System containers (e.g., archetype-api, archetype-worker)
                 is_archetype_system = c.name.startswith("archetype-") and not is_archetype_node
 
-                # Only include relevant containers
-                if not is_archetype_node and not is_clab_node and not is_archetype_system:
+                # Only include Archetype-related containers
+                if not is_archetype_node and not is_archetype_system:
                     continue
 
                 # Count only Archetype-related containers
@@ -402,15 +397,9 @@ def _sync_get_resource_usage() -> dict:
                 if c.status == "running":
                     containers_running += 1
 
-                # Extract info based on provider
-                if is_archetype_node:
-                    lab_prefix = archetype_lab_id
-                    node_name = labels.get("archetype.node_name")
-                    node_kind = labels.get("archetype.node_kind")
-                else:
-                    lab_prefix = clab_lab_prefix
-                    node_name = labels.get("clab-node-name")
-                    node_kind = labels.get("clab-node-kind")
+                lab_prefix = labels.get("archetype.lab_id", "")
+                node_name = labels.get("archetype.node_name")
+                node_kind = labels.get("archetype.node_kind")
 
                 # Collect per-container CPU/memory stats for running containers
                 container_cpu_percent = None
@@ -1669,7 +1658,7 @@ async def remove_container_for_lab(
 
         # Validate container belongs to the lab (optional safety check)
         labels = container.labels or {}
-        container_lab_id = labels.get("archetype.lab_id", labels.get("clab-lab-name"))
+        container_lab_id = labels.get("archetype.lab_id")
         if container_lab_id and container_lab_id != lab_id:
             logger.warning(
                 f"Container {container_name} belongs to lab {container_lab_id}, "
@@ -1780,26 +1769,13 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
         client = docker.from_env()
 
         # Find all containers for this lab
-        # Try both archetype.lab_id (new) and containerlab prefix (legacy)
         containers = client.containers.list(all=True, filters={
             "label": f"archetype.lab_id={request.lab_id}"
         })
 
-        # Also check for containerlab-style containers (legacy)
-        # These use a truncated lab_id as prefix
-        lab_prefix = request.lab_id[:20]
-        clab_containers = client.containers.list(all=True, filters={
-            "label": f"containerlab={lab_prefix}"
-        })
-
-        # Combine and dedupe
-        all_containers = {c.id: c for c in containers}
-        for c in clab_containers:
-            all_containers[c.id] = c
-
-        for container in all_containers.values():
+        for container in containers:
             labels = container.labels
-            node_name = labels.get("archetype.node_name") or labels.get("clab-node-name")
+            node_name = labels.get("archetype.node_name")
 
             if not node_name:
                 continue
@@ -1869,16 +1845,10 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
             for container in containers:
                 # Check if container belongs to a valid lab
                 labels = container.labels
-                # Check both DockerProvider and ContainerlabProvider labels
-                lab_id_archetype = labels.get("archetype.lab_id", "")
-                lab_prefix_clab = labels.get("containerlab", "")
-                lab_prefix = lab_id_archetype or lab_prefix_clab
+                lab_id = labels.get("archetype.lab_id", "")
 
                 # Protect images from valid labs
-                is_valid_lab = any(
-                    lab_id.startswith(lab_prefix) or lab_prefix.startswith(lab_id[:20])
-                    for lab_id in request.valid_lab_ids
-                ) if lab_prefix else False
+                is_valid_lab = lab_id in request.valid_lab_ids if lab_id else False
 
                 if is_valid_lab or container.status == "running":
                     if container.image:
@@ -3444,8 +3414,7 @@ async def check_node_ready(lab_id: str, node_name: str) -> dict:
         import docker
         client = docker.from_env()
         container = client.containers.get(container_name)
-        # Try new archetype labels first, fall back to containerlab labels
-        kind = container.labels.get("archetype.node_kind") or container.labels.get("clab-node-kind", "")
+        kind = container.labels.get("archetype.node_kind", "")
     except Exception as e:
         return {
             "is_ready": False,
@@ -3571,8 +3540,8 @@ async def list_bridges() -> dict:
 
                 # Get details for each bridge
                 for bridge_name in sorted(seen_bridges):
-                    # Skip containerlab and docker bridges
-                    if bridge_name.startswith(("clab", "docker", "br-")):
+                    # Skip docker-managed bridges
+                    if bridge_name.startswith(("docker", "br-")):
                         continue
 
                     bridge_info = {"name": bridge_name, "interfaces": []}
@@ -3600,8 +3569,8 @@ async def list_bridges() -> dict:
 
                     for link in link_data:
                         name = link.get("ifname", "")
-                        # Skip containerlab and docker bridges
-                        if name.startswith(("clab", "docker", "br-")):
+                        # Skip docker-managed bridges
+                        if name.startswith(("docker", "br-")):
                             continue
 
                         bridges.append({
@@ -4043,8 +4012,7 @@ async def _get_console_config(container_name: str) -> tuple[str, str, str, str]:
             import docker
             client = docker.from_env()
             container = client.containers.get(container_name)
-            # Try new archetype labels first, fall back to containerlab labels
-            kind = container.labels.get("archetype.node_kind") or container.labels.get("clab-node-kind", "")
+            kind = container.labels.get("archetype.node_kind", "")
             method = get_console_method(kind)
             shell = get_console_shell(kind)
             username, password = get_console_credentials(kind)

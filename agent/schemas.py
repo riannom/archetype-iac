@@ -45,8 +45,6 @@ class Provider(str, Enum):
     """Supported infrastructure providers."""
     DOCKER = "docker"  # Native Docker management for containers
     LIBVIRT = "libvirt"  # Libvirt for qcow2 VMs
-    # DEPRECATED: ContainerlabProvider has been removed. Kept for API compatibility.
-    CONTAINERLAB = "containerlab"
 
 
 # --- Agent Registration ---

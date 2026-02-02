@@ -114,7 +114,7 @@ class OverlayManager:
 
         # Create a bridge and attach container
         bridge = await manager.create_bridge(tunnel)
-        await manager.attach_container(bridge, "clab-lab123-r1", "eth1")
+        await manager.attach_container(bridge, "archetype-lab123-r1", "eth1")
 
         # Clean up when done
         await manager.cleanup_lab("lab123")
