@@ -216,7 +216,7 @@ def get_vlan_manager() -> VlanManager:
 def parse_external_networks_from_topology(topology_yaml: str) -> list[dict]:
     """Parse external network configurations from a topology YAML.
 
-    Looks for the _external_networks section (added by graph_to_containerlab_yaml)
+    Looks for the _external_networks section (added by graph_to_topology_yaml)
     which contains external network configurations for VLAN setup.
 
     Args:
