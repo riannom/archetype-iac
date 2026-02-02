@@ -76,3 +76,9 @@
 - Add health checks to compose.
 - Add log forwarding.
 - Add backup scripts.
+
+## Phase L — Networking Stability (2026-02-02)
+- Enforce shared OVS bridge usage (`arch-ovs`) for all labs.
+- Migrate legacy per-lab bridges (`ovs-*`) to shared bridge on agent startup.
+- Add tests covering per-lab bridge migration behavior.
+- Verified in Project_1: EOS-5 ↔ EOS-2 ping succeeds after migration.
