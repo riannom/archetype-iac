@@ -232,11 +232,11 @@ class TestNodeEventEndpoint:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
     ):
-        """Test that lab can be found by prefix (containerlab truncation)."""
+        """Test that lab can be found by prefix (truncated lab IDs)."""
         lab, nodes = sample_lab_with_nodes
         node = nodes[0]
 
-        # Containerlab truncates lab IDs, use a prefix
+        # Lab IDs may be truncated in labels, use a prefix
         lab_prefix = lab.id[:20] if len(lab.id) > 20 else lab.id
 
         response = test_client.post(

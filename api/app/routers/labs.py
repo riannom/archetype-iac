@@ -140,24 +140,24 @@ def _upsert_node_states(
 
     # Update or create node states
     for node in graph.nodes:
-        # Use container_name (YAML key) for containerlab operations, fall back to name
-        clab_name = node.container_name or node.name
+        # Use container_name (YAML key) for container operations, fall back to name
+        container_name = node.container_name or node.name
         if node.id in existing_by_node_id:
             existing_state = existing_by_node_id[node.id]
             # Fix node_name if it was set as a placeholder from lazy initialization.
             # Lazy init sets node_name=node_id as a temporary value until topology syncs.
             # Once a node is deployed (has a real container_name), we must NOT change it
             # because that would break console/operations for existing containers.
-            if existing_state.node_name == node.id and existing_state.node_name != clab_name:
+            if existing_state.node_name == node.id and existing_state.node_name != container_name:
                 # This was a placeholder - safe to correct it
-                existing_state.node_name = clab_name
+                existing_state.node_name = container_name
             # If node_name != node_id, it was already set correctly or deployed - don't touch
         else:
             # Create new with defaults - node_name is set only once at creation
             new_state = models.NodeState(
                 lab_id=lab_id,
                 node_id=node.id,
-                node_name=clab_name,
+                node_name=container_name,
                 desired_state="stopped",
                 actual_state="undeployed",
             )
@@ -1612,7 +1612,7 @@ def _upsert_link_states(
     # Node endpoints in links reference node IDs, not names
     node_id_to_name: dict[str, str] = {}
     for node in graph.nodes:
-        # Use container_name (YAML key) for consistency with containerlab
+        # Use container_name (YAML key) for consistency
         node_id_to_name[node.id] = node.container_name or node.name
 
     # Track which links are in the current topology

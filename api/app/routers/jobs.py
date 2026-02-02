@@ -42,7 +42,7 @@ def _extract_error_summary(log_content: str | None, status: str) -> str | None:
     # Look for specific error patterns in order of priority
     lines = log_content.strip().split("\n")
 
-    # Pattern 1: containerlab level=error format
+    # Pattern 1: level=error format
     # Example: level=error msg="failed to create container"
     for line in lines:
         match = re.search(r'level=error\s+msg="([^"]+)"', line)
@@ -72,7 +72,7 @@ def _extract_error_summary(log_content: str | None, status: str) -> str | None:
         if line.startswith("Details:"):
             return line[8:].strip()[:200]
 
-    # Pattern 4: Look for common containerlab/docker errors
+    # Pattern 4: Look for common docker errors
     error_patterns = [
         "missing image",
         "image not found",
@@ -114,7 +114,7 @@ def _extract_error_summary(log_content: str | None, status: str) -> str | None:
                 stderr_lines.append(stripped)
                 # Get first meaningful error line from stderr
                 if len(stderr_lines) == 1:
-                    # Check for containerlab format in stderr
+                    # Check for level=error format in stderr
                     match = re.search(r'level=error\s+msg="([^"]+)"', stripped)
                     if match:
                         return match.group(1)[:200]

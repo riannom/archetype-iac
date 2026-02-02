@@ -25,14 +25,14 @@ router = APIRouter(prefix="/events", tags=["events"])
 
 
 def _find_lab_by_prefix(database: Session, lab_prefix: str) -> models.Lab | None:
-    """Find a lab by its containerlab prefix.
+    """Find a lab by its ID prefix.
 
-    Containerlab truncates lab IDs to ~20 chars, so we need to find
+    Lab IDs may be truncated to ~20 chars in container labels, so we need to find
     labs that start with the given prefix.
 
     Args:
         database: Database session
-        lab_prefix: Containerlab lab prefix from container labels
+        lab_prefix: Lab ID prefix from container labels
 
     Returns:
         Lab if found, None otherwise
@@ -45,7 +45,7 @@ def _find_lab_by_prefix(database: Session, lab_prefix: str) -> models.Lab | None
     if lab:
         return lab
 
-    # Try prefix match (containerlab truncates to ~20 chars)
+    # Try prefix match (lab IDs may be truncated to ~20 chars)
     labs = database.query(models.Lab).filter(
         models.Lab.id.startswith(lab_prefix)
     ).all()

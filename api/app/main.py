@@ -341,7 +341,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     # Get all labs for mapping
     all_labs = database.query(models.Lab).all()
     labs_by_id = {lab.id: lab for lab in all_labs}
-    labs_by_prefix = {lab.id[:20]: lab.id for lab in all_labs}  # containerlab truncates
+    labs_by_prefix = {lab.id[:20]: lab.id for lab in all_labs}  # short prefix for matching
 
     # Aggregate resource usage from all online agents
     total_cpu = 0.0
@@ -451,7 +451,7 @@ def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
     all_labs = database.query(models.Lab).all()
     # Map both full ID and truncated prefix to lab info
     labs_by_id = {lab.id: lab.name for lab in all_labs}
-    labs_by_prefix = {lab.id[:20]: (lab.id, lab.name) for lab in all_labs}  # containerlab truncates to ~20 chars
+    labs_by_prefix = {lab.id[:20]: (lab.id, lab.name) for lab in all_labs}  # short prefix for matching
 
     all_containers = []
     for host in hosts:
@@ -480,7 +480,7 @@ def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
                 by_lab[lab_id] = {"name": c["lab_name"], "containers": []}
             by_lab[lab_id]["containers"].append(c)
         else:
-            # Orphan containerlab container (lab deleted but container still running)
+            # Orphan container (lab deleted but container still running)
             system_containers.append(c)
 
     return {

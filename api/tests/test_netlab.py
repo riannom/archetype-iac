@@ -80,11 +80,11 @@ class TestRunNetlabCommand:
                 returncode=0, stdout="", stderr=""
             )
 
-            run_netlab_command(["containerlab", "deploy", "-t", "topology.yml"])
+            run_netlab_command(["docker", "compose", "up", "-d"])
 
             mock_run.assert_called_once()
             args, kwargs = mock_run.call_args
-            assert args[0] == ["containerlab", "deploy", "-t", "topology.yml"]
+            assert args[0] == ["docker", "compose", "up", "-d"]
 
     def test_workspace_sets_cwd(self):
         """Test that workspace parameter sets the working directory."""
