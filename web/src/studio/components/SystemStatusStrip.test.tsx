@@ -3,6 +3,18 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SystemStatusStrip from "./SystemStatusStrip";
 import { BrowserRouter } from "react-router-dom";
+import { DEFAULT_USER_PREFERENCES } from "../../types/notifications";
+
+// Mock useNotifications
+const mockUpdateCanvasSettings = vi.fn();
+const mockPreferences = { ...DEFAULT_USER_PREFERENCES };
+
+vi.mock("../../contexts/NotificationContext", () => ({
+  useNotifications: () => ({
+    preferences: mockPreferences,
+    updateCanvasSettings: mockUpdateCanvasSettings,
+  }),
+}));
 
 // Mock the popup components
 vi.mock("./AgentsPopup", () => ({
@@ -138,6 +150,8 @@ const multiHostMetrics = {
 describe("SystemStatusStrip", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset preferences to default state
+    mockPreferences.canvas_settings.metricsBarExpanded = false;
   });
 
   describe("Loading state", () => {
@@ -395,7 +409,7 @@ describe("SystemStatusStrip", () => {
       expect(screen.queryByText("aggregated")).not.toBeInTheDocument();
     });
 
-    it("expands per-host rows when aggregated is clicked", async () => {
+    it("calls updateCanvasSettings when aggregated is clicked to expand", async () => {
       const user = userEvent.setup();
 
       render(
@@ -407,14 +421,13 @@ describe("SystemStatusStrip", () => {
       const aggregatedButton = screen.getByText("aggregated").closest("button");
       await user.click(aggregatedButton!);
 
-      await waitFor(() => {
-        expect(screen.getByText("Host Alpha")).toBeInTheDocument();
-        expect(screen.getByText("Host Beta")).toBeInTheDocument();
-      });
+      expect(mockUpdateCanvasSettings).toHaveBeenCalledWith({ metricsBarExpanded: true });
     });
 
-    it("collapses per-host rows when clicked again", async () => {
+    it("calls updateCanvasSettings when aggregated is clicked to collapse", async () => {
       const user = userEvent.setup();
+      // Start with expanded state
+      mockPreferences.canvas_settings.metricsBarExpanded = true;
 
       render(
         <TestWrapper>
@@ -423,21 +436,30 @@ describe("SystemStatusStrip", () => {
       );
 
       const aggregatedButton = screen.getByText("aggregated").closest("button");
-
-      // Expand
-      await user.click(aggregatedButton!);
-      expect(screen.getByText("Host Alpha")).toBeInTheDocument();
-
-      // Collapse
       await user.click(aggregatedButton!);
 
-      // The content is hidden via CSS max-h-0, not removed from DOM
+      expect(mockUpdateCanvasSettings).toHaveBeenCalledWith({ metricsBarExpanded: false });
+    });
+
+    it("shows expanded state when preference is true", () => {
+      mockPreferences.canvas_settings.metricsBarExpanded = true;
+
+      render(
+        <TestWrapper>
+          <SystemStatusStrip metrics={multiHostMetrics} />
+        </TestWrapper>
+      );
+
+      const aggregatedButton = screen.getByText("aggregated").closest("button");
+      expect(aggregatedButton).toHaveAttribute("aria-expanded", "true");
+
+      // Per-host section should be visible
       const perHostSection = screen.getByText("Host Alpha").closest("div[class*='overflow-hidden']");
-      expect(perHostSection).toHaveClass("max-h-0");
+      expect(perHostSection).toHaveClass("max-h-[500px]");
     });
 
-    it("has correct aria-expanded attribute", async () => {
-      const user = userEvent.setup();
+    it("shows collapsed state when preference is false", () => {
+      mockPreferences.canvas_settings.metricsBarExpanded = false;
 
       render(
         <TestWrapper>
@@ -448,9 +470,9 @@ describe("SystemStatusStrip", () => {
       const aggregatedButton = screen.getByText("aggregated").closest("button");
       expect(aggregatedButton).toHaveAttribute("aria-expanded", "false");
 
-      await user.click(aggregatedButton!);
-
-      expect(aggregatedButton).toHaveAttribute("aria-expanded", "true");
+      // Per-host section should be hidden via CSS
+      const perHostSection = screen.getByText("Host Alpha").closest("div[class*='overflow-hidden']");
+      expect(perHostSection).toHaveClass("max-h-0");
     });
 
     it("displays per-host metrics correctly", async () => {
