@@ -1,13 +1,38 @@
 """API routers."""
-from app.routers import admin, agents, auth, console, images, jobs, labs, permissions
+from app.routers import (
+    admin,
+    agents,
+    auth,
+    callbacks,
+    console,
+    events,
+    images,
+    infrastructure,
+    iso,
+    jobs,
+    labs,
+    permissions,
+    state_ws,
+    system,
+    vendors,
+    webhooks,
+)
 
 __all__ = [
     "admin",
     "agents",
     "auth",
+    "callbacks",
     "console",
+    "events",
     "images",
+    "infrastructure",
+    "iso",
     "jobs",
     "labs",
     "permissions",
+    "state_ws",
+    "system",
+    "vendors",
+    "webhooks",
 ]

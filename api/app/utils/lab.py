@@ -2,11 +2,84 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import models
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+
+def find_lab_by_prefix(
+    prefix: str,
+    labs_by_id: Mapping[str, models.Lab] | Mapping[str, str],
+    labs_by_prefix: Mapping[str, str] | Mapping[str, tuple[str, str]] | None = None,
+) -> str | None:
+    """Find lab ID by prefix match.
+
+    Containerlab truncates lab IDs to ~20 characters, so container names
+    may only have a prefix of the actual lab ID. This function handles
+    both exact matches and prefix-based lookups.
+
+    Args:
+        prefix: The lab ID or truncated prefix to search for
+        labs_by_id: Dict mapping lab IDs to Lab objects or lab names
+        labs_by_prefix: Optional dict mapping truncated prefixes to lab IDs
+                       (or tuples of (lab_id, lab_name))
+
+    Returns:
+        The full lab ID if found, None otherwise
+    """
+    if not prefix:
+        return None
+    # Try exact match first
+    if prefix in labs_by_id:
+        return prefix
+    # Try prefix lookup
+    if labs_by_prefix and prefix in labs_by_prefix:
+        value = labs_by_prefix[prefix]
+        # Handle both str and tuple[str, str] formats
+        return value[0] if isinstance(value, tuple) else value
+    # Try partial prefix match
+    for lab_id in labs_by_id:
+        if lab_id.startswith(prefix):
+            return lab_id
+    return None
+
+
+def find_lab_with_name(
+    prefix: str,
+    labs_by_id: Mapping[str, str],
+    labs_by_prefix: Mapping[str, tuple[str, str]] | None = None,
+) -> tuple[str | None, str | None]:
+    """Find lab ID and name by prefix match.
+
+    Similar to find_lab_by_prefix but returns both the lab ID and name.
+
+    Args:
+        prefix: The lab ID or truncated prefix to search for
+        labs_by_id: Dict mapping lab IDs to lab names
+        labs_by_prefix: Optional dict mapping truncated prefixes to (lab_id, lab_name) tuples
+
+    Returns:
+        Tuple of (lab_id, lab_name), or (None, None) if not found
+    """
+    if not prefix:
+        return None, None
+    # Try exact match first
+    if prefix in labs_by_id:
+        return prefix, labs_by_id[prefix]
+    # Try prefix lookup
+    if labs_by_prefix and prefix in labs_by_prefix:
+        return labs_by_prefix[prefix]
+    # Try partial prefix match
+    for lab_id, lab_name in labs_by_id.items():
+        if lab_id.startswith(prefix):
+            return lab_id, lab_name
+    return None, None
 
 
 def get_lab_provider(lab: models.Lab) -> str:
