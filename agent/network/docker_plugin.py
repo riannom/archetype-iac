@@ -1,15 +1,17 @@
 """Docker Network Plugin for OVS Integration.
 
 This plugin provides Docker networking backed by Open vSwitch, enabling:
-- Per-lab OVS bridges for network isolation
-- VLAN-based logical segmentation
+- Single shared OVS bridge (arch-ovs) for all labs
+- VLAN-based logical segmentation for link isolation
 - Pre-boot interface provisioning (interfaces exist before container init)
 - Hot-connect/disconnect for topology changes via VLAN remapping
+- Seamless cross-host connectivity via VXLAN tunnels on same bridge
 
 Architecture:
-    - One OVS bridge per lab (ovs-{lab_id})
+    - Single OVS bridge (arch-ovs) shared by all labs and VXLAN tunnels
     - Each container interface = one Docker network attachment
     - VLAN tags isolate interfaces until hot_connect links them
+    - Cross-host links work automatically (VXLAN tunnels on same bridge)
 
 Docker Plugin Lifecycle:
     CreateNetwork  → Create OVS bridge (once per lab) or register interface network
@@ -176,11 +178,17 @@ class DockerOVSPlugin:
         return await self._run_cmd(["ovs-vsctl", *args])
 
     async def _ensure_bridge(self, lab_id: str) -> LabBridge:
-        """Ensure OVS bridge exists for lab, create if needed."""
+        """Ensure OVS bridge exists and lab state is tracked.
+
+        Uses the shared arch-ovs bridge for all labs. This enables:
+        - Same-host links via VLAN tag matching
+        - Cross-host links via VXLAN tunnels (already on arch-ovs)
+        """
         if lab_id in self.lab_bridges:
             return self.lab_bridges[lab_id]
 
-        bridge_name = f"{OVS_BRIDGE_PREFIX}{lab_id[:12]}"
+        # Use shared bridge for all labs (enables cross-host VXLAN connectivity)
+        bridge_name = settings.ovs_bridge_name  # Default: "arch-ovs"
 
         # Check if bridge exists
         code, _, _ = await self._ovs_vsctl("br-exists", bridge_name)
@@ -205,14 +213,17 @@ class DockerOVSPlugin:
 
             logger.info(f"Created OVS bridge: {bridge_name}")
         else:
-            logger.info(f"OVS bridge {bridge_name} already exists")
+            logger.debug(f"OVS bridge {bridge_name} already exists")
 
         lab_bridge = LabBridge(lab_id=lab_id, bridge_name=bridge_name)
         self.lab_bridges[lab_id] = lab_bridge
         return lab_bridge
 
     async def _maybe_delete_bridge(self, lab_id: str) -> None:
-        """Delete OVS bridge if no networks are using it."""
+        """Remove lab tracking if no networks are using it.
+
+        Note: The shared arch-ovs bridge is never deleted, only lab tracking is removed.
+        """
         lab_bridge = self.lab_bridges.get(lab_id)
         if not lab_bridge:
             return
@@ -221,13 +232,9 @@ class DockerOVSPlugin:
             # Still has networks
             return
 
-        # No more networks, delete bridge
-        code, _, stderr = await self._ovs_vsctl("--if-exists", "del-br", lab_bridge.bridge_name)
-        if code != 0:
-            logger.error(f"Failed to delete OVS bridge {lab_bridge.bridge_name}: {stderr}")
-        else:
-            logger.info(f"Deleted OVS bridge: {lab_bridge.bridge_name}")
-
+        # No more networks for this lab, remove tracking
+        # Don't delete the shared bridge - it's used by other labs and VXLAN tunnels
+        logger.info(f"Removed lab {lab_id} tracking (bridge {lab_bridge.bridge_name} retained)")
         del self.lab_bridges[lab_id]
 
     async def _create_veth_pair(self, host_name: str, cont_name: str) -> bool:
@@ -614,32 +621,33 @@ class DockerOVSPlugin:
 
             return
 
-        # No persisted state - fall back to OVS discovery
-        logger.info("Discovering existing OVS state...")
+        # No persisted state - just ensure shared bridge exists
+        # With the shared bridge architecture, we can't recover lab state from OVS alone
+        # since all labs share the same bridge. Labs will be re-registered when
+        # Docker networks are created.
+        logger.info("No persisted state found, ensuring shared bridge exists...")
 
-        # List all OVS bridges
-        code, stdout, _ = await self._ovs_vsctl("list-br")
+        # Ensure the shared bridge exists and is configured
+        bridge_name = settings.ovs_bridge_name
+        code, _, _ = await self._ovs_vsctl("br-exists", bridge_name)
         if code != 0:
-            logger.warning("Failed to list OVS bridges, skipping state recovery")
-            return
+            # Create the shared bridge
+            code, _, stderr = await self._ovs_vsctl("add-br", bridge_name)
+            if code != 0:
+                logger.error(f"Failed to create shared OVS bridge: {stderr}")
+                return
 
-        bridges = [b.strip() for b in stdout.strip().split("\n") if b.strip()]
-        ovs_bridges = [b for b in bridges if b.startswith(OVS_BRIDGE_PREFIX)]
+            await self._ovs_vsctl("set-fail-mode", bridge_name, "standalone")
+            await self._run_cmd([
+                "ovs-ofctl", "add-flow", bridge_name,
+                "priority=1,actions=normal"
+            ])
+            await self._run_cmd(["ip", "link", "set", bridge_name, "up"])
+            logger.info(f"Created shared OVS bridge: {bridge_name}")
+        else:
+            logger.info(f"Shared OVS bridge {bridge_name} exists")
 
-        if not ovs_bridges:
-            logger.info("No existing OVS bridges found")
-            return
-
-        logger.info(f"Found {len(ovs_bridges)} OVS bridges to recover")
-
-        for bridge_name in ovs_bridges:
-            # Only recover bridge metadata, skip expensive endpoint recovery
-            # Endpoints will be re-registered by Docker when containers reconnect
-            await self._recover_bridge_state(bridge_name, skip_endpoints=True)
-
-        logger.info(
-            f"State recovery complete: {len(self.lab_bridges)} bridges"
-        )
+        logger.info("State recovery complete (no lab state to recover)")
 
     async def _recover_bridge_state(self, bridge_name: str, skip_endpoints: bool = False) -> None:
         """Recover state for a single OVS bridge."""
@@ -991,10 +999,7 @@ class DockerOVSPlugin:
             for net_id in networks_to_remove:
                 del self.networks[net_id]
 
-            # Delete bridge
-            await self._ovs_vsctl("--if-exists", "del-br", lab_bridge.bridge_name)
-
-            # Remove from tracking
+            # Remove lab tracking (don't delete shared bridge)
             del self.lab_bridges[lab_id]
 
             # Clean up management network if exists
