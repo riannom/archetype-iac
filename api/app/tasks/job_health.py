@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from app import agent_client, models
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, get_session
 from app.utils.job import get_job_timeout, is_job_stuck
 from app.utils.async_tasks import safe_create_task
 
@@ -55,32 +55,29 @@ async def check_stuck_jobs():
     3. Finds jobs assigned to offline agents
     4. Either retries the job (if under max_retries) or marks it as failed
     """
-    session = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
+    with get_session() as session:
+        try:
+            now = datetime.now(timezone.utc)
 
-        # Find all active jobs (queued or running)
-        active_jobs = (
-            session.query(models.Job)
-            .filter(models.Job.status.in_(["queued", "running"]))
-            .all()
-        )
+            # Find all active jobs (queued or running)
+            active_jobs = (
+                session.query(models.Job)
+                .filter(models.Job.status.in_(["queued", "running"]))
+                .all()
+            )
 
-        if not active_jobs:
-            return
+            if not active_jobs:
+                return
 
-        # Check each job for stuck state
-        for job in active_jobs:
-            try:
-                await _check_single_job(session, job, now)
-            except Exception as e:
-                logger.error(f"Error checking job {job.id}: {e}")
+            # Check each job for stuck state
+            for job in active_jobs:
+                try:
+                    await _check_single_job(session, job, now)
+                except Exception as e:
+                    logger.error(f"Error checking job {job.id}: {e}")
 
-    except Exception as e:
-        logger.error(f"Error in job health check: {e}")
-        session.rollback()
-    finally:
-        session.close()
+        except Exception as e:
+            logger.error(f"Error in job health check: {e}")
 
 
 async def _check_single_job(session, job: models.Job, now: datetime):
@@ -362,81 +359,75 @@ async def check_orphaned_queued_jobs():
     - Agent went offline before job was picked up
     - Race conditions in job assignment
     """
-    session = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
-        orphan_cutoff = now - timedelta(minutes=2)
+    with get_session() as session:
+        try:
+            now = datetime.now(timezone.utc)
+            orphan_cutoff = now - timedelta(minutes=2)
 
-        # Find queued jobs older than 2 minutes without an agent
-        orphaned_jobs = (
-            session.query(models.Job)
-            .filter(
-                models.Job.status == "queued",
-                models.Job.agent_id.is_(None),
-                models.Job.created_at < orphan_cutoff,
+            # Find queued jobs older than 2 minutes without an agent
+            orphaned_jobs = (
+                session.query(models.Job)
+                .filter(
+                    models.Job.status == "queued",
+                    models.Job.agent_id.is_(None),
+                    models.Job.created_at < orphan_cutoff,
+                )
+                .all()
             )
-            .all()
-        )
 
-        for job in orphaned_jobs:
-            logger.warning(f"Found orphaned queued job {job.id} (created {job.created_at})")
+            for job in orphaned_jobs:
+                logger.warning(f"Found orphaned queued job {job.id} (created {job.created_at})")
 
-            if job.retry_count < settings.job_max_retries:
-                # Try to assign to an available agent
-                await _retry_job(session, job)
-            else:
-                await _fail_job(session, job, reason="No agent available to process job")
+                if job.retry_count < settings.job_max_retries:
+                    # Try to assign to an available agent
+                    await _retry_job(session, job)
+                else:
+                    await _fail_job(session, job, reason="No agent available to process job")
 
-    except Exception as e:
-        logger.error(f"Error checking orphaned jobs: {e}")
-        session.rollback()
-    finally:
-        session.close()
+        except Exception as e:
+            logger.error(f"Error checking orphaned jobs: {e}")
 
 
 async def check_jobs_on_offline_agents():
     """Find running jobs assigned to agents that have gone offline."""
-    session = SessionLocal()
-    try:
-        # Find all offline agents
-        offline_agents = (
-            session.query(models.Host)
-            .filter(models.Host.status == "offline")
-            .all()
-        )
-
-        if not offline_agents:
-            return
-
-        offline_agent_ids = [a.id for a in offline_agents]
-
-        # Find active jobs on offline agents
-        stranded_jobs = (
-            session.query(models.Job)
-            .filter(
-                models.Job.status.in_(["queued", "running"]),
-                models.Job.agent_id.in_(offline_agent_ids),
-            )
-            .all()
-        )
-
-        for job in stranded_jobs:
-            logger.warning(
-                f"Job {job.id} is on offline agent {job.agent_id}, "
-                f"retry_count={job.retry_count}"
+    with get_session() as session:
+        try:
+            # Find all offline agents
+            offline_agents = (
+                session.query(models.Host)
+                .filter(models.Host.status == "offline")
+                .all()
             )
 
-            if job.retry_count < settings.job_max_retries:
-                # Retry on a different agent
-                await _retry_job(session, job, exclude_agent=job.agent_id)
-            else:
-                await _fail_job(session, job, reason="Agent went offline during job execution")
+            if not offline_agents:
+                return
 
-    except Exception as e:
-        logger.error(f"Error checking jobs on offline agents: {e}")
-        session.rollback()
-    finally:
-        session.close()
+            offline_agent_ids = [a.id for a in offline_agents]
+
+            # Find active jobs on offline agents
+            stranded_jobs = (
+                session.query(models.Job)
+                .filter(
+                    models.Job.status.in_(["queued", "running"]),
+                    models.Job.agent_id.in_(offline_agent_ids),
+                )
+                .all()
+            )
+
+            for job in stranded_jobs:
+                logger.warning(
+                    f"Job {job.id} is on offline agent {job.agent_id}, "
+                    f"retry_count={job.retry_count}"
+                )
+
+                if job.retry_count < settings.job_max_retries:
+                    # Retry on a different agent
+                    await _retry_job(session, job, exclude_agent=job.agent_id)
+                else:
+                    await _fail_job(session, job, reason="Agent went offline during job execution")
+
+        except Exception as e:
+            logger.error(f"Error checking jobs on offline agents: {e}")
 
 
 async def check_stuck_image_sync_jobs():
@@ -449,85 +440,82 @@ async def check_stuck_image_sync_jobs():
 
     Stuck jobs are marked as failed with detailed error messages.
     """
-    session = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
+    with get_session() as session:
+        try:
+            now = datetime.now(timezone.utc)
 
-        # Find all active image sync jobs
-        active_jobs = (
-            session.query(models.ImageSyncJob)
-            .filter(models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]))
-            .all()
-        )
+            # Find all active image sync jobs
+            active_jobs = (
+                session.query(models.ImageSyncJob)
+                .filter(models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]))
+                .all()
+            )
 
-        if not active_jobs:
-            return
+            if not active_jobs:
+                return
 
-        for job in active_jobs:
-            try:
-                # Check host status
-                host = session.get(models.Host, job.host_id)
-                host_offline = host and host.status != "online"
+            for job in active_jobs:
+                try:
+                    # Check host status
+                    host = session.get(models.Host, job.host_id)
+                    host_offline = host and host.status != "online"
 
-                # Determine if job is stuck
-                is_stuck = False
-                error_reason = ""
+                    # Determine if job is stuck
+                    is_stuck = False
+                    error_reason = ""
 
-                if job.status == "pending":
-                    # Pending jobs should start within pending timeout
-                    pending_cutoff = now - timedelta(seconds=settings.image_sync_job_pending_timeout)
-                    if job.created_at.replace(tzinfo=timezone.utc) < pending_cutoff:
-                        is_stuck = True
-                        error_reason = f"Job stuck in pending state for over {settings.image_sync_job_pending_timeout}s"
-                        if host_offline:
-                            error_reason += f" (target host {host.name if host else job.host_id} is offline)"
-
-                elif job.status in ["transferring", "loading"]:
-                    # Active jobs should complete within image_sync_timeout
-                    if job.started_at:
-                        timeout_cutoff = now - timedelta(seconds=settings.image_sync_timeout)
-                        if job.started_at.replace(tzinfo=timezone.utc) < timeout_cutoff:
+                    if job.status == "pending":
+                        # Pending jobs should start within pending timeout
+                        pending_cutoff = now - timedelta(seconds=settings.image_sync_job_pending_timeout)
+                        if job.created_at.replace(tzinfo=timezone.utc) < pending_cutoff:
                             is_stuck = True
-                            error_reason = f"Job timed out after {settings.image_sync_timeout}s in {job.status} state"
+                            error_reason = f"Job stuck in pending state for over {settings.image_sync_job_pending_timeout}s"
+                            if host_offline:
+                                error_reason += f" (target host {host.name if host else job.host_id} is offline)"
 
-                    # Also check for offline host
-                    if host_offline:
-                        is_stuck = True
-                        error_reason = f"Target host {host.name if host else job.host_id} went offline during transfer"
+                    elif job.status in ["transferring", "loading"]:
+                        # Active jobs should complete within image_sync_timeout
+                        if job.started_at:
+                            timeout_cutoff = now - timedelta(seconds=settings.image_sync_timeout)
+                            if job.started_at.replace(tzinfo=timezone.utc) < timeout_cutoff:
+                                is_stuck = True
+                                error_reason = f"Job timed out after {settings.image_sync_timeout}s in {job.status} state"
 
-                if is_stuck:
-                    logger.warning(
-                        f"Detected stuck ImageSyncJob {job.id}: status={job.status}, "
-                        f"image_id={job.image_id}, host_id={job.host_id}, reason={error_reason}"
-                    )
+                        # Also check for offline host
+                        if host_offline:
+                            is_stuck = True
+                            error_reason = f"Target host {host.name if host else job.host_id} went offline during transfer"
 
-                    # Mark job as failed
-                    job.status = "failed"
-                    job.error_message = error_reason
-                    job.completed_at = now
-                    session.commit()
+                    if is_stuck:
+                        logger.warning(
+                            f"Detected stuck ImageSyncJob {job.id}: status={job.status}, "
+                            f"image_id={job.image_id}, host_id={job.host_id}, reason={error_reason}"
+                        )
 
-                    # Update corresponding ImageHost record
-                    image_host = session.query(models.ImageHost).filter(
-                        models.ImageHost.image_id == job.image_id,
-                        models.ImageHost.host_id == job.host_id
-                    ).first()
-
-                    if image_host:
-                        image_host.status = "failed"
-                        image_host.error_message = error_reason
+                        # Mark job as failed
+                        job.status = "failed"
+                        job.error_message = error_reason
+                        job.completed_at = now
                         session.commit()
 
-                    logger.info(f"Marked stuck ImageSyncJob {job.id} as failed: {error_reason}")
+                        # Update corresponding ImageHost record
+                        image_host = session.query(models.ImageHost).filter(
+                            models.ImageHost.image_id == job.image_id,
+                            models.ImageHost.host_id == job.host_id
+                        ).first()
 
-            except Exception as e:
-                logger.error(f"Error checking ImageSyncJob {job.id}: {e}")
+                        if image_host:
+                            image_host.status = "failed"
+                            image_host.error_message = error_reason
+                            session.commit()
 
-    except Exception as e:
-        logger.error(f"Error in ImageSyncJob health check: {e}")
-        session.rollback()
-    finally:
-        session.close()
+                        logger.info(f"Marked stuck ImageSyncJob {job.id} as failed: {error_reason}")
+
+                except Exception as e:
+                    logger.error(f"Error checking ImageSyncJob {job.id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in ImageSyncJob health check: {e}")
 
 
 async def check_stuck_locks():
@@ -542,60 +530,57 @@ async def check_stuck_locks():
     - Agent crashes during deploy but restarts with stale lock state
     - Network issues cause deploy to timeout but lock remains
     """
-    session = SessionLocal()
-    try:
-        # Find all online agents
-        from datetime import timezone as tz
-        cutoff = datetime.now(tz.utc) - timedelta(seconds=60)
+    with get_session() as session:
+        try:
+            # Find all online agents
+            from datetime import timezone as tz
+            cutoff = datetime.now(tz.utc) - timedelta(seconds=60)
 
-        online_agents = (
-            session.query(models.Host)
-            .filter(
-                models.Host.status == "online",
-                models.Host.last_heartbeat >= cutoff,
+            online_agents = (
+                session.query(models.Host)
+                .filter(
+                    models.Host.status == "online",
+                    models.Host.last_heartbeat >= cutoff,
+                )
+                .all()
             )
-            .all()
-        )
 
-        if not online_agents:
-            return
+            if not online_agents:
+                return
 
-        for agent in online_agents:
-            try:
-                status = await agent_client.get_agent_lock_status(agent)
+            for agent in online_agents:
+                try:
+                    status = await agent_client.get_agent_lock_status(agent)
 
-                # Check for errors from the agent
-                if status.get("error"):
-                    logger.debug(f"Could not get lock status from agent {agent.id}: {status.get('error')}")
-                    continue
+                    # Check for errors from the agent
+                    if status.get("error"):
+                        logger.debug(f"Could not get lock status from agent {agent.id}: {status.get('error')}")
+                        continue
 
-                # Check each lock
-                for lock in status.get("locks", []):
-                    if lock.get("is_stuck"):
-                        lab_id = lock.get("lab_id")
-                        age_seconds = lock.get("age_seconds", 0)
+                    # Check each lock
+                    for lock in status.get("locks", []):
+                        if lock.get("is_stuck"):
+                            lab_id = lock.get("lab_id")
+                            age_seconds = lock.get("age_seconds", 0)
 
-                        logger.warning(
-                            f"Found stuck lock on agent {agent.id} ({agent.name}) "
-                            f"for lab {lab_id} (held for {age_seconds:.0f}s)"
-                        )
+                            logger.warning(
+                                f"Found stuck lock on agent {agent.id} ({agent.name}) "
+                                f"for lab {lab_id} (held for {age_seconds:.0f}s)"
+                            )
 
-                        # Release the stuck lock
-                        result = await agent_client.release_agent_lock(agent, lab_id)
+                            # Release the stuck lock
+                            result = await agent_client.release_agent_lock(agent, lab_id)
 
-                        if result.get("status") == "cleared":
-                            logger.info(f"Successfully released stuck lock for lab {lab_id} on agent {agent.id}")
-                        else:
-                            logger.warning(f"Failed to release stuck lock for lab {lab_id}: {result}")
+                            if result.get("status") == "cleared":
+                                logger.info(f"Successfully released stuck lock for lab {lab_id} on agent {agent.id}")
+                            else:
+                                logger.warning(f"Failed to release stuck lock for lab {lab_id}: {result}")
 
-            except Exception as e:
-                logger.error(f"Failed to check locks on agent {agent.id}: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to check locks on agent {agent.id}: {e}")
 
-    except Exception as e:
-        logger.error(f"Error in stuck lock check: {e}")
-        session.rollback()
-    finally:
-        session.close()
+        except Exception as e:
+            logger.error(f"Error in stuck lock check: {e}")
 
 
 async def check_stuck_stopping_nodes():
@@ -607,73 +592,70 @@ async def check_stuck_stopping_nodes():
     Stuck nodes are recovered by querying actual container status from the agent
     and updating their state accordingly.
     """
-    session = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
-        # 6 minute timeout for stopping operations
-        stuck_threshold = now - timedelta(seconds=360)
+    with get_session() as session:
+        try:
+            now = datetime.now(timezone.utc)
+            # 6 minute timeout for stopping operations
+            stuck_threshold = now - timedelta(seconds=360)
 
-        # Find nodes stuck in "stopping" state past the threshold
-        stuck_nodes = (
-            session.query(models.NodeState)
-            .filter(
-                models.NodeState.actual_state == "stopping",
-                models.NodeState.stopping_started_at < stuck_threshold,
-            )
-            .all()
-        )
-
-        if not stuck_nodes:
-            return
-
-        # Group by lab_id for efficient processing
-        nodes_by_lab: dict[str, list[models.NodeState]] = {}
-        for ns in stuck_nodes:
-            if ns.lab_id not in nodes_by_lab:
-                nodes_by_lab[ns.lab_id] = []
-            nodes_by_lab[ns.lab_id].append(ns)
-
-        for lab_id, nodes in nodes_by_lab.items():
-            # Check if there's an active job for this lab
-            active_job = (
-                session.query(models.Job)
+            # Find nodes stuck in "stopping" state past the threshold
+            stuck_nodes = (
+                session.query(models.NodeState)
                 .filter(
-                    models.Job.lab_id == lab_id,
-                    models.Job.status.in_(["queued", "running"]),
+                    models.NodeState.actual_state == "stopping",
+                    models.NodeState.stopping_started_at < stuck_threshold,
                 )
-                .first()
+                .all()
             )
 
-            if active_job:
-                # Job is still running - don't interfere
-                continue
+            if not stuck_nodes:
+                return
 
-            logger.warning(
-                f"Found {len(nodes)} node(s) stuck in 'stopping' state for lab {lab_id} "
-                f"with no active job, recovering..."
-            )
+            # Group by lab_id for efficient processing
+            nodes_by_lab: dict[str, list[models.NodeState]] = {}
+            for ns in stuck_nodes:
+                if ns.lab_id not in nodes_by_lab:
+                    nodes_by_lab[ns.lab_id] = []
+                nodes_by_lab[ns.lab_id].append(ns)
 
-            # No active job - recover these nodes
-            # Set them to "stopped" since that was the intent
-            for ns in nodes:
-                duration = (now - ns.stopping_started_at).total_seconds() if ns.stopping_started_at else 0
-                logger.info(
-                    f"Recovering node {ns.node_name} in lab {lab_id} from stuck 'stopping' state "
-                    f"(stuck for {duration:.0f}s)"
+            for lab_id, nodes in nodes_by_lab.items():
+                # Check if there's an active job for this lab
+                active_job = (
+                    session.query(models.Job)
+                    .filter(
+                        models.Job.lab_id == lab_id,
+                        models.Job.status.in_(["queued", "running"]),
+                    )
+                    .first()
                 )
-                ns.actual_state = "stopped"
-                ns.stopping_started_at = None
-                ns.error_message = None
-                ns.is_ready = False
-                ns.boot_started_at = None
 
-            session.commit()
+                if active_job:
+                    # Job is still running - don't interfere
+                    continue
 
-    except Exception as e:
-        logger.error(f"Error in stuck stopping nodes check: {e}")
-        session.rollback()
-    finally:
-        session.close()
+                logger.warning(
+                    f"Found {len(nodes)} node(s) stuck in 'stopping' state for lab {lab_id} "
+                    f"with no active job, recovering..."
+                )
+
+                # No active job - recover these nodes
+                # Set them to "stopped" since that was the intent
+                for ns in nodes:
+                    duration = (now - ns.stopping_started_at).total_seconds() if ns.stopping_started_at else 0
+                    logger.info(
+                        f"Recovering node {ns.node_name} in lab {lab_id} from stuck 'stopping' state "
+                        f"(stuck for {duration:.0f}s)"
+                    )
+                    ns.actual_state = "stopped"
+                    ns.stopping_started_at = None
+                    ns.error_message = None
+                    ns.is_ready = False
+                    ns.boot_started_at = None
+
+                session.commit()
+
+        except Exception as e:
+            logger.error(f"Error in stuck stopping nodes check: {e}")
 
 
 async def check_stuck_starting_nodes():
@@ -685,73 +667,70 @@ async def check_stuck_starting_nodes():
     Stuck nodes are recovered by setting them to "stopped" (safe fallback).
     User can retry the start operation.
     """
-    session = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
-        # 6 minute timeout for starting operations
-        stuck_threshold = now - timedelta(seconds=360)
+    with get_session() as session:
+        try:
+            now = datetime.now(timezone.utc)
+            # 6 minute timeout for starting operations
+            stuck_threshold = now - timedelta(seconds=360)
 
-        # Find nodes stuck in "starting" state past the threshold
-        stuck_nodes = (
-            session.query(models.NodeState)
-            .filter(
-                models.NodeState.actual_state == "starting",
-                models.NodeState.starting_started_at < stuck_threshold,
-            )
-            .all()
-        )
-
-        if not stuck_nodes:
-            return
-
-        # Group by lab_id for efficient processing
-        nodes_by_lab: dict[str, list[models.NodeState]] = {}
-        for ns in stuck_nodes:
-            if ns.lab_id not in nodes_by_lab:
-                nodes_by_lab[ns.lab_id] = []
-            nodes_by_lab[ns.lab_id].append(ns)
-
-        for lab_id, nodes in nodes_by_lab.items():
-            # Check if there's an active job for this lab
-            active_job = (
-                session.query(models.Job)
+            # Find nodes stuck in "starting" state past the threshold
+            stuck_nodes = (
+                session.query(models.NodeState)
                 .filter(
-                    models.Job.lab_id == lab_id,
-                    models.Job.status.in_(["queued", "running"]),
+                    models.NodeState.actual_state == "starting",
+                    models.NodeState.starting_started_at < stuck_threshold,
                 )
-                .first()
+                .all()
             )
 
-            if active_job:
-                # Job is still running - don't interfere
-                continue
+            if not stuck_nodes:
+                return
 
-            logger.warning(
-                f"Found {len(nodes)} node(s) stuck in 'starting' state for lab {lab_id} "
-                f"with no active job, recovering..."
-            )
+            # Group by lab_id for efficient processing
+            nodes_by_lab: dict[str, list[models.NodeState]] = {}
+            for ns in stuck_nodes:
+                if ns.lab_id not in nodes_by_lab:
+                    nodes_by_lab[ns.lab_id] = []
+                nodes_by_lab[ns.lab_id].append(ns)
 
-            # No active job - recover these nodes
-            # Set them to "stopped" as a safe fallback (user can retry)
-            for ns in nodes:
-                duration = (now - ns.starting_started_at).total_seconds() if ns.starting_started_at else 0
-                logger.info(
-                    f"Recovering node {ns.node_name} in lab {lab_id} from stuck 'starting' state "
-                    f"(stuck for {duration:.0f}s)"
+            for lab_id, nodes in nodes_by_lab.items():
+                # Check if there's an active job for this lab
+                active_job = (
+                    session.query(models.Job)
+                    .filter(
+                        models.Job.lab_id == lab_id,
+                        models.Job.status.in_(["queued", "running"]),
+                    )
+                    .first()
                 )
-                ns.actual_state = "stopped"
-                ns.starting_started_at = None
-                ns.error_message = None
-                ns.is_ready = False
-                ns.boot_started_at = None
 
-            session.commit()
+                if active_job:
+                    # Job is still running - don't interfere
+                    continue
 
-    except Exception as e:
-        logger.error(f"Error in stuck starting nodes check: {e}")
-        session.rollback()
-    finally:
-        session.close()
+                logger.warning(
+                    f"Found {len(nodes)} node(s) stuck in 'starting' state for lab {lab_id} "
+                    f"with no active job, recovering..."
+                )
+
+                # No active job - recover these nodes
+                # Set them to "stopped" as a safe fallback (user can retry)
+                for ns in nodes:
+                    duration = (now - ns.starting_started_at).total_seconds() if ns.starting_started_at else 0
+                    logger.info(
+                        f"Recovering node {ns.node_name} in lab {lab_id} from stuck 'starting' state "
+                        f"(stuck for {duration:.0f}s)"
+                    )
+                    ns.actual_state = "stopped"
+                    ns.starting_started_at = None
+                    ns.error_message = None
+                    ns.is_ready = False
+                    ns.boot_started_at = None
+
+                session.commit()
+
+        except Exception as e:
+            logger.error(f"Error in stuck starting nodes check: {e}")
 
 
 async def job_health_monitor():

@@ -25,7 +25,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
-from app.db import SessionLocal
+from app.db import SessionLocal, get_session
 from app.services.broadcaster import broadcast_node_state_change
 from app.services.topology import TopologyService
 from app.utils.async_tasks import safe_create_task
@@ -334,51 +334,48 @@ async def _process_node_changes_impl(
         added_node_ids: List of node IDs that were added
         removed_node_info: List of dicts with info about removed nodes
     """
-    session = SessionLocal()
-    try:
-        lab = session.get(models.Lab, lab_id)
-        if not lab:
-            logger.error(f"Lab {lab_id} not found for live node changes")
-            return
+    with get_session() as session:
+        try:
+            lab = session.get(models.Lab, lab_id)
+            if not lab:
+                logger.error(f"Lab {lab_id} not found for live node changes")
+                return
 
-        # Build host_to_agent mapping
-        host_to_agent = await _build_host_to_agent_map(session, lab_id, lab)
+            # Build host_to_agent mapping
+            host_to_agent = await _build_host_to_agent_map(session, lab_id, lab)
 
-        # Process removed nodes first (teardown)
-        for node_info in removed_node_info:
-            try:
-                await destroy_node_immediately(session, lab_id, node_info, host_to_agent)
-            except Exception as e:
-                logger.error(f"Error destroying node {node_info.get('node_name')}: {e}")
-
-        # Only auto-deploy new nodes if the lab is in a running state
-        # (meaning there are already deployed nodes and user expects live updates)
-        if lab.state in ("running", "starting"):
-            for node_id in added_node_ids:
+            # Process removed nodes first (teardown)
+            for node_info in removed_node_info:
                 try:
-                    # Find the NodeState for this node
-                    node_state = (
-                        session.query(models.NodeState)
-                        .filter(
-                            models.NodeState.lab_id == lab_id,
-                            models.NodeState.node_id == node_id,
-                        )
-                        .first()
-                    )
-                    if node_state and node_state.actual_state in ("undeployed", "stopped"):
-                        await deploy_node_immediately(session, lab_id, node_state, lab)
+                    await destroy_node_immediately(session, lab_id, node_info, host_to_agent)
                 except Exception as e:
-                    logger.error(f"Error deploying node {node_id}: {e}")
-        else:
-            logger.debug(
-                f"Lab {lab_id} is in state '{lab.state}', skipping auto-deploy for new nodes"
-            )
+                    logger.error(f"Error destroying node {node_info.get('node_name')}: {e}")
 
-    except Exception as e:
-        logger.error(f"Error processing node changes for lab {lab_id}: {e}")
-        session.rollback()
-    finally:
-        session.close()
+            # Only auto-deploy new nodes if the lab is in a running state
+            # (meaning there are already deployed nodes and user expects live updates)
+            if lab.state in ("running", "starting"):
+                for node_id in added_node_ids:
+                    try:
+                        # Find the NodeState for this node
+                        node_state = (
+                            session.query(models.NodeState)
+                            .filter(
+                                models.NodeState.lab_id == lab_id,
+                                models.NodeState.node_id == node_id,
+                            )
+                            .first()
+                        )
+                        if node_state and node_state.actual_state in ("undeployed", "stopped"):
+                            await deploy_node_immediately(session, lab_id, node_state, lab)
+                    except Exception as e:
+                        logger.error(f"Error deploying node {node_id}: {e}")
+            else:
+                logger.debug(
+                    f"Lab {lab_id} is in state '{lab.state}', skipping auto-deploy for new nodes"
+                )
+
+        except Exception as e:
+            logger.error(f"Error processing node changes for lab {lab_id}: {e}")
 
 
 async def _build_host_to_agent_map(

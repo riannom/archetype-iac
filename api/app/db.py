@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import redis
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -42,8 +44,6 @@ def get_db():
     finally:
         db.close()
 
-
-from contextlib import contextmanager
 
 @contextmanager
 def get_session():

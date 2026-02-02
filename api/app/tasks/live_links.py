@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
-from app.db import SessionLocal
+from app.db import SessionLocal, get_session
 from app.services.link_manager import LinkManager, allocate_vni
 from app.tasks.link_orchestration import (
     create_same_host_link,
@@ -275,130 +275,127 @@ async def process_link_changes(
         removed_link_info: List of dicts with info about removed links
         user_id: User who triggered the change (for job tracking)
     """
-    session = SessionLocal()
     job = None
     log_parts: list[str] = []
 
-    try:
-        # Create a job to track this operation
-        add_count = len(added_link_names)
-        remove_count = len(removed_link_info)
-        action_desc = []
-        if add_count > 0:
-            action_desc.append(f"add:{add_count}")
-        if remove_count > 0:
-            action_desc.append(f"remove:{remove_count}")
+    with get_session() as session:
+        try:
+            # Create a job to track this operation
+            add_count = len(added_link_names)
+            remove_count = len(removed_link_info)
+            action_desc = []
+            if add_count > 0:
+                action_desc.append(f"add:{add_count}")
+            if remove_count > 0:
+                action_desc.append(f"remove:{remove_count}")
 
-        job = models.Job(
-            lab_id=lab_id,
-            user_id=user_id,
-            action=f"links:{','.join(action_desc)}",
-            status="running",
-            started_at=datetime.now(timezone.utc),
-        )
-        session.add(job)
-        session.commit()
-        session.refresh(job)
+            job = models.Job(
+                lab_id=lab_id,
+                user_id=user_id,
+                action=f"links:{','.join(action_desc)}",
+                status="running",
+                started_at=datetime.now(timezone.utc),
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
 
-        log_parts.append("=== Live Link Update ===")
-        log_parts.append(f"Lab: {lab_id}")
-        log_parts.append(f"Links to add: {add_count}")
-        log_parts.append(f"Links to remove: {remove_count}")
-        log_parts.append("")
-
-        # Build host_to_agent mapping
-        host_to_agent = await _build_host_to_agent_map(session, lab_id)
-
-        if not host_to_agent:
-            log_parts.append("WARNING: No agents available, skipping link operations")
-            logger.warning(f"No agents available for lab {lab_id}, skipping live link operations")
-            job.status = "completed"
-            job.completed_at = datetime.now(timezone.utc)
-            _update_job_log(session, job, log_parts)
-            return
-
-        error_count = 0
-
-        # Process removed links first (teardown)
-        if removed_link_info:
-            log_parts.append("=== Removing Links ===")
-            for link_info in removed_link_info:
-                try:
-                    success = await teardown_link(session, lab_id, link_info, host_to_agent, log_parts)
-                    if not success:
-                        error_count += 1
-                except Exception as e:
-                    error_count += 1
-                    log_parts.append(f"  {link_info.get('link_name')}: FAILED - {e}")
-                    logger.error(f"Error tearing down link {link_info.get('link_name')}: {e}")
+            log_parts.append("=== Live Link Update ===")
+            log_parts.append(f"Lab: {lab_id}")
+            log_parts.append(f"Links to add: {add_count}")
+            log_parts.append(f"Links to remove: {remove_count}")
             log_parts.append("")
 
-        # Now delete the LinkState records for removed links
-        for link_info in removed_link_info:
-            link_name = link_info.get("link_name")
-            if link_name:
-                ls = (
-                    session.query(models.LinkState)
-                    .filter(
-                        models.LinkState.lab_id == lab_id,
-                        models.LinkState.link_name == link_name,
-                    )
-                    .first()
-                )
-                if ls:
-                    session.delete(ls)
+            # Build host_to_agent mapping
+            host_to_agent = await _build_host_to_agent_map(session, lab_id)
 
-        # Process added links
-        if added_link_names:
-            log_parts.append("=== Adding Links ===")
-            for link_name in added_link_names:
-                link_state = (
-                    session.query(models.LinkState)
-                    .filter(
-                        models.LinkState.lab_id == lab_id,
-                        models.LinkState.link_name == link_name,
-                    )
-                    .first()
-                )
-                if link_state:
+            if not host_to_agent:
+                log_parts.append("WARNING: No agents available, skipping link operations")
+                logger.warning(f"No agents available for lab {lab_id}, skipping live link operations")
+                job.status = "completed"
+                job.completed_at = datetime.now(timezone.utc)
+                _update_job_log(session, job, log_parts)
+                return
+
+            error_count = 0
+
+            # Process removed links first (teardown)
+            if removed_link_info:
+                log_parts.append("=== Removing Links ===")
+                for link_info in removed_link_info:
                     try:
-                        success = await create_link_if_ready(
-                            session, lab_id, link_state, host_to_agent, log_parts
-                        )
-                        if not success and link_state.actual_state == "error":
+                        success = await teardown_link(session, lab_id, link_info, host_to_agent, log_parts)
+                        if not success:
                             error_count += 1
                     except Exception as e:
                         error_count += 1
-                        log_parts.append(f"  {link_name}: FAILED - {e}")
-                        logger.error(f"Error creating link {link_name}: {e}")
-                        link_state.actual_state = "error"
-                        link_state.error_message = str(e)
-            log_parts.append("")
+                        log_parts.append(f"  {link_info.get('link_name')}: FAILED - {e}")
+                        logger.error(f"Error tearing down link {link_info.get('link_name')}: {e}")
+                log_parts.append("")
 
-        # Summary
-        log_parts.append("=== Summary ===")
-        if error_count > 0:
-            log_parts.append(f"Completed with {error_count} error(s)")
-            job.status = "completed"  # Still completed, just with errors
-        else:
-            log_parts.append("All link operations completed successfully")
-            job.status = "completed"
+            # Now delete the LinkState records for removed links
+            for link_info in removed_link_info:
+                link_name = link_info.get("link_name")
+                if link_name:
+                    ls = (
+                        session.query(models.LinkState)
+                        .filter(
+                            models.LinkState.lab_id == lab_id,
+                            models.LinkState.link_name == link_name,
+                        )
+                        .first()
+                    )
+                    if ls:
+                        session.delete(ls)
 
-        job.completed_at = datetime.now(timezone.utc)
-        _update_job_log(session, job, log_parts)
-        session.commit()
+            # Process added links
+            if added_link_names:
+                log_parts.append("=== Adding Links ===")
+                for link_name in added_link_names:
+                    link_state = (
+                        session.query(models.LinkState)
+                        .filter(
+                            models.LinkState.lab_id == lab_id,
+                            models.LinkState.link_name == link_name,
+                        )
+                        .first()
+                    )
+                    if link_state:
+                        try:
+                            success = await create_link_if_ready(
+                                session, lab_id, link_state, host_to_agent, log_parts
+                            )
+                            if not success and link_state.actual_state == "error":
+                                error_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            log_parts.append(f"  {link_name}: FAILED - {e}")
+                            logger.error(f"Error creating link {link_name}: {e}")
+                            link_state.actual_state = "error"
+                            link_state.error_message = str(e)
+                log_parts.append("")
 
-    except Exception as e:
-        logger.error(f"Error processing link changes for lab {lab_id}: {e}")
-        log_parts.append(f"\nFATAL ERROR: {e}")
-        if job:
-            job.status = "failed"
+            # Summary
+            log_parts.append("=== Summary ===")
+            if error_count > 0:
+                log_parts.append(f"Completed with {error_count} error(s)")
+                job.status = "completed"  # Still completed, just with errors
+            else:
+                log_parts.append("All link operations completed successfully")
+                job.status = "completed"
+
             job.completed_at = datetime.now(timezone.utc)
             _update_job_log(session, job, log_parts)
-        session.rollback()
-        session.commit()  # Commit the job status update
-    finally:
-        session.close()
+            session.commit()
+
+        except Exception as e:
+            logger.error(f"Error processing link changes for lab {lab_id}: {e}")
+            log_parts.append(f"\nFATAL ERROR: {e}")
+            if job:
+                job.status = "failed"
+                job.completed_at = datetime.now(timezone.utc)
+                _update_job_log(session, job, log_parts)
+            session.commit()  # Commit the job status update
 
 
 def _lookup_endpoint_hosts(
