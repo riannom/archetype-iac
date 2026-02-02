@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.db import SessionLocal, get_redis
+from app.db import SessionLocal, get_redis, get_session
 from app import agent_client
 from app.utils.async_tasks import safe_create_task
 
@@ -416,49 +416,46 @@ async def enforce_lab_states():
     if not settings.state_enforcement_enabled:
         return
 
-    session = SessionLocal()
-    try:
-        # Find all node_states where desired != actual for running labs
-        mismatched_states = (
-            session.query(models.NodeState)
-            .join(models.Lab, models.NodeState.lab_id == models.Lab.id)
-            .filter(
-                models.NodeState.desired_state != models.NodeState.actual_state,
-                # Only consider labs that are in a stable state (not transitioning)
-                models.Lab.state.in_(["running", "stopped", "error"]),
-            )
-            .all()
-        )
-
-        if not mismatched_states:
-            return
-
-        logger.debug(f"Found {len(mismatched_states)} nodes with state mismatches")
-
-        # Process each mismatch
-        enforced_count = 0
-        for node_state in mismatched_states:
-            lab = session.get(models.Lab, node_state.lab_id)
-            if not lab:
-                continue
-
-            try:
-                if await enforce_node_state(session, lab, node_state):
-                    enforced_count += 1
-            except Exception as e:
-                logger.error(
-                    f"Error enforcing state for {node_state.node_name} "
-                    f"in lab {node_state.lab_id}: {e}"
+    with get_session() as session:
+        try:
+            # Find all node_states where desired != actual for running labs
+            mismatched_states = (
+                session.query(models.NodeState)
+                .join(models.Lab, models.NodeState.lab_id == models.Lab.id)
+                .filter(
+                    models.NodeState.desired_state != models.NodeState.actual_state,
+                    # Only consider labs that are in a stable state (not transitioning)
+                    models.Lab.state.in_(["running", "stopped", "error"]),
                 )
+                .all()
+            )
 
-        if enforced_count > 0:
-            logger.info(f"State enforcement triggered {enforced_count} corrective actions")
+            if not mismatched_states:
+                return
 
-    except Exception as e:
-        logger.error(f"Error in state enforcement: {e}")
-        session.rollback()
-    finally:
-        session.close()
+            logger.debug(f"Found {len(mismatched_states)} nodes with state mismatches")
+
+            # Process each mismatch
+            enforced_count = 0
+            for node_state in mismatched_states:
+                lab = session.get(models.Lab, node_state.lab_id)
+                if not lab:
+                    continue
+
+                try:
+                    if await enforce_node_state(session, lab, node_state):
+                        enforced_count += 1
+                except Exception as e:
+                    logger.error(
+                        f"Error enforcing state for {node_state.node_name} "
+                        f"in lab {node_state.lab_id}: {e}"
+                    )
+
+            if enforced_count > 0:
+                logger.info(f"State enforcement triggered {enforced_count} corrective actions")
+
+        except Exception as e:
+            logger.error(f"Error in state enforcement: {e}")
 
 
 async def state_enforcement_monitor():

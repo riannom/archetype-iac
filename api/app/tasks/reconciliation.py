@@ -24,7 +24,7 @@ import redis
 
 from app import agent_client, models
 from app.config import settings
-from app.db import SessionLocal, get_redis
+from app.db import SessionLocal, get_redis, get_session
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
@@ -195,117 +195,114 @@ async def refresh_states_from_agents():
     to reflect the actual state. For enforcement of desired state, see
     state_enforcement.py.
     """
-    session = SessionLocal()
-    try:
-        # Find labs that need reconciliation:
-        # - Labs in transitional states (starting, stopping, unknown)
-        # - Labs where state has been stuck for too long
-        now = datetime.now(timezone.utc)
-        stale_cutoff = now - timedelta(seconds=settings.stale_starting_threshold)
+    with get_session() as session:
+        try:
+            # Find labs that need reconciliation:
+            # - Labs in transitional states (starting, stopping, unknown)
+            # - Labs where state has been stuck for too long
+            now = datetime.now(timezone.utc)
+            stale_cutoff = now - timedelta(seconds=settings.stale_starting_threshold)
 
-        transitional_labs = (
-            session.query(models.Lab)
-            .filter(
-                models.Lab.state.in_(["starting", "stopping", "unknown"]),
+            transitional_labs = (
+                session.query(models.Lab)
+                .filter(
+                    models.Lab.state.in_(["starting", "stopping", "unknown"]),
+                )
+                .all()
             )
-            .all()
-        )
 
-        # Also find labs with nodes in "pending" state for too long
-        pending_threshold = now - timedelta(seconds=settings.stale_pending_threshold)
-        stale_pending_nodes = (
-            session.query(models.NodeState)
-            .filter(
-                models.NodeState.actual_state == "pending",
-                models.NodeState.updated_at < pending_threshold,
+            # Also find labs with nodes in "pending" state for too long
+            pending_threshold = now - timedelta(seconds=settings.stale_pending_threshold)
+            stale_pending_nodes = (
+                session.query(models.NodeState)
+                .filter(
+                    models.NodeState.actual_state == "pending",
+                    models.NodeState.updated_at < pending_threshold,
+                )
+                .all()
             )
-            .all()
-        )
 
-        # Find running nodes that haven't completed boot readiness check
-        unready_running_nodes = (
-            session.query(models.NodeState)
-            .filter(
-                models.NodeState.actual_state == "running",
-                models.NodeState.is_ready == False,
+            # Find running nodes that haven't completed boot readiness check
+            unready_running_nodes = (
+                session.query(models.NodeState)
+                .filter(
+                    models.NodeState.actual_state == "running",
+                    models.NodeState.is_ready == False,
+                )
+                .all()
             )
-            .all()
-        )
 
-        # Find nodes in error state - they may have recovered
-        error_nodes = (
-            session.query(models.NodeState)
-            .filter(models.NodeState.actual_state == "error")
-            .all()
-        )
-
-        # Find nodes where desired=running but actual=stopped/undeployed
-        # These may have been started by state enforcement and need reconciliation
-        stale_stopped_nodes = (
-            session.query(models.NodeState)
-            .filter(
-                models.NodeState.desired_state == "running",
-                models.NodeState.actual_state.in_(["stopped", "undeployed", "exited"]),
+            # Find nodes in error state - they may have recovered
+            error_nodes = (
+                session.query(models.NodeState)
+                .filter(models.NodeState.actual_state == "error")
+                .all()
             )
-            .all()
-        )
 
-        # Find running nodes that are missing NodePlacement records
-        # This handles cases where deploy jobs failed after containers were created
-        from sqlalchemy import and_, exists
-        from sqlalchemy.sql import select
-
-        placement_exists_subquery = (
-            select(models.NodePlacement.id)
-            .where(
-                models.NodePlacement.lab_id == models.NodeState.lab_id,
-                models.NodePlacement.node_name == models.NodeState.node_name,
+            # Find nodes where desired=running but actual=stopped/undeployed
+            # These may have been started by state enforcement and need reconciliation
+            stale_stopped_nodes = (
+                session.query(models.NodeState)
+                .filter(
+                    models.NodeState.desired_state == "running",
+                    models.NodeState.actual_state.in_(["stopped", "undeployed", "exited"]),
+                )
+                .all()
             )
-            .exists()
-        )
 
-        running_nodes_without_placement = (
-            session.query(models.NodeState)
-            .filter(
-                models.NodeState.actual_state == "running",
-                ~placement_exists_subquery,
+            # Find running nodes that are missing NodePlacement records
+            # This handles cases where deploy jobs failed after containers were created
+            from sqlalchemy import and_, exists
+            from sqlalchemy.sql import select
+
+            placement_exists_subquery = (
+                select(models.NodePlacement.id)
+                .where(
+                    models.NodePlacement.lab_id == models.NodeState.lab_id,
+                    models.NodePlacement.node_name == models.NodeState.node_name,
+                )
+                .exists()
             )
-            .all()
-        )
 
-        # Collect unique lab IDs that need reconciliation
-        labs_to_reconcile = set()
-        for lab in transitional_labs:
-            labs_to_reconcile.add(lab.id)
-        for node in stale_pending_nodes:
-            labs_to_reconcile.add(node.lab_id)
-        for node in unready_running_nodes:
-            labs_to_reconcile.add(node.lab_id)
-        for node in error_nodes:
-            labs_to_reconcile.add(node.lab_id)
-        for node in running_nodes_without_placement:
-            labs_to_reconcile.add(node.lab_id)
-        for node in stale_stopped_nodes:
-            labs_to_reconcile.add(node.lab_id)
+            running_nodes_without_placement = (
+                session.query(models.NodeState)
+                .filter(
+                    models.NodeState.actual_state == "running",
+                    ~placement_exists_subquery,
+                )
+                .all()
+            )
 
-        # FIRST: Always check readiness for running nodes (this doesn't interfere with jobs)
-        # This is separate because readiness checks should happen even when jobs are running
-        if unready_running_nodes:
-            await _check_readiness_for_nodes(session, unready_running_nodes)
+            # Collect unique lab IDs that need reconciliation
+            labs_to_reconcile = set()
+            for lab in transitional_labs:
+                labs_to_reconcile.add(lab.id)
+            for node in stale_pending_nodes:
+                labs_to_reconcile.add(node.lab_id)
+            for node in unready_running_nodes:
+                labs_to_reconcile.add(node.lab_id)
+            for node in error_nodes:
+                labs_to_reconcile.add(node.lab_id)
+            for node in running_nodes_without_placement:
+                labs_to_reconcile.add(node.lab_id)
+            for node in stale_stopped_nodes:
+                labs_to_reconcile.add(node.lab_id)
 
-        if not labs_to_reconcile:
-            return  # Nothing to reconcile
+            # FIRST: Always check readiness for running nodes (this doesn't interfere with jobs)
+            # This is separate because readiness checks should happen even when jobs are running
+            if unready_running_nodes:
+                await _check_readiness_for_nodes(session, unready_running_nodes)
 
-        logger.info(f"Reconciling state for {len(labs_to_reconcile)} lab(s)")
+            if not labs_to_reconcile:
+                return  # Nothing to reconcile
 
-        for lab_id in labs_to_reconcile:
-            await _reconcile_single_lab(session, lab_id)
+            logger.info(f"Reconciling state for {len(labs_to_reconcile)} lab(s)")
 
-    except Exception as e:
-        logger.error(f"Error in state reconciliation: {e}")
-        session.rollback()
-    finally:
-        session.close()
+            for lab_id in labs_to_reconcile:
+                await _reconcile_single_lab(session, lab_id)
+
+        except Exception as e:
+            logger.error(f"Error in state reconciliation: {e}")
 
 
 async def _check_readiness_for_nodes(session, nodes: list):
@@ -870,8 +867,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
     except Exception as e:
         logger.error(f"Failed to reconcile lab {lab_id}: {e}")
-        session.rollback()
         # Don't update state on error - leave it for next cycle
+        # Note: session cleanup handled by get_session() context manager
 
 
 async def state_reconciliation_monitor():

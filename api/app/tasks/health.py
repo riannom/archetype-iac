@@ -6,7 +6,7 @@ import logging
 
 from app import agent_client
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, get_session
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +17,13 @@ async def agent_health_monitor():
     while True:
         try:
             await asyncio.sleep(settings.agent_health_check_interval)
-            session = SessionLocal()
-            try:
-                marked_offline = await agent_client.update_stale_agents(session)
-                if marked_offline:
-                    logger.info(f"Marked {len(marked_offline)} agent(s) as offline")
-            except Exception as e:
-                logger.error(f"Error updating stale agents: {e}")
-                session.rollback()
-            finally:
-                session.close()
+            with get_session() as session:
+                try:
+                    marked_offline = await agent_client.update_stale_agents(session)
+                    if marked_offline:
+                        logger.info(f"Marked {len(marked_offline)} agent(s) as offline")
+                except Exception as e:
+                    logger.error(f"Error updating stale agents: {e}")
         except asyncio.CancelledError:
             logger.info("Agent health monitor stopped")
             break

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, get_session
 from app.image_store import find_image_by_id, load_manifest
 from app.services.topology import TopologyService
 
@@ -37,10 +37,19 @@ async def sync_image_to_agent(
     Returns:
         Tuple of (success, error_message)
     """
-    own_session = database is None
-    if own_session:
-        database = SessionLocal()
+    if database is not None:
+        return await _sync_image_to_agent_impl(image_id, host_id, database)
+    else:
+        with get_session() as session:
+            return await _sync_image_to_agent_impl(image_id, host_id, session)
 
+
+async def _sync_image_to_agent_impl(
+    image_id: str,
+    host_id: str,
+    database: Session,
+) -> tuple[bool, str | None]:
+    """Implementation of sync_image_to_agent."""
     try:
         # Get image from manifest
         manifest = load_manifest()
@@ -108,12 +117,7 @@ async def sync_image_to_agent(
             return False, job.error_message if job else "Sync job disappeared"
 
     except Exception as e:
-        if own_session:
-            database.rollback()
         return False, str(e)
-    finally:
-        if own_session:
-            database.close()
 
 
 async def check_agent_has_image(host: models.Host, reference: str) -> bool:
@@ -174,10 +178,17 @@ async def reconcile_agent_images(host_id: str, database: Session | None = None):
         host_id: Host ID to reconcile
         database: Optional database session
     """
-    own_session = database is None
-    if own_session:
-        database = SessionLocal()
+    if database is not None:
+        # Use provided session
+        await _reconcile_agent_images_impl(host_id, database)
+    else:
+        # Create our own session with proper cleanup
+        with get_session() as session:
+            await _reconcile_agent_images_impl(host_id, session)
 
+
+async def _reconcile_agent_images_impl(host_id: str, database: Session):
+    """Implementation of reconcile_agent_images."""
     try:
         host = database.get(models.Host, host_id)
         if not host or host.status != "online":
@@ -253,11 +264,6 @@ async def reconcile_agent_images(host_id: str, database: Session | None = None):
         print(f"Error reconciling images for host {host_id}: {e}")
         import traceback
         traceback.print_exc()
-        if own_session:
-            database.rollback()
-    finally:
-        if own_session:
-            database.close()
 
 
 async def push_image_on_upload(image_id: str, database: Session | None = None):
@@ -272,29 +278,29 @@ async def push_image_on_upload(image_id: str, database: Session | None = None):
     if not settings.image_sync_enabled:
         return
 
-    own_session = database is None
-    if own_session:
-        database = SessionLocal()
+    if database is not None:
+        await _push_image_on_upload_impl(image_id, database)
+    else:
+        with get_session() as session:
+            await _push_image_on_upload_impl(image_id, session)
 
-    try:
-        # Get all online hosts with push strategy
-        hosts = database.query(models.Host).filter(
-            models.Host.status == "online",
-            models.Host.image_sync_strategy == "push"
-        ).all()
 
-        if not hosts:
-            return
+async def _push_image_on_upload_impl(image_id: str, database: Session):
+    """Implementation of push_image_on_upload."""
+    # Get all online hosts with push strategy
+    hosts = database.query(models.Host).filter(
+        models.Host.status == "online",
+        models.Host.image_sync_strategy == "push"
+    ).all()
 
-        print(f"Pushing image {image_id} to {len(hosts)} agents")
+    if not hosts:
+        return
 
-        # Start sync tasks for each host
-        for host in hosts:
-            asyncio.create_task(sync_image_to_agent(image_id, host.id))
+    print(f"Pushing image {image_id} to {len(hosts)} agents")
 
-    finally:
-        if own_session:
-            database.close()
+    # Start sync tasks for each host
+    for host in hosts:
+        asyncio.create_task(sync_image_to_agent(image_id, host.id))
 
 
 async def pull_images_on_registration(host_id: str, database: Session | None = None):
@@ -309,55 +315,55 @@ async def pull_images_on_registration(host_id: str, database: Session | None = N
     if not settings.image_sync_enabled:
         return
 
-    own_session = database is None
-    if own_session:
-        database = SessionLocal()
+    if database is not None:
+        await _pull_images_on_registration_impl(host_id, database)
+    else:
+        with get_session() as session:
+            await _pull_images_on_registration_impl(host_id, session)
 
-    try:
-        host = database.get(models.Host, host_id)
-        if not host:
-            return
 
-        # Check if host has pull strategy
-        strategy = host.image_sync_strategy
-        if not strategy:
-            strategy = settings.image_sync_fallback_strategy
+async def _pull_images_on_registration_impl(host_id: str, database: Session):
+    """Implementation of pull_images_on_registration."""
+    host = database.get(models.Host, host_id)
+    if not host:
+        return
 
-        if strategy != "pull":
-            return
+    # Check if host has pull strategy
+    strategy = host.image_sync_strategy
+    if not strategy:
+        strategy = settings.image_sync_fallback_strategy
 
-        print(f"Agent {host.name} has 'pull' strategy, syncing all images")
+    if strategy != "pull":
+        return
 
-        # First reconcile to see what's already there
-        await reconcile_agent_images(host_id, database)
+    print(f"Agent {host.name} has 'pull' strategy, syncing all images")
 
-        # Get all Docker images from library
-        manifest = load_manifest()
-        library_images = manifest.get("images", [])
+    # First reconcile to see what's already there
+    await reconcile_agent_images(host_id, database)
 
-        # Find images that need syncing
-        for lib_image in library_images:
-            if lib_image.get("kind") != "docker":
-                continue
+    # Get all Docker images from library
+    manifest = load_manifest()
+    library_images = manifest.get("images", [])
 
-            image_id = lib_image.get("id")
+    # Find images that need syncing
+    for lib_image in library_images:
+        if lib_image.get("kind") != "docker":
+            continue
 
-            # Check current status
-            image_host = database.query(models.ImageHost).filter(
-                models.ImageHost.image_id == image_id,
-                models.ImageHost.host_id == host_id
-            ).first()
+        image_id = lib_image.get("id")
 
-            if image_host and image_host.status == "synced":
-                continue
+        # Check current status
+        image_host = database.query(models.ImageHost).filter(
+            models.ImageHost.image_id == image_id,
+            models.ImageHost.host_id == host_id
+        ).first()
 
-            # Need to sync
-            print(f"Syncing {image_id} to {host.name}")
-            asyncio.create_task(sync_image_to_agent(image_id, host_id))
+        if image_host and image_host.status == "synced":
+            continue
 
-    finally:
-        if own_session:
-            database.close()
+        # Need to sync
+        print(f"Syncing {image_id} to {host.name}")
+        asyncio.create_task(sync_image_to_agent(image_id, host_id))
 
 
 async def ensure_images_for_deployment(
@@ -396,10 +402,27 @@ async def ensure_images_for_deployment(
     if timeout is None:
         timeout = settings.image_sync_timeout
 
-    own_session = database is None
-    if own_session:
-        database = SessionLocal()
+    if database is not None:
+        return await _ensure_images_for_deployment_impl(
+            host_id, image_references, timeout, database, lab_id, image_to_nodes, log_entries
+        )
+    else:
+        with get_session() as session:
+            return await _ensure_images_for_deployment_impl(
+                host_id, image_references, timeout, session, lab_id, image_to_nodes, log_entries
+            )
 
+
+async def _ensure_images_for_deployment_impl(
+    host_id: str,
+    image_references: list[str],
+    timeout: int,
+    database: Session,
+    lab_id: str | None,
+    image_to_nodes: dict[str, list[str]] | None,
+    log_entries: list[str],
+) -> tuple[bool, list[str], list[str]]:
+    """Implementation of ensure_images_for_deployment."""
     # Use provided mapping or empty dict
     if image_to_nodes is None:
         image_to_nodes = {}
@@ -515,12 +538,7 @@ async def ensure_images_for_deployment(
 
     except Exception as e:
         log_entries.append(f"Error during image sync: {e}")
-        if own_session:
-            database.rollback()
         return False, image_references, log_entries
-    finally:
-        if own_session:
-            database.close()
 
 
 def get_images_from_topology(topology_yaml: str) -> list[str]:
