@@ -27,6 +27,7 @@ from app import models
 from app.config import settings
 from app.db import SessionLocal, get_redis
 from app import agent_client
+from app.utils.async_tasks import safe_create_task
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +291,10 @@ async def enforce_node_state(
                 f"({node_state.enforcement_attempts}). Marking as error."
             )
             # Notify UI of the failure
-            asyncio.create_task(_notify_enforcement_failure(lab_id, node_state))
+            safe_create_task(
+                _notify_enforcement_failure(lab_id, node_state),
+                name=f"notify:enforcement:{lab_id}:{node_name}"
+            )
         else:
             logger.debug(f"Node {node_name} in lab {lab_id}: {reason}")
         return False
@@ -396,9 +400,10 @@ async def enforce_node_state(
     provider = get_lab_provider(lab)
 
     # Start sync job - this sets transitional states (starting/stopping)
-    asyncio.create_task(run_node_reconcile(
-        job.id, lab_id, [node_id], provider=provider
-    ))
+    safe_create_task(
+        run_node_reconcile(job.id, lab_id, [node_id], provider=provider),
+        name=f"enforce:sync:{job.id}"
+    )
 
     return True
 

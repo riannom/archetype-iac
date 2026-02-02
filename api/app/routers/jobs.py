@@ -20,6 +20,7 @@ from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.utils.lab import get_lab_or_404, get_lab_provider
+from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
 
 logger = logging.getLogger(__name__)
@@ -344,13 +345,15 @@ async def lab_up(
     # Start background task - choose deployment method based on topology
     # Deploy functions build topology from database (source of truth)
     if is_multihost:
-        asyncio.create_task(run_multihost_deploy(
-            job.id, lab.id, provider=lab_provider
-        ))
+        safe_create_task(
+            run_multihost_deploy(job.id, lab.id, provider=lab_provider),
+            name=f"deploy:multihost:{job.id}"
+        )
     else:
-        asyncio.create_task(run_agent_job(
-            job.id, lab.id, "up", provider=lab_provider
-        ))
+        safe_create_task(
+            run_agent_job(job.id, lab.id, "up", provider=lab_provider),
+            name=f"deploy:single:{job.id}"
+        )
 
     # Build response with image sync events
     job_out = schemas.JobOut.model_validate(job)
@@ -397,13 +400,15 @@ async def lab_down(
     # Start background task - choose destroy method based on topology
     # Destroy functions use database for host analysis (source of truth)
     if is_multihost:
-        asyncio.create_task(run_multihost_destroy(
-            job.id, lab.id, provider=lab_provider
-        ))
+        safe_create_task(
+            run_multihost_destroy(job.id, lab.id, provider=lab_provider),
+            name=f"destroy:multihost:{job.id}"
+        )
     else:
-        asyncio.create_task(run_agent_job(
-            job.id, lab.id, "down", provider=lab_provider
-        ))
+        safe_create_task(
+            run_agent_job(job.id, lab.id, "down", provider=lab_provider),
+            name=f"destroy:single:{job.id}"
+        )
 
     return schemas.JobOut.model_validate(job)
 
@@ -468,7 +473,7 @@ async def lab_restart(
         finally:
             session.close()
 
-    asyncio.create_task(restart_sequence())
+    safe_create_task(restart_sequence(), name=f"restart:{down_job.id}")
 
     return schemas.JobOut.model_validate(down_job)
 
@@ -537,7 +542,10 @@ async def node_action(
     database.refresh(job)
 
     # Start sync job
-    asyncio.create_task(run_node_reconcile(job.id, lab.id, [node], provider=lab_provider))
+    safe_create_task(
+        run_node_reconcile(job.id, lab.id, [node], provider=lab_provider),
+        name=f"sync:node:{job.id}"
+    )
 
     return schemas.JobOut.model_validate(job)
 

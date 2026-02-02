@@ -1,9 +1,14 @@
 """System information endpoints including version and updates."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import sys
 import time
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends
@@ -246,4 +251,155 @@ def get_system_alerts(
     return SystemAlertsResponse(
         alerts=alerts,
         agent_error_count=len(alerts),
+    )
+
+
+# --- Diagnostics ---
+
+class TaskInfo(BaseModel):
+    """Information about a running async task."""
+    name: str
+    state: str
+    done: bool
+    cancelled: bool
+    has_exception: bool
+    exception_type: str | None = None
+    exception_message: str | None = None
+
+
+class RecentJobInfo(BaseModel):
+    """Recent job for diagnostics."""
+    job_id: str
+    lab_id: str
+    action: str
+    status: str
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
+    error_summary: str | None = None
+
+
+class DiagnosticsResponse(BaseModel):
+    """System diagnostics information for troubleshooting."""
+    timestamp: str
+    python_version: str
+    asyncio_tasks: list[TaskInfo]
+    task_count: int
+    recent_failed_jobs: list[RecentJobInfo]
+    recent_jobs: list[RecentJobInfo]
+    event_loop_running: bool
+    memory_info: dict[str, Any] | None = None
+
+
+@router.get("/diagnostics", response_model=DiagnosticsResponse)
+async def get_diagnostics(
+    database: Session = Depends(db.get_db),
+) -> DiagnosticsResponse:
+    """Get system diagnostics for troubleshooting.
+
+    Returns information about running asyncio tasks, recent jobs, and system state.
+    Useful for debugging crashes and performance issues.
+
+    Note: This endpoint is primarily for debugging. In production, you may want
+    to restrict access to admins only.
+    """
+    # Get all running asyncio tasks
+    tasks_info = []
+    all_tasks = asyncio.all_tasks()
+
+    for task in all_tasks:
+        task_state = "running"
+        if task.done():
+            task_state = "done"
+        elif task.cancelled():
+            task_state = "cancelled"
+
+        exception_type = None
+        exception_message = None
+        has_exception = False
+
+        if task.done() and not task.cancelled():
+            try:
+                exc = task.exception()
+                if exc:
+                    has_exception = True
+                    exception_type = type(exc).__name__
+                    exception_message = str(exc)[:200]
+            except asyncio.CancelledError:
+                pass
+            except asyncio.InvalidStateError:
+                pass
+
+        tasks_info.append(TaskInfo(
+            name=task.get_name(),
+            state=task_state,
+            done=task.done(),
+            cancelled=task.cancelled(),
+            has_exception=has_exception,
+            exception_type=exception_type,
+            exception_message=exception_message,
+        ))
+
+    # Get recent failed jobs
+    failed_jobs = (
+        database.query(models.Job)
+        .filter(models.Job.status == "failed")
+        .order_by(models.Job.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    # Get most recent jobs regardless of status
+    recent_jobs = (
+        database.query(models.Job)
+        .order_by(models.Job.created_at.desc())
+        .limit(20)
+        .all()
+    )
+
+    def job_to_info(job: models.Job) -> RecentJobInfo:
+        error_summary = None
+        if job.status == "failed" and job.log_path:
+            # Extract first line of error
+            error_summary = job.log_path.split('\n')[0][:200] if job.log_path else None
+        return RecentJobInfo(
+            job_id=job.id,
+            lab_id=job.lab_id,
+            action=job.action,
+            status=job.status,
+            created_at=job.created_at.isoformat() if job.created_at else "",
+            started_at=job.started_at.isoformat() if job.started_at else None,
+            completed_at=job.completed_at.isoformat() if job.completed_at else None,
+            error_summary=error_summary,
+        )
+
+    # Try to get memory info
+    memory_info = None
+    try:
+        import resource
+        rusage = resource.getrusage(resource.RUSAGE_SELF)
+        memory_info = {
+            "max_rss_mb": rusage.ru_maxrss / 1024,  # Convert to MB
+            "user_time_s": rusage.ru_utime,
+            "system_time_s": rusage.ru_stime,
+        }
+    except ImportError:
+        pass
+
+    # Check if event loop is running
+    try:
+        loop = asyncio.get_running_loop()
+        event_loop_running = loop.is_running()
+    except RuntimeError:
+        event_loop_running = False
+
+    return DiagnosticsResponse(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        python_version=sys.version,
+        asyncio_tasks=tasks_info,
+        task_count=len(all_tasks),
+        recent_failed_jobs=[job_to_info(j) for j in failed_jobs],
+        recent_jobs=[job_to_info(j) for j in recent_jobs],
+        event_loop_running=event_loop_running,
+        memory_info=memory_info,
     )

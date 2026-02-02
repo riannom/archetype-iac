@@ -28,6 +28,7 @@ from app import agent_client, models
 from app.db import SessionLocal
 from app.services.broadcaster import broadcast_node_state_change
 from app.services.topology import TopologyService
+from app.utils.async_tasks import safe_create_task
 from app.tasks.jobs import run_node_reconcile
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,10 @@ async def deploy_node_immediately(
     logger.info(f"Triggered immediate deploy for node {node_state.node_name} (job {job.id})")
 
     # Run sync in background
-    asyncio.create_task(run_node_reconcile(job.id, lab_id, [node_state.node_id], provider=provider))
+    safe_create_task(
+        run_node_reconcile(job.id, lab_id, [node_state.node_id], provider=provider),
+        name=f"live:deploy:{job.id}"
+    )
 
     return True
 

@@ -19,6 +19,7 @@ from app import agent_client, models
 from app.config import settings
 from app.db import SessionLocal
 from app.utils.job import get_job_timeout, is_job_stuck
+from app.utils.async_tasks import safe_create_task
 
 logger = logging.getLogger(__name__)
 
@@ -279,9 +280,10 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
         # run_agent_job builds topology from database internally
         topo_service = TopologyService(session)
         if topo_service.has_nodes(lab.id):
-            asyncio.create_task(run_agent_job(
-                job.id, lab.id, "up", provider=provider
-            ))
+            safe_create_task(
+                run_agent_job(job.id, lab.id, "up", provider=provider),
+                name=f"retry:deploy:{job.id}"
+            )
         else:
             logger.error(f"Cannot retry deploy job {job.id}: no topology in database")
             job.status = "failed"
@@ -289,7 +291,10 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
             session.commit()
 
     elif job.action == "down":
-        asyncio.create_task(run_agent_job(job.id, lab.id, "down", provider=provider))
+        safe_create_task(
+            run_agent_job(job.id, lab.id, "down", provider=provider),
+            name=f"retry:destroy:{job.id}"
+        )
 
     elif job.action.startswith("sync:"):
         # Sync action: sync:node:nodeid or sync:lab
@@ -305,7 +310,10 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
             node_ids = [ns.node_id for ns in node_states]
 
         if node_ids:
-            asyncio.create_task(run_node_reconcile(job.id, lab.id, node_ids, provider))
+            safe_create_task(
+                run_node_reconcile(job.id, lab.id, node_ids, provider),
+                name=f"retry:sync:{job.id}"
+            )
 
     else:
         logger.warning(f"Unknown action type for retry: {job.action}")

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -34,6 +35,7 @@ from app.tasks.reconciliation import state_reconciliation_monitor
 from app.tasks.disk_cleanup import disk_cleanup_monitor
 from app.tasks.image_reconciliation import image_reconciliation_monitor
 from app.tasks.state_enforcement import state_enforcement_monitor
+from app.utils.async_tasks import setup_asyncio_exception_handler, safe_create_task
 from alembic.config import Config as AlembicConfig
 from alembic import command as alembic_command
 
@@ -58,6 +60,9 @@ async def lifespan(app: FastAPI):
 
     # Startup
     logger.info("Starting Archetype API controller")
+
+    # Set up asyncio exception handler for catching unhandled exceptions in tasks
+    setup_asyncio_exception_handler()
 
     # Run database migrations
     logger.info("Running database migrations")
@@ -91,23 +96,25 @@ async def lifespan(app: FastAPI):
         finally:
             session.close()
 
-    # Start agent health monitor background task
-    _agent_monitor_task = asyncio.create_task(agent_health_monitor())
-
-    # Start state reconciliation monitor background task
-    _reconciliation_task = asyncio.create_task(state_reconciliation_monitor())
-
-    # Start job health monitor background task
-    _job_health_task = asyncio.create_task(job_health_monitor())
-
-    # Start disk cleanup monitor background task
-    _disk_cleanup_task = asyncio.create_task(disk_cleanup_monitor())
-
-    # Start image reconciliation monitor background task
-    _image_reconciliation_task = asyncio.create_task(image_reconciliation_monitor())
-
-    # Start state enforcement monitor background task
-    _state_enforcement_task = asyncio.create_task(state_enforcement_monitor())
+    # Start background monitor tasks with proper exception handling
+    _agent_monitor_task = safe_create_task(
+        agent_health_monitor(), name="agent_health_monitor"
+    )
+    _reconciliation_task = safe_create_task(
+        state_reconciliation_monitor(), name="state_reconciliation_monitor"
+    )
+    _job_health_task = safe_create_task(
+        job_health_monitor(), name="job_health_monitor"
+    )
+    _disk_cleanup_task = safe_create_task(
+        disk_cleanup_monitor(), name="disk_cleanup_monitor"
+    )
+    _image_reconciliation_task = safe_create_task(
+        image_reconciliation_monitor(), name="image_reconciliation_monitor"
+    )
+    _state_enforcement_task = safe_create_task(
+        state_enforcement_monitor(), name="state_enforcement_monitor"
+    )
 
     yield
 
@@ -158,6 +165,46 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Archetype API", version="0.1.0", lifespan=lifespan)
+
+
+# Global exception handler for unhandled exceptions
+# This prevents the API from crashing and provides detailed error logging
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Handle all unhandled exceptions with detailed logging.
+
+    This ensures the API never crashes from unhandled exceptions, and provides
+    detailed error information for troubleshooting.
+    """
+    # Get correlation ID for tracing
+    correlation_id = correlation_id_var.get()
+
+    # Format full traceback for logging
+    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    tb_str = "".join(tb_lines)
+
+    # Log the full error with context
+    logger.error(
+        f"Unhandled exception in request handler:\n"
+        f"Correlation ID: {correlation_id}\n"
+        f"Request: {request.method} {request.url.path}\n"
+        f"Exception type: {type(exc).__name__}\n"
+        f"Exception message: {exc}\n"
+        f"Full traceback:\n{tb_str}"
+    )
+
+    # Return a structured error response
+    # In production, we don't expose internal details to clients
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "error_type": type(exc).__name__,
+            "correlation_id": correlation_id,
+            "message": "An unexpected error occurred. Please check server logs for details.",
+        },
+        headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
+    )
 
 
 # Correlation ID middleware for request tracing

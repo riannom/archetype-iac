@@ -28,6 +28,7 @@ from app.tasks.jobs import run_agent_job, run_multihost_destroy
 from app.topology import analyze_topology
 from app.utils.lab import get_lab_or_404, get_lab_provider
 from app.utils.link import generate_link_name
+from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
 
 logger = logging.getLogger(__name__)
@@ -401,14 +402,18 @@ async def update_topology_from_yaml(
     # Trigger live link operations in background if there are changes
     if added_link_names or removed_link_info:
         from app.tasks.live_links import process_link_changes
-        asyncio.create_task(
-            process_link_changes(lab.id, added_link_names, removed_link_info, current_user.id)
+        safe_create_task(
+            process_link_changes(lab.id, added_link_names, removed_link_info, current_user.id),
+            name=f"live_links:{lab.id}"
         )
 
     # Trigger live node operations in background if there are changes
     if added_node_ids or removed_node_info:
         from app.tasks.live_nodes import process_node_changes
-        asyncio.create_task(process_node_changes(lab.id, added_node_ids, removed_node_info))
+        safe_create_task(
+            process_node_changes(lab.id, added_node_ids, removed_node_info),
+            name=f"live_nodes:{lab.id}"
+        )
 
     return schemas.LabOut.model_validate(lab)
 
@@ -459,14 +464,18 @@ async def update_topology(
     # Trigger live link operations in background if there are changes
     if added_link_names or removed_link_info:
         from app.tasks.live_links import process_link_changes
-        asyncio.create_task(
-            process_link_changes(lab.id, added_link_names, removed_link_info, current_user.id)
+        safe_create_task(
+            process_link_changes(lab.id, added_link_names, removed_link_info, current_user.id),
+            name=f"live_links_update:{lab.id}"
         )
 
     # Trigger live node operations in background if there are changes
     if added_node_ids or removed_node_info:
         from app.tasks.live_nodes import process_node_changes
-        asyncio.create_task(process_node_changes(lab.id, added_node_ids, removed_node_info))
+        safe_create_task(
+            process_node_changes(lab.id, added_node_ids, removed_node_info),
+            name=f"live_nodes_update:{lab.id}"
+        )
 
     return schemas.LabOut.model_validate(lab)
 
@@ -736,7 +745,10 @@ async def set_node_desired_state(
                 database.refresh(job)
 
                 # Start background sync task
-                asyncio.create_task(run_node_reconcile(job.id, lab.id, [node_id], provider=provider))
+                safe_create_task(
+                    run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
+                    name=f"sync:node:{job.id}"
+                )
 
     return _enrich_node_state(state)
 
@@ -830,7 +842,10 @@ async def set_all_nodes_desired_state(
             database.refresh(job)
 
             # Start background sync task
-            asyncio.create_task(run_node_reconcile(job.id, lab.id, nodes_needing_sync, provider=provider))
+            safe_create_task(
+                run_node_reconcile(job.id, lab.id, nodes_needing_sync, provider=provider),
+                name=f"sync:bulk:{job.id}"
+            )
 
     # Refresh and return all states
     states = (
@@ -1057,7 +1072,10 @@ async def reconcile_node(
     database.refresh(job)
 
     # Start background reconcile task
-    asyncio.create_task(run_node_reconcile(job.id, lab.id, [node_id], provider=lab_provider))
+    safe_create_task(
+        run_node_reconcile(job.id, lab.id, [node_id], provider=lab_provider),
+        name=f"reconcile:node:{job.id}"
+    )
 
     return schemas.ReconcileResponse(
         job_id=job.id,
@@ -1125,7 +1143,10 @@ async def reconcile_lab(
     database.refresh(job)
 
     # Start background reconcile task
-    asyncio.create_task(run_node_reconcile(job.id, lab.id, node_ids, provider=lab_provider))
+    safe_create_task(
+        run_node_reconcile(job.id, lab.id, node_ids, provider=lab_provider),
+        name=f"reconcile:lab:{job.id}"
+    )
 
     return schemas.ReconcileResponse(
         job_id=job.id,
