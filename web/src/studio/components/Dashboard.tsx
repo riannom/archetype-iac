@@ -7,7 +7,6 @@ import SystemStatusStrip from './SystemStatusStrip';
 import SystemLogsModal from './SystemLogsModal';
 import { ArchetypeIcon } from '../../components/icons';
 import { VersionBadge } from '../../components/VersionBadge';
-import { apiRequest } from '../../api';
 
 interface LabSummary {
   id: string;
@@ -81,27 +80,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [showSystemLogs, setShowSystemLogs] = useState(false);
   const [editingLabId, setEditingLabId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
-  const [cleanupLoading, setCleanupLoading] = useState(false);
-  const [cleanupResult, setCleanupResult] = useState<{ count: number; shown: boolean } | null>(null);
   const isAdmin = user?.is_admin ?? false;
-
-  const handleCleanupStuckJobs = async () => {
-    setCleanupLoading(true);
-    try {
-      const result = await apiRequest<{ cleaned_count: number }>('/admin/cleanup-stuck-jobs', {
-        method: 'POST',
-      });
-      setCleanupResult({ count: result.cleaned_count, shown: true });
-      // Auto-hide after 3 seconds
-      setTimeout(() => setCleanupResult(null), 3000);
-      // Refresh to update any affected labs
-      onRefresh();
-    } catch (error) {
-      console.error('Failed to cleanup stuck jobs:', error);
-    } finally {
-      setCleanupLoading(false);
-    }
-  };
 
   const handleStartEdit = (lab: LabSummary, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -162,22 +141,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <i className="fa-solid fa-file-lines text-xs"></i>
                 <span className="text-[10px] font-bold uppercase">Logs</span>
               </button>
-              <div className="relative">
-                <button
-                  onClick={handleCleanupStuckJobs}
-                  disabled={cleanupLoading}
-                  className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all disabled:opacity-50"
-                  title="Cleanup stuck jobs (>5 min old)"
-                >
-                  <i className={`fa-solid fa-broom text-xs ${cleanupLoading ? 'animate-spin' : ''}`}></i>
-                  <span className="text-[10px] font-bold uppercase">Cleanup</span>
-                </button>
-                {cleanupResult?.shown && (
-                  <div className="absolute top-full mt-2 right-0 px-3 py-2 bg-green-600 text-white text-xs font-bold rounded-lg shadow-lg whitespace-nowrap z-50">
-                    {cleanupResult.count === 0 ? 'No stuck jobs found' : `Cleaned ${cleanupResult.count} stuck job${cleanupResult.count !== 1 ? 's' : ''}`}
-                  </div>
-                )}
-              </div>
             </>
           )}
 
