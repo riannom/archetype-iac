@@ -76,7 +76,7 @@ class NodeEventListener(ABC):
     (Docker, libvirt, etc.) and invoke callbacks when events occur.
 
     Implementations should:
-    1. Filter events to only managed nodes (e.g., archetype-* or clab-* containers)
+    1. Filter events to only managed nodes (archetype.* labeled containers)
     2. Parse provider-specific events into NodeEvent objects
     3. Handle reconnection on connection loss
     4. Be cancellable via the stop() method

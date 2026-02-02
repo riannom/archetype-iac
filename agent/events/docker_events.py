@@ -9,8 +9,8 @@ Docker Events API provides real-time notifications for:
 - Container health status changes
 - Container create/destroy
 
-We filter for containers with the "archetype.node_name" label (DockerProvider)
-or "clab-node-name" label (ContainerlabProvider) to identify managed containers.
+We filter for containers with the "archetype.node_name" label to identify
+managed containers.
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class DockerEventListener(NodeEventListener):
     This listener:
     1. Connects to the Docker daemon
     2. Subscribes to container events
-    3. Filters for Archetype-managed containers (archetype-* or clab-* prefix)
+    3. Filters for Archetype-managed containers (archetype.* labels)
     4. Converts Docker events to NodeEvent objects
     5. Invokes the callback for each relevant event
 
@@ -179,7 +179,6 @@ class DockerEventListener(NodeEventListener):
         """Parse a Docker event into a NodeEvent.
 
         Filters for Archetype-managed containers and extracts relevant info.
-        Supports both DockerProvider (archetype.*) and ContainerlabProvider (clab-*) labels.
 
         Args:
             event: Raw Docker event dict
@@ -203,25 +202,13 @@ class DockerEventListener(NodeEventListener):
         attributes = actor.get("Attributes", {})
 
         # Filter for Archetype-managed containers
-        # DockerProvider labels (primary): archetype.node_name, archetype.lab_id
-        # Legacy containerlab labels (backward compatibility): clab-node-name, containerlab
-        is_archetype = "archetype.node_name" in attributes
-        is_containerlab = "clab-node-name" in attributes  # Legacy support
-
-        if not is_archetype and not is_containerlab:
+        if "archetype.node_name" not in attributes:
             return None
 
-        # Extract node name and lab ID based on provider
-        if is_archetype:
-            node_name = attributes.get("archetype.node_name", "")
-            lab_prefix = attributes.get("archetype.lab_id", "")
-            node_kind = attributes.get("archetype.node_kind", "")
-            display_name = attributes.get("archetype.node_display_name")
-        else:
-            node_name = attributes.get("clab-node-name", "")
-            lab_prefix = attributes.get("containerlab", "")
-            node_kind = attributes.get("clab-node-kind", "")
-            display_name = None  # Containerlab doesn't have display names
+        node_name = attributes.get("archetype.node_name", "")
+        lab_prefix = attributes.get("archetype.lab_id", "")
+        node_kind = attributes.get("archetype.node_kind", "")
+        display_name = attributes.get("archetype.node_display_name")
 
         if not node_name or not lab_prefix:
             return None
