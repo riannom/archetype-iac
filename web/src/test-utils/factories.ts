@@ -6,7 +6,7 @@
  */
 
 /**
- * Host data for HostsPage tests
+ * Host data for InfrastructurePage tests
  */
 export interface MockHostDetailed {
   id: string;
