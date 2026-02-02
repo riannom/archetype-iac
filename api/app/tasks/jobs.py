@@ -39,10 +39,13 @@ async def _auto_extract_configs_before_destroy(
     This is called before destroying a lab to preserve running configs.
     Creates snapshots with type 'auto_stop' to distinguish from manual extracts.
 
+    For multi-host labs, this queries all agents that have nodes for the lab
+    and extracts configs from each agent concurrently.
+
     Args:
         session: Database session
         lab: Lab being destroyed
-        agent: Agent running the lab
+        agent: Agent running the lab (used as fallback if no placements exist)
     """
     if not settings.feature_auto_extract_on_destroy:
         return
@@ -50,17 +53,47 @@ async def _auto_extract_configs_before_destroy(
     try:
         logger.info(f"Auto-extracting configs before destroy for lab {lab.id}")
 
-        # Call agent to extract configs
-        result = await agent_client.extract_configs_on_agent(agent, lab.id)
+        # Get all agents that have nodes for this lab (multi-host support)
+        placements = (
+            session.query(models.NodePlacement.host_id)
+            .filter(models.NodePlacement.lab_id == lab.id)
+            .distinct()
+            .all()
+        )
+        host_ids = [p.host_id for p in placements]
 
-        if not result.get("success"):
-            logger.warning(
-                f"Auto-extract before destroy failed for lab {lab.id}: "
-                f"{result.get('error', 'Unknown error')}"
-            )
+        # Fall back to provided agent if no placements exist
+        if not host_ids:
+            host_ids = [agent.id]
+
+        # Get all healthy agents
+        agents = []
+        for host_id in host_ids:
+            host = session.get(models.Host, host_id)
+            if host and agent_client.is_agent_online(host):
+                agents.append(host)
+
+        if not agents:
+            logger.warning(f"No healthy agents available for auto-extract on lab {lab.id}")
             return
 
-        configs = result.get("configs", [])
+        # Call all agents concurrently to extract configs
+        tasks = [agent_client.extract_configs_on_agent(a, lab.id) for a in agents]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Merge configs from all agents
+        configs = []
+        for a, result in zip(agents, results):
+            if isinstance(result, Exception):
+                logger.warning(f"Auto-extract failed on agent {a.id}: {result}")
+                continue
+            if not result.get("success"):
+                logger.warning(
+                    f"Auto-extract failed on agent {a.id}: {result.get('error', 'Unknown')}"
+                )
+                continue
+            configs.extend(result.get("configs", []))
+
         if not configs:
             logger.debug(f"No configs extracted before destroy for lab {lab.id}")
             return
@@ -1013,13 +1046,13 @@ async def run_multihost_destroy(
         session.close()
 
 
-async def run_node_sync(
+async def run_node_reconcile(
     job_id: str,
     lab_id: str,
     node_ids: list[str],
     provider: str = "docker",
 ):
-    """Sync nodes to match their desired state.
+    """Reconcile nodes to match their desired state.
 
     This function handles the reconciliation logic:
     1. If any node needs to start and is undeployed, deploys the full topology
@@ -1034,7 +1067,7 @@ async def run_node_sync(
     Args:
         job_id: The job ID
         lab_id: The lab ID
-        node_ids: List of node IDs to sync
+        node_ids: List of node IDs to reconcile
         provider: Provider for the job (default: docker)
     """
     session = SessionLocal()
@@ -1246,7 +1279,7 @@ async def run_node_sync(
                 session.add(other_job)
                 session.commit()
                 session.refresh(other_job)
-                asyncio.create_task(run_node_sync(other_job.id, lab_id, other_node_ids, provider=provider))
+                asyncio.create_task(run_node_reconcile(other_job.id, lab_id, other_node_ids, provider=provider))
 
         # Handle nodes that couldn't be assigned an agent
         # DON'T spawn separate jobs - that can cause infinite loops if agent lookup keeps failing
