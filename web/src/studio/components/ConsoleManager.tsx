@@ -30,6 +30,8 @@ interface ConsoleManagerProps {
 const TAB_DRAG_THRESHOLD = 30;
 // Threshold for horizontal movement to trigger reorder mode
 const REORDER_THRESHOLD = 10;
+// Distance from bottom of viewport to show dock zone (in pixels)
+const DOCK_ZONE_HEIGHT = 100;
 
 const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   labId,
@@ -52,6 +54,8 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
 
   // Drop target detection state
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  // Dock zone detection (for dropping onto bottom panel)
+  const [showDockZone, setShowDockZone] = useState(false);
   const windowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Tab drag state for splitting tabs out of windows or reordering within
@@ -160,6 +164,13 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
           const target = findDropTarget(e.clientX, e.clientY, dragState.id);
           setDropTargetId(target);
         }
+
+        // Check if near bottom of viewport for dock zone
+        if (onDockWindow) {
+          const viewportBottom = window.innerHeight;
+          const isNearBottom = e.clientY > viewportBottom - DOCK_ZONE_HEIGHT;
+          setShowDockZone(isNearBottom);
+        }
       }
 
       // Handle window resize
@@ -240,8 +251,12 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     };
 
     const handleMouseUp = (e: MouseEvent) => {
+      // Handle dock to bottom panel on drop (check this first, before merge)
+      if (dragState && showDockZone && onDockWindow) {
+        onDockWindow(dragState.id);
+      }
       // Handle window merge on drop
-      if (dragState && dropTargetId && onMergeWindows) {
+      else if (dragState && dropTargetId && onMergeWindows) {
         onMergeWindows(dragState.id, dropTargetId);
       }
 
@@ -264,6 +279,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       setDragState(null);
       setResizeState(null);
       setDropTargetId(null);
+      setShowDockZone(false);
       setTabDragState(null);
     };
 
@@ -275,7 +291,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragState, resizeState, tabDragState, dropTargetId, windows, onUpdateWindowPos, onMergeWindows, onSplitTab, onReorderTab, findDropTarget, calculateReorderIndex]);
+  }, [dragState, resizeState, tabDragState, dropTargetId, showDockZone, windows, onUpdateWindowPos, onMergeWindows, onSplitTab, onReorderTab, onDockWindow, findDropTarget, calculateReorderIndex]);
 
   // Get the node being dragged as a tab (for ghost preview)
   const tabDragNode = tabDragState?.isDragging
@@ -478,6 +494,23 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         >
           <i className="fa-solid fa-terminal"></i>
           <span>{tabDragNode.name}</span>
+        </div>
+      )}
+
+      {/* Dock zone overlay at bottom of screen */}
+      {showDockZone && dragState && (
+        <div
+          className="fixed left-0 right-0 z-[99] flex items-center justify-center bg-sage-500/20 border-t-2 border-sage-500 backdrop-blur-sm transition-all animate-pulse"
+          style={{
+            bottom: 0,
+            height: DOCK_ZONE_HEIGHT,
+          }}
+        >
+          <div className="flex items-center gap-3 px-6 py-3 bg-sage-600/90 rounded-lg shadow-lg text-white font-bold text-sm">
+            <i className="fa-solid fa-chevron-down"></i>
+            <span>Drop to dock in bottom panel</span>
+            <i className="fa-solid fa-chevron-down"></i>
+          </div>
         </div>
       )}
     </>

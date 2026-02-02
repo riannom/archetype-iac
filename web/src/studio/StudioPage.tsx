@@ -1234,6 +1234,18 @@ const StudioPage: React.FC = () => {
     }
   }, [activeBottomTabId]);
 
+  // Reorder docked console tabs
+  const handleReorderDockedTab = useCallback((fromIndex: number, toIndex: number) => {
+    setDockedConsoles((prev) => {
+      const newTabs = [...prev];
+      const [movedTab] = newTabs.splice(fromIndex, 1);
+      // Adjust toIndex if moving right (since we removed an element)
+      const adjustedTo = toIndex > fromIndex ? toIndex - 1 : toIndex;
+      newTabs.splice(adjustedTo, 0, movedTab);
+      return newTabs;
+    });
+  }, []);
+
   const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string) => {
     if (nodeId && nodeName) {
       setConfigViewerNode({ id: nodeId, name: nodeName });
@@ -1746,6 +1758,7 @@ const StudioPage: React.FC = () => {
         onSelectTab={setActiveBottomTabId}
         onCloseConsoleTab={handleCloseDockedConsole}
         onUndockConsole={handleUndockConsole}
+        onReorderTab={handleReorderDockedTab}
         labId={activeLab?.id}
         nodeStates={nodeStates}
       />

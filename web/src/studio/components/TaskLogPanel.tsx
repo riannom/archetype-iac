@@ -33,6 +33,7 @@ interface TaskLogPanelProps {
   onSelectTab?: (tabId: string) => void;
   onCloseConsoleTab?: (nodeId: string) => void;
   onUndockConsole?: (nodeId: string, x: number, y: number) => void;
+  onReorderTab?: (fromIndex: number, toIndex: number) => void;
   // Lab context for terminals
   labId?: string;
   nodeStates?: Record<string, NodeStateEntry>;
@@ -43,6 +44,7 @@ const MAX_HEIGHT = 600;
 const DEFAULT_HEIGHT = 200;
 const STORAGE_KEY = 'archetype-tasklog-height';
 const TAB_UNDOCK_THRESHOLD = 30; // pixels of vertical drag to trigger undock
+const TAB_REORDER_THRESHOLD = 10; // pixels of horizontal drag to trigger reorder
 
 const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   entries,
@@ -55,6 +57,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   onSelectTab,
   onCloseConsoleTab,
   onUndockConsole,
+  onReorderTab,
   labId,
   nodeStates = {},
 }) => {
@@ -69,14 +72,20 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   const startY = useRef(0);
   const startHeight = useRef(0);
 
-  // Tab drag state for undocking
+  // Tab drag state for undocking and reordering
   const [tabDragState, setTabDragState] = useState<{
     nodeId: string;
     startX: number;
     startY: number;
+    currentX: number;
     currentY: number;
-    isDragging: boolean;
+    isDragging: boolean; // vertical drag for undock
+    isReordering: boolean; // horizontal drag for reorder
+    reorderTargetIndex: number | null;
   } | null>(null);
+
+  // Refs to track tab elements for calculating drop positions
+  const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -85,18 +94,34 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
     startHeight.current = height;
   }, [height]);
 
-  // Handle tab mousedown for potential undock drag
+  // Handle tab mousedown for potential undock drag or reorder
   const handleTabMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
-    if (!onUndockConsole) return;
+    if (!onUndockConsole && !onReorderTab) return;
     e.stopPropagation();
     setTabDragState({
       nodeId,
       startX: e.clientX,
       startY: e.clientY,
+      currentX: e.clientX,
       currentY: e.clientY,
       isDragging: false,
+      isReordering: false,
+      reorderTargetIndex: null,
     });
-  }, [onUndockConsole]);
+  }, [onUndockConsole, onReorderTab]);
+
+  // Calculate the target index for reordering based on cursor position
+  const calculateReorderIndex = useCallback((clientX: number, draggedNodeId: string): number => {
+    let targetIndex = 0;
+    for (let i = 0; i < consoleTabs.length; i++) {
+      const tabEl = tabRefs.current.get(consoleTabs[i].nodeId);
+      if (!tabEl) continue;
+      const rect = tabEl.getBoundingClientRect();
+      const midpoint = rect.left + rect.width / 2;
+      if (clientX > midpoint) targetIndex = i + 1;
+    }
+    return targetIndex;
+  }, [consoleTabs]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -127,26 +152,75 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
     };
   }, [isResizing]);
 
-  // Handle tab drag for undocking
+  // Handle tab drag for undocking and reordering
   useEffect(() => {
     if (!tabDragState) return;
 
     const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - tabDragState.startX;
       const deltaY = e.clientY - tabDragState.startY;
+      const absX = Math.abs(deltaX);
+      const absY = Math.abs(deltaY);
 
       setTabDragState(prev => {
         if (!prev) return null;
-        // If vertical movement exceeds threshold, mark as dragging
-        if (Math.abs(deltaY) >= TAB_UNDOCK_THRESHOLD) {
-          return { ...prev, currentY: e.clientY, isDragging: true };
+
+        // If vertical movement exceeds threshold → undock mode
+        if (absY >= TAB_UNDOCK_THRESHOLD && !prev.isReordering) {
+          return {
+            ...prev,
+            currentX: e.clientX,
+            currentY: e.clientY,
+            isDragging: true,
+            isReordering: false,
+            reorderTargetIndex: null,
+          };
         }
-        return { ...prev, currentY: e.clientY };
+
+        // If already in undock mode, continue tracking
+        if (prev.isDragging) {
+          return { ...prev, currentX: e.clientX, currentY: e.clientY };
+        }
+
+        // If horizontal movement detected and not in undock mode → reorder mode
+        if (absX >= TAB_REORDER_THRESHOLD && !prev.isDragging && onReorderTab) {
+          const targetIndex = calculateReorderIndex(e.clientX, prev.nodeId);
+          return {
+            ...prev,
+            currentX: e.clientX,
+            currentY: e.clientY,
+            isReordering: true,
+            reorderTargetIndex: targetIndex,
+          };
+        }
+
+        // If already in reorder mode, update target index
+        if (prev.isReordering) {
+          const targetIndex = calculateReorderIndex(e.clientX, prev.nodeId);
+          return {
+            ...prev,
+            currentX: e.clientX,
+            currentY: e.clientY,
+            reorderTargetIndex: targetIndex,
+          };
+        }
+
+        // Not enough movement yet
+        return { ...prev, currentX: e.clientX, currentY: e.clientY };
       });
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-      if (tabDragState.isDragging && onUndockConsole) {
-        // Undock the console at cursor position
+      // Handle reorder on drop
+      if (tabDragState.isReordering && tabDragState.reorderTargetIndex !== null && onReorderTab) {
+        const fromIndex = consoleTabs.findIndex(t => t.nodeId === tabDragState.nodeId);
+        const toIndex = tabDragState.reorderTargetIndex;
+        if (fromIndex !== -1 && fromIndex !== toIndex && fromIndex !== toIndex - 1) {
+          onReorderTab(fromIndex, toIndex);
+        }
+      }
+      // Handle undock on drop
+      else if (tabDragState.isDragging && onUndockConsole) {
         onUndockConsole(tabDragState.nodeId, e.clientX - 260, e.clientY - 50);
       }
       setTabDragState(null);
@@ -159,7 +233,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [tabDragState, onUndockConsole]);
+  }, [tabDragState, onUndockConsole, onReorderTab, consoleTabs, calculateReorderIndex]);
 
   const levelColors = {
     info: 'text-cyan-700 dark:text-cyan-400',
@@ -253,38 +327,64 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
               </button>
 
               {/* Console tabs */}
-              {consoleTabs.map((tab) => {
+              {consoleTabs.map((tab, index) => {
                 const isActive = activeTabId === tab.nodeId;
                 const isBeingDragged = tabDragState?.nodeId === tab.nodeId && tabDragState.isDragging;
+                const isBeingReordered = tabDragState?.nodeId === tab.nodeId && tabDragState.isReordering;
+
+                // Show reorder indicator before this tab if target index matches
+                const showIndicatorBefore = tabDragState?.isReordering &&
+                  tabDragState.reorderTargetIndex === index;
 
                 return (
-                  <div
-                    key={tab.nodeId}
-                    onMouseDown={(e) => handleTabMouseDown(e, tab.nodeId)}
-                    onClick={() => onSelectTab?.(tab.nodeId)}
-                    className={`h-8 px-4 flex items-center gap-2 text-[10px] font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
-                      isActive
-                        ? 'text-sage-600 dark:text-sage-400 border-sage-500'
-                        : 'text-stone-500 dark:text-stone-500 border-transparent hover:text-stone-700 dark:hover:text-stone-300'
-                    } ${isBeingDragged ? 'opacity-50' : ''} ${onUndockConsole ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                  >
-                    <i className="fa-solid fa-terminal text-[9px]"></i>
-                    <span className="truncate max-w-[100px]">{tab.nodeName}</span>
-                    {onCloseConsoleTab && (
-                      <button
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onCloseConsoleTab(tab.nodeId);
-                        }}
-                        className="ml-1 hover:text-red-400 p-0.5 transition-colors opacity-60 hover:opacity-100"
-                      >
-                        <i className="fa-solid fa-xmark text-[8px]"></i>
-                      </button>
+                  <React.Fragment key={tab.nodeId}>
+                    {/* Reorder drop indicator before this tab */}
+                    {showIndicatorBefore && (
+                      <div className="console-tab-reorder-indicator" />
                     )}
-                  </div>
+                    <div
+                      ref={(el) => {
+                        if (el) {
+                          tabRefs.current.set(tab.nodeId, el);
+                        } else {
+                          tabRefs.current.delete(tab.nodeId);
+                        }
+                      }}
+                      onMouseDown={(e) => handleTabMouseDown(e, tab.nodeId)}
+                      onClick={() => {
+                        if (!tabDragState?.isDragging && !tabDragState?.isReordering) {
+                          onSelectTab?.(tab.nodeId);
+                        }
+                      }}
+                      className={`h-8 px-4 flex items-center gap-2 text-[10px] font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
+                        isActive
+                          ? 'text-sage-600 dark:text-sage-400 border-sage-500'
+                          : 'text-stone-500 dark:text-stone-500 border-transparent hover:text-stone-700 dark:hover:text-stone-300'
+                      } ${isBeingDragged ? 'opacity-50' : ''} ${isBeingReordered ? 'opacity-50 bg-sage-500/10' : ''} ${onUndockConsole || onReorderTab ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                    >
+                      <i className="fa-solid fa-terminal text-[9px]"></i>
+                      <span className="truncate max-w-[100px]">{tab.nodeName}</span>
+                      {onCloseConsoleTab && (
+                        <button
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCloseConsoleTab(tab.nodeId);
+                          }}
+                          className="ml-1 hover:text-red-400 p-0.5 transition-colors opacity-60 hover:opacity-100"
+                        >
+                          <i className="fa-solid fa-xmark text-[8px]"></i>
+                        </button>
+                      )}
+                    </div>
+                  </React.Fragment>
                 );
               })}
+              {/* Reorder drop indicator at the end */}
+              {tabDragState?.isReordering &&
+                tabDragState.reorderTargetIndex === consoleTabs.length && (
+                <div className="console-tab-reorder-indicator" />
+              )}
             </div>
           )}
 
