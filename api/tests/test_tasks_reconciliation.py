@@ -50,25 +50,43 @@ class TestEnsureLinkStatesForLab:
         """Should create LinkState records for links in topology."""
         from app.tasks.reconciliation import _ensure_link_states_for_lab
 
-        topology_yaml = """
-name: test
-topology:
-  nodes:
-    R1:
-      kind: linux
-    R2:
-      kind: linux
-  links:
-    - endpoints: ["R1:eth1", "R2:eth1"]
-"""
-        created = _ensure_link_states_for_lab(test_db, sample_lab.id, topology_yaml)
+        node1 = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="R1",
+            display_name="R1",
+            container_name="R1",
+            node_type="device",
+            device="linux",
+        )
+        node2 = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="R2",
+            display_name="R2",
+            container_name="R2",
+            node_type="device",
+            device="linux",
+        )
+        test_db.add_all([node1, node2])
+        test_db.commit()
 
-        assert created >= 0
-        # Verify link state was created
+        link = models.Link(
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node_id=node1.id,
+            source_interface="eth1",
+            target_node_id=node2.id,
+            target_interface="eth1",
+        )
+        test_db.add(link)
+        test_db.commit()
+
+        created = _ensure_link_states_for_lab(test_db, sample_lab.id)
+        assert created >= 1
+
         links = test_db.query(models.LinkState).filter(
             models.LinkState.lab_id == sample_lab.id
         ).all()
-        assert len(links) >= 0
+        assert len(links) >= 1
 
     def test_skips_existing_link_states(self, test_db: Session, sample_lab: models.Lab, sample_link_state: models.LinkState):
         """Should not duplicate existing link states."""
@@ -79,18 +97,7 @@ topology:
             models.LinkState.lab_id == sample_lab.id
         ).count()
 
-        topology_yaml = """
-name: test
-topology:
-  nodes:
-    R1:
-      kind: linux
-    R2:
-      kind: linux
-  links:
-    - endpoints: ["R1:eth1", "R2:eth1"]
-"""
-        _ensure_link_states_for_lab(test_db, sample_lab.id, topology_yaml)
+        _ensure_link_states_for_lab(test_db, sample_lab.id)
 
         # Count should not have increased for existing link
         after_count = test_db.query(models.LinkState).filter(
@@ -98,11 +105,11 @@ topology:
         ).count()
         assert after_count >= before_count
 
-    def test_handles_invalid_topology_yaml(self, test_db: Session, sample_lab: models.Lab):
-        """Should handle invalid YAML gracefully."""
+    def test_handles_empty_links(self, test_db: Session, sample_lab: models.Lab):
+        """Should handle labs with no links gracefully."""
         from app.tasks.reconciliation import _ensure_link_states_for_lab
 
-        created = _ensure_link_states_for_lab(test_db, sample_lab.id, "invalid: yaml: {{")
+        created = _ensure_link_states_for_lab(test_db, sample_lab.id)
         assert created == 0
 
 

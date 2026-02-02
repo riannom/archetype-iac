@@ -1779,10 +1779,6 @@ username admin privilege 15 role network-admin nopassword
     ) -> DeployResult:
         """Deploy a topology using Docker SDK.
 
-        Accepts topology in two formats:
-        - topology: Structured JSON format (preferred)
-        - topology_yaml: Legacy YAML string format
-
         Steps:
         1. Parse topology (from JSON or YAML)
         2. Validate images exist
@@ -1794,15 +1790,18 @@ username admin privilege 15 role network-admin nopassword
         """
         workspace.mkdir(parents=True, exist_ok=True)
 
-        # Parse topology from JSON or YAML
+        # Parse topology from JSON only
         if topology:
             parsed_topology = self._topology_from_json(topology)
         elif topology_yaml:
-            parsed_topology = self._parse_topology(topology_yaml, lab_id)
+            return DeployResult(
+                success=False,
+                error="topology_yaml is not supported for deploy; use JSON topology",
+            )
         else:
             return DeployResult(
                 success=False,
-                error="No topology provided (need either JSON or YAML)",
+                error="No topology provided (JSON required)",
             )
         if not parsed_topology.nodes:
             return DeployResult(

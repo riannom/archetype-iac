@@ -1015,9 +1015,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
     Uses Redis-based per-lab locking to prevent concurrent deploys for the same lab.
     Locks automatically expire via TTL if agent crashes, ensuring recovery.
 
-    Accepts topology in two formats:
-    - topology: Structured JSON format (preferred for multi-host)
-    - topology_yaml: Legacy YAML string format
+    Accepts topology in JSON format only.
 
     If callback_url is provided, returns 202 Accepted immediately and executes
     the deploy in the background, POSTing the result to the callback URL when done.
@@ -1029,11 +1027,16 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
     if request.callback_url:
         logger.debug(f"  Async mode with callback: {request.callback_url}")
 
-    # Validate that at least one topology format is provided
-    if not request.topology and not request.topology_yaml:
+    # Validate that JSON topology is provided
+    if not request.topology:
         raise HTTPException(
             status_code=400,
-            detail="No topology provided. Must provide either 'topology' (JSON) or 'topology_yaml' (YAML)."
+            detail="No topology provided. Deploy requires 'topology' (JSON)."
+        )
+    if request.topology_yaml:
+        raise HTTPException(
+            status_code=400,
+            detail="topology_yaml is not supported for deploy; use JSON topology",
         )
 
     lock_manager = get_lock_manager()
@@ -1051,7 +1054,6 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                 request.job_id,
                 lab_id,
                 request.topology,
-                request.topology_yaml,
                 request.provider.value,
                 request.callback_url,
             )
@@ -1076,7 +1078,6 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
             result = await provider.deploy(
                 lab_id=lab_id,
                 topology=request.topology,
-                topology_yaml=request.topology_yaml,
                 workspace=workspace,
             )
 
@@ -1126,7 +1127,6 @@ async def _execute_deploy_with_callback(
     job_id: str,
     lab_id: str,
     topology: "DeployTopology | None",
-    topology_yaml: str | None,
     provider_name: str,
     callback_url: str,
 ) -> None:
@@ -1144,7 +1144,6 @@ async def _execute_deploy_with_callback(
 
     Args:
         topology: Structured JSON topology (preferred for multi-host)
-        topology_yaml: Legacy YAML string format
     """
     from agent.callbacks import CallbackPayload, deliver_callback
     from agent.locks import LockAcquisitionTimeout
@@ -1186,7 +1185,6 @@ async def _execute_deploy_with_callback(
                         result = await provider.deploy(
                             lab_id=lab_id,
                             topology=topology,
-                            topology_yaml=topology_yaml,
                             workspace=workspace,
                         )
 

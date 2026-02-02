@@ -432,33 +432,24 @@ async def _do_deploy(
     url: str,
     job_id: str,
     lab_id: str,
-    topology: dict | None,
-    topology_yaml: str | None,
+    topology: dict,
     provider: str = "docker",
 ) -> dict:
     """Internal deploy request (for retry wrapper).
-
-    Sends deploy request with either structured JSON topology or legacy YAML.
 
     Args:
         url: Agent deploy endpoint URL
         job_id: Job identifier
         lab_id: Lab identifier
-        topology: Structured topology dict (preferred for multi-host)
-        topology_yaml: Legacy YAML string format
+        topology: Structured topology dict
         provider: Provider to use
     """
     payload: dict = {
         "job_id": job_id,
         "lab_id": lab_id,
         "provider": provider,
+        "topology": topology,
     }
-
-    # Prefer JSON topology if provided, fall back to YAML
-    if topology is not None:
-        payload["topology"] = topology
-    elif topology_yaml is not None:
-        payload["topology_yaml"] = topology_yaml
 
     client = get_http_client()
     response = await client.post(
@@ -474,37 +465,31 @@ async def deploy_to_agent(
     agent: models.Host,
     job_id: str,
     lab_id: str,
-    topology_yaml: str | None = None,
     topology: dict | None = None,
     provider: str = "docker",
 ) -> dict:
     """Send deploy request to agent with retry logic.
 
-    Supports two topology formats:
-    - topology: Structured JSON dict (preferred for multi-host deployments)
-    - topology_yaml: Legacy YAML string format
-
-    At least one must be provided.
-
     Args:
         agent: The agent to deploy to
         job_id: Job identifier
         lab_id: Lab identifier
-        topology_yaml: Topology YAML content (legacy)
-        topology: Structured topology dict (preferred)
+        topology: Structured topology dict
         provider: Provider to use (default: docker)
 
     Returns:
         Agent response dict
     """
+    if topology is None:
+        raise ValueError("Deploy requires topology JSON; topology_yaml is no longer supported")
+
     url = f"{get_agent_url(agent)}/jobs/deploy"
-    format_info = "JSON" if topology else "YAML"
-    logger.info(f"Deploying lab {lab_id} via agent {agent.id} using provider {provider} ({format_info} format)")
+    logger.info(f"Deploying lab {lab_id} via agent {agent.id} using provider {provider} (JSON)")
 
     try:
         # Reduce retries for deploy since it's a long operation and agent has its own deduplication
         result = await with_retry(
-            _do_deploy, url, job_id, lab_id, topology, topology_yaml, provider, max_retries=1
+            _do_deploy, url, job_id, lab_id, topology, provider, max_retries=1
         )
         logger.info(f"Deploy completed for lab {lab_id}: {result.get('status')}")
         return result

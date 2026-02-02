@@ -348,36 +348,32 @@ class TestMultihostDeployBroadcasts:
         test_db.commit()
         test_db.refresh(job)
 
-        # Multi-host topology
-        topology_yaml = """
-name: multihost
-topology:
-  nodes:
-    r1:
-      kind: linux
-      labels:
-        netlab.host: Agent 1
-    r2:
-      kind: linux
-      labels:
-        netlab.host: Agent 2
-"""
+        node1 = models.Node(
+            lab_id=lab.id,
+            gui_id="r1",
+            display_name="r1",
+            container_name="r1",
+            node_type="device",
+            device="linux",
+            host_id=multiple_hosts[0].id,
+        )
+        node2 = models.Node(
+            lab_id=lab.id,
+            gui_id="r2",
+            display_name="r2",
+            container_name="r2",
+            node_type="device",
+            device="linux",
+            host_id=multiple_hosts[1].id,
+        )
+        test_db.add_all([node1, node2])
+        test_db.commit()
 
         with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
             with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
-                with patch("app.tasks.jobs.agent_client.get_agent_by_name", new_callable=AsyncMock) as mock_get_agent:
-                    # Return appropriate host for each name
-                    def get_agent_by_name(db, name, **kwargs):
-                        for host in multiple_hosts:
-                            if host.name == name:
-                                return host
-                        return None
-
-                    mock_get_agent.side_effect = get_agent_by_name
-
-                    with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
-                        mock_deploy.return_value = {"status": "completed"}
-                        await run_multihost_deploy(job.id, lab.id, topology_yaml)
+                with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
+                    mock_deploy.return_value = {"status": "completed"}
+                    await run_multihost_deploy(job.id, lab.id)
 
         # Check for host count in progress messages
         all_calls = mock_broadcaster.publish_job_progress.call_args_list
