@@ -1020,6 +1020,22 @@ async def run_node_sync(
                     ns.node_name = db_node.container_name
                     session.commit()
 
+        # Set transitional states EARLY, before any agent lookup can fail.
+        # This ensures users see "stopping" or "starting" before "error" if agent lookup fails.
+        for ns in node_states:
+            if ns.desired_state == "stopped" and ns.actual_state == "running":
+                ns.actual_state = "stopping"
+                ns.stopping_started_at = datetime.now(timezone.utc)
+                ns.error_message = None
+            elif ns.desired_state == "running" and ns.actual_state in ("stopped", "error"):
+                ns.actual_state = "starting"
+                ns.starting_started_at = datetime.now(timezone.utc)
+                ns.error_message = None
+            elif ns.desired_state == "running" and ns.actual_state in ("undeployed", "pending"):
+                ns.actual_state = "pending"
+                ns.error_message = None
+        session.commit()
+
         # Get the node names we're syncing
         node_names_to_sync = {ns.node_name for ns in node_states}
 
@@ -1238,23 +1254,27 @@ async def run_node_sync(
         graph = None
 
         # Categorize nodes by what action they need
-        nodes_need_deploy = []  # undeployed -> running
-        nodes_need_start = []   # stopped -> running
-        nodes_need_stop = []    # running -> stopped
+        # Note: Transitional states (stopping, starting, pending) were set earlier
+        # before agent lookup, so we match on both original and transitional states
+        nodes_need_deploy = []  # undeployed/pending -> running
+        nodes_need_start = []   # stopped/starting -> running
+        nodes_need_stop = []    # running/stopping -> stopped
 
         for ns in node_states:
             if ns.desired_state == "running":
                 if ns.actual_state in ("undeployed", "pending"):
                     nodes_need_deploy.append(ns)
-                elif ns.actual_state in ("stopped", "error"):
+                elif ns.actual_state in ("stopped", "error", "starting"):
                     # Both stopped and error states can be started via docker start
                     # Error state may be from intentional stop (exit code 137/143) or crash
                     # Either way, try starting first - if container doesn't exist, it will fail
                     # and we can fall back to deploy
+                    # "starting" is already set earlier (transitional state set before agent lookup)
                     nodes_need_start.append(ns)
                 # If already running, nothing to do
             elif ns.desired_state == "stopped":
-                if ns.actual_state == "running":
+                if ns.actual_state in ("running", "stopping"):
+                    # "stopping" is already set earlier (transitional state set before agent lookup)
                     nodes_need_stop.append(ns)
                 # If already stopped/undeployed, nothing to do
 
@@ -1263,27 +1283,9 @@ async def run_node_sync(
             f"start={len(nodes_need_start)}, stop={len(nodes_need_stop)}"
         )
 
-        # Mark nodes that need deploy as "pending" (first-time container creation)
-        for ns in nodes_need_deploy:
-            ns.actual_state = "pending"
-            ns.error_message = None
-
-        # Mark nodes that need start as "starting" with timestamp for timeout tracking
-        # "starting" is distinct from "pending" - it's for existing containers being started
+        # Log messages for actions
         if nodes_need_start:
             log_parts.append(f"Starting {len(nodes_need_start)} node(s)...")
-        for ns in nodes_need_start:
-            ns.actual_state = "starting"
-            ns.starting_started_at = datetime.now(timezone.utc)
-            ns.error_message = None
-
-        # Mark nodes that need stop as "stopping" with timestamp for timeout tracking
-        for ns in nodes_need_stop:
-            ns.actual_state = "stopping"
-            ns.stopping_started_at = datetime.now(timezone.utc)
-            ns.error_message = None
-
-        session.commit()
 
         # Migration detection: Check if nodes exist on different agents and clean them up
         # This handles the case where a node's host placement changed
