@@ -13,7 +13,7 @@ Key behaviors tested:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -44,7 +44,7 @@ class TestEarlyTransitionalStateAssignment:
             gui_id="node-1",
             display_name="router1",
             container_name="router1",
-            kind="linux",
+            node_type="device",
             image="alpine:latest",
         )
         test_db.add(node)
@@ -249,7 +249,7 @@ class TestTransitionalStateTimestamps:
             gui_id="node-1",
             display_name="router1",
             container_name="router1",
-            kind="linux",
+            node_type="device",
             image="alpine:latest",
         )
         test_db.add(node)
@@ -360,7 +360,7 @@ class TestCategorizationMatchesTransitionalStates:
             gui_id="node-1",
             display_name="router1",
             container_name="router1",
-            kind="linux",
+            node_type="device",
             image="alpine:latest",
         )
         test_db.add(node)
@@ -507,7 +507,7 @@ class TestExplicitPlacementFailure:
             gui_id="node-1",
             display_name="router1",
             container_name="router1",
-            kind="linux",
+            node_type="device",
             image="alpine:latest",
             host_id=offline_host.id,  # Explicit placement to offline host
         )
@@ -588,7 +588,7 @@ class TestErrorMessageClearing:
             gui_id="node-1",
             display_name="router1",
             container_name="router1",
-            kind="linux",
+            node_type="device",
             image="alpine:latest",
         )
         test_db.add(node)
@@ -719,7 +719,7 @@ class TestNoStateChangeWhenAlreadyInDesiredState:
             gui_id="node-1",
             display_name="router1",
             container_name="router1",
-            kind="linux",
+            node_type="device",
             image="alpine:latest",
         )
         test_db.add(node)
@@ -796,3 +796,168 @@ class TestNoStateChangeWhenAlreadyInDesiredState:
 
         # State should remain running (no change needed)
         assert node_state.actual_state == "running"
+
+
+class TestEarlyPlacementUpdate:
+    """Tests that NodePlacement is updated early with 'starting' status."""
+
+    @pytest.fixture
+    def lab_with_node_and_host(self, test_db: Session, test_user: models.User, sample_host: models.Host):
+        """Create a lab with a node and an available agent."""
+        lab = models.Lab(
+            name="Placement Test Lab",
+            owner_id=test_user.id,
+            provider="docker",
+            state="running",
+            agent_id=sample_host.id,
+        )
+        test_db.add(lab)
+        test_db.commit()
+        test_db.refresh(lab)
+
+        node = models.Node(
+            lab_id=lab.id,
+            gui_id="node-1",
+            display_name="router1",
+            container_name="router1",
+            node_type="device",
+            image="alpine:latest",
+        )
+        test_db.add(node)
+        test_db.commit()
+
+        return lab, node, sample_host
+
+    @pytest.mark.asyncio
+    async def test_placement_updated_with_starting_status_before_deploy(
+        self, test_db: Session, test_user: models.User, lab_with_node_and_host
+    ):
+        """NodePlacement should be updated with status='starting' before deploy."""
+        lab, node, host = lab_with_node_and_host
+
+        # Node wants to start from stopped
+        node_state = models.NodeState(
+            lab_id=lab.id,
+            node_id="node-1",
+            node_name="router1",
+            desired_state="running",
+            actual_state="stopped",
+        )
+        test_db.add(node_state)
+        test_db.commit()
+
+        job = models.Job(
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="sync:node:node-1",
+            status="queued",
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+
+        # Track placement status changes
+        placement_statuses = []
+        original_commit = test_db.commit
+
+        def tracking_commit():
+            # Check for placement updates
+            placement = (
+                test_db.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab.id,
+                    models.NodePlacement.node_name == "router1",
+                )
+                .first()
+            )
+            if placement:
+                placement_statuses.append(placement.status)
+            original_commit()
+
+        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+                with patch("app.tasks.jobs.agent_client.container_action", new_callable=AsyncMock) as mock_action:
+                    mock_action.return_value = {"success": True, "status": "running"}
+                    with patch.object(test_db, "commit", tracking_commit):
+                        await run_node_sync(job.id, lab.id, ["node-1"])
+
+        # "starting" should appear in placement statuses before "deployed"
+        assert "starting" in placement_statuses, (
+            f"Placement should have status='starting' before deploy. "
+            f"Statuses seen: {placement_statuses}"
+        )
+
+
+class TestStateEnforcementJobAction:
+    """Tests that state enforcement creates correct job actions."""
+
+    def test_enforcement_job_action_is_sync_format(self, test_db: Session, test_user: models.User, sample_host: models.Host):
+        """Verify that job action from state_enforcement uses sync: prefix, not node: prefix.
+
+        This is a simpler test that just checks the job creation logic without
+        actually running the enforcement task.
+        """
+        # The key change we made: state_enforcement.py now creates jobs with
+        # action=f"sync:node:{node_id}" instead of action=f"node:{action}:{node_name}"
+
+        # We can verify this by checking the source code pattern
+        import inspect
+        from app.tasks import state_enforcement
+
+        source = inspect.getsource(state_enforcement.enforce_node_state)
+
+        # Should contain sync:node: pattern
+        assert "sync:node:" in source, (
+            "enforce_node_state should create jobs with 'sync:node:' action pattern"
+        )
+
+        # Should NOT contain legacy node:start or node:stop patterns in job creation
+        assert 'action=f"node:{action}' not in source, (
+            "enforce_node_state should NOT create legacy 'node:start/stop' jobs"
+        )
+
+    def test_enforcement_calls_run_node_sync(self, test_db: Session):
+        """Verify that state_enforcement imports and calls run_node_sync."""
+        import inspect
+        from app.tasks import state_enforcement
+
+        source = inspect.getsource(state_enforcement.enforce_node_state)
+
+        # Should import run_node_sync
+        assert "run_node_sync" in source, (
+            "enforce_node_state should use run_node_sync"
+        )
+
+        # Should NOT use run_agent_job for node actions
+        assert "run_agent_job" not in source, (
+            "enforce_node_state should NOT use run_agent_job for node actions"
+        )
+
+
+class TestNodeActionEndpointJobAction:
+    """Tests that node action endpoint creates correct job actions."""
+
+    def test_node_action_job_format_is_sync(self):
+        """Verify that node_action endpoint creates sync: jobs, not node: jobs.
+
+        This is a source inspection test to verify the change was made correctly.
+        """
+        import inspect
+        from app.routers import jobs as jobs_router
+
+        source = inspect.getsource(jobs_router.node_action)
+
+        # Should create sync:node: jobs
+        assert "sync:node:" in source, (
+            "node_action endpoint should create 'sync:node:' jobs"
+        )
+
+        # Should call run_node_sync
+        assert "run_node_sync" in source, (
+            "node_action endpoint should call run_node_sync"
+        )
+
+        # Should NOT create legacy node:start/stop jobs
+        assert 'action=f"node:{action}' not in source, (
+            "node_action endpoint should NOT create legacy 'node:' action jobs"
+        )
