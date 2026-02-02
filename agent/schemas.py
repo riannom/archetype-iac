@@ -383,6 +383,17 @@ class ExtractConfigsResponse(BaseModel):
     error: str | None = None
 
 
+class UpdateConfigRequest(BaseModel):
+    """Controller -> Agent: Push a startup config for a node."""
+    content: str
+
+
+class UpdateConfigResponse(BaseModel):
+    """Agent -> Controller: Config update result."""
+    success: bool
+    error: str | None = None
+
+
 # --- Image Synchronization ---
 
 class DockerImageInfo(BaseModel):

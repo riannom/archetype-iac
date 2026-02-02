@@ -1206,6 +1206,44 @@ async def extract_configs_on_agent(
         return {"success": False, "extracted_count": 0, "error": str(e)}
 
 
+async def update_config_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    content: str,
+) -> dict:
+    """Push a startup config to an agent for a specific node.
+
+    This syncs the API's extracted config to the agent's workspace so
+    it will be used on next container restart/redeploy.
+
+    Args:
+        agent: The agent managing the node
+        lab_id: Lab identifier
+        node_name: Node name (container name without lab prefix)
+        content: The config content to save
+
+    Returns:
+        Dict with 'success' and optionally 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/config"
+    logger.debug(f"Pushing config for {node_name} to agent {agent.id}")
+
+    try:
+        client = get_http_client()
+        response = await client.put(url, json={"content": content}, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.debug(f"Pushed config for {node_name} to agent {agent.id}")
+        else:
+            logger.warning(f"Config push failed for {node_name}: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to push config for {node_name} on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def prune_docker_on_agent(
     agent: models.Host,
     valid_lab_ids: list[str],

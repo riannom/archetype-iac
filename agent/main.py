@@ -92,6 +92,8 @@ from agent.schemas import (
     RegistrationRequest,
     RegistrationResponse,
     TunnelInfo,
+    UpdateConfigRequest,
+    UpdateConfigResponse,
     UpdateRequest,
     UpdateResponse,
     DockerPruneRequest,
@@ -1521,6 +1523,33 @@ async def extract_configs(lab_id: str) -> ExtractConfigsResponse:
             extracted_count=0,
             error=str(e),
         )
+
+
+@app.put("/labs/{lab_id}/nodes/{node_name}/config")
+async def update_node_config(
+    lab_id: str,
+    node_name: str,
+    request: UpdateConfigRequest,
+) -> UpdateConfigResponse:
+    """Update the startup config for a node.
+
+    This saves the config to the agent's workspace so it will be used
+    on next container restart/redeploy. Called by the API after extracting
+    configs to sync the agent's workspace with the API's workspace.
+    """
+    logger.info(f"Update config request: lab={lab_id} node={node_name}")
+
+    try:
+        workspace = get_workspace(lab_id)
+        config_dir = workspace / "configs" / node_name
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / "startup-config"
+        config_file.write_text(request.content)
+        logger.info(f"Saved startup config for {node_name} ({len(request.content)} bytes)")
+        return UpdateConfigResponse(success=True)
+    except Exception as e:
+        logger.error(f"Update config error for {node_name}: {e}", exc_info=True)
+        return UpdateConfigResponse(success=False, error=str(e))
 
 
 # --- Container Control Endpoints ---
