@@ -224,7 +224,6 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str, database: Sessi
 async def lab_state_websocket(
     websocket: WebSocket,
     lab_id: str,
-    database: Session = Depends(db.get_db),
 ) -> None:
     """WebSocket endpoint for real-time lab state updates.
 
@@ -241,6 +240,11 @@ async def lab_state_websocket(
     - Server sends JSON messages with type, timestamp, data
     - Client can send JSON messages for future commands (currently unused)
     - Connection closes on client disconnect or error
+
+    Note: We use get_session() context manager for the initial state query
+    rather than Depends(get_db) because WebSocket handlers run indefinitely.
+    Using a dependency would keep the session open for the entire connection
+    lifetime, leading to 'idle in transaction' connection leaks.
     """
     await manager.connect(websocket, lab_id)
 
@@ -248,8 +252,10 @@ async def lab_state_websocket(
     subscription_task = asyncio.create_task(_subscribe_and_forward(websocket, lab_id))
 
     try:
-        # Send initial state
-        await _send_initial_state(websocket, lab_id, database)
+        # Send initial state using scoped session
+        # (don't use Depends(get_db) for long-lived WebSocket handlers)
+        with db.get_session() as database:
+            await _send_initial_state(websocket, lab_id, database)
 
         # Keep connection alive and handle client messages
         while True:
