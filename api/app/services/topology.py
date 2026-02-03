@@ -707,7 +707,11 @@ class TopologyService:
                 node.image = graph_node.image
                 node.version = graph_node.version
                 node.network_mode = graph_node.network_mode
-                node.host_id = host_id
+                # Only update host_id if explicitly specified - preserve existing
+                # assignment when user has "Auto" selected to avoid clearing
+                # host placement after deployment
+                if host_id is not None:
+                    node.host_id = host_id
                 node.connection_type = graph_node.connection_type
                 node.parent_interface = graph_node.parent_interface
                 node.vlan_id = graph_node.vlan_id
