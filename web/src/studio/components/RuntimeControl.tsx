@@ -1,5 +1,5 @@
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { DeviceModel, Node, isDeviceNode, DeviceNode } from '../types';
 import { getAgentColor } from '../../utils/agentColors';
 
@@ -27,15 +27,13 @@ interface RuntimeControlProps {
   onSetRuntimeStatus: (nodeId: string, status: RuntimeStatus) => void;
   onRefreshStates: () => void;
   studioRequest: <T>(path: string, options?: RequestInit) => Promise<T>;
-  onOpenConfigViewer?: () => void;
-  onOpenNodeConfig?: (nodeId: string, nodeName: string) => void;
   agents?: { id: string; name: string }[];
   onUpdateNode?: (id: string, updates: Partial<Node>) => void;
   pendingNodeOps?: Set<string>;
   onFlushTopologySave?: () => Promise<void>;
 }
 
-const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onSetRuntimeStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig, agents = [], onUpdateNode, pendingNodeOps = new Set(), onFlushTopologySave }) => {
+const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onSetRuntimeStatus, onRefreshStates, studioRequest, agents = [], onUpdateNode, pendingNodeOps = new Set(), onFlushTopologySave }) => {
   const [isExtracting, setIsExtracting] = useState(false);
   const [pendingOps, setPendingOps] = useState<Set<PendingOp>>(new Set());
 
@@ -188,15 +186,6 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                   <i className={`fa-solid ${isExtracting ? 'fa-spinner fa-spin' : 'fa-download'} mr-2`}></i>
                   {isExtracting ? 'Extracting...' : 'Extract Configs'}
                 </button>
-                {onOpenConfigViewer && (
-                  <button
-                    onClick={onOpenConfigViewer}
-                    className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
-                    title="View saved configurations"
-                  >
-                    <i className="fa-solid fa-file-code mr-2"></i> View Configs
-                  </button>
-                )}
               </>
             )}
           </div>
@@ -207,9 +196,11 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
             <thead>
               <tr className="bg-stone-100 dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800">
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Device Name</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Model / Version</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Model</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Version</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Status</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Agent</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Assigned</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Running On</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest text-right">Actions</th>
               </tr>
             </thead>
@@ -233,8 +224,10 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="text-xs text-stone-700 dark:text-stone-300 font-medium">{model?.name}</div>
-                      <div className="text-[10px] text-stone-500 italic">{node.version}</div>
+                      <div className="text-xs text-stone-700 dark:text-stone-300 font-medium">{model?.name || '—'}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-xs text-stone-500 dark:text-stone-400 font-mono">{node.version || '—'}</div>
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
@@ -256,40 +249,38 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="space-y-1.5">
-                        {agents.length > 1 ? (
-                          <select
-                            value={node.host || ''}
-                            onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
-                            disabled={status === 'running' || status === 'booting' || status === 'stopping'}
-                            className="bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <option value="">Auto</option>
-                            {agents.map((agent) => (
-                              <option key={agent.id} value={agent.id}>
-                                {agent.name}
-                              </option>
-                            ))}
-                          </select>
-                        ) : hostName ? (
-                          <div className="flex items-center gap-1.5">
-                            <i className="fa-solid fa-server text-stone-400 dark:text-stone-500 text-[10px]"></i>
-                            <span className="text-xs text-stone-600 dark:text-stone-400">{hostName}</span>
-                          </div>
-                        ) : (
-                          <span className="text-stone-400 dark:text-stone-600 text-xs">Auto</span>
-                        )}
-                        {/* Show running host indicator when multi-agent and node is running/booting/stopping */}
-                        {agents.length > 1 && (status === 'running' || status === 'booting' || status === 'stopping') && hostName && (
-                          <div className="flex items-center gap-1.5 text-[10px] text-stone-500 dark:text-stone-400">
+                      {agents.length > 1 ? (
+                        <select
+                          value={node.host || ''}
+                          onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
+                          disabled={status === 'running' || status === 'booting' || status === 'stopping'}
+                          className="bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <option value="">Auto</option>
+                          {agents.map((agent) => (
+                            <option key={agent.id} value={agent.id}>
+                              {agent.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-stone-400 dark:text-stone-600 text-xs">Auto</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      {(status === 'running' || status === 'booting' || status === 'stopping') && hostName ? (
+                        <div className="flex items-center gap-1.5">
+                          {agents.length > 1 && (
                             <div
                               className="w-2 h-2 rounded-full flex-shrink-0"
                               style={{ backgroundColor: getAgentColor(nodeState?.host_id || '') }}
                             />
-                            <span>Running on: {hostName}</span>
-                          </div>
-                        )}
-                      </div>
+                          )}
+                          <span className="text-xs text-stone-600 dark:text-stone-400">{hostName}</span>
+                        </div>
+                      ) : (
+                        <span className="text-stone-400 dark:text-stone-600 text-xs">—</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
@@ -331,15 +322,6 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                                 </button>
                               </>
                             )}
-                            {onOpenNodeConfig && (
-                              <button
-                                onClick={() => onOpenNodeConfig(node.id, node.container_name || node.name)}
-                                className="p-2 text-blue-500 hover:bg-blue-500/10 rounded-lg transition-all"
-                                title="View saved config"
-                              >
-                                <i className="fa-solid fa-file-code"></i>
-                              </button>
-                            )}
                         </>
                       </div>
                     </td>
@@ -348,7 +330,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
               })}
               {nodes.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-20 text-center text-stone-500 dark:text-stone-600 italic text-sm">
+                  <td colSpan={7} className="px-6 py-20 text-center text-stone-500 dark:text-stone-600 italic text-sm">
                     No devices in current topology. Return to Designer to add nodes.
                   </td>
                 </tr>
