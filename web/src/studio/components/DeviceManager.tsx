@@ -7,6 +7,7 @@ import ImageCard from './ImageCard';
 import ImageFilterBar, { ImageAssignmentFilter, ImageSortOption } from './ImageFilterBar';
 import FilterChip from './FilterChip';
 import ISOImportModal from '../../components/ISOImportModal';
+import { usePersistedState, usePersistedSet } from '../hooks/usePersistedState';
 
 interface ImageCatalogEntry {
   clab?: string;
@@ -41,18 +42,18 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   const qcow2InputRef = useRef<HTMLInputElement | null>(null);
   const [showISOModal, setShowISOModal] = useState(false);
 
-  // Device filters
+  // Device filters (persisted to localStorage)
   const [deviceSearch, setDeviceSearch] = useState('');
-  const [selectedDeviceVendors, setSelectedDeviceVendors] = useState<Set<string>>(new Set());
-  const [deviceImageStatus, setDeviceImageStatus] = useState<'all' | 'has_image' | 'no_image'>('all');
-  const [deviceSort, setDeviceSort] = useState<'name' | 'vendor' | 'type'>('vendor');
+  const [selectedDeviceVendors, toggleDeviceVendor, clearDeviceVendors] = usePersistedSet('archetype:filters:device:vendors');
+  const [deviceImageStatus, setDeviceImageStatus] = usePersistedState<'all' | 'has_image' | 'no_image'>('archetype:filters:device:imageStatus', 'all');
+  const [deviceSort, setDeviceSort] = usePersistedState<'name' | 'vendor' | 'type'>('archetype:filters:device:sort', 'vendor');
 
-  // Image filters
+  // Image filters (persisted to localStorage)
   const [imageSearch, setImageSearch] = useState('');
-  const [selectedImageVendors, setSelectedImageVendors] = useState<Set<string>>(new Set());
-  const [selectedImageKinds, setSelectedImageKinds] = useState<Set<string>>(new Set());
-  const [imageAssignmentFilter, setImageAssignmentFilter] = useState<ImageAssignmentFilter>('all');
-  const [imageSort, setImageSort] = useState<ImageSortOption>('vendor');
+  const [selectedImageVendors, toggleImageVendor, clearImageVendors] = usePersistedSet('archetype:filters:image:vendors');
+  const [selectedImageKinds, toggleImageKind, clearImageKinds] = usePersistedSet('archetype:filters:image:kinds');
+  const [imageAssignmentFilter, setImageAssignmentFilter] = usePersistedState<ImageAssignmentFilter>('archetype:filters:image:assignment', 'all');
+  const [imageSort, setImageSort] = usePersistedState<ImageSortOption>('archetype:filters:image:sort', 'vendor');
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
 
@@ -418,14 +419,14 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
   const clearDeviceFilters = () => {
     setDeviceSearch('');
-    setSelectedDeviceVendors(new Set());
+    clearDeviceVendors();
     setDeviceImageStatus('all');
   };
 
   const clearImageFilters = () => {
     setImageSearch('');
-    setSelectedImageVendors(new Set());
-    setSelectedImageKinds(new Set());
+    clearImageVendors();
+    clearImageKinds();
     setImageAssignmentFilter('all');
   };
 
@@ -580,15 +581,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                     key={vendor}
                     label={vendor}
                     isActive={selectedDeviceVendors.has(vendor)}
-                    onClick={() => {
-                      const next = new Set(selectedDeviceVendors);
-                      if (next.has(vendor)) {
-                        next.delete(vendor);
-                      } else {
-                        next.add(vendor);
-                      }
-                      setSelectedDeviceVendors(next);
-                    }}
+                    onClick={() => toggleDeviceVendor(vendor)}
                   />
                 ))}
                 {hasDeviceFilters && (
@@ -633,25 +626,9 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
               searchQuery={imageSearch}
               onSearchChange={setImageSearch}
               selectedVendors={selectedImageVendors}
-              onVendorToggle={(vendor) => {
-                const next = new Set(selectedImageVendors);
-                if (next.has(vendor)) {
-                  next.delete(vendor);
-                } else {
-                  next.add(vendor);
-                }
-                setSelectedImageVendors(next);
-              }}
+              onVendorToggle={toggleImageVendor}
               selectedKinds={selectedImageKinds}
-              onKindToggle={(kind) => {
-                const next = new Set(selectedImageKinds);
-                if (next.has(kind)) {
-                  next.delete(kind);
-                } else {
-                  next.add(kind);
-                }
-                setSelectedImageKinds(next);
-              }}
+              onKindToggle={toggleImageKind}
               assignmentFilter={imageAssignmentFilter}
               onAssignmentFilterChange={setImageAssignmentFilter}
               sortOption={imageSort}
