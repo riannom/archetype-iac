@@ -2071,10 +2071,12 @@ class DockerOVSPlugin:
                 f"(sandbox: {sandbox_key})"
             )
 
+            # Use DstName to specify exact interface name, not DstPrefix which
+            # lets Docker auto-number based on attachment order (causing mismatches)
             return web.json_response({
                 "InterfaceName": {
                     "SrcName": endpoint.cont_veth,
-                    "DstPrefix": endpoint.interface_name.rstrip("0123456789"),
+                    "DstName": endpoint.interface_name,
                 },
             })
 
