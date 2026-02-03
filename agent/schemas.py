@@ -140,15 +140,10 @@ class DeployTopology(BaseModel):
 class DeployRequest(BaseModel):
     """Controller -> Agent: Deploy a lab topology.
 
-    Supports two formats for backward compatibility:
-    - topology_yaml: Legacy YAML string format
-    - topology: New structured JSON format (preferred for multi-host)
-
-    At least one of topology_yaml or topology must be provided.
+    Uses structured JSON format only.
     """
     job_id: str
     lab_id: str
-    topology_yaml: str | None = None      # Legacy YAML format
     topology: DeployTopology | None = None  # New JSON format (preferred)
     provider: Provider = Provider.DOCKER
     # Optional callback URL for async execution

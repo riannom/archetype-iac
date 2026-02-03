@@ -241,38 +241,6 @@ class TestCeosContainerConfig:
         parsed = provider._topology_from_json(topology)
         assert parsed.nodes["eos_1"].interface_count == config.max_ports
 
-    def test_yaml_topology_defaults_interface_count_for_ceos(self, provider):
-        """Verify YAML topology defaults interface_count for cEOS when missing."""
-        config = get_config_by_device("ceos")
-        assert config and config.max_ports > 0
-
-        topology_yaml = """
-nodes:
-  eos_1:
-    kind: ceos
-    _display_name: EOS-1
-    image: ceos:latest
-links: []
-"""
-        parsed = provider._parse_topology(topology_yaml, "test-lab")
-        assert parsed.nodes["eos_1"].interface_count == config.max_ports
-
-    def test_yaml_device_field_resolves_ceos_kind(self, provider):
-        """Verify YAML device field resolves to cEOS kind for interface defaults."""
-        config = get_config_by_device("ceos")
-        assert config and config.max_ports > 0
-
-        topology_yaml = """
-nodes:
-  eos_1:
-    device: eos
-    _display_name: EOS-1
-    image: ceos:latest
-links: []
-"""
-        parsed = provider._parse_topology(topology_yaml, "test-lab")
-        assert parsed.nodes["eos_1"].kind == "ceos"
-        assert parsed.nodes["eos_1"].interface_count == config.max_ports
 
 
 # --- Tests for startup-config hostname ---

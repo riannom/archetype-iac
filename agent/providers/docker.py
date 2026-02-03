@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Any
 
 import docker
-import yaml
 from docker.errors import NotFound, APIError, ImageNotFound
 from docker.types import Mount, IPAMConfig
 
@@ -312,74 +311,6 @@ class DockerProvider(Provider):
         """Get container name prefix for a lab."""
         safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
         return f"{CONTAINER_PREFIX}-{safe_lab_id}"
-
-    def _parse_topology(self, topology_yaml: str, lab_id: str) -> ParsedTopology:
-        """Parse topology YAML to internal representation.
-
-        Handles both wrapped and flat formats.
-        """
-        topo = yaml.safe_load(topology_yaml)
-        if not topo:
-            return ParsedTopology(name=lab_id, nodes={}, links=[])
-
-        # Handle wrapped format: {name: ..., topology: {nodes: ..., links: ...}}
-        if "topology" in topo:
-            name = topo.get("name", lab_id)
-            nodes_raw = topo.get("topology", {}).get("nodes", {})
-            links_raw = topo.get("topology", {}).get("links", [])
-        else:
-            # Flat format: {nodes: ..., links: ...}
-            name = lab_id
-            nodes_raw = topo.get("nodes", {})
-            links_raw = topo.get("links", [])
-
-        # Parse nodes
-        nodes = {}
-        for node_name, node_config in (nodes_raw or {}).items():
-            if not isinstance(node_config, dict):
-                continue
-            raw_kind = node_config.get("kind") or node_config.get("device") or "linux"
-            kind = get_kind_for_device(raw_kind)
-            interface_count = node_config.get("interface_count")
-            if is_ceos_kind(kind) and (not interface_count or interface_count <= 0):
-                config = get_config_by_device(kind)
-                fallback = config.max_ports if config else 0
-                if fallback > 0:
-                    interface_count = fallback
-                    logger.warning(
-                        f"cEOS {node_name}: interface_count missing; defaulting to {fallback} for pre-provisioning"
-                    )
-            nodes[node_name] = TopologyNode(
-                name=node_name,
-                kind=kind,
-                display_name=node_config.get("_display_name"),
-                image=node_config.get("image"),
-                host=node_config.get("host"),
-                interface_count=interface_count,
-                binds=node_config.get("binds", []),
-                env=node_config.get("env", {}),
-                ports=node_config.get("ports", []),
-                startup_config=node_config.get("startup-config"),
-                exec_=node_config.get("exec", []),
-            )
-
-        # Parse links
-        links = []
-        for link in (links_raw or []):
-            if isinstance(link, dict):
-                endpoints = link.get("endpoints", [])
-            elif isinstance(link, list):
-                endpoints = link
-            elif isinstance(link, str):
-                # String format: "node1:eth1 -- node2:eth1"
-                parts = link.replace("--", " ").split()
-                endpoints = [p for p in parts if ":" in p]
-            else:
-                continue
-            if len(endpoints) >= 2:
-                links.append(TopologyLink(endpoints=endpoints[:2]))
-
-        return ParsedTopology(name=name, nodes=nodes, links=links)
 
     def _validate_images(self, topology: ParsedTopology) -> list[tuple[str, str]]:
         """Check that all required images exist.
@@ -1773,14 +1704,13 @@ username admin privilege 15 role network-admin nopassword
         self,
         lab_id: str,
         topology: DeployTopology | None,
-        topology_yaml: str | None,
         workspace: Path,
         agent_id: str | None = None,
     ) -> DeployResult:
         """Deploy a topology using Docker SDK.
 
         Steps:
-        1. Parse topology (from JSON or YAML)
+        1. Parse topology (JSON)
         2. Validate images exist
         3. Create required directories
         4. Create containers (network mode: none)
@@ -1793,11 +1723,6 @@ username admin privilege 15 role network-admin nopassword
         # Parse topology from JSON only
         if topology:
             parsed_topology = self._topology_from_json(topology)
-        elif topology_yaml:
-            return DeployResult(
-                success=False,
-                error="topology_yaml is not supported for deploy; use JSON topology",
-            )
         else:
             return DeployResult(
                 success=False,

@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from agent.schemas import (
     DeployRequest,
+    DeployTopology,
     JobResult,
     JobStatus,
     Provider,
@@ -76,6 +77,11 @@ class MockLockManager:
             yield
 
 
+def _minimal_topology() -> DeployTopology:
+    """Build a minimal JSON topology for deploy request tests."""
+    return DeployTopology(nodes=[], links=[])
+
+
 # --- Tests for Lock Acquisition Timeout ---
 
 @pytest.mark.asyncio
@@ -94,7 +100,7 @@ async def test_deploy_returns_503_when_lock_timeout():
         request = DeployRequest(
             job_id="job-123",
             lab_id=lab_id,
-            topology_yaml="name: test\n",
+            topology=_minimal_topology(),
             provider=Provider.DOCKER,
         )
 
@@ -128,7 +134,7 @@ async def test_deploy_acquires_lock_when_available():
             request = DeployRequest(
                 job_id="job-456",
                 lab_id=lab_id,
-                topology_yaml="name: test\n",
+                topology=_minimal_topology(),
                 provider=Provider.DOCKER,
             )
 
@@ -148,7 +154,7 @@ async def test_deploy_returns_503_when_lock_manager_not_initialized():
         request = DeployRequest(
             job_id="job-no-manager",
             lab_id="test-lab",
-            topology_yaml="name: test\n",
+            topology=_minimal_topology(),
             provider=Provider.DOCKER,
         )
 
@@ -172,7 +178,7 @@ async def test_async_deploy_returns_accepted():
     request = DeployRequest(
         job_id="job-async",
         lab_id=lab_id,
-        topology_yaml="name: test\n",
+        topology=_minimal_topology(),
         provider=Provider.DOCKER,
         callback_url="http://localhost:8000/callback",
     )
@@ -207,7 +213,7 @@ async def test_async_deploy_callback_sends_timeout_on_lock_failure():
             await _execute_deploy_with_callback(
                 job_id="job-timeout",
                 lab_id=lab_id,
-                topology_yaml="name: test\n",
+                topology=_minimal_topology(),
                 provider_name="docker",
                 callback_url="http://localhost:8000/callback",
             )
@@ -247,7 +253,7 @@ async def test_async_deploy_callback_sends_success():
                 await _execute_deploy_with_callback(
                     job_id="job-success",
                     lab_id=lab_id,
-                    topology_yaml="name: test\n",
+                    topology=_minimal_topology(),
                     provider_name="docker",
                     callback_url="http://localhost:8000/callback",
                 )
@@ -282,7 +288,7 @@ async def test_async_deploy_callback_sends_error_on_exception():
                 await _execute_deploy_with_callback(
                     job_id="job-error",
                     lab_id=lab_id,
-                    topology_yaml="name: test\n",
+                    topology=_minimal_topology(),
                     provider_name="docker",
                     callback_url="http://localhost:8000/callback",
                 )
@@ -309,7 +315,7 @@ async def test_async_deploy_fails_when_lock_manager_not_initialized():
             await _execute_deploy_with_callback(
                 job_id="job-no-manager",
                 lab_id="test-lab",
-                topology_yaml="name: test\n",
+                topology=_minimal_topology(),
                 provider_name="docker",
                 callback_url="http://localhost:8000/callback",
             )

@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from agent.schemas import DeployTopology
 
-import yaml
 
 from agent.config import settings
 from agent.providers.base import (
@@ -377,98 +376,23 @@ class LibvirtProvider(Provider):
         self,
         lab_id: str,
         topology: "DeployTopology | None",
-        topology_yaml: str | None,
         workspace: Path,
     ) -> DeployResult:
         """Deploy a libvirt topology.
 
-        Note: LibvirtProvider currently only supports YAML format.
-        JSON topology is not yet implemented for VM deployments.
+        Note: LibvirtProvider JSON topology support is not yet implemented.
         """
         workspace.mkdir(parents=True, exist_ok=True)
-        disks_dir = self._disks_dir(workspace)
-
-        # LibvirtProvider currently only supports YAML
-        if not topology_yaml:
+        if topology is None:
             return DeployResult(
                 success=False,
-                error="LibvirtProvider requires topology_yaml (JSON format not yet supported)",
+                error="No topology provided (JSON required)",
             )
 
-        try:
-            topo = yaml.safe_load(topology_yaml)
-            if not topo:
-                return DeployResult(
-                    success=False,
-                    error="Invalid topology YAML",
-                )
-
-            # Handle both wrapped and flat topology formats
-            nodes = topo.get("topology", {}).get("nodes", {})
-            if not nodes:
-                nodes = topo.get("nodes", {})
-
-            if not isinstance(nodes, dict):
-                return DeployResult(
-                    success=False,
-                    error="Invalid topology: no nodes defined",
-                )
-
-            deployed_nodes: list[NodeInfo] = []
-            errors: list[str] = []
-
-            for node_name, node_config in nodes.items():
-                if not isinstance(node_config, dict):
-                    continue
-
-                # Skip non-VM nodes (DockerProvider handles containers)
-                kind = node_config.get("kind", "")
-                supported_vm_kinds = node_config.get("supported_image_kinds", [])
-                if "qcow2" not in supported_vm_kinds and kind not in (
-                    "c8000v", "cat-sdwan-controller", "cat-sdwan-manager",
-                    "cat-sdwan-validator", "cat-sdwan-vedge", "ftdv", "fmcv",
-                    "cat9800", "cisco_asav", "cisco_iosv", "cisco_csr1000v",
-                ):
-                    continue
-
-                try:
-                    node_info = await self._deploy_node(
-                        lab_id, node_name, node_config, disks_dir
-                    )
-                    deployed_nodes.append(node_info)
-                except Exception as e:
-                    log_name_str = _log_name(node_name, node_config)
-                    logger.error(f"Failed to deploy node {log_name_str}: {e}")
-                    errors.append(f"{log_name_str}: {e}")
-
-            if errors and not deployed_nodes:
-                # Complete failure
-                return DeployResult(
-                    success=False,
-                    nodes=deployed_nodes,
-                    error=f"Failed to deploy nodes: {'; '.join(errors)}",
-                )
-
-            if errors:
-                # Partial success
-                return DeployResult(
-                    success=True,
-                    nodes=deployed_nodes,
-                    stderr=f"Some nodes failed: {'; '.join(errors)}",
-                )
-
-            return DeployResult(
-                success=True,
-                nodes=deployed_nodes,
-                stdout=f"Deployed {len(deployed_nodes)} VM nodes",
-            )
-
-        except Exception as e:
-            logger.exception(f"Deploy failed for lab {lab_id}: {e}")
-            return DeployResult(
-                success=False,
-                error=str(e),
-            )
+        return DeployResult(
+            success=False,
+            error="LibvirtProvider does not support JSON topology yet",
+        )
 
     async def _deploy_node(
         self,
