@@ -888,3 +888,41 @@ class PortVlanResponse(BaseModel):
     interface: str
     vlan_tag: int | None = None
     error: str | None = None
+
+
+# --- Host Interface Configuration ---
+
+
+class InterfaceDetail(BaseModel):
+    """Detailed information about a host network interface."""
+    name: str
+    mtu: int
+    is_physical: bool
+    is_default_route: bool  # True if this is the default route interface
+    mac: str | None = None
+    ipv4_addresses: list[str] = Field(default_factory=list)
+    state: str  # up/down/unknown
+
+
+class InterfaceDetailsResponse(BaseModel):
+    """Response from interface details endpoint."""
+    interfaces: list[InterfaceDetail] = Field(default_factory=list)
+    default_route_interface: str | None = None
+    network_manager: str | None = None  # networkmanager, netplan, systemd-networkd, unknown
+
+
+class SetMtuRequest(BaseModel):
+    """Request to set MTU on an interface."""
+    mtu: int = Field(ge=68, le=9216)
+    persist: bool = True  # Whether to make persistent across reboots
+
+
+class SetMtuResponse(BaseModel):
+    """Response from setting interface MTU."""
+    success: bool
+    interface: str
+    previous_mtu: int
+    new_mtu: int
+    persisted: bool = False
+    network_manager: str | None = None
+    error: str | None = None

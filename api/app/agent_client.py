@@ -1661,6 +1661,76 @@ async def test_mtu_on_agent(
         }
 
 
+# --- Interface Configuration Functions ---
+
+
+async def get_agent_interface_details(agent: models.Host) -> dict:
+    """Get detailed interface information from an agent.
+
+    Returns all interfaces with their MTU, identifies the default route
+    interface, and detects which network manager is in use.
+
+    Args:
+        agent: The agent to query
+
+    Returns:
+        Dict with 'interfaces', 'default_route_interface', 'network_manager' keys
+    """
+    url = f"{get_agent_url(agent)}/interfaces/details"
+
+    try:
+        client = get_http_client()
+        response = await client.get(url, timeout=30.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Failed to get interface details from agent {agent.id}: {e}")
+        raise
+
+
+async def set_agent_interface_mtu(
+    agent: models.Host,
+    interface_name: str,
+    mtu: int,
+    persist: bool = True,
+) -> dict:
+    """Set MTU on an agent's interface.
+
+    Applies the MTU change and optionally persists it across reboots.
+
+    Args:
+        agent: The agent to configure
+        interface_name: Name of the interface
+        mtu: MTU value to set
+        persist: Whether to persist the change across reboots
+
+    Returns:
+        Dict with 'success', 'interface', 'previous_mtu', 'new_mtu',
+        'persisted', 'network_manager', 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/interfaces/{interface_name}/mtu"
+
+    try:
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={"mtu": mtu, "persist": persist},
+            timeout=60.0,  # Longer timeout for persistence operations
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Failed to set MTU on agent {agent.id} interface {interface_name}: {e}")
+        return {
+            "success": False,
+            "interface": interface_name,
+            "previous_mtu": 0,
+            "new_mtu": mtu,
+            "persisted": False,
+            "error": str(e),
+        }
+
+
 # --- Hot-Connect Link Management Functions ---
 
 async def create_link_on_agent(

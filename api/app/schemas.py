@@ -848,6 +848,74 @@ class MtuTestAllResponse(BaseModel):
 
 
 # =============================================================================
+# Host Interface Configuration Schemas
+# =============================================================================
+
+
+class InterfaceDetailOut(BaseModel):
+    """Detailed information about a host network interface."""
+
+    name: str
+    mtu: int
+    is_physical: bool
+    is_default_route: bool
+    mac: str | None = None
+    ipv4_addresses: list[str] = Field(default_factory=list)
+    state: str
+
+
+class InterfaceDetailsResponseOut(BaseModel):
+    """Response from agent interface details endpoint."""
+
+    interfaces: list[InterfaceDetailOut] = Field(default_factory=list)
+    default_route_interface: str | None = None
+    network_manager: str | None = None
+
+
+class SetMtuRequestIn(BaseModel):
+    """Request to set MTU on an interface."""
+
+    mtu: int = Field(ge=68, le=9216)
+    persist: bool = True
+
+
+class SetMtuResponseOut(BaseModel):
+    """Response from setting interface MTU."""
+
+    success: bool
+    interface: str
+    previous_mtu: int
+    new_mtu: int
+    persisted: bool = False
+    network_manager: str | None = None
+    error: str | None = None
+
+
+class AgentNetworkConfigOut(BaseModel):
+    """Output schema for agent network configuration."""
+
+    id: str
+    host_id: str
+    host_name: str | None = None
+    data_plane_interface: str | None = None
+    desired_mtu: int = 9000
+    current_mtu: int | None = None
+    last_sync_at: datetime | None = None
+    sync_status: str = "unknown"
+    sync_error: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class AgentNetworkConfigUpdate(BaseModel):
+    """Request to update agent network configuration."""
+
+    data_plane_interface: str | None = None
+    desired_mtu: int | None = Field(default=None, ge=68, le=9216)
+
+
+# =============================================================================
 # Interface Mapping Schemas
 # =============================================================================
 
