@@ -18,7 +18,33 @@ from app.schemas import (
 from app.image_store import find_image_reference, find_custom_device, get_device_override
 from app.config import settings
 from app.storage import lab_workspace
-from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config, is_ceos_kind
+from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config, is_ceos_kind, get_config_by_device
+
+
+def _resolve_device_kind(device: str | None) -> str:
+    """Resolve the canonical kind for a device, checking custom devices.
+
+    Args:
+        device: Device type (e.g., "eos", "ceos", custom device ID)
+
+    Returns:
+        The canonical kind (e.g., "ceos" for EOS devices)
+    """
+    if not device:
+        return "linux"
+
+    # First check if vendor config knows this device
+    config = get_config_by_device(device)
+    if config:
+        return config.kind
+
+    # Check custom devices for a kind override
+    custom = find_custom_device(device)
+    if custom and custom.get("kind"):
+        return custom["kind"]
+
+    # Fall back to the device ID itself
+    return device
 
 
 def _normalize_interface_name(iface_name: str) -> str:
@@ -53,7 +79,7 @@ def _denormalize_interface_name(iface_name: str, device: str | None) -> str:
         return iface_name
 
     # Get port naming from vendor config, custom device, and overrides (in that order).
-    kind = get_kind_for_device(device)
+    kind = _resolve_device_kind(device)
     config = get_vendor_config(kind)
 
     port_naming = config.port_naming if config else "eth"
@@ -641,9 +667,7 @@ def graph_to_topology_yaml(
         node_data: dict[str, Any] = {}
 
         # Map device to kind using centralized vendor registry
-        kind = "linux"  # default
-        if node.device:
-            kind = get_kind_for_device(node.device)
+        kind = _resolve_device_kind(node.device)
         node_data["kind"] = kind
         node_kinds[safe_name] = kind  # Track for interface provisioning
 
