@@ -697,7 +697,7 @@ class InterfaceMapping(Base):
 
     # OVS layer
     ovs_port: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)  # "vh614ed63ed40"
-    ovs_bridge: Mapped[str | None] = mapped_column(String(50), nullable=True)  # "arch-ovs" or "ovs-{lab_id}"
+    ovs_bridge: Mapped[str | None] = mapped_column(String(50), nullable=True)  # "arch-ovs"
     vlan_tag: Mapped[int | None] = mapped_column(nullable=True)
 
     # Linux layer

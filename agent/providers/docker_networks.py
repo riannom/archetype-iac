@@ -49,7 +49,7 @@ class DockerNetworkManager:
         """Create Docker networks for a lab's interfaces.
 
         Creates one network per interface (eth1, eth2, ..., ethN).
-        All networks share the same OVS bridge (ovs-{lab_id}).
+        All networks connect to the shared OVS bridge (arch-ovs).
 
         Args:
             lab_id: Lab identifier

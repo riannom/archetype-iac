@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column("node_id", sa.String(36), sa.ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False),
         # OVS layer
         sa.Column("ovs_port", sa.String(20), nullable=True),  # e.g., "vh614ed63ed40"
-        sa.Column("ovs_bridge", sa.String(50), nullable=True),  # e.g., "arch-ovs" or "ovs-{lab_id}"
+        sa.Column("ovs_bridge", sa.String(50), nullable=True),  # e.g., "arch-ovs"
         sa.Column("vlan_tag", sa.Integer(), nullable=True),
         # Linux layer
         sa.Column("linux_interface", sa.String(20), nullable=False),  # e.g., "eth1"

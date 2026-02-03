@@ -70,24 +70,23 @@ alembic revision --autogenerate -m "description"
 
 ### Multi-Host Networking (`agent/network/`)
 
-The agent uses Open vSwitch (OVS) for all container networking:
+The agent uses Open vSwitch (OVS) for all container networking. All containers on a host share a single `arch-ovs` bridge, with VLAN tags providing isolation.
 
 - **`docker_plugin.py`**: OVS Docker network plugin for pre-boot interface provisioning
-  - Creates **per-lab OVS bridges** (`ovs-{lab_id[:12]}`)
-  - Each interface gets a unique VLAN tag initially (isolated)
+  - All container interfaces connect to the shared `arch-ovs` bridge
+  - Each interface gets a unique VLAN tag initially (isolated until linked)
   - `hot_connect()` matches VLAN tags to create L2 links between interfaces
   - Required for cEOS which enumerates interfaces at boot time
 
 - **`ovs.py`**: OVSNetworkManager for external connections and VXLAN
-  - Uses single OVS bridge (`arch-ovs`) for VXLAN tunnels and external interfaces
-  - **Note**: Same-host links use docker_plugin's per-lab bridges, not arch-ovs
+  - Manages the shared `arch-ovs` bridge for VXLAN tunnels and external interfaces
 
 - **`overlay.py`**: OverlayManager for cross-host VXLAN tunnels
-  - Creates VXLAN ports on OVS (not Linux bridge - Linux bridge has unicast forwarding issues)
+  - Creates VXLAN ports on `arch-ovs` (not Linux bridge - Linux bridge has unicast forwarding issues)
   - Uses VLAN tags (3000-4000 range) for overlay link isolation
 
 **Key requirements**:
-- OVS bridges must use `fail_mode: standalone`. The default `secure` mode drops all traffic without explicit OpenFlow rules.
+- OVS bridge must use `fail_mode: standalone`. The default `secure` mode drops all traffic without explicit OpenFlow rules.
 - Same-host link creation uses `DockerOVSPlugin.hot_connect()`, not `OVSNetworkManager.hot_connect()`
 
 ### Frontend (`web/`)

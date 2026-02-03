@@ -23,7 +23,7 @@ CREATE TABLE interface_mappings (
 
     -- OVS layer
     ovs_port VARCHAR(20),              -- "vh614ed63ed40"
-    ovs_bridge VARCHAR(50),            -- "arch-ovs" or "ovs-{lab_id}"
+    ovs_bridge VARCHAR(50),            -- "arch-ovs"
     vlan_tag INT,
 
     -- Linux layer
