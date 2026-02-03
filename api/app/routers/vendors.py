@@ -313,16 +313,13 @@ def get_device_config(
         find_custom_device,
         get_device_override,
     )
-    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device, _get_vendor_options
-
-    # Resolve alias to canonical device ID
-    canonical_id = get_kind_for_device(device_id)
+    from agent.vendors import _get_vendor_options, _get_config_by_kind
 
     base_config = {}
 
     # Check if it's a built-in vendor device
-    if canonical_id in VENDOR_CONFIGS:
-        config = VENDOR_CONFIGS[canonical_id]
+    config = _get_config_by_kind(device_id)
+    if config:
         base_config = {
             "id": device_id,
             "kind": config.kind,
