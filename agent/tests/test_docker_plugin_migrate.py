@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.network.docker_plugin import DockerOVSPlugin
+from agent.network.docker_plugin import DockerOVSPlugin, LabBridge, NetworkState
 
 
 @pytest.mark.asyncio
@@ -56,3 +56,22 @@ async def test_migrate_per_lab_bridges_drops_empty_bridge(monkeypatch, tmp_path)
     await plugin._migrate_per_lab_bridges()
 
     assert ("--if-exists", "del-br", "ovs-empty") in calls
+
+
+def test_migrate_state_to_shared_bridge(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+
+    plugin.lab_bridges["lab123"] = LabBridge(lab_id="lab123", bridge_name="ovs-lab123")
+    plugin.networks["net123"] = NetworkState(
+        network_id="net123",
+        lab_id="lab123",
+        interface_name="eth1",
+        bridge_name="ovs-lab123",
+    )
+
+    updated = plugin._migrate_state_to_shared_bridge()
+
+    assert updated is True
+    assert plugin.lab_bridges["lab123"].bridge_name == "arch-ovs"
+    assert plugin.networks["net123"].bridge_name == "arch-ovs"
