@@ -28,6 +28,15 @@ from app.services.broadcaster import broadcast_node_state_change, get_broadcaste
 from app.services.topology import TopologyService, graph_to_deploy_topology
 from app.utils.lab import update_lab_state
 from app.utils.async_tasks import safe_create_task
+from app.state import (
+    HostStatus,
+    JobStatus,
+    LabState,
+    LinkActualState,
+    NodeActualState,
+    NodeDesiredState,
+)
+from app.services.state_machine import NodeStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -489,7 +498,7 @@ async def run_agent_job(
             lab = session.get(models.Lab, lab_id)
             if not lab:
                 logger.error(f"Lab {lab_id} not found in database")
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Lab {lab_id} not found"
                 session.commit()
@@ -521,7 +530,7 @@ async def run_agent_job(
                     required_provider=provider,
                 )
             if not agent:
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = (
                     f"ERROR: No healthy agent available.\n\n"
@@ -533,13 +542,13 @@ async def run_agent_job(
                     f"- All capable agents are at capacity\n\n"
                     f"Check agent status and connectivity."
                 )
-                update_lab_state(session, lab_id, "error", error="No healthy agent available")
+                update_lab_state(session, lab_id, LabState.ERROR.value, error="No healthy agent available")
                 session.commit()
                 logger.warning(f"Job {job_id} failed: no healthy agent available for provider {provider}")
                 return
 
             # Update job with agent assignment and start time
-            job.status = "running"
+            job.status = JobStatus.RUNNING.value
             job.agent_id = agent.id
             job.started_at = datetime.now(timezone.utc)
             session.commit()
@@ -552,11 +561,11 @@ async def run_agent_job(
 
             # Update lab state based on action
             if action == "up":
-                update_lab_state(session, lab_id, "starting", agent_id=agent.id)
+                update_lab_state(session, lab_id, LabState.STARTING.value, agent_id=agent.id)
                 # Dispatch webhook for deploy started
                 await _dispatch_webhook("lab.deploy_started", lab, job, session)
             elif action == "down":
-                update_lab_state(session, lab_id, "stopping", agent_id=agent.id)
+                update_lab_state(session, lab_id, LabState.STOPPING.value, agent_id=agent.id)
 
             logger.info(f"Job {job_id} started: {action} on lab {lab_id} via agent {agent.id}")
 
@@ -582,7 +591,7 @@ async def run_agent_job(
                 job.completed_at = datetime.now(timezone.utc)
 
                 if result.get("status") == "completed":
-                    job.status = "completed"
+                    job.status = JobStatus.COMPLETED.value
                     log_content = f"Job completed successfully.\n\n"
 
                     # Broadcast job completed
@@ -593,18 +602,18 @@ async def run_agent_job(
 
                     # Update lab state based on completed action
                     if action == "up":
-                        update_lab_state(session, lab_id, "running", agent_id=agent.id)
+                        update_lab_state(session, lab_id, LabState.RUNNING.value, agent_id=agent.id)
                         # Capture management IPs for IaC workflows
                         await _capture_node_ips(session, lab_id, agent)
                         # Dispatch webhook for successful deploy
                         await _dispatch_webhook("lab.deploy_complete", lab, job, session)
                     elif action == "down":
-                        update_lab_state(session, lab_id, "stopped")
+                        update_lab_state(session, lab_id, LabState.STOPPED.value)
                         # Dispatch webhook for destroy complete
                         await _dispatch_webhook("lab.destroy_complete", lab, job, session)
 
                 else:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED.value
                     error_msg = result.get('error_message', 'Unknown error')
                     log_content = f"Job failed.\n\nError: {error_msg}\n\n"
 
@@ -615,7 +624,7 @@ async def run_agent_job(
                     )
 
                     # Update lab state to error
-                    update_lab_state(session, lab_id, "error", error=error_msg)
+                    update_lab_state(session, lab_id, LabState.ERROR.value, error=error_msg)
 
                     # Dispatch webhook for failed job
                     if action == "up":
@@ -636,7 +645,7 @@ async def run_agent_job(
                 logger.info(f"Job {job_id} completed with status: {job.status}")
 
             except AgentUnavailableError as e:
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = (
                     f"ERROR: Agent became unavailable during job execution.\n\n"
@@ -647,7 +656,7 @@ async def run_agent_job(
                 )
 
                 # Update lab state to unknown (we don't know what state it's in)
-                update_lab_state(session, lab_id, "unknown", error=f"Agent unavailable: {e.message}")
+                update_lab_state(session, lab_id, LabState.UNKNOWN.value, error=f"Agent unavailable: {e.message}")
 
                 session.commit()
                 logger.error(f"Job {job_id} failed: agent unavailable - {e.message}")
@@ -657,7 +666,7 @@ async def run_agent_job(
                     await agent_client.mark_agent_offline(session, e.agent_id)
 
             except AgentJobError as e:
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 log_content = f"ERROR: Job execution failed on agent.\n\nDetails: {e.message}\n\n"
                 if e.stdout:
@@ -667,13 +676,13 @@ async def run_agent_job(
                 job.log_path = log_content.strip()
 
                 # Update lab state to error
-                update_lab_state(session, lab_id, "error", error=e.message)
+                update_lab_state(session, lab_id, LabState.ERROR.value, error=e.message)
 
                 session.commit()
                 logger.error(f"Job {job_id} failed: agent job error - {e.message}")
 
             except Exception as e:
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = (
                     f"ERROR: Unexpected error during job execution.\n\n"
@@ -683,7 +692,7 @@ async def run_agent_job(
                 )
 
                 # Update lab state to error
-                update_lab_state(session, lab_id, "error", error=str(e))
+                update_lab_state(session, lab_id, LabState.ERROR.value, error=str(e))
 
                 session.commit()
                 logger.exception(f"Job {job_id} failed with unexpected error: {e}")
@@ -724,7 +733,7 @@ async def run_multihost_deploy(
             lab = session.get(models.Lab, lab_id)
             if not lab:
                 logger.error(f"Lab {lab_id} not found in database")
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Lab {lab_id} not found"
                 session.commit()
@@ -755,13 +764,13 @@ async def run_multihost_deploy(
                     )
                 else:
                     # No default agent available
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED.value
                     job.completed_at = datetime.now(timezone.utc)
                     job.log_path = (
                         f"ERROR: {len(unplaced_nodes)} nodes have no host assignment "
                         f"and no default agent is available"
                     )
-                    update_lab_state(session, lab_id, "error", error="No agent for unplaced nodes")
+                    update_lab_state(session, lab_id, LabState.ERROR.value, error="No agent for unplaced nodes")
                     session.commit()
                     return
 
@@ -775,7 +784,7 @@ async def run_multihost_deploy(
             )
 
             # Update job status
-            job.status = "running"
+            job.status = JobStatus.RUNNING.value
             job.started_at = datetime.now(timezone.utc)
             session.commit()
 
@@ -785,7 +794,7 @@ async def run_multihost_deploy(
                 progress_message=f"Starting multi-host deployment ({len(analysis.placements)} hosts)"
             )
 
-            update_lab_state(session, lab_id, "starting")
+            update_lab_state(session, lab_id, LabState.STARTING.value)
 
             # Dispatch webhook for deploy started
             await _dispatch_webhook("lab.deploy_started", lab, job, session)
@@ -803,10 +812,10 @@ async def run_multihost_deploy(
 
             if missing_hosts:
                 error_msg = f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: {error_msg}"
-                update_lab_state(session, lab_id, "error", error=error_msg)
+                update_lab_state(session, lab_id, LabState.ERROR.value, error=error_msg)
                 session.commit()
                 logger.error(f"Job {job_id} failed: {error_msg}")
                 return
@@ -890,10 +899,10 @@ async def run_multihost_deploy(
                 else:
                     log_parts.append("No hosts to rollback (all failed)")
 
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = "\n".join(log_parts)
-                update_lab_state(session, lab_id, "error", error="Deployment failed on one or more hosts")
+                update_lab_state(session, lab_id, LabState.ERROR.value, error="Deployment failed on one or more hosts")
                 session.commit()
                 logger.error(f"Job {job_id} failed: deployment error on one or more hosts (rollback completed)")
                 return
@@ -911,10 +920,10 @@ async def run_multihost_deploy(
                 log_parts.append(f"\n=== Link Setup Summary ===")
                 log_parts.append(f"Links: {links_ok} OK, {links_failed} failed")
                 log_parts.append("\nNote: Containers are deployed but some links failed.")
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = "\n".join(log_parts)
-                update_lab_state(session, lab_id, "error", error=f"Link setup failed: {links_failed} link(s)")
+                update_lab_state(session, lab_id, LabState.ERROR.value, error=f"Link setup failed: {links_failed} link(s)")
                 session.commit()
                 logger.error(f"Job {job_id} failed: {links_failed} link(s) failed")
                 return
@@ -927,7 +936,7 @@ async def run_multihost_deploy(
                     await _update_node_placements(session, lab_id, agent.id, node_names)
 
             # Mark job as completed
-            job.status = "completed"
+            job.status = JobStatus.COMPLETED.value
             job.completed_at = datetime.now(timezone.utc)
             job.log_path = "\n".join(log_parts)
 
@@ -961,10 +970,10 @@ async def run_multihost_deploy(
                 job = session.get(models.Job, job_id)
                 lab = session.get(models.Lab, lab_id)
                 if job:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED.value
                     job.completed_at = datetime.now(timezone.utc)
                     job.log_path = f"ERROR: Unexpected error: {e}"
-                    update_lab_state(session, lab_id, "error", error=str(e))
+                    update_lab_state(session, lab_id, LabState.ERROR.value, error=str(e))
                     session.commit()
                     # Dispatch webhook for failed deploy
                     if lab:
@@ -1003,7 +1012,7 @@ async def run_multihost_destroy(
             lab = session.get(models.Lab, lab_id)
             if not lab:
                 logger.error(f"Lab {lab_id} not found in database")
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Lab {lab_id} not found"
                 session.commit()
@@ -1019,11 +1028,11 @@ async def run_multihost_destroy(
             )
 
             # Update job status
-            job.status = "running"
+            job.status = JobStatus.RUNNING.value
             job.started_at = datetime.now(timezone.utc)
             session.commit()
 
-            update_lab_state(session, lab_id, "stopping")
+            update_lab_state(session, lab_id, LabState.STOPPING.value)
 
             # Map host_id to agents
             host_to_agent: dict[str, models.Host] = {}
@@ -1039,10 +1048,10 @@ async def run_multihost_destroy(
             if not host_to_agent:
                 # No agents found, try single-agent destroy as fallback
                 error_msg = "No agents found for multi-host destroy"
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: {error_msg}"
-                update_lab_state(session, lab_id, "error", error=error_msg)
+                update_lab_state(session, lab_id, LabState.ERROR.value, error=error_msg)
                 session.commit()
                 logger.error(f"Job {job_id} failed: {error_msg}")
                 return
@@ -1084,13 +1093,13 @@ async def run_multihost_destroy(
 
             # Update job status
             if all_success:
-                job.status = "completed"
-                update_lab_state(session, lab_id, "stopped")
+                job.status = JobStatus.COMPLETED.value
+                update_lab_state(session, lab_id, LabState.STOPPED.value)
             else:
                 # Use completed_with_warnings for partial failures
                 # This provides visibility that cleanup may be incomplete
                 job.status = "completed_with_warnings"
-                update_lab_state(session, lab_id, "stopped")
+                update_lab_state(session, lab_id, LabState.STOPPED.value)
                 log_parts.append("\nWARNING: Some hosts may have had issues during destroy")
                 log_parts.append("Containers may need manual cleanup on failed hosts.")
 
@@ -1108,10 +1117,10 @@ async def run_multihost_destroy(
             try:
                 job = session.get(models.Job, job_id)
                 if job:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED.value
                     job.completed_at = datetime.now(timezone.utc)
                     job.log_path = f"ERROR: Unexpected error: {e}"
-                    update_lab_state(session, lab_id, "error", error=str(e))
+                    update_lab_state(session, lab_id, LabState.ERROR.value, error=str(e))
                     session.commit()
             except Exception as inner_e:
                 logger.exception(f"Critical error handling job {job_id} failure: {inner_e}")
@@ -1151,7 +1160,7 @@ async def run_node_reconcile(
             lab = session.get(models.Lab, lab_id)
             if not lab:
                 logger.error(f"Lab {lab_id} not found in database")
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Lab {lab_id} not found"
                 session.commit()
@@ -1168,7 +1177,7 @@ async def run_node_reconcile(
             )
 
             if not node_states:
-                job.status = "completed"
+                job.status = JobStatus.COMPLETED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = "No nodes to sync"
                 session.commit()
@@ -1205,17 +1214,30 @@ async def run_node_reconcile(
             # This ensures users see "stopping" or "starting" before "error" if agent lookup fails.
             for ns in node_states:
                 old_state = ns.actual_state
-                if ns.desired_state == "stopped" and ns.actual_state == "running":
-                    ns.actual_state = "stopping"
-                    ns.stopping_started_at = datetime.now(timezone.utc)
-                    ns.error_message = None
-                elif ns.desired_state == "running" and ns.actual_state in ("stopped", "error"):
-                    ns.actual_state = "starting"
-                    ns.starting_started_at = datetime.now(timezone.utc)
-                    ns.error_message = None
-                elif ns.desired_state == "running" and ns.actual_state in ("undeployed", "pending"):
-                    ns.actual_state = "pending"
-                    ns.error_message = None
+                try:
+                    current_actual = NodeActualState(ns.actual_state)
+                    desired = NodeDesiredState(ns.desired_state)
+                    next_state = NodeStateMachine.get_transition_for_desired(current_actual, desired)
+                    if next_state:
+                        ns.actual_state = next_state.value
+                        ns.error_message = None
+                        if next_state == NodeActualState.STOPPING:
+                            ns.stopping_started_at = datetime.now(timezone.utc)
+                        elif next_state == NodeActualState.STARTING:
+                            ns.starting_started_at = datetime.now(timezone.utc)
+                except ValueError:
+                    # Handle legacy state values - fall through to old behavior
+                    if ns.desired_state == NodeDesiredState.STOPPED.value and ns.actual_state == NodeActualState.RUNNING.value:
+                        ns.actual_state = NodeActualState.STOPPING.value
+                        ns.stopping_started_at = datetime.now(timezone.utc)
+                        ns.error_message = None
+                    elif ns.desired_state == NodeDesiredState.RUNNING.value and ns.actual_state in (NodeActualState.STOPPED.value, NodeActualState.ERROR.value):
+                        ns.actual_state = NodeActualState.STARTING.value
+                        ns.starting_started_at = datetime.now(timezone.utc)
+                        ns.error_message = None
+                    elif ns.desired_state == NodeDesiredState.RUNNING.value and ns.actual_state in (NodeActualState.UNDEPLOYED.value, NodeActualState.PENDING.value):
+                        ns.actual_state = NodeActualState.PENDING.value
+                        ns.error_message = None
 
                 # Broadcast transitional state change to WebSocket clients
                 if ns.actual_state != old_state:
@@ -1271,12 +1293,12 @@ async def run_node_reconcile(
             # Fail fast if any explicit placements can't be honored
             if explicit_placement_failures:
                 error_msg = "Cannot deploy - explicit host assignments failed:\n" + "\n".join(explicit_placement_failures)
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = error_msg
                 for ns in node_states:
                     if ns.node_name in [f.split(":")[0] for f in explicit_placement_failures]:
-                        ns.actual_state = "error"
+                        ns.actual_state = NodeActualState.ERROR.value
                         ns.error_message = "Assigned host unavailable"
                 session.commit()
                 logger.error(f"Sync job {job_id} failed: {error_msg}")
@@ -1355,7 +1377,7 @@ async def run_node_reconcile(
                         lab_id=lab_id,
                         user_id=job.user_id,
                         action=f"sync:agent:{other_agent_id}:{','.join(other_node_ids)}",
-                        status="queued",
+                        status=JobStatus.QUEUED.value,
                         parent_job_id=job.id,
                     )
                     session.add(other_job)
@@ -1379,7 +1401,7 @@ async def run_node_reconcile(
                         f"Cannot assign agent for {len(nodes_without_agent)} node(s), marking as error"
                     )
                     for ns in nodes_without_agent:
-                        ns.actual_state = "error"
+                        ns.actual_state = NodeActualState.ERROR.value
                         ns.error_message = "No agent available for explicit host placement"
                     session.commit()
 
@@ -1431,7 +1453,7 @@ async def run_node_reconcile(
                             required_provider=provider,
                         )
             if not agent:
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 if target_agent_id:
                     job.log_path = f"ERROR: Target agent {target_agent_id} is offline or unresponsive"
@@ -1441,14 +1463,14 @@ async def run_node_reconcile(
                     error_msg = "No agent available"
                 # Mark nodes as error
                 for ns in node_states:
-                    ns.actual_state = "error"
+                    ns.actual_state = NodeActualState.ERROR.value
                     ns.error_message = error_msg
                 session.commit()
                 logger.warning(f"Job {job_id} failed: no healthy agent available")
                 return
 
             # Update job with agent assignment
-            job.status = "running"
+            job.status = JobStatus.RUNNING.value
             job.agent_id = agent.id
             job.started_at = datetime.now(timezone.utc)
             session.commit()
@@ -1477,7 +1499,7 @@ async def run_node_reconcile(
             nodes_need_stop = []    # running/stopping -> stopped
 
             for ns in node_states:
-                if ns.desired_state == "running":
+                if ns.desired_state == NodeDesiredState.RUNNING.value:
                     if ns.actual_state in ("undeployed", "pending"):
                         nodes_need_deploy.append(ns)
                     elif ns.actual_state in ("stopped", "error", "starting"):
@@ -1488,7 +1510,7 @@ async def run_node_reconcile(
                         # "starting" is already set earlier (transitional state set before agent lookup)
                         nodes_need_start.append(ns)
                     # If already running, nothing to do
-                elif ns.desired_state == "stopped":
+                elif ns.desired_state == NodeDesiredState.STOPPED.value:
                     if ns.actual_state in ("running", "stopping"):
                         # "stopping" is already set earlier (transitional state set before agent lookup)
                         nodes_need_stop.append(ns)
@@ -1615,7 +1637,7 @@ async def run_node_reconcile(
                         session.query(models.Host)
                         .filter(
                             models.Host.id != agent.id,
-                            models.Host.status == "online",
+                            models.Host.status == HostStatus.ONLINE.value,
                         )
                         .all()
                     )
@@ -1671,11 +1693,11 @@ async def run_node_reconcile(
                 # Get topology from database (source of truth)
                 if not topo_service.has_nodes(lab_id):
                     error_msg = "No topology defined in database"
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED.value
                     job.completed_at = datetime.now(timezone.utc)
                     job.log_path = f"ERROR: {error_msg}"
                     for ns in nodes_need_deploy:
-                        ns.actual_state = "error"
+                        ns.actual_state = NodeActualState.ERROR.value
                         ns.error_message = error_msg
                     session.commit()
                     return
@@ -1809,7 +1831,7 @@ async def run_node_reconcile(
                 if not deployed_node_names:
                     log_parts.append(f"No nodes to deploy on {agent.name}")
                     for ns in nodes_need_deploy:
-                        ns.actual_state = "error"
+                        ns.actual_state = NodeActualState.ERROR.value
                         ns.error_message = "No nodes to deploy"
                     session.commit()
                     nodes_need_deploy = []
@@ -1834,10 +1856,10 @@ async def run_node_reconcile(
                         logger.error(f"Job {job_id}: {error_msg}")
                         log_parts.append(error_msg)
                         for ns in nodes_need_deploy:
-                            ns.actual_state = "error"
+                            ns.actual_state = NodeActualState.ERROR.value
                             ns.error_message = "Deploy validation failed - wrong agent"
                         session.commit()
-                        job.status = "failed"
+                        job.status = JobStatus.FAILED.value
                         job.completed_at = datetime.now(timezone.utc)
                         job.log_path = "\n".join(log_parts)
                         session.commit()
@@ -1858,10 +1880,10 @@ async def run_node_reconcile(
                         logger.error(f"Job {job_id}: {error_msg}")
                         log_parts.append(error_msg)
                         for ns in nodes_need_deploy:
-                            ns.actual_state = "error"
+                            ns.actual_state = NodeActualState.ERROR.value
                             ns.error_message = "Deploy lock conflict"
                         session.commit()
-                        job.status = "failed"
+                        job.status = JobStatus.FAILED.value
                         job.completed_at = datetime.now(timezone.utc)
                         job.log_path = "\n".join(log_parts)
                         session.commit()
@@ -1904,13 +1926,13 @@ async def run_node_reconcile(
                             # We need to stop deployed nodes where desired_state=stopped
                             nodes_to_stop_after_deploy = [
                                 ns for ns in all_states
-                                if ns.desired_state == "stopped" and ns.node_name in deployed_node_names
+                                if ns.desired_state == NodeDesiredState.STOPPED.value and ns.node_name in deployed_node_names
                             ]
 
                             # Mark deployed nodes as running (since clab starts them all)
                             for ns in all_states:
                                 if ns.node_name in deployed_node_names:
-                                    ns.actual_state = "running"
+                                    ns.actual_state = NodeActualState.RUNNING.value
                                     ns.error_message = None
                                     if not ns.boot_started_at:
                                         ns.boot_started_at = datetime.now(timezone.utc)
@@ -1927,12 +1949,12 @@ async def run_node_reconcile(
                                         agent, container_name, "stop"
                                     )
                                     if stop_result.get("success"):
-                                        ns.actual_state = "stopped"
+                                        ns.actual_state = NodeActualState.STOPPED.value
                                         ns.stopping_started_at = None
                                         ns.boot_started_at = None
                                         log_parts.append(f"  {ns.node_name}: stopped")
                                     else:
-                                        ns.actual_state = "error"
+                                        ns.actual_state = NodeActualState.ERROR.value
                                         ns.stopping_started_at = None
                                         ns.error_message = stop_result.get("error") or "Stop failed"
                                         ns.boot_started_at = None
@@ -1944,7 +1966,7 @@ async def run_node_reconcile(
                             error_msg = result.get("error_message", "Deploy failed")
                             log_parts.append(f"Deploy FAILED: {error_msg}")
                             for ns in nodes_need_deploy:
-                                ns.actual_state = "error"
+                                ns.actual_state = NodeActualState.ERROR.value
                                 ns.error_message = error_msg
                             session.commit()
 
@@ -1962,7 +1984,7 @@ async def run_node_reconcile(
                             # Keep nodes in pending state rather than marking as error
                             # Reconciliation will retry when agent becomes available
                             if ns.actual_state not in ("running", "stopped"):
-                                ns.actual_state = "pending"
+                                ns.actual_state = NodeActualState.PENDING.value
                             ns.error_message = error_msg
                         session.commit()
                         logger.warning(f"Deploy in sync job {job_id} failed due to agent unavailability: {e}")
@@ -1970,7 +1992,7 @@ async def run_node_reconcile(
                         error_msg = str(e)
                         log_parts.append(f"Deploy FAILED: {error_msg}")
                         for ns in nodes_need_deploy:
-                            ns.actual_state = "error"
+                            ns.actual_state = NodeActualState.ERROR.value
                             ns.error_message = error_msg
                         session.commit()
                         logger.exception(f"Deploy failed in sync job {job_id}: {e}")
@@ -1991,7 +2013,7 @@ async def run_node_reconcile(
                 if not topo_service.has_nodes(lab_id):
                     error_msg = "No topology defined in database"
                     for ns in nodes_need_start:
-                        ns.actual_state = "error"
+                        ns.actual_state = NodeActualState.ERROR.value
                         ns.starting_started_at = None  # Clear starting timestamp
                         ns.error_message = error_msg
                     session.commit()
@@ -2088,7 +2110,7 @@ async def run_node_reconcile(
                     if not deployed_node_names:
                         log_parts.append(f"No nodes to redeploy on {agent.name}")
                         for ns in nodes_need_start:
-                            ns.actual_state = "error"
+                            ns.actual_state = NodeActualState.ERROR.value
                             ns.starting_started_at = None  # Clear starting timestamp
                             ns.error_message = "No nodes to deploy"
                         session.commit()
@@ -2113,11 +2135,11 @@ async def run_node_reconcile(
                             logger.error(f"Job {job_id}: {error_msg}")
                             log_parts.append(error_msg)
                             for ns in nodes_need_start:
-                                ns.actual_state = "error"
+                                ns.actual_state = NodeActualState.ERROR.value
                                 ns.starting_started_at = None
                                 ns.error_message = "Deploy validation failed - wrong agent"
                             session.commit()
-                            job.status = "failed"
+                            job.status = JobStatus.FAILED.value
                             job.completed_at = datetime.now(timezone.utc)
                             job.log_path = "\n".join(log_parts)
                             session.commit()
@@ -2138,11 +2160,11 @@ async def run_node_reconcile(
                             logger.error(f"Job {job_id}: {error_msg}")
                             log_parts.append(error_msg)
                             for ns in nodes_need_start:
-                                ns.actual_state = "error"
+                                ns.actual_state = NodeActualState.ERROR.value
                                 ns.starting_started_at = None
                                 ns.error_message = "Deploy lock conflict"
                             session.commit()
-                            job.status = "failed"
+                            job.status = JobStatus.FAILED.value
                             job.completed_at = datetime.now(timezone.utc)
                             job.log_path = "\n".join(log_parts)
                             session.commit()
@@ -2184,7 +2206,7 @@ async def run_node_reconcile(
                                 # Only mark deployed nodes as running (not all nodes)
                                 for ns in all_states:
                                     if ns.node_name in deployed_node_names:
-                                        ns.actual_state = "running"
+                                        ns.actual_state = NodeActualState.RUNNING.value
                                         ns.starting_started_at = None  # Clear starting timestamp
                                         ns.error_message = None
                                         if not ns.boot_started_at:
@@ -2194,7 +2216,7 @@ async def run_node_reconcile(
                                 # Now stop deployed nodes that should be stopped
                                 nodes_to_stop_after = [
                                     ns for ns in all_states
-                                    if ns.desired_state == "stopped" and ns.node_name in deployed_node_names
+                                    if ns.desired_state == NodeDesiredState.STOPPED.value and ns.node_name in deployed_node_names
                                 ]
 
                                 if nodes_to_stop_after:
@@ -2207,12 +2229,12 @@ async def run_node_reconcile(
                                             agent, container_name, "stop"
                                         )
                                         if stop_result.get("success"):
-                                            ns.actual_state = "stopped"
+                                            ns.actual_state = NodeActualState.STOPPED.value
                                             ns.stopping_started_at = None
                                             ns.boot_started_at = None
                                             log_parts.append(f"  {ns.node_name}: stopped")
                                         else:
-                                            ns.actual_state = "error"
+                                            ns.actual_state = NodeActualState.ERROR.value
                                             ns.stopping_started_at = None
                                             ns.error_message = stop_result.get("error") or "Stop failed"
                                             ns.boot_started_at = None
@@ -2221,7 +2243,7 @@ async def run_node_reconcile(
                                 error_msg = result.get("error_message", "Redeploy failed")
                                 log_parts.append(f"Redeploy FAILED: {error_msg}")
                                 for ns in nodes_need_start:
-                                    ns.actual_state = "error"
+                                    ns.actual_state = NodeActualState.ERROR.value
                                     ns.starting_started_at = None  # Clear starting timestamp
                                     ns.error_message = error_msg
 
@@ -2245,7 +2267,7 @@ async def run_node_reconcile(
                             error_msg = str(e)
                             log_parts.append(f"Redeploy FAILED: {error_msg}")
                             for ns in nodes_need_start:
-                                ns.actual_state = "error"
+                                ns.actual_state = NodeActualState.ERROR.value
                                 ns.starting_started_at = None  # Clear starting timestamp
                                 ns.error_message = error_msg
                             logger.exception(f"Redeploy failed in sync job {job_id}: {e}")
@@ -2295,7 +2317,7 @@ async def run_node_reconcile(
                                     agent, container_name, "stop"
                                 )
                         if result.get("success"):
-                            ns.actual_state = "stopped"
+                            ns.actual_state = NodeActualState.STOPPED.value
                             ns.stopping_started_at = None
                             ns.error_message = None
                             ns.boot_started_at = None
@@ -2315,7 +2337,7 @@ async def run_node_reconcile(
                                 name=f"broadcast:stopped:{lab_id}:{ns.node_id}"
                             )
                         else:
-                            ns.actual_state = "error"
+                            ns.actual_state = NodeActualState.ERROR.value
                             ns.stopping_started_at = None
                             ns.error_message = result.get("error") or "Stop failed"
                             ns.boot_started_at = None
@@ -2342,7 +2364,7 @@ async def run_node_reconcile(
                         log_parts.append(f"  {ns.node_name}: FAILED (transient) - {error_msg}")
                         logger.warning(f"Stop {ns.node_name} in job {job_id} failed due to agent unavailability")
                     except Exception as e:
-                        ns.actual_state = "error"
+                        ns.actual_state = NodeActualState.ERROR.value
                         ns.stopping_started_at = None
                         ns.error_message = str(e)
                         ns.boot_started_at = None
@@ -2370,10 +2392,10 @@ async def run_node_reconcile(
             await _create_cross_host_links_if_ready(session, lab_id, log_parts)
 
             # Check if any nodes are in error state
-            error_count = sum(1 for ns in node_states if ns.actual_state == "error")
+            error_count = sum(1 for ns in node_states if ns.actual_state == NodeActualState.ERROR.value)
 
             if error_count > 0:
-                job.status = "failed"
+                job.status = JobStatus.FAILED.value
                 log_parts.append(f"\nCompleted with {error_count} error(s)")
                 # Broadcast job failed
                 await _broadcast_job_progress(
@@ -2381,7 +2403,7 @@ async def run_node_reconcile(
                     error_message=f"Node sync failed: {error_count} error(s)"
                 )
             else:
-                job.status = "completed"
+                job.status = JobStatus.COMPLETED.value
                 log_parts.append("\nAll nodes synced successfully")
                 # Broadcast job completed
                 await _broadcast_job_progress(
@@ -2400,7 +2422,7 @@ async def run_node_reconcile(
             try:
                 job = session.get(models.Job, job_id)
                 if job:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED.value
                     job.completed_at = datetime.now(timezone.utc)
                     job.log_path = f"ERROR: Unexpected error: {e}"
                     session.commit()
@@ -2435,7 +2457,7 @@ async def _create_cross_host_links_if_ready(
         .filter(
             models.LinkState.lab_id == lab_id,
             models.LinkState.is_cross_host == True,
-            models.LinkState.actual_state != "up",
+            models.LinkState.actual_state != LinkActualState.UP.value,
         )
         .count()
     )
@@ -2501,7 +2523,7 @@ async def _create_cross_host_links_if_ready(
     )
 
     # Build host_to_agent map with all online agents
-    all_agents = session.query(models.Host).filter(models.Host.status == "online").all()
+    all_agents = session.query(models.Host).filter(models.Host.status == HostStatus.ONLINE.value).all()
     host_to_agent: dict[str, models.Host] = {}
     for agent in all_agents:
         if agent_client.is_agent_online(agent):

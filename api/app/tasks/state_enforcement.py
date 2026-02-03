@@ -28,6 +28,13 @@ from app.config import settings
 from app.db import SessionLocal, get_redis, get_session
 from app import agent_client
 from app.utils.async_tasks import safe_create_task
+from app.state import (
+    JobStatus,
+    LabState,
+    NodeActualState,
+    NodeDesiredState,
+)
+from app.services.state_machine import NodeStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +160,7 @@ def _has_active_job(session: Session, lab_id: str, node_name: str | None = None)
     """Check if there's an active job for this lab/node."""
     query = session.query(models.Job).filter(
         models.Job.lab_id == lab_id,
-        models.Job.status.in_(["queued", "running"]),
+        models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
     )
 
     if node_name:
@@ -253,22 +260,24 @@ async def enforce_node_state(
     actual = node_state.actual_state
     now = datetime.now(timezone.utc)
 
-    # Determine what action is needed
-    if desired == "running" and actual in ("stopped", "undeployed", "exited"):
+    # Determine what action is needed using state machine
+    action = NodeStateMachine.get_enforcement_action(
+        NodeActualState(actual) if actual in [s.value for s in NodeActualState] else NodeActualState.ERROR,
+        NodeDesiredState(desired) if desired in [s.value for s in NodeDesiredState] else NodeDesiredState.STOPPED,
+    )
+
+    # Handle special case: pending node waiting for agent
+    if desired == NodeDesiredState.RUNNING.value and actual == NodeActualState.PENDING.value and node_state.error_message == "Waiting for agent":
         action = "start"
-    elif desired == "running" and actual == "pending" and node_state.error_message == "Waiting for agent":
-        # Node was queued for deploy but agent wasn't available - retry now
-        action = "start"
-    elif desired == "running" and actual == "error":
-        # Auto-restart crashed nodes if enabled
+
+    # Handle special case: auto-restart disabled for error state
+    if action == "start" and actual == NodeActualState.ERROR.value:
         if not settings.state_enforcement_auto_restart_enabled:
             logger.debug(f"Auto-restart disabled for {node_name}, skipping")
             return False
-        action = "start"
-    elif desired == "stopped" and actual == "running":
-        action = "stop"
-    else:
-        # No clear action for this mismatch (e.g., error states)
+
+    if not action:
+        # No clear action for this mismatch
         logger.debug(
             f"No enforcement action for {node_name}: desired={desired}, actual={actual}"
         )
@@ -280,7 +289,7 @@ async def enforce_node_state(
         # If max retries reached and not yet marked as failed, mark it now
         if "max retries" in reason and not node_state.enforcement_failed_at:
             node_state.enforcement_failed_at = now
-            node_state.actual_state = "error"
+            node_state.actual_state = NodeActualState.ERROR.value
             node_state.error_message = (
                 f"State enforcement failed after {node_state.enforcement_attempts} attempts. "
                 f"Manual intervention required."
@@ -312,7 +321,7 @@ async def enforce_node_state(
     # Check for lab-wide active jobs (deploy/destroy)
     lab_job = session.query(models.Job).filter(
         models.Job.lab_id == lab_id,
-        models.Job.status.in_(["queued", "running"]),
+        models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
         models.Job.action.in_(["up", "down"]),
     ).first()
     if lab_job:
@@ -425,7 +434,7 @@ async def enforce_lab_states():
                 .filter(
                     models.NodeState.desired_state != models.NodeState.actual_state,
                     # Only consider labs that are in a stable state (not transitioning)
-                    models.Lab.state.in_(["running", "stopped", "error"]),
+                    models.Lab.state.in_([LabState.RUNNING.value, LabState.STOPPED.value, LabState.ERROR.value]),
                 )
                 .all()
             )
