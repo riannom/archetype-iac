@@ -1959,12 +1959,9 @@ async def setup_cross_host_link(
     if not agent_supports_vxlan(agent_b):
         return {"success": False, "error": f"Agent {agent_b.id} does not support VXLAN"}
 
-    # Extract agent IP addresses from their addresses for VXLAN tunnel endpoints
-    # Format is usually "host:port" or "http://host:port"
-    addr_a = agent_a.address.replace("http://", "").replace("https://", "")
-    addr_b = agent_b.address.replace("http://", "").replace("https://", "")
-    agent_ip_a = addr_a.split(":")[0]
-    agent_ip_b = addr_b.split(":")[0]
+    # Extract and resolve agent IP addresses (handles hostnames like "local-agent")
+    agent_ip_a = resolve_agent_ip(agent_a.address)
+    agent_ip_b = resolve_agent_ip(agent_b.address)
 
     logger.info(f"Setting up cross-host link {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
 
