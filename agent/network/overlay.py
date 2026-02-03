@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +38,20 @@ from agent.config import settings
 
 
 logger = logging.getLogger(__name__)
+
+# Container name prefix (must match docker.py)
+CONTAINER_PREFIX = "archetype"
+
+
+def _build_container_name(lab_id: str, node_name: str) -> str:
+    """Build full Docker container name from lab_id and node_name.
+
+    This must match the naming convention in DockerProvider._container_name().
+    Format: archetype-{safe_lab_id[:20]}-{safe_node_name}
+    """
+    safe_lab_id = re.sub(r"[^a-zA-Z0-9_-]", "", lab_id)[:20]
+    safe_node = re.sub(r"[^a-zA-Z0-9_-]", "", node_name)
+    return f"{CONTAINER_PREFIX}-{safe_lab_id}-{safe_node}"
 
 # VXLAN default port
 VXLAN_PORT = 4789
@@ -682,6 +697,15 @@ class OverlayManager:
         try:
             await self._ensure_ovs_bridge()
 
+            # Build full container name if only short name was provided.
+            if not container_name.startswith(CONTAINER_PREFIX + "-"):
+                full_container_name = _build_container_name(bridge.lab_id, container_name)
+                logger.debug(
+                    f"Expanded container name: {container_name} -> {full_container_name}"
+                )
+            else:
+                full_container_name = container_name
+
             # Prefer using pre-provisioned OVS ports from the Docker OVS plugin.
             # This preserves interfaces created before boot (critical for cEOS).
             try:
@@ -689,7 +713,7 @@ class OverlayManager:
 
                 plugin = get_docker_ovs_plugin()
                 host_veth = await plugin.get_endpoint_host_veth(
-                    bridge.lab_id, container_name, interface_name
+                    bridge.lab_id, full_container_name, interface_name
                 )
                 if host_veth:
                     code, _, stderr = await self._ovs_vsctl(
@@ -702,18 +726,18 @@ class OverlayManager:
 
                     logger.info(
                         f"Attached existing OVS port {host_veth} for "
-                        f"{container_name}:{interface_name} to VLAN {bridge.vlan_tag}"
+                        f"{full_container_name}:{interface_name} to VLAN {bridge.vlan_tag}"
                     )
                     return True
             except Exception as e:
                 logger.warning(
-                    f"OVS plugin attach failed for {container_name}:{interface_name}, "
+                    f"OVS plugin attach failed for {full_container_name}:{interface_name}, "
                     f"falling back to veth attach: {e}"
                 )
 
             # Get container PID for network namespace (wrapped to avoid blocking)
             def _sync_get_container_info():
-                container = self.docker.containers.get(container_name)
+                container = self.docker.containers.get(full_container_name)
                 if container.status != "running":
                     return None, "not running"
                 pid = container.attrs["State"]["Pid"]
@@ -723,7 +747,7 @@ class OverlayManager:
 
             pid, error = await asyncio.to_thread(_sync_get_container_info)
             if pid is None:
-                logger.error(f"Container {container_name}: {error}")
+                logger.error(f"Container {full_container_name}: {error}")
                 return False
 
             # Create unique veth names with random suffix to ensure unique MACs
@@ -804,11 +828,11 @@ class OverlayManager:
             # Track the veth pair
             bridge.veth_pairs.append((veth_host, interface_name))
 
-            logger.info(f"Attached container {container_name} to OVS {self._bridge_name} via {interface_name} (VLAN {bridge.vlan_tag})")
+            logger.info(f"Attached container {full_container_name} to OVS {self._bridge_name} via {interface_name} (VLAN {bridge.vlan_tag})")
             return True
 
         except NotFound:
-            logger.error(f"Container {container_name} not found")
+            logger.error(f"Container {full_container_name} not found")
             return False
         except Exception as e:
             logger.error(f"Error attaching container to bridge: {e}")
@@ -845,6 +869,17 @@ class OverlayManager:
         try:
             await self._ensure_ovs_bridge()
 
+            # Build full container name if only short name was provided.
+            # The API may send short names (e.g., "eos_1") but Docker containers
+            # use full names (e.g., "archetype-{lab_id}-eos_1").
+            if not container_name.startswith(CONTAINER_PREFIX + "-"):
+                full_container_name = _build_container_name(lab_id, container_name)
+                logger.debug(
+                    f"Expanded container name: {container_name} -> {full_container_name}"
+                )
+            else:
+                full_container_name = container_name
+
             # Prefer using pre-provisioned OVS ports from the Docker OVS plugin.
             # This preserves interfaces created before boot (critical for cEOS).
             try:
@@ -852,7 +887,7 @@ class OverlayManager:
 
                 plugin = get_docker_ovs_plugin()
                 host_veth = await plugin.get_endpoint_host_veth(
-                    lab_id, container_name, interface_name
+                    lab_id, full_container_name, interface_name
                 )
                 if host_veth:
                     code, _, stderr = await self._ovs_vsctl(
@@ -866,7 +901,7 @@ class OverlayManager:
                     # Update the docker plugin's in-memory state to stay in sync
                     # This ensures get_endpoint_vlan() returns the correct value
                     await plugin.set_endpoint_vlan(
-                        lab_id, container_name, interface_name, vlan_tag
+                        lab_id, full_container_name, interface_name, vlan_tag
                     )
 
                     # Track link -> VTEP association for reference counting
@@ -877,19 +912,19 @@ class OverlayManager:
                         )
 
                     logger.info(
-                        f"Attached OVS port {host_veth} for {container_name}:{interface_name} "
+                        f"Attached OVS port {host_veth} for {full_container_name}:{interface_name} "
                         f"with VLAN {vlan_tag} (trunk VTEP model)"
                     )
                     return True
             except Exception as e:
                 logger.warning(
-                    f"OVS plugin attach failed for {container_name}:{interface_name}, "
+                    f"OVS plugin attach failed for {full_container_name}:{interface_name}, "
                     f"falling back to veth attach: {e}"
                 )
 
             # Fallback: Create new veth pair and attach to OVS
             def _sync_get_container_info():
-                container = self.docker.containers.get(container_name)
+                container = self.docker.containers.get(full_container_name)
                 if container.status != "running":
                     return None, "not running"
                 pid = container.attrs["State"]["Pid"]
@@ -899,7 +934,7 @@ class OverlayManager:
 
             pid, error = await asyncio.to_thread(_sync_get_container_info)
             if pid is None:
-                logger.error(f"Container {container_name}: {error}")
+                logger.error(f"Container {full_container_name}: {error}")
                 return False
 
             # Create unique veth names
@@ -967,13 +1002,13 @@ class OverlayManager:
                 )
 
             logger.info(
-                f"Attached {container_name}:{interface_name} to OVS "
+                f"Attached {full_container_name}:{interface_name} to OVS "
                 f"via {veth_host} with VLAN {vlan_tag} (trunk VTEP model)"
             )
             return True
 
         except NotFound:
-            logger.error(f"Container {container_name} not found")
+            logger.error(f"Container {full_container_name} not found")
             return False
         except Exception as e:
             logger.error(f"Error attaching container interface: {e}")
