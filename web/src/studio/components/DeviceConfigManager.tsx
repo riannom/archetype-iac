@@ -3,6 +3,7 @@ import { DeviceModel, ImageLibraryEntry } from '../types';
 import DeviceConfigCard from './DeviceConfigCard';
 import DeviceConfigPanel from './DeviceConfigPanel';
 import FilterChip from './FilterChip';
+import { usePersistedState, usePersistedSet } from '../hooks/usePersistedState';
 
 interface CustomDevice {
   id: string;
@@ -26,10 +27,10 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
   onRemoveCustomDevice,
   onRefresh,
 }) => {
-  // Device filters
+  // Device filters (persisted to localStorage)
   const [deviceSearch, setDeviceSearch] = useState('');
-  const [selectedVendors, setSelectedVendors] = useState<Set<string>>(new Set());
-  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
+  const [selectedVendors, toggleVendor, clearVendors] = usePersistedSet('archetype:filters:deviceConfig:vendors');
+  const [selectedTypes, toggleType, clearTypes] = usePersistedSet('archetype:filters:deviceConfig:types');
 
   // Selected device for config panel
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
@@ -136,8 +137,8 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
 
   const clearFilters = () => {
     setDeviceSearch('');
-    setSelectedVendors(new Set());
-    setSelectedTypes(new Set());
+    clearVendors();
+    clearTypes();
   };
 
   const hasFilters =
@@ -236,37 +237,21 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
               {/* Filter chips */}
               <div className="flex flex-wrap gap-1.5">
                 {/* Type filters */}
-                {deviceTypes.slice(0, 3).map((type) => (
+                {deviceTypes.map((type) => (
                   <FilterChip
                     key={type}
                     label={type}
                     isActive={selectedTypes.has(type)}
-                    onClick={() => {
-                      const next = new Set(selectedTypes);
-                      if (next.has(type)) {
-                        next.delete(type);
-                      } else {
-                        next.add(type);
-                      }
-                      setSelectedTypes(next);
-                    }}
+                    onClick={() => toggleType(type)}
                   />
                 ))}
-                {/* Vendor filters */}
-                {vendors.slice(0, 4).map((vendor) => (
+                {/* Vendor filters - show all vendors dynamically */}
+                {vendors.map((vendor) => (
                   <FilterChip
                     key={vendor}
                     label={vendor}
                     isActive={selectedVendors.has(vendor)}
-                    onClick={() => {
-                      const next = new Set(selectedVendors);
-                      if (next.has(vendor)) {
-                        next.delete(vendor);
-                      } else {
-                        next.add(vendor);
-                      }
-                      setSelectedVendors(next);
-                    }}
+                    onClick={() => toggleVendor(vendor)}
                   />
                 ))}
                 {hasFilters && (
