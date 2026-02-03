@@ -105,3 +105,25 @@ groups:
         annotations:
           summary: "Multiple labs in error state"
           description: "{{ $value }} labs are in error state."
+
+  - name: archetype-database
+    rules:
+      # Alert when idle-in-transaction connections accumulate (potential leak)
+      - alert: IdleInTransactionConnections
+        expr: archetype_db_idle_in_transaction > 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Idle-in-transaction database connections detected"
+          description: "{{ $value }} connections are stuck idle in transaction for over 2 minutes. This may indicate a connection leak that could cause API unresponsiveness."
+
+      # Critical: Many idle-in-transaction connections
+      - alert: IdleInTransactionConnectionsCritical
+        expr: archetype_db_idle_in_transaction > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical: Multiple idle-in-transaction connections"
+          description: "{{ $value }} connections are stuck idle in transaction. API may become unresponsive. PostgreSQL will auto-terminate after 5 minutes."

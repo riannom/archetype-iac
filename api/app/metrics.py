@@ -141,6 +141,19 @@ if PROMETHEUS_AVAILABLE:
         "Number of labs in running state",
     )
 
+    # --- Database Metrics ---
+
+    db_connections_idle_in_transaction = Gauge(
+        "archetype_db_idle_in_transaction",
+        "Number of database connections stuck idle in transaction",
+    )
+
+    db_connections_total = Gauge(
+        "archetype_db_connections_total",
+        "Total active database connections",
+        ["state"],
+    )
+
 else:
     # Dummy implementations when prometheus_client is not installed
     class DummyMetric:
@@ -171,6 +184,8 @@ else:
     enforcement_pending = DummyMetric()
     labs_total = DummyMetric()
     labs_active = DummyMetric()
+    db_connections_idle_in_transaction = DummyMetric()
+    db_connections_total = DummyMetric()
 
 
 def update_node_metrics(session: "Session") -> None:
@@ -363,6 +378,49 @@ def update_enforcement_metrics(session: "Session") -> None:
         logger.warning(f"Error updating enforcement metrics: {e}")
 
 
+def update_db_metrics(session: "Session") -> None:
+    """Update database connection health metrics.
+
+    Queries pg_stat_activity to track connection states, especially
+    idle-in-transaction connections which can indicate connection leaks.
+    """
+    if not PROMETHEUS_AVAILABLE:
+        return
+
+    try:
+        from sqlalchemy import text
+
+        # Query PostgreSQL for connection states
+        result = session.execute(text("""
+            SELECT state, count(*)
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+            GROUP BY state
+        """))
+
+        db_connections_total._metrics.clear()
+        idle_in_transaction_count = 0
+
+        for row in result:
+            state, count = row
+            if state:
+                db_connections_total.labels(state=state).set(count)
+                if state == "idle in transaction":
+                    idle_in_transaction_count = count
+
+        db_connections_idle_in_transaction.set(idle_in_transaction_count)
+
+        # Log warning if idle-in-transaction connections are accumulating
+        if idle_in_transaction_count > 2:
+            logger.warning(
+                f"Database health: {idle_in_transaction_count} idle-in-transaction "
+                "connections detected - possible connection leak"
+            )
+
+    except Exception as e:
+        logger.warning(f"Error updating db metrics: {e}")
+
+
 def update_all_metrics(session: "Session") -> None:
     """Update all metrics from database.
 
@@ -373,6 +431,7 @@ def update_all_metrics(session: "Session") -> None:
     update_job_metrics(session)
     update_lab_metrics(session)
     update_enforcement_metrics(session)
+    update_db_metrics(session)
 
 
 def get_metrics() -> tuple[bytes, str]:
