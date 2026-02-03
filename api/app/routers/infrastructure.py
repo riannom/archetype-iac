@@ -18,6 +18,11 @@ from app.schemas import (
     MtuTestRequest,
     MtuTestResponse,
     MtuTestAllResponse,
+    InterfaceDetailsResponseOut,
+    SetMtuRequestIn,
+    SetMtuResponseOut,
+    AgentNetworkConfigOut,
+    AgentNetworkConfigUpdate,
 )
 
 
@@ -376,3 +381,252 @@ async def test_all_agent_pairs(
         failed=failed,
         results=results,
     )
+
+
+# =============================================================================
+# Agent Interface Configuration Endpoints
+# =============================================================================
+
+
+@router.get("/agents/{agent_id}/interfaces", response_model=InterfaceDetailsResponseOut)
+async def get_agent_interfaces(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> InterfaceDetailsResponseOut:
+    """Get detailed interface information from an agent.
+
+    Returns all interfaces with their MTU, identifies the default route
+    interface, and detects which network manager is in use on the agent.
+    """
+    from app import agent_client
+
+    # Get the agent
+    agent = database.get(models.Host, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if not agent_client.is_agent_online(agent):
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+    try:
+        result = await agent_client.get_agent_interface_details(agent)
+        return InterfaceDetailsResponseOut(**result)
+    except Exception as e:
+        logger.error(f"Failed to get interfaces from agent {agent_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agents/{agent_id}/interfaces/{interface_name}/mtu", response_model=SetMtuResponseOut)
+async def set_agent_interface_mtu(
+    agent_id: str,
+    interface_name: str,
+    request: SetMtuRequestIn,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> SetMtuResponseOut:
+    """Set MTU on an agent's interface.
+
+    Requires admin access. Applies the MTU change and optionally persists
+    it across reboots (based on detected network manager).
+    """
+    from app import agent_client
+
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Get the agent
+    agent = database.get(models.Host, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if not agent_client.is_agent_online(agent):
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+    try:
+        result = await agent_client.set_agent_interface_mtu(
+            agent, interface_name, request.mtu, request.persist
+        )
+        return SetMtuResponseOut(**result)
+    except Exception as e:
+        logger.error(f"Failed to set MTU on agent {agent_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/agents/{agent_id}/network-config", response_model=AgentNetworkConfigOut)
+async def get_agent_network_config(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> AgentNetworkConfigOut:
+    """Get the network configuration for an agent.
+
+    Returns the configured data plane interface and desired MTU, along
+    with the last known actual MTU and sync status.
+    """
+    # Get the agent
+    agent = database.get(models.Host, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get or create network config
+    config = (
+        database.query(models.AgentNetworkConfig)
+        .filter(models.AgentNetworkConfig.host_id == agent_id)
+        .first()
+    )
+
+    if not config:
+        # Create default config
+        import uuid
+        config = models.AgentNetworkConfig(
+            id=str(uuid.uuid4()),
+            host_id=agent_id,
+        )
+        database.add(config)
+        database.commit()
+        database.refresh(config)
+
+    return AgentNetworkConfigOut(
+        id=config.id,
+        host_id=config.host_id,
+        host_name=agent.name,
+        data_plane_interface=config.data_plane_interface,
+        desired_mtu=config.desired_mtu,
+        current_mtu=config.current_mtu,
+        last_sync_at=config.last_sync_at,
+        sync_status=config.sync_status,
+        sync_error=config.sync_error,
+    )
+
+
+@router.patch("/agents/{agent_id}/network-config", response_model=AgentNetworkConfigOut)
+async def update_agent_network_config(
+    agent_id: str,
+    update: AgentNetworkConfigUpdate,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> AgentNetworkConfigOut:
+    """Update the network configuration for an agent.
+
+    Requires admin access. Optionally applies the MTU change immediately
+    if the agent is online.
+    """
+    from app import agent_client
+
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Get the agent
+    agent = database.get(models.Host, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get or create network config
+    config = (
+        database.query(models.AgentNetworkConfig)
+        .filter(models.AgentNetworkConfig.host_id == agent_id)
+        .first()
+    )
+
+    if not config:
+        import uuid
+        config = models.AgentNetworkConfig(
+            id=str(uuid.uuid4()),
+            host_id=agent_id,
+        )
+        database.add(config)
+
+    # Apply updates
+    if update.data_plane_interface is not None:
+        config.data_plane_interface = update.data_plane_interface
+    if update.desired_mtu is not None:
+        config.desired_mtu = update.desired_mtu
+
+    database.commit()
+    database.refresh(config)
+
+    # If agent is online and we have an interface configured, try to sync
+    if config.data_plane_interface and agent_client.is_agent_online(agent):
+        try:
+            result = await agent_client.set_agent_interface_mtu(
+                agent, config.data_plane_interface, config.desired_mtu, persist=True
+            )
+            config.last_sync_at = datetime.now(timezone.utc)
+            if result.get("success"):
+                config.current_mtu = result.get("new_mtu")
+                config.sync_status = "synced"
+                config.sync_error = None
+            else:
+                config.sync_status = "error"
+                config.sync_error = result.get("error")
+            database.commit()
+            database.refresh(config)
+        except Exception as e:
+            logger.warning(f"Failed to sync MTU to agent {agent_id}: {e}")
+            config.sync_status = "error"
+            config.sync_error = str(e)
+            database.commit()
+            database.refresh(config)
+
+    return AgentNetworkConfigOut(
+        id=config.id,
+        host_id=config.host_id,
+        host_name=agent.name,
+        data_plane_interface=config.data_plane_interface,
+        desired_mtu=config.desired_mtu,
+        current_mtu=config.current_mtu,
+        last_sync_at=config.last_sync_at,
+        sync_status=config.sync_status,
+        sync_error=config.sync_error,
+    )
+
+
+@router.get("/network-configs", response_model=list[AgentNetworkConfigOut])
+async def list_agent_network_configs(
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> list[AgentNetworkConfigOut]:
+    """List network configurations for all agents.
+
+    Returns the configured data plane interface and desired MTU for all
+    agents, along with sync status information.
+    """
+    # Get all agents
+    agents = database.query(models.Host).all()
+    agent_map = {a.id: a for a in agents}
+
+    # Get all network configs
+    configs = database.query(models.AgentNetworkConfig).all()
+    config_map = {c.host_id: c for c in configs}
+
+    result = []
+    for agent in agents:
+        config = config_map.get(agent.id)
+        if config:
+            result.append(AgentNetworkConfigOut(
+                id=config.id,
+                host_id=config.host_id,
+                host_name=agent.name,
+                data_plane_interface=config.data_plane_interface,
+                desired_mtu=config.desired_mtu,
+                current_mtu=config.current_mtu,
+                last_sync_at=config.last_sync_at,
+                sync_status=config.sync_status,
+                sync_error=config.sync_error,
+            ))
+        else:
+            # Return a placeholder for agents without config
+            result.append(AgentNetworkConfigOut(
+                id="",
+                host_id=agent.id,
+                host_name=agent.name,
+                data_plane_interface=None,
+                desired_mtu=9000,
+                current_mtu=None,
+                last_sync_at=None,
+                sync_status="unconfigured",
+                sync_error=None,
+            ))
+
+    return result

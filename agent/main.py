@@ -129,6 +129,11 @@ from agent.schemas import (
     PortRestoreRequest,
     PortRestoreResponse,
     PortVlanResponse,
+    # Host interface configuration
+    InterfaceDetail,
+    InterfaceDetailsResponse,
+    SetMtuRequest,
+    SetMtuResponse,
 )
 from agent.version import __version__, get_commit
 from agent.updater import (
@@ -3739,6 +3744,170 @@ async def list_interfaces() -> dict:
         return {"interfaces": interfaces}
 
     return await asyncio.to_thread(_sync_list_interfaces)
+
+
+@app.get("/interfaces/details")
+async def get_interface_details() -> InterfaceDetailsResponse:
+    """Get detailed interface info including MTU and default route detection.
+
+    Returns all physical interfaces with their current MTU, identifies the
+    default route interface, and detects which network manager is in use.
+    """
+    import json as json_module
+    import subprocess
+
+    from agent.network.interface_config import (
+        detect_network_manager,
+        get_default_route_interface,
+        get_interface_mtu,
+        is_physical_interface,
+    )
+
+    def _sync_get_details() -> InterfaceDetailsResponse:
+        interfaces: list[InterfaceDetail] = []
+        default_route_iface = get_default_route_interface()
+        network_mgr = detect_network_manager()
+
+        try:
+            # Get list of all interfaces
+            result = subprocess.run(
+                ["ip", "-j", "link", "show"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                link_data = json_module.loads(result.stdout)
+
+                for link in link_data:
+                    name = link.get("ifname", "")
+                    if not name or name == "lo":
+                        continue
+
+                    # Check if physical
+                    is_physical = is_physical_interface(name)
+
+                    # Get MTU
+                    mtu = get_interface_mtu(name) or link.get("mtu", 1500)
+
+                    # Get state
+                    operstate = link.get("operstate", "unknown")
+
+                    # Get MAC address
+                    mac = link.get("address")
+
+                    # Get IP addresses
+                    addr_result = subprocess.run(
+                        ["ip", "-j", "addr", "show", name],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    ipv4_addresses = []
+                    if addr_result.returncode == 0:
+                        addr_data = json_module.loads(addr_result.stdout)
+                        for iface in addr_data:
+                            for addr_info in iface.get("addr_info", []):
+                                if addr_info.get("family") == "inet":
+                                    ipv4_addresses.append(
+                                        f"{addr_info['local']}/{addr_info.get('prefixlen', 24)}"
+                                    )
+
+                    interfaces.append(InterfaceDetail(
+                        name=name,
+                        mtu=mtu,
+                        is_physical=is_physical,
+                        is_default_route=(name == default_route_iface),
+                        mac=mac,
+                        ipv4_addresses=ipv4_addresses,
+                        state=operstate,
+                    ))
+
+        except Exception as e:
+            logger.error(f"Error getting interface details: {e}")
+
+        return InterfaceDetailsResponse(
+            interfaces=interfaces,
+            default_route_interface=default_route_iface,
+            network_manager=network_mgr,
+        )
+
+    return await asyncio.to_thread(_sync_get_details)
+
+
+@app.post("/interfaces/{interface_name}/mtu")
+async def set_interface_mtu(interface_name: str, request: SetMtuRequest) -> SetMtuResponse:
+    """Set MTU on a physical interface with optional persistence.
+
+    Args:
+        interface_name: Name of the interface to configure
+        request: MTU value and persistence settings
+
+    Returns:
+        Result of the MTU configuration operation
+    """
+    from agent.network.interface_config import (
+        detect_network_manager,
+        get_interface_mtu,
+        is_physical_interface,
+        set_mtu_persistent,
+        set_mtu_runtime,
+    )
+
+    # Validate interface exists
+    previous_mtu = get_interface_mtu(interface_name)
+    if previous_mtu is None:
+        return SetMtuResponse(
+            success=False,
+            interface=interface_name,
+            previous_mtu=0,
+            new_mtu=request.mtu,
+            error=f"Interface {interface_name} not found",
+        )
+
+    # Warn if not a physical interface
+    if not is_physical_interface(interface_name):
+        logger.warning(f"Setting MTU on non-physical interface {interface_name}")
+
+    network_mgr = detect_network_manager()
+
+    # Apply runtime MTU first
+    success, error = await set_mtu_runtime(interface_name, request.mtu)
+    if not success:
+        return SetMtuResponse(
+            success=False,
+            interface=interface_name,
+            previous_mtu=previous_mtu,
+            new_mtu=request.mtu,
+            network_manager=network_mgr,
+            error=error,
+        )
+
+    # Persist if requested
+    persisted = False
+    persist_error = None
+    if request.persist:
+        if network_mgr == "unknown":
+            persist_error = "Cannot persist: unknown network manager"
+            logger.warning(f"MTU set on {interface_name} but persistence unavailable: {persist_error}")
+        else:
+            persisted, persist_error = await set_mtu_persistent(interface_name, request.mtu, network_mgr)
+            if not persisted:
+                logger.warning(f"MTU set on {interface_name} but persistence failed: {persist_error}")
+
+    # Verify the MTU was applied
+    new_mtu = get_interface_mtu(interface_name) or request.mtu
+
+    return SetMtuResponse(
+        success=True,
+        interface=interface_name,
+        previous_mtu=previous_mtu,
+        new_mtu=new_mtu,
+        persisted=persisted,
+        network_manager=network_mgr,
+        error=persist_error if not persisted and request.persist else None,
+    )
 
 
 @app.get("/bridges")

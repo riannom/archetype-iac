@@ -746,3 +746,37 @@ class AgentLink(Base):
     latency_ms: Mapped[float | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AgentNetworkConfig(Base):
+    """Per-agent network interface configuration for MTU management.
+
+    Stores the configured data plane interface and desired MTU for each agent,
+    along with sync status to track whether the agent's actual configuration
+    matches the desired state.
+
+    Sync statuses:
+    - unconfigured: No interface configured yet
+    - synced: Agent's MTU matches desired MTU
+    - mismatch: Agent's MTU differs from desired (needs sync)
+    - error: Last sync attempt failed
+    - unknown: Unable to determine current state
+    """
+    __tablename__ = "agent_network_configs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), unique=True, index=True)
+    # The physical interface to configure (e.g., "eth0", "ens192")
+    data_plane_interface: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # User-desired MTU (what we want the interface set to)
+    desired_mtu: Mapped[int] = mapped_column(default=9000)
+    # Last known actual MTU on the interface
+    current_mtu: Mapped[int | None] = mapped_column(nullable=True)
+    # When we last synced/checked the MTU
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Sync status: synced, mismatch, error, unknown, unconfigured
+    sync_status: Mapped[str] = mapped_column(String(20), default="unconfigured")
+    # Error message if sync failed
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

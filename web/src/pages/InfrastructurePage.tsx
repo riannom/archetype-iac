@@ -74,6 +74,34 @@ interface MtuTestAllResponse {
   results: MtuTestResponse[];
 }
 
+interface InterfaceDetail {
+  name: string;
+  mtu: number;
+  is_physical: boolean;
+  is_default_route: boolean;
+  mac: string | null;
+  ipv4_addresses: string[];
+  state: string;
+}
+
+interface InterfaceDetailsResponse {
+  interfaces: InterfaceDetail[];
+  default_route_interface: string | null;
+  network_manager: string | null;
+}
+
+interface AgentNetworkConfig {
+  id: string;
+  host_id: string;
+  host_name: string | null;
+  data_plane_interface: string | null;
+  desired_mtu: number;
+  current_mtu: number | null;
+  last_sync_at: string | null;
+  sync_status: string;
+  sync_error: string | null;
+}
+
 interface LabInfo {
   id: string;
   name: string;
@@ -174,6 +202,22 @@ const InfrastructurePage: React.FC = () => {
   const [updatingAgents, setUpdatingAgents] = useState<Set<string>>(new Set());
   const [updateStatuses, setUpdateStatuses] = useState<Map<string, UpdateStatus>>(new Map());
 
+  // Host network config state
+  const [networkConfigs, setNetworkConfigs] = useState<AgentNetworkConfig[]>([]);
+  const [networkConfigsLoading, setNetworkConfigsLoading] = useState(false);
+  const [configuringMtu, setConfiguringMtu] = useState<string | null>(null);  // agent ID being configured
+  const [configModalData, setConfigModalData] = useState<{
+    agentId: string;
+    agentName: string;
+    interfaces: InterfaceDetail[];
+    defaultInterface: string | null;
+    networkManager: string | null;
+    currentConfig: AgentNetworkConfig | null;
+  } | null>(null);
+  const [selectedInterface, setSelectedInterface] = useState<string>('');
+  const [desiredMtu, setDesiredMtu] = useState<number>(9000);
+  const [savingMtuConfig, setSavingMtuConfig] = useState(false);
+
   // ============================================================================
   // Data Loading
   // ============================================================================
@@ -214,17 +258,32 @@ const InfrastructurePage: React.FC = () => {
     }
   }, []);
 
+  const loadNetworkConfigs = useCallback(async () => {
+    setNetworkConfigsLoading(true);
+    try {
+      const data = await apiRequest<AgentNetworkConfig[]>('/infrastructure/network-configs');
+      setNetworkConfigs(data);
+    } catch (err) {
+      console.error('Failed to load network configs:', err);
+    } finally {
+      setNetworkConfigsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadMesh();
     loadHosts();
     loadLatestVersion();
+    loadNetworkConfigs();
     const meshInterval = setInterval(loadMesh, 30000);
     const hostsInterval = setInterval(loadHosts, 10000);
+    const networkConfigsInterval = setInterval(loadNetworkConfigs, 30000);
     return () => {
       clearInterval(meshInterval);
       clearInterval(hostsInterval);
+      clearInterval(networkConfigsInterval);
     };
-  }, [loadMesh, loadHosts, loadLatestVersion]);
+  }, [loadMesh, loadHosts, loadLatestVersion, loadNetworkConfigs]);
 
   // Poll update status for agents being updated
   useEffect(() => {
@@ -510,6 +569,95 @@ const InfrastructurePage: React.FC = () => {
   const isUpdateAvailable = (host: HostDetailed): boolean => {
     if (!latestVersion || !host.version) return false;
     return host.version !== latestVersion;
+  };
+
+  // ============================================================================
+  // MTU Configuration Handlers
+  // ============================================================================
+
+  const openMtuConfigModal = async (agentId: string) => {
+    const host = hosts.find(h => h.id === agentId);
+    if (!host || host.status !== 'online') {
+      alert('Agent is offline');
+      return;
+    }
+
+    setConfiguringMtu(agentId);
+    try {
+      const interfacesData = await apiRequest<InterfaceDetailsResponse>(
+        `/infrastructure/agents/${agentId}/interfaces`
+      );
+
+      const existingConfig = networkConfigs.find(c => c.host_id === agentId);
+
+      setConfigModalData({
+        agentId,
+        agentName: host.name,
+        interfaces: interfacesData.interfaces.filter(i => i.is_physical),
+        defaultInterface: interfacesData.default_route_interface,
+        networkManager: interfacesData.network_manager,
+        currentConfig: existingConfig || null,
+      });
+
+      // Pre-fill form with existing config or defaults
+      if (existingConfig?.data_plane_interface) {
+        setSelectedInterface(existingConfig.data_plane_interface);
+        setDesiredMtu(existingConfig.desired_mtu);
+      } else if (interfacesData.default_route_interface) {
+        setSelectedInterface(interfacesData.default_route_interface);
+        setDesiredMtu(9000);
+      } else if (interfacesData.interfaces.length > 0) {
+        const firstPhysical = interfacesData.interfaces.find(i => i.is_physical);
+        setSelectedInterface(firstPhysical?.name || '');
+        setDesiredMtu(9000);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to load interface details');
+    } finally {
+      setConfiguringMtu(null);
+    }
+  };
+
+  const closeMtuConfigModal = () => {
+    setConfigModalData(null);
+    setSelectedInterface('');
+    setDesiredMtu(9000);
+  };
+
+  const saveMtuConfig = async () => {
+    if (!configModalData || !selectedInterface) return;
+
+    setSavingMtuConfig(true);
+    try {
+      await apiRequest(`/infrastructure/agents/${configModalData.agentId}/network-config`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          data_plane_interface: selectedInterface,
+          desired_mtu: desiredMtu,
+        }),
+      });
+      await loadNetworkConfigs();
+      closeMtuConfigModal();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to save MTU configuration');
+    } finally {
+      setSavingMtuConfig(false);
+    }
+  };
+
+  const getMtuSyncStatusBadge = (status: string): { color: string; icon: string; text: string } => {
+    switch (status) {
+      case 'synced':
+        return { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: 'fa-check', text: 'Synced' };
+      case 'mismatch':
+        return { color: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400', icon: 'fa-triangle-exclamation', text: 'Mismatch' };
+      case 'error':
+        return { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400', icon: 'fa-times-circle', text: 'Error' };
+      case 'unconfigured':
+        return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', icon: 'fa-minus', text: 'Not Configured' };
+      default:
+        return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', icon: 'fa-question', text: 'Unknown' };
+    }
   };
 
   // ============================================================================
@@ -1018,6 +1166,140 @@ const InfrastructurePage: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Host Network Configuration */}
+                  <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
+                        <i className="fa-solid fa-ethernet text-sage-600 dark:text-sage-400"></i>
+                        Host Network
+                      </h2>
+                      <button
+                        onClick={loadNetworkConfigs}
+                        disabled={networkConfigsLoading}
+                        className="flex items-center gap-2 px-2 py-1 text-xs text-stone-500 hover:text-stone-700 dark:hover:text-stone-300 transition-colors"
+                      >
+                        <i className={`fa-solid fa-sync ${networkConfigsLoading ? 'fa-spin' : ''}`}></i>
+                        Refresh
+                      </button>
+                    </div>
+
+                    <p className="text-sm text-stone-500 dark:text-stone-400 mb-4">
+                      Configure physical interface MTU on each agent host for optimal VXLAN overlay performance.
+                      Jumbo frames (MTU 9000) are recommended for production deployments.
+                    </p>
+
+                    {hosts.length === 0 ? (
+                      <div className="text-center py-8 text-stone-500">
+                        <i className="fa-solid fa-server text-3xl mb-3 opacity-30"></i>
+                        <p>No agents registered</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-stone-200 dark:border-stone-700">
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Agent</th>
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Interface</th>
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Current MTU</th>
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Desired MTU</th>
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Status</th>
+                              <th className="text-right py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {hosts.map((host) => {
+                              const config = networkConfigs.find(c => c.host_id === host.id);
+                              const statusBadge = getMtuSyncStatusBadge(config?.sync_status || 'unconfigured');
+                              const isLoading = configuringMtu === host.id;
+                              const needsAttention = config?.sync_status === 'mismatch' || config?.sync_status === 'error';
+
+                              return (
+                                <tr
+                                  key={host.id}
+                                  className={`border-b border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/30 ${
+                                    needsAttention ? 'bg-amber-50/50 dark:bg-amber-900/10' : ''
+                                  }`}
+                                >
+                                  <td className="py-2 px-3">
+                                    <div className="flex items-center gap-2">
+                                      <div className={`w-2 h-2 rounded-full ${host.status === 'online' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                      <span className="font-medium text-stone-700 dark:text-stone-300">{host.name}</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-2 px-3 text-stone-600 dark:text-stone-400 font-mono text-xs">
+                                    {config?.data_plane_interface || '-'}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    {config?.current_mtu ? (
+                                      <span className={`font-mono ${
+                                        config.current_mtu >= (config.desired_mtu || 9000)
+                                          ? 'text-green-600 dark:text-green-400'
+                                          : 'text-amber-600 dark:text-amber-400'
+                                      }`}>
+                                        {config.current_mtu}
+                                        {config.current_mtu < (config.desired_mtu || 9000) && (
+                                          <i className="fa-solid fa-triangle-exclamation ml-1.5 text-[10px]" title="Below desired MTU"></i>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <span className="text-stone-400">-</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-3 text-stone-600 dark:text-stone-400 font-mono">
+                                    {config?.desired_mtu || 9000}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${statusBadge.color}`}>
+                                      <i className={`fa-solid ${statusBadge.icon} text-[10px]`}></i>
+                                      {statusBadge.text}
+                                    </span>
+                                    {config?.sync_error && (
+                                      <span className="ml-2 text-xs text-red-500" title={config.sync_error}>
+                                        <i className="fa-solid fa-circle-exclamation"></i>
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-3 text-right">
+                                    <button
+                                      onClick={() => openMtuConfigModal(host.id)}
+                                      disabled={host.status !== 'online' || isLoading}
+                                      className={`px-2 py-1 rounded text-xs font-medium transition-all ${
+                                        host.status === 'online' && !isLoading
+                                          ? 'bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400'
+                                          : 'bg-stone-100 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
+                                      }`}
+                                    >
+                                      {isLoading ? (
+                                        <i className="fa-solid fa-spinner fa-spin"></i>
+                                      ) : (
+                                        <>
+                                          <i className="fa-solid fa-cog mr-1"></i>
+                                          Configure
+                                        </>
+                                      )}
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {networkConfigs.some(c => c.sync_status === 'mismatch' || c.sync_status === 'error') && (
+                      <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                        <div className="flex items-start gap-2">
+                          <i className="fa-solid fa-triangle-exclamation text-amber-500 mt-0.5"></i>
+                          <div className="text-xs text-amber-700 dark:text-amber-300">
+                            <strong>Attention:</strong> Some agents have MTU configurations that need attention.
+                            Click Configure to update the interface MTU.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Agent Mesh */}
                   <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6">
                     <div className="flex items-center justify-between mb-6">
@@ -1198,6 +1480,187 @@ const InfrastructurePage: React.FC = () => {
         isOpen={showThemeSelector}
         onClose={() => setShowThemeSelector(false)}
       />
+
+      {/* MTU Configuration Modal */}
+      {configModalData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-stone-200 dark:border-stone-800">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
+                  <i className="fa-solid fa-ethernet text-sage-600 dark:text-sage-400"></i>
+                  Configure MTU - {configModalData.agentName}
+                </h2>
+                <button
+                  onClick={closeMtuConfigModal}
+                  className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
+                >
+                  <i className="fa-solid fa-times text-lg"></i>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Network Manager Info */}
+              {configModalData.networkManager && (
+                <div className="flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400 bg-stone-100 dark:bg-stone-800 px-3 py-2 rounded-lg">
+                  <i className="fa-solid fa-info-circle"></i>
+                  <span>Network Manager: <strong className="text-stone-700 dark:text-stone-300">{configModalData.networkManager}</strong></span>
+                  {configModalData.networkManager !== 'unknown' && (
+                    <span className="text-green-600 dark:text-green-400">(will persist on reboot)</span>
+                  )}
+                  {configModalData.networkManager === 'unknown' && (
+                    <span className="text-amber-600 dark:text-amber-400">(runtime only, may not persist)</span>
+                  )}
+                </div>
+              )}
+
+              {/* Interface Selection */}
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  Physical Interface
+                </label>
+                {configModalData.interfaces.length === 0 ? (
+                  <p className="text-sm text-stone-500">No physical interfaces found on this agent.</p>
+                ) : (
+                  <select
+                    value={selectedInterface}
+                    onChange={(e) => setSelectedInterface(e.target.value)}
+                    className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                  >
+                    <option value="">Select an interface...</option>
+                    {configModalData.interfaces.map((iface) => (
+                      <option key={iface.name} value={iface.name}>
+                        {iface.name}
+                        {iface.is_default_route ? ' (Recommended - Default Route)' : ''}
+                        {' - '}MTU: {iface.mtu}
+                        {iface.ipv4_addresses.length > 0 ? ` - ${iface.ipv4_addresses[0]}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {/* Selected Interface Details */}
+                {selectedInterface && (
+                  <div className="mt-3 p-3 bg-stone-50 dark:bg-stone-800/50 rounded-lg">
+                    {(() => {
+                      const iface = configModalData.interfaces.find(i => i.name === selectedInterface);
+                      if (!iface) return null;
+                      return (
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <span className="text-stone-500">Current MTU:</span>
+                            <span className="ml-2 font-mono text-stone-700 dark:text-stone-300">{iface.mtu}</span>
+                          </div>
+                          <div>
+                            <span className="text-stone-500">State:</span>
+                            <span className={`ml-2 ${iface.state === 'UP' || iface.state === 'up' ? 'text-green-600 dark:text-green-400' : 'text-stone-500'}`}>
+                              {iface.state}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-stone-500">MAC:</span>
+                            <span className="ml-2 font-mono text-stone-700 dark:text-stone-300">{iface.mac || 'N/A'}</span>
+                          </div>
+                          <div>
+                            <span className="text-stone-500">IP:</span>
+                            <span className="ml-2 font-mono text-stone-700 dark:text-stone-300">
+                              {iface.ipv4_addresses.length > 0 ? iface.ipv4_addresses.join(', ') : 'N/A'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* MTU Input */}
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  Desired MTU
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    min={68}
+                    max={9216}
+                    value={desiredMtu}
+                    onChange={(e) => setDesiredMtu(parseInt(e.target.value) || 1500)}
+                    className="w-32 px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500 font-mono"
+                  />
+                  <span className="text-xs text-stone-500">bytes (68-9216)</span>
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={() => setDesiredMtu(1500)}
+                    className={`px-2 py-1 text-xs rounded ${desiredMtu === 1500 ? 'bg-sage-100 dark:bg-sage-900/30 text-sage-700 dark:text-sage-400' : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400'}`}
+                  >
+                    1500 (Standard)
+                  </button>
+                  <button
+                    onClick={() => setDesiredMtu(9000)}
+                    className={`px-2 py-1 text-xs rounded ${desiredMtu === 9000 ? 'bg-sage-100 dark:bg-sage-900/30 text-sage-700 dark:text-sage-400' : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400'}`}
+                  >
+                    9000 (Jumbo)
+                  </button>
+                </div>
+                <p className="text-xs text-stone-400 mt-2">
+                  For VXLAN overlay (50 byte overhead), set underlay to at least {mtuValue + 50} for {mtuValue} byte overlay MTU.
+                </p>
+              </div>
+
+              {/* Warning for MTU decrease */}
+              {selectedInterface && (() => {
+                const iface = configModalData.interfaces.find(i => i.name === selectedInterface);
+                if (iface && desiredMtu < iface.mtu) {
+                  return (
+                    <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <i className="fa-solid fa-triangle-exclamation text-amber-500 mt-0.5"></i>
+                        <div className="text-xs text-amber-700 dark:text-amber-300">
+                          You are decreasing MTU from {iface.mtu} to {desiredMtu}. This may briefly interrupt network traffic.
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+            </div>
+
+            <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
+              <button
+                onClick={closeMtuConfigModal}
+                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveMtuConfig}
+                disabled={!selectedInterface || savingMtuConfig}
+                className={`px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                  selectedInterface && !savingMtuConfig
+                    ? 'bg-sage-600 hover:bg-sage-700 text-white'
+                    : 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
+                }`}
+              >
+                {savingMtuConfig ? (
+                  <>
+                    <i className="fa-solid fa-spinner fa-spin mr-2"></i>
+                    Applying...
+                  </>
+                ) : (
+                  <>
+                    <i className="fa-solid fa-check mr-2"></i>
+                    Apply MTU
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };
