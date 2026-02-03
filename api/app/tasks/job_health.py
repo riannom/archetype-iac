@@ -20,6 +20,12 @@ from app.config import settings
 from app.db import SessionLocal, get_session
 from app.utils.job import get_job_timeout, is_job_stuck
 from app.utils.async_tasks import safe_create_task
+from app.state import (
+    HostStatus,
+    JobStatus,
+    LabState,
+    NodeActualState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +68,7 @@ async def check_stuck_jobs():
             # Find all active jobs (queued or running)
             active_jobs = (
                 session.query(models.Job)
-                .filter(models.Job.status.in_(["queued", "running"]))
+                .filter(models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]))
                 .all()
             )
 
@@ -144,7 +150,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
             .filter(
                 models.Job.lab_id == old_job.lab_id,
                 models.Job.action == old_job.action,
-                models.Job.status.in_(["queued", "running"]),
+                models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
                 models.Job.id != old_job.id,
             )
             .first()
@@ -165,7 +171,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
     # Force-release lock on agent before retry to prevent new job from blocking
     if old_job.agent_id and old_job.lab_id:
         agent = session.get(models.Host, old_job.agent_id)
-        if agent and agent.status == "online":
+        if agent and agent.status == HostStatus.ONLINE.value:
             try:
                 result = await agent_client.release_agent_lock(agent, old_job.lab_id)
                 if result.get("status") == "cleared":
@@ -178,7 +184,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
                 logger.warning(f"Failed to force-release lock for lab {old_job.lab_id}: {e}")
 
     # Mark old job as failed
-    old_job.status = "failed"
+    old_job.status = JobStatus.FAILED.value
     old_job.completed_at = datetime.now(timezone.utc)
     timeout_msg = f"Job timed out after {get_job_timeout(old_job.action)}s, retrying (attempt {old_job.retry_count + 1})..."
     if _is_file_path(old_job.log_path):
@@ -200,7 +206,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
         lab_id=old_job.lab_id,
         user_id=old_job.user_id,
         action=old_job.action,
-        status="queued",
+        status=JobStatus.QUEUED.value,
         retry_count=old_job.retry_count + 1,
     )
     session.add(new_job)
@@ -215,7 +221,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
         session.query(models.Job)
         .filter(
             models.Job.parent_job_id == old_job.id,
-            models.Job.status.in_(["queued", "running"]),
+            models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
         )
         .all()
     )
@@ -251,7 +257,7 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
     lab = session.get(models.Lab, job.lab_id) if job.lab_id else None
     if not lab:
         logger.error(f"Cannot retry job {job.id}: lab not found")
-        job.status = "failed"
+        job.status = JobStatus.FAILED.value
         job.log_path = "Retry failed: lab not found"
         session.commit()
         return
@@ -268,7 +274,7 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
 
     if not agent:
         logger.error(f"Cannot retry job {job.id}: no healthy agent available")
-        job.status = "failed"
+        job.status = JobStatus.FAILED.value
         job.log_path = "Retry failed: no healthy agent available"
         session.commit()
         return
@@ -284,7 +290,7 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
             )
         else:
             logger.error(f"Cannot retry deploy job {job.id}: no topology in database")
-            job.status = "failed"
+            job.status = JobStatus.FAILED.value
             job.log_path = "Retry failed: no topology defined"
             session.commit()
 
@@ -315,7 +321,7 @@ async def _trigger_job_execution(session, job: models.Job, exclude_agent: str | 
 
     else:
         logger.warning(f"Unknown action type for retry: {job.action}")
-        job.status = "failed"
+        job.status = JobStatus.FAILED.value
         job.log_path = f"Retry failed: unknown action type {job.action}"
         session.commit()
 
@@ -324,7 +330,7 @@ async def _fail_job(session, job: models.Job, reason: str):
     """Mark a job as failed and update lab state."""
     logger.error(f"Failing job {job.id}: {reason}")
 
-    job.status = "failed"
+    job.status = JobStatus.FAILED.value
     job.completed_at = datetime.now(timezone.utc)
     if _is_file_path(job.log_path):
         # Append failure message to existing log file
@@ -343,7 +349,7 @@ async def _fail_job(session, job: models.Job, reason: str):
     if job.lab_id:
         lab = session.get(models.Lab, job.lab_id)
         if lab:
-            lab.state = "error"
+            lab.state = LabState.ERROR.value
             lab.state_error = f"Job {job.action} failed: {reason}"
             lab.state_updated_at = datetime.now(timezone.utc)
             logger.info(f"Set lab {job.lab_id} state to error due to stuck job")
@@ -368,7 +374,7 @@ async def check_orphaned_queued_jobs():
             orphaned_jobs = (
                 session.query(models.Job)
                 .filter(
-                    models.Job.status == "queued",
+                    models.Job.status == JobStatus.QUEUED.value,
                     models.Job.agent_id.is_(None),
                     models.Job.created_at < orphan_cutoff,
                 )
@@ -395,7 +401,7 @@ async def check_jobs_on_offline_agents():
             # Find all offline agents
             offline_agents = (
                 session.query(models.Host)
-                .filter(models.Host.status == "offline")
+                .filter(models.Host.status == HostStatus.OFFLINE.value)
                 .all()
             )
 
@@ -408,7 +414,7 @@ async def check_jobs_on_offline_agents():
             stranded_jobs = (
                 session.query(models.Job)
                 .filter(
-                    models.Job.status.in_(["queued", "running"]),
+                    models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
                     models.Job.agent_id.in_(offline_agent_ids),
                 )
                 .all()
@@ -493,7 +499,7 @@ async def check_stuck_image_sync_jobs():
                         )
 
                         # Mark job as failed
-                        job.status = "failed"
+                        job.status = JobStatus.FAILED.value
                         job.error_message = error_reason
                         job.completed_at = now
                         session.commit()
@@ -539,7 +545,7 @@ async def check_stuck_locks():
             online_agents = (
                 session.query(models.Host)
                 .filter(
-                    models.Host.status == "online",
+                    models.Host.status == HostStatus.ONLINE.value,
                     models.Host.last_heartbeat >= cutoff,
                 )
                 .all()
@@ -602,7 +608,7 @@ async def check_stuck_stopping_nodes():
             stuck_nodes = (
                 session.query(models.NodeState)
                 .filter(
-                    models.NodeState.actual_state == "stopping",
+                    models.NodeState.actual_state == NodeActualState.STOPPING.value,
                     models.NodeState.stopping_started_at < stuck_threshold,
                 )
                 .all()
@@ -624,7 +630,7 @@ async def check_stuck_stopping_nodes():
                     session.query(models.Job)
                     .filter(
                         models.Job.lab_id == lab_id,
-                        models.Job.status.in_(["queued", "running"]),
+                        models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
                     )
                     .first()
                 )
@@ -646,7 +652,7 @@ async def check_stuck_stopping_nodes():
                         f"Recovering node {ns.node_name} in lab {lab_id} from stuck 'stopping' state "
                         f"(stuck for {duration:.0f}s)"
                     )
-                    ns.actual_state = "stopped"
+                    ns.actual_state = NodeActualState.STOPPED.value
                     ns.stopping_started_at = None
                     ns.error_message = None
                     ns.is_ready = False
@@ -677,7 +683,7 @@ async def check_stuck_starting_nodes():
             stuck_nodes = (
                 session.query(models.NodeState)
                 .filter(
-                    models.NodeState.actual_state == "starting",
+                    models.NodeState.actual_state == NodeActualState.STARTING.value,
                     models.NodeState.starting_started_at < stuck_threshold,
                 )
                 .all()
@@ -699,7 +705,7 @@ async def check_stuck_starting_nodes():
                     session.query(models.Job)
                     .filter(
                         models.Job.lab_id == lab_id,
-                        models.Job.status.in_(["queued", "running"]),
+                        models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
                     )
                     .first()
                 )
@@ -721,7 +727,7 @@ async def check_stuck_starting_nodes():
                         f"Recovering node {ns.node_name} in lab {lab_id} from stuck 'starting' state "
                         f"(stuck for {duration:.0f}s)"
                     )
-                    ns.actual_state = "stopped"
+                    ns.actual_state = NodeActualState.STOPPED.value
                     ns.starting_started_at = None
                     ns.error_message = None
                     ns.is_ready = False

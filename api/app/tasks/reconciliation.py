@@ -30,6 +30,16 @@ from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 from app.utils.link import generate_link_name
 from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
+from app.state import (
+    HostStatus,
+    JobStatus,
+    LabState,
+    LinkActualState,
+    LinkDesiredState,
+    NodeActualState,
+    NodeDesiredState,
+)
+from app.services.state_machine import LabStateMachine, LinkStateMachine, NodeStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +256,7 @@ async def refresh_states_from_agents():
             transitional_labs = (
                 session.query(models.Lab)
                 .filter(
-                    models.Lab.state.in_(["starting", "stopping", "unknown"]),
+                    models.Lab.state.in_([LabState.STARTING.value, LabState.STOPPING.value, LabState.UNKNOWN.value]),
                 )
                 .all()
             )
@@ -256,7 +266,7 @@ async def refresh_states_from_agents():
             stale_pending_nodes = (
                 session.query(models.NodeState)
                 .filter(
-                    models.NodeState.actual_state == "pending",
+                    models.NodeState.actual_state == NodeActualState.PENDING.value,
                     models.NodeState.updated_at < pending_threshold,
                 )
                 .all()
@@ -266,7 +276,7 @@ async def refresh_states_from_agents():
             unready_running_nodes = (
                 session.query(models.NodeState)
                 .filter(
-                    models.NodeState.actual_state == "running",
+                    models.NodeState.actual_state == NodeActualState.RUNNING.value,
                     models.NodeState.is_ready == False,
                 )
                 .all()
@@ -275,7 +285,7 @@ async def refresh_states_from_agents():
             # Find nodes in error state - they may have recovered
             error_nodes = (
                 session.query(models.NodeState)
-                .filter(models.NodeState.actual_state == "error")
+                .filter(models.NodeState.actual_state == NodeActualState.ERROR.value)
                 .all()
             )
 
@@ -284,8 +294,8 @@ async def refresh_states_from_agents():
             stale_stopped_nodes = (
                 session.query(models.NodeState)
                 .filter(
-                    models.NodeState.desired_state == "running",
-                    models.NodeState.actual_state.in_(["stopped", "undeployed", "exited"]),
+                    models.NodeState.desired_state == NodeDesiredState.RUNNING.value,
+                    models.NodeState.actual_state.in_([NodeActualState.STOPPED.value, NodeActualState.UNDEPLOYED.value, NodeActualState.EXITED.value]),
                 )
                 .all()
             )
@@ -307,7 +317,7 @@ async def refresh_states_from_agents():
             running_nodes_without_placement = (
                 session.query(models.NodeState)
                 .filter(
-                    models.NodeState.actual_state == "running",
+                    models.NodeState.actual_state == NodeActualState.RUNNING.value,
                     ~placement_exists_subquery,
                 )
                 .all()
@@ -414,7 +424,7 @@ async def _reconcile_single_lab(session, lab_id: str):
             session.query(models.Job)
             .filter(
                 models.Job.lab_id == lab_id,
-                models.Job.status.in_(["pending", "running", "queued"]),
+                models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
             )
             .first()
         )
@@ -566,7 +576,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             session.query(models.Job)
             .filter(
                 models.Job.lab_id == lab_id,
-                models.Job.status.in_(["queued", "running"]),
+                models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
             )
             .first()
         )
@@ -620,7 +630,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
             # Additional check: skip "stopping" or "starting" states even without timestamp
             # if there's an active job (the job will manage state)
-            if ns.actual_state == "stopping":
+            if ns.actual_state == NodeActualState.STOPPING.value:
                 if active_job:
                     stopped_count += 1
                     continue
@@ -630,7 +640,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     f"timestamp or active job, recovering via reconciliation"
                 )
 
-            if ns.actual_state == "starting":
+            if ns.actual_state == NodeActualState.STARTING.value:
                 if active_job:
                     running_count += 1
                     continue
@@ -646,7 +656,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
             if container_status:
                 if container_status == "running":
-                    ns.actual_state = "running"
+                    ns.actual_state = NodeActualState.RUNNING.value
                     ns.stopping_started_at = None  # Clear if recovering from stuck stopping
                     ns.starting_started_at = None  # Clear if recovering from stuck starting
                     ns.error_message = None
@@ -672,7 +682,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                             logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
 
                 elif container_status in ("stopped", "exited"):
-                    ns.actual_state = "stopped"
+                    ns.actual_state = NodeActualState.STOPPED.value
                     ns.stopping_started_at = None  # Clear if recovering from stuck stopping
                     ns.starting_started_at = None  # Clear if recovering from stuck starting
                     ns.error_message = None
@@ -680,7 +690,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     ns.boot_started_at = None
                     stopped_count += 1
                 elif container_status in ("error", "dead"):
-                    ns.actual_state = "error"
+                    ns.actual_state = NodeActualState.ERROR.value
                     ns.stopping_started_at = None  # Clear if recovering from stuck stopping
                     ns.starting_started_at = None  # Clear if recovering from stuck starting
                     ns.error_message = f"Container status: {container_status}"
@@ -704,7 +714,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 if agent_was_queried:
                     # Agent responded but container not found - safe to mark undeployed
                     if ns.actual_state not in ("undeployed", "stopped"):
-                        ns.actual_state = "undeployed"
+                        ns.actual_state = NodeActualState.UNDEPLOYED.value
                         ns.error_message = None
                     ns.is_ready = False
                     ns.boot_started_at = None
@@ -794,21 +804,18 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 )
                 session.add(new_placement)
 
-        # Update lab state based on aggregated node states
+        # Update lab state based on aggregated node states using state machine
         old_lab_state = lab.state
-        if error_count > 0:
-            lab.state = "error"
+        new_lab_state = LabStateMachine.compute_lab_state(
+            running_count=running_count,
+            stopped_count=stopped_count,
+            undeployed_count=undeployed_count,
+            error_count=error_count,
+        )
+        lab.state = new_lab_state.value
+        if new_lab_state == LabState.ERROR:
             lab.state_error = f"{error_count} node(s) in error state"
-        elif running_count > 0 and stopped_count == 0 and undeployed_count == 0:
-            lab.state = "running"
-            lab.state_error = None
-        elif running_count == 0 and (stopped_count > 0 or undeployed_count > 0):
-            lab.state = "stopped"
-            lab.state_error = None
-        elif running_count > 0:
-            # Mixed state - some running, some stopped/undeployed
-            # This is a valid partial deployment
-            lab.state = "running"
+        else:
             lab.state_error = None
 
         lab.state_updated_at = datetime.now(timezone.utc)
@@ -835,11 +842,11 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             target_state = node_actual_states.get(ls.target_node, "unknown")
 
             # Determine link actual state based on endpoint node states
-            if source_state == "running" and target_state == "running":
+            if source_state == NodeActualState.RUNNING.value and target_state == NodeActualState.RUNNING.value:
                 # Both nodes running - check L2 connectivity
                 # If carrier states are off, link is administratively down
                 if ls.source_carrier_state == "off" or ls.target_carrier_state == "off":
-                    ls.actual_state = "down"
+                    ls.actual_state = LinkActualState.DOWN.value
                     ls.error_message = "Carrier disabled on one or more endpoints"
                 elif ls.is_cross_host:
                     # For cross-host links, verify VXLAN tunnel exists
@@ -852,29 +859,29 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                         .first()
                     )
                     if tunnel:
-                        ls.actual_state = "up"
+                        ls.actual_state = LinkActualState.UP.value
                         ls.error_message = None
                     else:
                         # No active tunnel - link is broken
-                        ls.actual_state = "error"
+                        ls.actual_state = LinkActualState.ERROR.value
                         ls.error_message = "VXLAN tunnel not active"
                 else:
                     # Same-host link - assume up if both nodes are running and carrier on
                     # Full L2 verification would require querying OVS VLAN tags from agent
                     # which adds latency. For now, trust that hot_connect worked.
-                    ls.actual_state = "up"
+                    ls.actual_state = LinkActualState.UP.value
                     ls.error_message = None
-            elif source_state in ("error",) or target_state in ("error",):
+            elif source_state == NodeActualState.ERROR.value or target_state == NodeActualState.ERROR.value:
                 # At least one node is in error state
-                ls.actual_state = "error"
+                ls.actual_state = LinkActualState.ERROR.value
                 ls.error_message = "One or more endpoint nodes in error state"
-            elif source_state in ("stopped", "undeployed") or target_state in ("stopped", "undeployed"):
+            elif source_state in (NodeActualState.STOPPED.value, NodeActualState.UNDEPLOYED.value) or target_state in (NodeActualState.STOPPED.value, NodeActualState.UNDEPLOYED.value):
                 # At least one node is stopped/undeployed
-                ls.actual_state = "down"
+                ls.actual_state = LinkActualState.DOWN.value
                 ls.error_message = None
             else:
                 # Unknown or transitional states
-                ls.actual_state = "unknown"
+                ls.actual_state = LinkActualState.UNKNOWN.value
                 ls.error_message = None
 
             if ls.actual_state != old_actual:
@@ -909,10 +916,10 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             # VXLAN tunnels, etc. This handles recovery from agent restarts, VLAN
             # mismatches, transient failures, and other error conditions.
             should_auto_connect = (
-                ls.desired_state == "up"
-                and node_actual_states.get(ls.source_node) == "running"
-                and node_actual_states.get(ls.target_node) == "running"
-                and ls.actual_state in ("unknown", "pending", "down", "error")
+                ls.desired_state == LinkDesiredState.UP.value
+                and node_actual_states.get(ls.source_node) == NodeActualState.RUNNING.value
+                and node_actual_states.get(ls.target_node) == NodeActualState.RUNNING.value
+                and ls.actual_state in (LinkActualState.UNKNOWN.value, LinkActualState.PENDING.value, LinkActualState.DOWN.value, LinkActualState.ERROR.value)
             )
             if should_auto_connect:
                 links_to_connect.append(ls)
@@ -933,7 +940,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                             await create_link_if_ready(session, lab_id, ls, host_to_agent)
                         except Exception as e:
                             logger.error(f"Failed to auto-connect link {ls.link_name}: {e}")
-                            ls.actual_state = "error"
+                            ls.actual_state = LinkActualState.ERROR.value
                             ls.error_message = str(e)
                 finally:
                     release_link_ops_lock(lab_id)
@@ -948,20 +955,20 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         out_of_sync_nodes = []
         for ns in node_states:
             # Skip nodes in transitional states (being handled by active job)
-            if ns.actual_state in ("stopping", "starting", "pending"):
+            if ns.actual_state in (NodeActualState.STOPPING.value, NodeActualState.STARTING.value, NodeActualState.PENDING.value):
                 continue
             # Skip if timestamps indicate active operation
             if ns.stopping_started_at or ns.starting_started_at:
                 continue
 
-            # Check for state mismatch
+            # Check for state mismatch using state machine
             needs_start = (
-                ns.desired_state == "running"
-                and ns.actual_state in ("stopped", "undeployed", "error")
+                ns.desired_state == NodeDesiredState.RUNNING.value
+                and ns.actual_state in (NodeActualState.STOPPED.value, NodeActualState.UNDEPLOYED.value, NodeActualState.ERROR.value)
             )
             needs_stop = (
-                ns.desired_state == "stopped"
-                and ns.actual_state == "running"
+                ns.desired_state == NodeDesiredState.STOPPED.value
+                and ns.actual_state == NodeActualState.RUNNING.value
             )
             if needs_start or needs_stop:
                 out_of_sync_nodes.append(ns)
@@ -972,7 +979,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 session.query(models.Job)
                 .filter(
                     models.Job.lab_id == lab_id,
-                    models.Job.status.in_(["queued", "running"]),
+                    models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
                 )
                 .first()
             )
