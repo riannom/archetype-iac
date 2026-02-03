@@ -6,7 +6,7 @@ transitions and computing next states based on desired states.
 
 from typing import Optional
 
-from api.app.state import (
+from app.state import (
     LabState,
     LinkActualState,
     LinkDesiredState,
