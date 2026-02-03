@@ -3329,6 +3329,7 @@ async def get_interface_vlan(
     lab_id: str,
     node: str,
     interface: str,
+    read_from_ovs: bool = False,
 ) -> PortVlanResponse:
     """Get the current VLAN tag for a container interface.
 
@@ -3336,6 +3337,8 @@ async def get_interface_vlan(
         lab_id: Lab identifier
         node: Node name (container name or node name)
         interface: Interface name in the container
+        read_from_ovs: If True, read directly from OVS instead of in-memory state.
+                       Use this for verification to get ground truth.
 
     Returns:
         PortVlanResponse with current VLAN tag
@@ -3354,7 +3357,9 @@ async def get_interface_vlan(
         provider = get_provider_for_request()
         container_name = provider.get_container_name(lab_id, node)
 
-        vlan_tag = await plugin.get_endpoint_vlan(lab_id, container_name, interface)
+        vlan_tag = await plugin.get_endpoint_vlan(
+            lab_id, container_name, interface, read_from_ovs=read_from_ovs
+        )
 
         return PortVlanResponse(
             container=container_name,

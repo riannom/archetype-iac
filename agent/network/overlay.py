@@ -863,6 +863,12 @@ class OverlayManager:
 
                     await self._run_cmd(["ip", "link", "set", host_veth, "up"])
 
+                    # Update the docker plugin's in-memory state to stay in sync
+                    # This ensures get_endpoint_vlan() returns the correct value
+                    await plugin.set_endpoint_vlan(
+                        lab_id, container_name, interface_name, vlan_tag
+                    )
+
                     # Track link -> VTEP association for reference counting
                     if link_id and remote_ip and remote_ip in self._vteps:
                         self._vteps[remote_ip].links.add(link_id)
