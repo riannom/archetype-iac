@@ -19,7 +19,6 @@ from agent.network.vlan import (
     VlanManager,
     VlanInterface,
     get_vlan_manager,
-    setup_external_networks,
     cleanup_external_networks,
 )
 from agent.network.docker_plugin import (
@@ -51,7 +50,6 @@ __all__ = [
     "VlanManager",
     "VlanInterface",
     "get_vlan_manager",
-    "setup_external_networks",
     "cleanup_external_networks",
     # Cleanup utilities
     "NetworkCleanupManager",

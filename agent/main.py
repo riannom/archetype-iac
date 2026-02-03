@@ -576,13 +576,17 @@ async def get_resource_usage() -> dict:
 
 def get_agent_info() -> AgentInfo:
     """Build agent info for registration."""
-    address = f"{settings.agent_host}:{settings.agent_port}"
-    # If host is 0.0.0.0, controller can't reach us - use local_ip or name
-    if settings.agent_host == "0.0.0.0":
-        if settings.local_ip:
-            address = f"{settings.local_ip}:{settings.agent_port}"
+    # Determine the host to advertise to the controller.
+    advertise_host = settings.advertise_host
+    if not advertise_host:
+        if settings.agent_host != "0.0.0.0":
+            advertise_host = settings.agent_host
+        elif settings.local_ip:
+            advertise_host = settings.local_ip
         else:
-            address = f"{settings.agent_name}:{settings.agent_port}"
+            advertise_host = settings.agent_name
+
+    address = f"{advertise_host}:{settings.agent_port}"
 
     return AgentInfo(
         agent_id=AGENT_ID,
@@ -1032,11 +1036,6 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
         raise HTTPException(
             status_code=400,
             detail="No topology provided. Deploy requires 'topology' (JSON)."
-        )
-    if request.topology_yaml:
-        raise HTTPException(
-            status_code=400,
-            detail="topology_yaml is not supported for deploy; use JSON topology",
         )
 
     lock_manager = get_lock_manager()

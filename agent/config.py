@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     agent_host: str = "0.0.0.0"
     agent_port: int = 8001
     is_local: bool = False  # True if co-located with controller (enables rebuild)
+    advertise_host: str = ""  # Optional override for registration address
 
     # Controller connection
     controller_url: str = "http://localhost:8000"
