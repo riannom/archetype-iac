@@ -958,8 +958,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
     except Exception as e:
         logger.error(f"Failed to reconcile lab {lab_id}: {e}")
-        # Don't update state on error - leave it for next cycle
-        # Note: session cleanup handled by get_session() context manager
+        # Rollback any uncommitted changes to prevent idle-in-transaction
+        session.rollback()
 
 
 async def state_reconciliation_monitor():
