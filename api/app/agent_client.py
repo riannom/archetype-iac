@@ -1071,6 +1071,239 @@ async def cleanup_overlay_on_agent(agent: models.Host, lab_id: str) -> dict:
         return {"tunnels_deleted": 0, "bridges_deleted": 0, "errors": [str(e)]}
 
 
+# --- New Trunk VTEP Model Functions ---
+
+
+def allocate_link_vlan(lab_id: str, link_name: str) -> int:
+    """Allocate a deterministic VLAN tag for a cross-host link.
+
+    Uses hash of lab_id:link_name to ensure:
+    - Same link always gets same VLAN (idempotent)
+    - Different links get different VLANs (collision-resistant)
+    - Both sides of a link get the same VLAN when using same parameters
+
+    VLAN range: 3000-4000 (matches agent overlay VLAN range)
+
+    Args:
+        lab_id: Lab identifier
+        link_name: Link identifier (e.g., "node1:eth1-node2:eth1")
+
+    Returns:
+        VLAN tag in the overlay range
+    """
+    import hashlib
+
+    combined = f"{lab_id}:{link_name}"
+    hash_val = int(hashlib.md5(combined.encode()).hexdigest()[:8], 16)
+    # Map to VLAN range 3000-4000 (1000 values)
+    return 3000 + (hash_val % 1000)
+
+
+async def ensure_vtep_on_agent(
+    agent: models.Host,
+    local_ip: str,
+    remote_ip: str,
+    remote_host_id: str | None = None,
+) -> dict:
+    """Ensure a VTEP exists on an agent to a remote host.
+
+    This implements the new trunk VTEP model where there is one VTEP per
+    remote host (not per link). The VTEP carries all cross-host links to
+    that remote host with VLAN tags providing isolation.
+
+    Args:
+        agent: The agent to create the VTEP on
+        local_ip: Agent's local IP for VXLAN endpoint
+        remote_ip: Remote agent's IP for VXLAN endpoint
+        remote_host_id: Optional remote host identifier
+
+    Returns:
+        Dict with 'success', 'vtep', 'created', and optionally 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/overlay/vtep"
+
+    payload = {
+        "local_ip": local_ip,
+        "remote_ip": remote_ip,
+    }
+    if remote_host_id:
+        payload["remote_host_id"] = remote_host_id
+
+    try:
+        client = get_http_client()
+        response = await client.post(url, json=payload, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            action = "created" if result.get("created") else "found"
+            logger.info(
+                f"VTEP {action} on {agent.id}: {result.get('vtep', {}).get('interface_name')} -> {remote_ip}"
+            )
+        else:
+            logger.warning(f"VTEP ensure failed on {agent.id}: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to ensure VTEP on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def attach_overlay_interface_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    container_name: str,
+    interface_name: str,
+    vlan_tag: int,
+    tenant_mtu: int = 0,
+) -> dict:
+    """Attach a container interface to the overlay with a specific VLAN tag.
+
+    This is the new model where VLAN tag is specified (coordinated across
+    agents) rather than derived from a per-link tunnel.
+
+    Args:
+        agent: The agent where the container is running
+        lab_id: Lab identifier
+        container_name: Docker container name
+        interface_name: Interface name inside container (e.g., eth1)
+        vlan_tag: VLAN tag for link isolation (must match remote side)
+        tenant_mtu: Optional MTU (0 = use default)
+
+    Returns:
+        Dict with 'success' and optionally 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/overlay/attach-link"
+
+    payload = {
+        "lab_id": lab_id,
+        "container_name": container_name,
+        "interface_name": interface_name,
+        "vlan_tag": vlan_tag,
+        "tenant_mtu": tenant_mtu,
+    }
+
+    try:
+        client = get_http_client()
+        response = await client.post(url, json=payload, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(
+                f"Attached {container_name}:{interface_name} to VLAN {vlan_tag} on {agent.id}"
+            )
+        else:
+            logger.warning(f"Overlay attach failed on {agent.id}: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to attach overlay interface on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def setup_cross_host_link_v2(
+    database: Session,
+    lab_id: str,
+    link_id: str,
+    agent_a: models.Host,
+    agent_b: models.Host,
+    node_a: str,
+    interface_a: str,
+    node_b: str,
+    interface_b: str,
+) -> dict:
+    """Set up a cross-host link using the new trunk VTEP model.
+
+    This creates/reuses VTEPs on both agents and attaches the container
+    interfaces with a coordinated VLAN tag.
+
+    Args:
+        database: Database session (unused, kept for compatibility)
+        lab_id: Lab identifier
+        link_id: Link identifier
+        agent_a: First agent
+        agent_b: Second agent
+        node_a: Container name on agent_a
+        interface_a: Interface name in node_a
+        node_b: Container name on agent_b
+        interface_b: Interface name in node_b
+
+    Returns:
+        Dict with 'success' and status information
+    """
+    # Extract agent IP addresses
+    addr_a = agent_a.address.replace("http://", "").replace("https://", "")
+    addr_b = agent_b.address.replace("http://", "").replace("https://", "")
+    agent_ip_a = addr_a.split(":")[0]
+    agent_ip_b = addr_b.split(":")[0]
+
+    logger.info(f"Setting up cross-host link (v2) {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
+
+    # Step 1: Ensure VTEPs exist on both agents (can run in parallel)
+    vtep_a_task = ensure_vtep_on_agent(
+        agent_a,
+        local_ip=agent_ip_a,
+        remote_ip=agent_ip_b,
+        remote_host_id=agent_b.id,
+    )
+    vtep_b_task = ensure_vtep_on_agent(
+        agent_b,
+        local_ip=agent_ip_b,
+        remote_ip=agent_ip_a,
+        remote_host_id=agent_a.id,
+    )
+
+    vtep_a_result, vtep_b_result = await asyncio.gather(vtep_a_task, vtep_b_task)
+
+    if not vtep_a_result.get("success"):
+        return {"success": False, "error": f"VTEP on {agent_a.id} failed: {vtep_a_result.get('error')}"}
+    if not vtep_b_result.get("success"):
+        return {"success": False, "error": f"VTEP on {agent_b.id} failed: {vtep_b_result.get('error')}"}
+
+    # Step 2: Allocate deterministic VLAN for this link
+    vlan_tag = allocate_link_vlan(lab_id, link_id)
+
+    # Step 3: Attach container interfaces with the coordinated VLAN tag (in parallel)
+    # Get tenant MTU from one of the VTEPs
+    tenant_mtu = vtep_a_result.get("vtep", {}).get("tenant_mtu", 0)
+
+    attach_a_task = attach_overlay_interface_on_agent(
+        agent_a,
+        lab_id=lab_id,
+        container_name=node_a,
+        interface_name=interface_a,
+        vlan_tag=vlan_tag,
+        tenant_mtu=tenant_mtu,
+    )
+    attach_b_task = attach_overlay_interface_on_agent(
+        agent_b,
+        lab_id=lab_id,
+        container_name=node_b,
+        interface_name=interface_b,
+        vlan_tag=vlan_tag,
+        tenant_mtu=tenant_mtu,
+    )
+
+    attach_a_result, attach_b_result = await asyncio.gather(attach_a_task, attach_b_task)
+
+    if not attach_a_result.get("success"):
+        logger.warning(f"Container attachment on {agent_a.id} failed: {attach_a_result.get('error')}")
+    if not attach_b_result.get("success"):
+        logger.warning(f"Container attachment on {agent_b.id} failed: {attach_b_result.get('error')}")
+
+    return {
+        "success": True,
+        "vlan_tag": vlan_tag,
+        "agent_a": agent_a.id,
+        "agent_b": agent_b.id,
+        "vteps": {
+            "a": vtep_a_result.get("vtep", {}).get("interface_name"),
+            "b": vtep_b_result.get("vtep", {}).get("interface_name"),
+        },
+        "attachments": {
+            "a": attach_a_result.get("success", False),
+            "b": attach_b_result.get("success", False),
+        },
+    }
+
+
 async def get_overlay_status_from_agent(agent: models.Host) -> dict:
     """Get overlay status from an agent.
 

@@ -339,8 +339,60 @@ class CleanupOverlayResponse(BaseModel):
 
 class OverlayStatusResponse(BaseModel):
     """Agent -> Controller: Status of all overlay networks."""
-    tunnels: list[TunnelInfo] = Field(default_factory=list)
+    vteps: list[dict[str, Any]] = Field(default_factory=list)  # New trunk VTEPs
+    tunnels: list[TunnelInfo] = Field(default_factory=list)  # Legacy per-link tunnels
     bridges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# --- New Trunk VTEP Model ---
+
+
+class VtepInfo(BaseModel):
+    """Information about a VXLAN Tunnel Endpoint (trunk model)."""
+    interface_name: str
+    vni: int
+    local_ip: str
+    remote_ip: str
+    remote_host_id: str | None = None
+    tenant_mtu: int = 0
+
+
+class EnsureVtepRequest(BaseModel):
+    """Controller -> Agent: Ensure VTEP exists to remote host.
+
+    In the trunk VTEP model, there is one VTEP per remote host (not per link).
+    This creates the VTEP if it doesn't exist, or returns the existing one.
+    """
+    local_ip: str  # This agent's IP for VXLAN endpoint
+    remote_ip: str  # Remote agent's IP for VXLAN endpoint
+    remote_host_id: str | None = None  # Optional remote host identifier
+
+
+class EnsureVtepResponse(BaseModel):
+    """Agent -> Controller: VTEP creation/lookup result."""
+    success: bool
+    vtep: VtepInfo | None = None
+    created: bool = False  # True if newly created, False if already existed
+    error: str | None = None
+
+
+class AttachOverlayInterfaceRequest(BaseModel):
+    """Controller -> Agent: Attach container interface with VLAN tag.
+
+    This is the new model where VLAN tag is specified by the controller
+    (coordinated across agents) rather than derived from a per-link tunnel.
+    """
+    lab_id: str
+    container_name: str
+    interface_name: str  # Interface inside container (e.g., eth1)
+    vlan_tag: int  # VLAN for link isolation (must match remote side)
+    tenant_mtu: int = 0  # Optional MTU (0 = use default)
+
+
+class AttachOverlayInterfaceResponse(BaseModel):
+    """Agent -> Controller: Attachment result."""
+    success: bool
+    error: str | None = None
 
 
 # --- MTU Testing ---
