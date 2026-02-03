@@ -1349,33 +1349,55 @@ async def setup_cross_host_link_v2(
     # Get tenant MTU from one of the VTEPs
     tenant_mtu = vtep_a_result.get("vtep", {}).get("tenant_mtu", 0)
 
-    attach_a_task = attach_overlay_interface_on_agent(
-        agent_a,
-        lab_id=lab_id,
-        container_name=node_a,
-        interface_name=interface_a,
-        vlan_tag=vlan_tag,
-        tenant_mtu=tenant_mtu,
-        link_id=link_id,
-        remote_ip=agent_ip_b,  # For VTEP reference counting
-    )
-    attach_b_task = attach_overlay_interface_on_agent(
-        agent_b,
-        lab_id=lab_id,
-        container_name=node_b,
-        interface_name=interface_b,
-        vlan_tag=vlan_tag,
-        tenant_mtu=tenant_mtu,
-        link_id=link_id,
-        remote_ip=agent_ip_a,  # For VTEP reference counting
+    # Retry logic for container attachments - containers may still be starting
+    max_retries = 3
+    retry_delay = 2.0  # seconds
+
+    async def attach_with_retry(agent, node, interface, remote_ip) -> dict:
+        """Attempt attachment with retries for timing issues."""
+        last_error = None
+        for attempt in range(max_retries):
+            result = await attach_overlay_interface_on_agent(
+                agent,
+                lab_id=lab_id,
+                container_name=node,
+                interface_name=interface,
+                vlan_tag=vlan_tag,
+                tenant_mtu=tenant_mtu,
+                link_id=link_id,
+                remote_ip=remote_ip,
+            )
+            if result.get("success"):
+                return result
+            last_error = result.get("error", "unknown error")
+            # Check if it's a "not running" error - worth retrying
+            if "not running" in str(last_error).lower() and attempt < max_retries - 1:
+                logger.info(f"Container not running, retrying attachment in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+            else:
+                break
+        return {"success": False, "error": last_error}
+
+    attach_a_result, attach_b_result = await asyncio.gather(
+        attach_with_retry(agent_a, node_a, interface_a, agent_ip_b),
+        attach_with_retry(agent_b, node_b, interface_b, agent_ip_a),
     )
 
-    attach_a_result, attach_b_result = await asyncio.gather(attach_a_task, attach_b_task)
-
+    # Check if either attachment failed - this must fail the whole operation
+    attach_errors = []
     if not attach_a_result.get("success"):
-        logger.warning(f"Container attachment on {agent_a.id} failed: {attach_a_result.get('error')}")
+        attach_errors.append(f"{agent_a.name}:{node_a}:{interface_a}: {attach_a_result.get('error')}")
     if not attach_b_result.get("success"):
-        logger.warning(f"Container attachment on {agent_b.id} failed: {attach_b_result.get('error')}")
+        attach_errors.append(f"{agent_b.name}:{node_b}:{interface_b}: {attach_b_result.get('error')}")
+
+    if attach_errors:
+        error_msg = "; ".join(attach_errors)
+        logger.error(f"Container attachment failed for cross-host link {link_id}: {error_msg}")
+        return {
+            "success": False,
+            "error": f"Container attachment failed: {error_msg}",
+            "vlan_tag": vlan_tag,
+        }
 
     return {
         "success": True,
