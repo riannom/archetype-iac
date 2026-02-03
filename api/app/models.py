@@ -289,9 +289,9 @@ class LinkState(Base):
 class VxlanTunnel(Base):
     """Tracks VXLAN tunnels for cross-host links.
 
-    Each VXLAN tunnel connects two agents for a specific link in a lab.
-    The tunnel uses a unique VNI (VXLAN Network Identifier) and is
-    associated with a VLAN tag on the OVS bridge.
+    In the trunk VTEP model, multiple links between the same host pair share
+    a single VTEP with VLAN tags providing per-link isolation. Each link_state
+    has at most one tunnel record for tracking purposes.
 
     Status values:
     - pending: Tunnel setup initiated
@@ -300,14 +300,14 @@ class VxlanTunnel(Base):
     - cleanup: Tunnel being torn down
     """
     __tablename__ = "vxlan_tunnels"
-    __table_args__ = (UniqueConstraint("lab_id", "vni", name="uq_vxlan_tunnel_lab_vni"),)
+    __table_args__ = (UniqueConstraint("link_state_id", name="uq_vxlan_tunnel_link_state"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
     link_state_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("link_states.id", ondelete="SET NULL"), nullable=True
+        String(36), ForeignKey("link_states.id", ondelete="SET NULL"), nullable=True, unique=True
     )
-    # VXLAN Network Identifier (unique per tunnel in lab)
+    # VXLAN Network Identifier (shared per host-pair in trunk VTEP model)
     vni: Mapped[int] = mapped_column(index=True)
     # Shared VLAN tag used on both agent's OVS bridges
     vlan_tag: Mapped[int] = mapped_column()
