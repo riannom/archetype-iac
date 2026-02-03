@@ -1573,8 +1573,6 @@ const StudioPage: React.FC = () => {
               }
             }}
             studioRequest={studioRequest}
-            onOpenConfigViewer={() => handleOpenConfigViewer()}
-            onOpenNodeConfig={handleOpenConfigViewer}
             agents={agents}
             onUpdateNode={handleUpdateNode}
             pendingNodeOps={pendingNodeOps}

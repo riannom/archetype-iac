@@ -59,8 +59,6 @@ describe("RuntimeControl", () => {
   const mockOnSetRuntimeStatus = vi.fn();
   const mockOnRefreshStates = vi.fn();
   const mockStudioRequest = vi.fn();
-  const mockOnOpenConfigViewer = vi.fn();
-  const mockOnOpenNodeConfig = vi.fn();
 
   const defaultProps = {
     labId: "test-lab-123",
@@ -72,8 +70,6 @@ describe("RuntimeControl", () => {
     onSetRuntimeStatus: mockOnSetRuntimeStatus,
     onRefreshStates: mockOnRefreshStates,
     studioRequest: mockStudioRequest,
-    onOpenConfigViewer: mockOnOpenConfigViewer,
-    onOpenNodeConfig: mockOnOpenNodeConfig,
   };
 
   beforeEach(() => {
@@ -293,12 +289,6 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
 
-      // Wait for initial metrics fetch to complete, then clear mocks
-      await waitFor(() => {
-        expect(mockStudioRequest).toHaveBeenCalledWith('/dashboard/metrics/containers');
-      });
-      mockStudioRequest.mockClear();
-
       await user.click(screen.getByRole("button", { name: /stop all/i }));
 
       // After cancelling confirmation, no stop-related requests should be made
@@ -357,35 +347,6 @@ describe("RuntimeControl", () => {
     });
   });
 
-  describe("View Configs button", () => {
-    it("renders View Configs button when handler is provided and lab is deployed", () => {
-      const runtimeStates: Record<string, RuntimeStatus> = {
-        "node-1": "running",
-        "node-2": "running",
-      };
-
-      render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
-
-      expect(
-        screen.getByRole("button", { name: /view configs/i })
-      ).toBeInTheDocument();
-    });
-
-    it("calls onOpenConfigViewer when View Configs is clicked", async () => {
-      const user = userEvent.setup();
-      const runtimeStates: Record<string, RuntimeStatus> = {
-        "node-1": "running",
-        "node-2": "running",
-      };
-
-      render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
-
-      await user.click(screen.getByRole("button", { name: /view configs/i }));
-
-      expect(mockOnOpenConfigViewer).toHaveBeenCalled();
-    });
-  });
-
   describe("Per-node actions", () => {
     it("shows play button for stopped nodes", () => {
       const runtimeStates: Record<string, RuntimeStatus> = {
@@ -425,20 +386,6 @@ describe("RuntimeControl", () => {
       const restartButtons = document.querySelectorAll(".fa-rotate");
       expect(restartButtons.length).toBe(2);
     });
-
-    it("shows config button for each node when handler is provided", () => {
-      const runtimeStates: Record<string, RuntimeStatus> = {
-        "node-1": "running",
-        "node-2": "running",
-      };
-
-      render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
-
-      // Each node should have a config button, plus one header View Configs button
-      // Total: 2 per-node + 1 header = 3
-      const configButtons = document.querySelectorAll(".fa-file-code");
-      expect(configButtons.length).toBe(3);
-    });
   });
 
   describe("Empty state", () => {
@@ -458,8 +405,11 @@ describe("RuntimeControl", () => {
       render(<RuntimeControl {...defaultProps} />);
 
       expect(screen.getByText("Device Name")).toBeInTheDocument();
-      expect(screen.getByText("Model / Version")).toBeInTheDocument();
+      expect(screen.getByText("Model")).toBeInTheDocument();
+      expect(screen.getByText("Version")).toBeInTheDocument();
       expect(screen.getByText("Status")).toBeInTheDocument();
+      expect(screen.getByText("Assigned")).toBeInTheDocument();
+      expect(screen.getByText("Running On")).toBeInTheDocument();
       expect(screen.getByText("Actions")).toBeInTheDocument();
     });
   });
