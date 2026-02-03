@@ -311,7 +311,7 @@ class VxlanTunnel(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
     link_state_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("link_states.id", ondelete="SET NULL"), nullable=True, unique=True
+        String(36), ForeignKey("link_states.id", ondelete="CASCADE"), nullable=True, unique=True
     )
     # VXLAN Network Identifier (shared per host-pair in trunk VTEP model)
     vni: Mapped[int] = mapped_column(index=True)

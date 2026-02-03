@@ -53,6 +53,9 @@ def resolve_agent_ip(address: str) -> str:
 # Retry configuration (exported for backward compatibility)
 MAX_RETRIES = settings.agent_max_retries
 
+# VTEP operations can be slow due to OVS bridge operations
+VTEP_OPERATION_TIMEOUT = 60.0
+
 # Cache for healthy agents
 _agent_cache: dict[str, tuple[str, datetime]] = {}  # agent_id -> (address, last_check)
 
@@ -1162,7 +1165,7 @@ async def ensure_vtep_on_agent(
 
     try:
         client = get_http_client()
-        response = await client.post(url, json=payload, timeout=30.0)
+        response = await client.post(url, json=payload, timeout=VTEP_OPERATION_TIMEOUT)
         response.raise_for_status()
         result = response.json()
         if result.get("success"):
@@ -1222,7 +1225,7 @@ async def attach_overlay_interface_on_agent(
 
     try:
         client = get_http_client()
-        response = await client.post(url, json=payload, timeout=30.0)
+        response = await client.post(url, json=payload, timeout=VTEP_OPERATION_TIMEOUT)
         response.raise_for_status()
         result = response.json()
         if result.get("success"):
@@ -1279,7 +1282,7 @@ async def detach_overlay_interface_on_agent(
 
     try:
         client = get_http_client()
-        response = await client.post(url, json=payload, timeout=30.0)
+        response = await client.post(url, json=payload, timeout=VTEP_OPERATION_TIMEOUT)
         response.raise_for_status()
         result = response.json()
         if result.get("success"):

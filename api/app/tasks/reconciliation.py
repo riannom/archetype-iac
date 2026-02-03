@@ -29,6 +29,7 @@ from app.services.broadcaster import broadcast_node_state_change, broadcast_link
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 from app.utils.link import generate_link_name
+from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
 
 logger = logging.getLogger(__name__)
 
@@ -899,6 +900,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         # Also handles cross-host links where VXLAN tunnel is missing
         from app.tasks.live_links import create_link_if_ready
 
+        # Collect links that need auto-connect
+        links_to_connect = []
         for ls in link_states:
             # Check if link should be connected but isn't
             # Retry ALL error links, not just specific error types - the link setup
@@ -912,14 +915,28 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 and ls.actual_state in ("unknown", "pending", "down", "error")
             )
             if should_auto_connect:
-                # Both nodes running, link should be up but isn't - create it
-                logger.info(f"Auto-connecting pending link {ls.link_name}")
+                links_to_connect.append(ls)
+
+        # Process auto-connect with lock to prevent conflicts with live_links
+        if links_to_connect:
+            lock_acquired = acquire_link_ops_lock(lab_id)
+            if not lock_acquired:
+                logger.debug(
+                    f"Could not acquire link ops lock for lab {lab_id}, "
+                    f"skipping auto-connect (will retry next cycle)"
+                )
+            else:
                 try:
-                    await create_link_if_ready(session, lab_id, ls, host_to_agent)
-                except Exception as e:
-                    logger.error(f"Failed to auto-connect link {ls.link_name}: {e}")
-                    ls.actual_state = "error"
-                    ls.error_message = str(e)
+                    for ls in links_to_connect:
+                        logger.info(f"Auto-connecting pending link {ls.link_name}")
+                        try:
+                            await create_link_if_ready(session, lab_id, ls, host_to_agent)
+                        except Exception as e:
+                            logger.error(f"Failed to auto-connect link {ls.link_name}: {e}")
+                            ls.actual_state = "error"
+                            ls.error_message = str(e)
+                finally:
+                    release_link_ops_lock(lab_id)
 
         # Clean up links marked for deletion (desired_state="deleted")
         for ls in link_states:
