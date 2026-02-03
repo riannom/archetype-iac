@@ -522,7 +522,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         undeployed_count = 0
 
         # Check for active jobs that might be handling "stopping" nodes
-        active_stop_job = (
+        active_job = (
             session.query(models.Job)
             .filter(
                 models.Job.lab_id == lab_id,
@@ -530,6 +530,15 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             )
             .first()
         )
+
+        # If there's an active job, refresh node_states from DB to pick up any
+        # transitional state changes (stopping_started_at, starting_started_at)
+        # that the job may have committed after we initially loaded them.
+        # This prevents race conditions where reconciliation overwrites "stopping"
+        # with "running" because it read stale state.
+        if active_job:
+            for ns in node_states:
+                session.refresh(ns)
 
         for ns in node_states:
             # Skip nodes with active transitional operations
@@ -572,7 +581,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             # Additional check: skip "stopping" or "starting" states even without timestamp
             # if there's an active job (the job will manage state)
             if ns.actual_state == "stopping":
-                if active_stop_job:
+                if active_job:
                     stopped_count += 1
                     continue
                 # No timestamp and no job - something is wrong, recover
@@ -582,7 +591,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 )
 
             if ns.actual_state == "starting":
-                if active_stop_job:
+                if active_job:
                     running_count += 1
                     continue
                 # No timestamp and no job - something is wrong, recover
