@@ -9,11 +9,9 @@ import pytest
 from app import schemas
 from app.storage import (
     delete_layout,
-    ensure_topology_file,
     lab_workspace,
     layout_path,
     read_layout,
-    topology_path,
     workspace_root,
     write_layout,
 )
@@ -52,18 +50,6 @@ class TestLabWorkspace:
         assert workspace == tmp_path / "lab-with-dashes"
 
 
-class TestTopologyPath:
-    """Tests for topology_path function."""
-
-    def test_returns_topology_yml_path(self, monkeypatch, tmp_path):
-        """Test topology_path returns path to topology.yml."""
-        from app.config import settings
-        monkeypatch.setattr(settings, "workspace", str(tmp_path))
-
-        topo_path = topology_path("test-lab")
-        assert topo_path == tmp_path / "test-lab" / "topology.yml"
-
-
 class TestLayoutPath:
     """Tests for layout_path function."""
 
@@ -74,38 +60,6 @@ class TestLayoutPath:
 
         l_path = layout_path("test-lab")
         assert l_path == tmp_path / "test-lab" / "layout.json"
-
-
-class TestEnsureTopologyFile:
-    """Tests for ensure_topology_file function."""
-
-    def test_creates_topology_file(self, monkeypatch, tmp_path):
-        """Test that topology file is created if it doesn't exist."""
-        from app.config import settings
-        monkeypatch.setattr(settings, "workspace", str(tmp_path))
-
-        lab_dir = tmp_path / "new-lab"
-        lab_dir.mkdir(parents=True)
-
-        result = ensure_topology_file("new-lab")
-
-        assert result.exists()
-        assert "nodes" in result.read_text()
-
-    def test_does_not_overwrite_existing(self, monkeypatch, tmp_path):
-        """Test that existing topology file is not overwritten."""
-        from app.config import settings
-        monkeypatch.setattr(settings, "workspace", str(tmp_path))
-
-        lab_dir = tmp_path / "existing-lab"
-        lab_dir.mkdir(parents=True)
-        topo_file = lab_dir / "topology.yml"
-        original_content = "name: my-lab\nnodes: {}"
-        topo_file.write_text(original_content)
-
-        result = ensure_topology_file("existing-lab")
-
-        assert result.read_text() == original_content
 
 
 class TestReadLayout:
