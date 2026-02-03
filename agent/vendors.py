@@ -829,50 +829,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     ),
 
     # =========================================================================
-    # CLOUD & EXTERNAL
-    # =========================================================================
-    "internet": VendorConfig(
-        kind="bridge",  # Special type for external connectivity
-        vendor="System",
-        console_shell="/bin/sh",
-        default_image=None,
-        aliases=[],
-        device_type=DeviceType.EXTERNAL,
-        category="Cloud & External",
-        subcategory=None,
-        label="Public Internet",
-        icon="fa-cloud",
-        versions=["Default"],
-        is_active=True,
-        notes="External bridge for internet connectivity.",
-        port_naming="",
-        port_start_index=0,
-        max_ports=1,
-        requires_image=False,
-        tags=["external", "bridge", "connectivity"],
-    ),
-    "mgmt_bridge": VendorConfig(
-        kind="bridge",  # Special type for management
-        vendor="System",
-        console_shell="/bin/sh",
-        default_image=None,
-        aliases=[],
-        device_type=DeviceType.EXTERNAL,
-        category="Cloud & External",
-        subcategory=None,
-        label="Management Bridge",
-        icon="fa-plug-circle-bolt",
-        versions=["br0"],
-        is_active=True,
-        notes="Management bridge for OOB access.",
-        port_naming="",
-        port_start_index=0,
-        max_ports=1,
-        requires_image=False,
-        tags=["external", "bridge", "management", "oob"],
-    ),
-
-    # =========================================================================
     # CISCO SD-WAN (VM-based, requires libvirt provider)
     # =========================================================================
     "c8000v": VendorConfig(
@@ -1467,7 +1423,7 @@ def get_vendors_for_ui() -> list[dict]:
     # Convert to output format
     result = []
     # Define category order
-    category_order = ["Network", "Security", "Compute", "Cloud & External"]
+    category_order = ["Network", "Security", "Compute"]
 
     for cat in category_order:
         if cat not in categories:
