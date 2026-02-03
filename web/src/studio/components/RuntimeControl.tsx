@@ -5,13 +5,6 @@ import { getAgentColor } from '../../utils/agentColors';
 
 export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'stopping' | 'error';
 
-// Container metrics from the agent
-interface ContainerMetrics {
-  cpu_percent: number | null;
-  memory_percent: number | null;
-  memory_mb: number | null;
-}
-
 // Track pending operations to prevent race conditions from rapid clicks
 type PendingOp = 'bulk' | string; // 'bulk' for bulk actions, node ID for per-node actions
 
@@ -45,57 +38,6 @@ interface RuntimeControlProps {
 const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onSetRuntimeStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig, agents = [], onUpdateNode, pendingNodeOps = new Set(), onFlushTopologySave }) => {
   const [isExtracting, setIsExtracting] = useState(false);
   const [pendingOps, setPendingOps] = useState<Set<PendingOp>>(new Set());
-  const [containerMetrics, setContainerMetrics] = useState<Record<string, ContainerMetrics>>({});
-
-  // Fetch container metrics periodically
-  useEffect(() => {
-    if (!labId) return;
-
-    const fetchMetrics = async () => {
-      try {
-        const data = await studioRequest<{
-          by_lab: Record<string, {
-            name: string;
-            containers: Array<{
-              node_name: string;
-              status: string;
-              cpu_percent: number | null;
-              memory_percent: number | null;
-              memory_mb: number | null;
-            }>;
-          }>;
-        }>('/dashboard/metrics/containers');
-
-        const labData = data.by_lab[labId];
-        if (labData?.containers) {
-          const metricsMap: Record<string, ContainerMetrics> = {};
-          // Only use metrics from running containers that have actual metrics data
-          // This handles duplicates across agents and failed stats collection
-          for (const container of labData.containers) {
-            if (container.node_name && container.status === 'running') {
-              const hasMetrics = container.cpu_percent !== null || container.memory_percent !== null;
-              // Only update if we have actual metrics (don't overwrite good data with nulls)
-              if (hasMetrics) {
-                metricsMap[container.node_name] = {
-                  cpu_percent: container.cpu_percent,
-                  memory_percent: container.memory_percent,
-                  memory_mb: container.memory_mb,
-                };
-              }
-            }
-          }
-          setContainerMetrics(metricsMap);
-        }
-      } catch (error) {
-        // Silently ignore - metrics are optional
-      }
-    };
-
-    // Fetch immediately, then every 5 seconds
-    fetchMetrics();
-    const interval = setInterval(fetchMetrics, 5000);
-    return () => clearInterval(interval);
-  }, [labId, studioRequest]);
 
   // Helper to check if an operation is pending
   // Checks both local bulk ops and per-node ops passed from parent
@@ -268,7 +210,6 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Model / Version</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Status</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Agent</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Utilization</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest text-right">Actions</th>
               </tr>
             </thead>
@@ -349,54 +290,6 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                           </div>
                         )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      {status === 'running' ? (
-                        (() => {
-                          const metrics = containerMetrics[node.container_name || node.name];
-                          if (metrics && (metrics.cpu_percent !== null || metrics.memory_percent !== null)) {
-                            return (
-                              <div className="space-y-1.5">
-                                {metrics.cpu_percent !== null && (
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-16 h-1.5 bg-stone-200 dark:bg-stone-800 rounded-full overflow-hidden">
-                                      <div
-                                        className="h-full bg-blue-500 rounded-full transition-all"
-                                        style={{ width: `${Math.min(metrics.cpu_percent, 100)}%` }}
-                                      />
-                                    </div>
-                                    <span className="text-[10px] font-mono text-stone-600 dark:text-stone-400 w-12">
-                                      {metrics.cpu_percent.toFixed(1)}% <span className="text-stone-400 dark:text-stone-600">CPU</span>
-                                    </span>
-                                  </div>
-                                )}
-                                {metrics.memory_percent !== null && (
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-16 h-1.5 bg-stone-200 dark:bg-stone-800 rounded-full overflow-hidden">
-                                      <div
-                                        className="h-full bg-purple-500 rounded-full transition-all"
-                                        style={{ width: `${Math.min(metrics.memory_percent, 100)}%` }}
-                                      />
-                                    </div>
-                                    <span className="text-[10px] font-mono text-stone-600 dark:text-stone-400 w-12">
-                                      {metrics.memory_mb !== null ? `${metrics.memory_mb}MB` : `${metrics.memory_percent.toFixed(1)}%`} <span className="text-stone-400 dark:text-stone-600">MEM</span>
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          }
-                          return (
-                            <span className="text-stone-400 dark:text-stone-600 text-[10px] italic">
-                              Loading...
-                            </span>
-                          );
-                        })()
-                      ) : (
-                        <span className="text-stone-400 dark:text-stone-700 text-[10px] italic">
-                          Offline
-                        </span>
-                      )}
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">

@@ -561,25 +561,76 @@ async def lab_status(
     # Get the provider for this lab
     lab_provider = get_lab_provider(lab)
 
-    # Try to get status from the agent managing this lab (respecting affinity)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
-    if agent:
+    # Query NodePlacement to find all agents with nodes for this lab
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab.id)
+        .all()
+    )
+
+    # Get unique agent IDs from placements
+    agent_ids = set(p.host_id for p in placements)
+
+    # Also include lab's default agent if set
+    if lab.agent_id:
+        agent_ids.add(lab.agent_id)
+
+    if not agent_ids:
+        # No agents found - try to get any healthy agent
+        agent = await agent_client.get_healthy_agent(database, required_provider=lab_provider)
+        if agent:
+            agent_ids.add(agent.id)
+
+    # Fetch agents from database
+    agents = []
+    if agent_ids:
+        agents = database.query(models.Host).filter(models.Host.id.in_(agent_ids)).all()
+
+    if not agents:
+        # Fallback to old netlab command if no agents
+        code, stdout, stderr = run_netlab_command(["netlab", "status"], lab_workspace(lab.id))
+        if code != 0:
+            return {"raw": "", "error": stderr or "netlab status failed"}
+        return {"raw": stdout}
+
+    # Aggregate status from all agents
+    all_nodes = []
+    errors = []
+    agent_info = []
+
+    async def fetch_agent_status(agent: models.Host):
         try:
             result = await agent_client.get_lab_status_from_agent(agent, lab.id)
-            return {
-                "nodes": result.get("nodes", []),
-                "error": result.get("error"),
-                "agent_id": agent.id,
-                "agent_name": agent.name,
-            }
+            nodes = result.get("nodes", [])
+            # Add agent info to each node
+            for node in nodes:
+                node["agent_id"] = agent.id
+                node["agent_name"] = agent.name
+            return nodes, result.get("error"), agent
         except Exception as e:
-            return {"nodes": [], "error": str(e)}
+            return [], str(e), agent
 
-    # Fallback to old netlab command if no agent
-    code, stdout, stderr = run_netlab_command(["netlab", "status"], lab_workspace(lab.id))
-    if code != 0:
-        return {"raw": "", "error": stderr or "netlab status failed"}
-    return {"raw": stdout}
+    # Fetch status from all agents concurrently
+    results = await asyncio.gather(*[fetch_agent_status(a) for a in agents])
+
+    seen_nodes = set()  # Track which nodes we've already added
+    for nodes, error, agent in results:
+        if error:
+            errors.append(f"{agent.name or agent.id}: {error}")
+        for node in nodes:
+            # Avoid duplicates - use node name as key
+            node_name = node.get("name", "")
+            if node_name not in seen_nodes:
+                all_nodes.append(node)
+                seen_nodes.add(node_name)
+        agent_info.append({"id": agent.id, "name": agent.name})
+
+    return {
+        "nodes": all_nodes,
+        "error": "; ".join(errors) if errors else None,
+        "agents": agent_info,
+        "is_multi_host": len(agents) > 1,
+    }
 
 
 @router.get("/labs/{lab_id}/jobs")
