@@ -181,6 +181,7 @@ async def link_reconciliation_monitor():
 
             except Exception as e:
                 logger.error(f"Link reconciliation error: {e}")
+                session.rollback()
             finally:
                 session.close()
 
