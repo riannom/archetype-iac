@@ -452,6 +452,8 @@ class DockerOVSPlugin:
                 data = json.load(f)
 
             self._deserialize_state(data)
+            if self._migrate_state_to_shared_bridge():
+                await self._save_state()
 
             logger.info(
                 f"Loaded plugin state: {len(self.lab_bridges)} bridges, "
@@ -465,6 +467,31 @@ class DockerOVSPlugin:
         except Exception as e:
             logger.error(f"Failed to load plugin state: {e}")
             return False
+
+    def _migrate_state_to_shared_bridge(self) -> bool:
+        """Rewrite persisted per-lab bridge references to the shared bridge."""
+        shared_bridge = settings.ovs_bridge_name
+        updated = False
+
+        for lab_id, bridge in self.lab_bridges.items():
+            if bridge.bridge_name != shared_bridge:
+                logger.warning(
+                    f"Updating persisted bridge for lab {lab_id} "
+                    f"from {bridge.bridge_name} to {shared_bridge}"
+                )
+                bridge.bridge_name = shared_bridge
+                updated = True
+
+        for net_id, network in self.networks.items():
+            if network.bridge_name != shared_bridge:
+                logger.warning(
+                    f"Updating persisted network {net_id[:12]} bridge "
+                    f"from {network.bridge_name} to {shared_bridge}"
+                )
+                network.bridge_name = shared_bridge
+                updated = True
+
+        return updated
 
     async def _mark_dirty_and_save(self) -> None:
         """Mark state as dirty and save to disk.
