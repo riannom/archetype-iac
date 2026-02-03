@@ -85,12 +85,14 @@ const AgentDropdown: React.FC<{
           <i className={`fa-solid fa-chevron-down text-[10px] text-stone-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
         {isOpen && (
-          <div className="absolute z-50 w-full mt-1 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg shadow-lg overflow-hidden">
+          <div className="absolute z-50 w-full mt-1 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg shadow-lg overflow-hidden">
             <button
               type="button"
               onClick={() => { onChange(''); setIsOpen(false); }}
-              className={`w-full px-3 py-2 text-sm text-left hover:bg-stone-100 dark:hover:bg-stone-700 ${
-                !value ? 'bg-sage-50 dark:bg-sage-900/20 text-sage-700 dark:text-sage-400' : 'text-stone-700 dark:text-stone-300'
+              className={`w-full px-3 py-2 text-sm text-left ${
+                !value
+                  ? 'bg-sage-50 dark:bg-sage-900/50 text-sage-700 dark:text-sage-400'
+                  : 'bg-white dark:bg-stone-900 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800'
               }`}
             >
               Auto (any available agent)
@@ -100,8 +102,10 @@ const AgentDropdown: React.FC<{
                 key={agent.id}
                 type="button"
                 onClick={() => { onChange(agent.id); setIsOpen(false); }}
-                className={`w-full px-3 py-2 text-sm text-left hover:bg-stone-100 dark:hover:bg-stone-700 ${
-                  value === agent.id ? 'bg-sage-50 dark:bg-sage-900/20 text-sage-700 dark:text-sage-400' : 'text-stone-700 dark:text-stone-300'
+                className={`w-full px-3 py-2 text-sm text-left ${
+                  value === agent.id
+                    ? 'bg-sage-50 dark:bg-sage-900/50 text-sage-700 dark:text-sage-400'
+                    : 'bg-white dark:bg-stone-900 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800'
                 }`}
               >
                 {agent.name}
