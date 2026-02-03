@@ -254,7 +254,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                           value={node.host || ''}
                           onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
                           disabled={status === 'running' || status === 'booting' || status === 'stopping'}
-                          className="bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <option value="">Auto</option>
                           {agents.map((agent) => (
