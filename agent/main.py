@@ -587,9 +587,35 @@ async def get_resource_usage() -> dict:
     return await asyncio.to_thread(_sync_get_resource_usage)
 
 
+def _detect_local_ip() -> str | None:
+    """Auto-detect local IP address from default route interface."""
+    import subprocess
+    try:
+        # Get the IP of the interface with the default route
+        result = subprocess.run(
+            ["ip", "route", "get", "1.1.1.1"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            # Output: "1.1.1.1 via X.X.X.X dev ethX src Y.Y.Y.Y uid 0"
+            parts = result.stdout.split()
+            if "src" in parts:
+                src_idx = parts.index("src")
+                if src_idx + 1 < len(parts):
+                    ip = parts[src_idx + 1]
+                    logger.info(f"Auto-detected local IP: {ip}")
+                    return ip
+    except Exception as e:
+        logger.warning(f"Failed to auto-detect local IP: {e}")
+    return None
+
+
 def get_agent_info() -> AgentInfo:
     """Build agent info for registration."""
     # Determine the host to advertise to the controller.
+    # Priority: advertise_host > agent_host (if not 0.0.0.0) > local_ip > auto-detect > agent_name
     advertise_host = settings.advertise_host
     if not advertise_host:
         if settings.agent_host != "0.0.0.0":
@@ -597,7 +623,12 @@ def get_agent_info() -> AgentInfo:
         elif settings.local_ip:
             advertise_host = settings.local_ip
         else:
-            advertise_host = settings.agent_name
+            # Try to auto-detect the local IP
+            detected_ip = _detect_local_ip()
+            if detected_ip:
+                advertise_host = detected_ip
+            else:
+                advertise_host = settings.agent_name
 
     address = f"{advertise_host}:{settings.agent_port}"
 
