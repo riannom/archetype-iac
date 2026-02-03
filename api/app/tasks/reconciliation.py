@@ -862,16 +862,15 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
         for ls in link_states:
             # Check if link should be connected but isn't
-            # Include "error" state for cross-host links with missing tunnels
+            # Retry ALL error links, not just specific error types - the link setup
+            # functions are idempotent and will reapply correct VLAN tags, recreate
+            # VXLAN tunnels, etc. This handles recovery from agent restarts, VLAN
+            # mismatches, transient failures, and other error conditions.
             should_auto_connect = (
                 ls.desired_state == "up"
                 and node_actual_states.get(ls.source_node) == "running"
                 and node_actual_states.get(ls.target_node) == "running"
-                and (
-                    ls.actual_state in ("unknown", "pending", "down")
-                    or (ls.actual_state == "error" and ls.is_cross_host
-                        and ls.error_message == "VXLAN tunnel not active")
-                )
+                and ls.actual_state in ("unknown", "pending", "down", "error")
             )
             if should_auto_connect:
                 # Both nodes running, link should be up but isn't - create it
