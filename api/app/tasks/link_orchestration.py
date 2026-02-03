@@ -487,6 +487,9 @@ async def teardown_deployment_links(
 
 
 def _extract_agent_ip(agent: models.Host) -> str:
-    """Extract IP address from agent's address field."""
-    addr = agent.address.replace("http://", "").replace("https://", "")
-    return addr.split(":")[0]
+    """Extract and resolve IP address from agent's address field.
+
+    For VXLAN endpoints, we need actual IP addresses not hostnames.
+    """
+    from app.agent_client import resolve_agent_ip
+    return resolve_agent_ip(agent.address)

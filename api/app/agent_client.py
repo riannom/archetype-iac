@@ -6,6 +6,7 @@ import asyncio
 import atexit
 import json
 import logging
+import socket
 from datetime import datetime, timedelta
 from typing import TypeVar, Callable, Any
 
@@ -18,6 +19,36 @@ from app.db import SessionLocal
 
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_agent_ip(address: str) -> str:
+    """Extract and resolve IP address from agent address.
+
+    Handles both IP addresses and hostnames. For hostnames, performs DNS
+    resolution to get the actual IP address (needed for VXLAN endpoints).
+
+    Args:
+        address: Agent address in format "host:port" or "http://host:port"
+
+    Returns:
+        Resolved IP address as string
+    """
+    # Strip protocol and port
+    addr = address.replace("http://", "").replace("https://", "")
+    host = addr.split(":")[0]
+
+    # Check if it's already an IP address (simple check for IPv4)
+    if all(part.isdigit() for part in host.split(".")):
+        return host
+
+    # Resolve hostname to IP
+    try:
+        ip = socket.gethostbyname(host)
+        logger.debug(f"Resolved hostname {host} to IP {ip}")
+        return ip
+    except socket.gaierror as e:
+        logger.warning(f"Failed to resolve hostname {host}: {e}, using as-is")
+        return host
 
 # Retry configuration (exported for backward compatibility)
 MAX_RETRIES = settings.agent_max_retries
@@ -1284,11 +1315,9 @@ async def setup_cross_host_link_v2(
     Returns:
         Dict with 'success' and status information
     """
-    # Extract agent IP addresses
-    addr_a = agent_a.address.replace("http://", "").replace("https://", "")
-    addr_b = agent_b.address.replace("http://", "").replace("https://", "")
-    agent_ip_a = addr_a.split(":")[0]
-    agent_ip_b = addr_b.split(":")[0]
+    # Extract and resolve agent IP addresses (handles hostnames like "local-agent")
+    agent_ip_a = resolve_agent_ip(agent_a.address)
+    agent_ip_b = resolve_agent_ip(agent_b.address)
 
     logger.info(f"Setting up cross-host link (v2) {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
 
