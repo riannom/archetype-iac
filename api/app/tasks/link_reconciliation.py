@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
@@ -321,6 +321,49 @@ async def attempt_link_repair(
         return False
 
 
+async def cleanup_orphaned_tunnels(session: Session) -> int:
+    """Clean up orphaned VxlanTunnel records.
+
+    Orphaned tunnels are those where:
+    - link_state_id is NULL (LinkState was deleted but tunnel remained)
+    - status is "cleanup" for more than 5 minutes (teardown stalled)
+
+    Args:
+        session: Database session
+
+    Returns:
+        Number of orphaned tunnels deleted
+    """
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    orphaned = (
+        session.query(models.VxlanTunnel)
+        .filter(
+            or_(
+                models.VxlanTunnel.link_state_id == None,
+                and_(
+                    models.VxlanTunnel.status == "cleanup",
+                    models.VxlanTunnel.updated_at < cutoff_time,
+                ),
+            )
+        )
+        .all()
+    )
+
+    count = len(orphaned)
+    for tunnel in orphaned:
+        logger.debug(
+            f"Deleting orphaned tunnel: vni={tunnel.vni}, "
+            f"link_state_id={tunnel.link_state_id}, status={tunnel.status}"
+        )
+        session.delete(tunnel)
+
+    if count > 0:
+        session.commit()
+
+    return count
+
+
 async def link_reconciliation_monitor():
     """Background task that periodically reconciles link states.
 
@@ -346,6 +389,11 @@ async def link_reconciliation_monitor():
                         f"recovered={results['recovered']}, "
                         f"errors={results['errors']}, skipped={results['skipped']}"
                     )
+
+                # Clean up orphaned VxlanTunnel records
+                orphans_deleted = await cleanup_orphaned_tunnels(session)
+                if orphans_deleted > 0:
+                    logger.info(f"Cleaned up {orphans_deleted} orphaned VxlanTunnel records")
 
             except Exception as e:
                 logger.error(f"Link reconciliation error: {e}")
