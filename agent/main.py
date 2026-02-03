@@ -410,9 +410,7 @@ def _sync_get_resource_usage() -> dict:
         try:
             import docker
             from docker.errors import NotFound, APIError
-            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
             client = docker.from_env()
-            stats_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="docker-stats")
 
             # Use low-level API to get container list, then fetch each individually
             # This handles "Dead" or corrupted containers gracefully
@@ -449,99 +447,6 @@ def _sync_get_resource_usage() -> dict:
                 node_name = labels.get("archetype.node_name")
                 node_kind = labels.get("archetype.node_kind")
 
-                # Collect per-container CPU/memory stats for running containers
-                container_cpu_percent = None
-                container_memory_percent = None
-                container_memory_mb = None
-                if c.status == "running" and not is_archetype_system:
-                    try:
-                        # Use a timeout to prevent stats collection from hanging
-                        # Docker stats can hang on containers with network issues
-                        future = stats_executor.submit(c.stats, stream=False)
-                        try:
-                            stats = future.result(timeout=5.0)  # 5 second timeout
-                        except FuturesTimeoutError:
-                            logger.debug(f"Stats collection timed out for {c.name}")
-                            raise Exception("Stats timeout")
-                        # Calculate CPU percentage
-                        # Handle both cgroups v1 and v2 formats
-                        cpu_stats = stats.get("cpu_stats", {})
-                        precpu_stats = stats.get("precpu_stats", {})
-                        cpu_usage = cpu_stats.get("cpu_usage", {})
-                        precpu_usage = precpu_stats.get("cpu_usage", {})
-
-                        cpu_delta = cpu_usage.get("total_usage", 0) - precpu_usage.get("total_usage", 0)
-                        system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
-                        online_cpus = cpu_stats.get("online_cpus") or len(cpu_usage.get("percpu_usage", [])) or 1
-
-                        if system_delta > 0:
-                            # cgroups v1 calculation (or v2 with system_cpu_usage available)
-                            container_cpu_percent = round((cpu_delta / system_delta) * online_cpus * 100, 1)
-                        elif cpu_delta >= 0:
-                            # cgroups v2: system_cpu_usage not available, use time-based estimation
-                            read_time = stats.get("read", "")
-                            preread_time = stats.get("preread", "")
-                            if read_time and preread_time:
-                                from datetime import datetime
-                                try:
-                                    # Parse ISO timestamps (e.g., "2024-01-01T00:00:00.123456789Z")
-                                    read_dt = datetime.fromisoformat(read_time.replace("Z", "+00:00").rstrip("0").rstrip("."))
-                                    preread_dt = datetime.fromisoformat(preread_time.replace("Z", "+00:00").rstrip("0").rstrip("."))
-                                    time_delta_ns = (read_dt - preread_dt).total_seconds() * 1e9
-                                    if time_delta_ns > 0:
-                                        container_cpu_percent = round((cpu_delta / time_delta_ns) * 100, 1)
-                                except Exception:
-                                    pass
-
-                        # Calculate memory percentage and usage
-                        memory_stats = stats.get("memory_stats", {})
-                        memory_usage = memory_stats.get("usage", 0)
-                        # Subtract cache from usage for more accurate "real" memory
-                        # cgroups v2 uses "inactive_file" instead of "cache"
-                        memory_cache = memory_stats.get("stats", {}).get("cache", 0)
-                        if memory_cache == 0:
-                            memory_cache = memory_stats.get("stats", {}).get("inactive_file", 0)
-                        memory_actual = memory_usage - memory_cache
-                        memory_limit = memory_stats.get("limit", 0)
-
-                        # Fallback: if Docker API returns empty stats, read cgroup files directly
-                        # This happens with systemd-based containers (like cEOS) on cgroups v2
-                        if memory_usage == 0 and not memory_stats:
-                            try:
-                                container_id = c.id
-                                cgroup_base = f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope"
-                                mem_current_path = f"{cgroup_base}/memory.current"
-                                if os.path.exists(mem_current_path):
-                                    with open(mem_current_path) as f:
-                                        memory_usage = int(f.read().strip())
-                                    # Try to get inactive_file from memory.stat
-                                    mem_stat_path = f"{cgroup_base}/memory.stat"
-                                    if os.path.exists(mem_stat_path):
-                                        with open(mem_stat_path) as f:
-                                            for line in f:
-                                                if line.startswith("inactive_file"):
-                                                    memory_cache = int(line.split()[1])
-                                                    break
-                                    memory_actual = memory_usage - memory_cache
-                                    logger.debug(f"Used cgroup fallback for {c.name}: {memory_actual} bytes")
-                            except Exception as e:
-                                logger.debug(f"Cgroup fallback failed for {c.name}: {e}")
-
-                        # On cgroups v2, a very large limit (close to max int64) means no limit
-                        # Use host memory as the reference in that case
-                        if memory_limit > 0 and memory_limit < (1 << 62):
-                            container_memory_percent = round((memory_actual / memory_limit) * 100, 1)
-                            container_memory_mb = round(memory_actual / (1024 * 1024), 1)
-                        elif memory_actual > 0:
-                            # No container memory limit - just report usage in MB
-                            container_memory_mb = round(memory_actual / (1024 * 1024), 1)
-                            # Can't calculate percent without a limit, leave as None
-                            logger.debug(f"Memory limit not set for {c.name}, reporting usage only: {container_memory_mb}MB")
-                        else:
-                            logger.debug(f"Memory stats invalid for {c.name}: memory_limit={memory_limit}, usage={memory_usage}")
-                    except Exception as e:
-                        logger.debug(f"Stats collection failed for {c.name}: {type(e).__name__}: {e}")
-
                 # Get image name/tag (handle deleted images gracefully)
                 try:
                     image_name = c.image.tags[0] if c.image.tags else c.image.short_id
@@ -556,12 +461,7 @@ def _sync_get_resource_usage() -> dict:
                     "node_kind": node_kind,
                     "image": image_name,
                     "is_system": is_archetype_system,
-                    "cpu_percent": container_cpu_percent,
-                    "memory_percent": container_memory_percent,
-                    "memory_mb": container_memory_mb,
                 })
-            # Shutdown the stats executor
-            stats_executor.shutdown(wait=False)
         except Exception as e:
             logger.warning(f"Docker container collection failed: {type(e).__name__}: {e}")
 

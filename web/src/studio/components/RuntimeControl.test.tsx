@@ -460,34 +460,7 @@ describe("RuntimeControl", () => {
       expect(screen.getByText("Device Name")).toBeInTheDocument();
       expect(screen.getByText("Model / Version")).toBeInTheDocument();
       expect(screen.getByText("Status")).toBeInTheDocument();
-      expect(screen.getByText("Utilization")).toBeInTheDocument();
       expect(screen.getByText("Actions")).toBeInTheDocument();
-    });
-  });
-
-  describe("Utilization display", () => {
-    it("shows Offline for stopped nodes", () => {
-      const runtimeStates: Record<string, RuntimeStatus> = {
-        "node-1": "stopped",
-        "node-2": "stopped",
-      };
-
-      render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
-
-      const offlineTexts = screen.getAllByText("Offline");
-      expect(offlineTexts).toHaveLength(2);
-    });
-
-    it("shows Loading for running nodes without metrics data", () => {
-      const runtimeStates: Record<string, RuntimeStatus> = {
-        "node-1": "running",
-        "node-2": "running",
-      };
-
-      render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
-
-      const loadingTexts = screen.getAllByText("Loading...");
-      expect(loadingTexts).toHaveLength(2);
     });
   });
 });
