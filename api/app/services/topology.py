@@ -73,6 +73,37 @@ def resolve_node_image(
     return get_default_image(kind)
 
 
+def resolve_device_kind(device: str | None) -> str:
+    """Resolve the canonical kind for a device, checking custom devices.
+
+    Priority:
+    1. If device matches a vendor config, use vendor's kind
+    2. If device is a custom device, use custom device's kind field
+    3. Fall back to the device ID itself (or "linux" if None)
+
+    Args:
+        device: Device type (e.g., "eos", "ceos", custom device ID)
+
+    Returns:
+        The canonical kind (e.g., "ceos" for EOS devices)
+    """
+    if not device:
+        return "linux"
+
+    # First check if vendor config knows this device
+    config = get_config_by_device(device)
+    if config:
+        return config.kind
+
+    # Check custom devices for a kind override
+    custom = find_custom_device(device)
+    if custom and custom.get("kind"):
+        return custom["kind"]
+
+    # Fall back to the device ID itself
+    return device
+
+
 @dataclass
 class NodePlacementInfo:
     """Placement of a node on a specific host."""
@@ -173,7 +204,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
             if_override = None
 
         # Resolve image using canonical 3-step fallback
-        kind = get_kind_for_device(n.device) if n.device else "linux"
+        kind = resolve_device_kind(n.device)
         image = resolve_node_image(n.device, kind, n.image, n.version)
 
         if not image:
@@ -279,7 +310,7 @@ class TopologyService:
         by_id = self._build_interface_index_map(nodes, links)
         result: dict[str, int] = {}
         for n in nodes:
-            kind = get_kind_for_device(n.device) if n.device else "linux"
+            kind = resolve_device_kind(n.device)
             max_ports = self._get_effective_max_ports(n.device, kind)
             max_index = by_id.get(n.id, 0)
             result[n.container_name] = max(max_ports, max_index)
@@ -424,7 +455,7 @@ class TopologyService:
         images: set[str] = set()
 
         for node in nodes:
-            kind = get_kind_for_device(node.device) if node.device else "linux"
+            kind = resolve_device_kind(node.device)
             image = resolve_node_image(node.device, kind, node.image, node.version)
             if image:
                 images.add(image)
@@ -446,7 +477,7 @@ class TopologyService:
         image_to_nodes: dict[str, list[str]] = {}
 
         for node in nodes:
-            kind = get_kind_for_device(node.device) if node.device else "linux"
+            kind = resolve_device_kind(node.device)
             image = resolve_node_image(node.device, kind, node.image, node.version)
             if image:
                 if image not in image_to_nodes:
@@ -1244,7 +1275,7 @@ class TopologyService:
         startup_config = config.get("startup-config")
 
         # Resolve image using canonical 3-step fallback
-        kind = get_kind_for_device(node.device) if node.device else "linux"
+        kind = resolve_device_kind(node.device)
         image = resolve_node_image(node.device, kind, node.image, node.version)
 
         if not image:
