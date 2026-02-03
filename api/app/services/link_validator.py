@@ -69,12 +69,13 @@ async def verify_same_host_link(
     source_iface = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
     target_iface = _normalize_interface_name(link_state.target_interface) if link_state.target_interface else ""
 
-    # Get VLAN tags from agent
+    # Get VLAN tags from agent (read directly from OVS for ground truth)
     source_vlan = await agent_client.get_interface_vlan_from_agent(
         agent,
         link_state.lab_id,
         link_state.source_node,
         source_iface,
+        read_from_ovs=True,
     )
 
     target_vlan = await agent_client.get_interface_vlan_from_agent(
@@ -82,6 +83,7 @@ async def verify_same_host_link(
         link_state.lab_id,
         link_state.target_node,
         target_iface,
+        read_from_ovs=True,
     )
 
     if source_vlan is None:
@@ -133,12 +135,13 @@ async def verify_cross_host_link(
     source_iface = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
     target_iface = _normalize_interface_name(link_state.target_interface) if link_state.target_interface else ""
 
-    # Get VLAN tags from both agents
+    # Get VLAN tags from both agents (read directly from OVS for ground truth)
     source_vlan = await agent_client.get_interface_vlan_from_agent(
         source_agent,
         link_state.lab_id,
         link_state.source_node,
         source_iface,
+        read_from_ovs=True,
     )
 
     target_vlan = await agent_client.get_interface_vlan_from_agent(
@@ -146,6 +149,7 @@ async def verify_cross_host_link(
         link_state.lab_id,
         link_state.target_node,
         target_iface,
+        read_from_ovs=True,
     )
 
     if source_vlan is None:

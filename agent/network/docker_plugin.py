@@ -2521,6 +2521,7 @@ class DockerOVSPlugin:
         lab_id: str,
         container: str,
         interface: str,
+        read_from_ovs: bool = False,
     ) -> int | None:
         """Get the current VLAN tag for an endpoint.
 
@@ -2528,6 +2529,8 @@ class DockerOVSPlugin:
             lab_id: Lab identifier
             container: Container name
             interface: Interface name
+            read_from_ovs: If True, read directly from OVS instead of in-memory state.
+                          Use this for verification to get ground truth.
 
         Returns:
             VLAN tag if found, None otherwise.
@@ -2535,12 +2538,84 @@ class DockerOVSPlugin:
         async with self._lock:
             for ep in self.endpoints.values():
                 if ep.container_name == container and ep.interface_name == interface:
+                    if read_from_ovs and ep.host_veth:
+                        # Read actual VLAN from OVS for verification
+                        code, stdout, _ = await self._run_cmd([
+                            "ovs-vsctl", "get", "port", ep.host_veth, "tag"
+                        ])
+                        if code == 0:
+                            try:
+                                return int(stdout.strip())
+                            except ValueError:
+                                pass
                     return ep.vlan_tag
 
         ep = await self._discover_endpoint(lab_id, container, interface)
         if ep:
+            if read_from_ovs and ep.host_veth:
+                # Read actual VLAN from OVS for verification
+                code, stdout, _ = await self._run_cmd([
+                    "ovs-vsctl", "get", "port", ep.host_veth, "tag"
+                ])
+                if code == 0:
+                    try:
+                        return int(stdout.strip())
+                    except ValueError:
+                        pass
             return ep.vlan_tag
         return None
+
+    async def set_endpoint_vlan(
+        self,
+        lab_id: str,
+        container: str,
+        interface: str,
+        vlan_tag: int,
+    ) -> bool:
+        """Update the VLAN tag for an endpoint in the in-memory state.
+
+        This should be called after externally modifying the OVS port's VLAN tag
+        to keep the in-memory state synchronized with OVS reality.
+
+        Args:
+            lab_id: Lab identifier
+            container: Container name
+            interface: Interface name
+            vlan_tag: New VLAN tag to record
+
+        Returns:
+            True if endpoint was found and updated, False otherwise.
+        """
+        async with self._lock:
+            for ep in self.endpoints.values():
+                if ep.container_name == container and ep.interface_name == interface:
+                    old_vlan = ep.vlan_tag
+                    ep.vlan_tag = vlan_tag
+                    self._touch_lab(lab_id)
+                    await self._mark_dirty_and_save()
+                    logger.debug(
+                        f"Updated in-memory VLAN for {container}:{interface}: "
+                        f"{old_vlan} -> {vlan_tag}"
+                    )
+                    return True
+
+        # Try to discover the endpoint if not in tracking
+        ep = await self._discover_endpoint(lab_id, container, interface)
+        if ep:
+            ep.vlan_tag = vlan_tag
+            # Add to tracking if discovered
+            async with self._lock:
+                self.endpoints[ep.endpoint_id] = ep
+                await self._mark_dirty_and_save()
+            logger.debug(
+                f"Discovered and updated VLAN for {container}:{interface}: {vlan_tag}"
+            )
+            return True
+
+        logger.warning(
+            f"Could not find endpoint to update VLAN: {container}:{interface}"
+        )
+        return False
 
     def get_container_interface_mapping(
         self,

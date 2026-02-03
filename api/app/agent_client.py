@@ -1981,6 +1981,7 @@ async def get_interface_vlan_from_agent(
     lab_id: str,
     node_name: str,
     interface: str,
+    read_from_ovs: bool = False,
 ) -> int | None:
     """Get the current VLAN tag for a specific interface from an agent.
 
@@ -1989,11 +1990,15 @@ async def get_interface_vlan_from_agent(
         lab_id: Lab identifier
         node_name: Container name or node name
         interface: Interface name (e.g., "eth1")
+        read_from_ovs: If True, read directly from OVS instead of in-memory state.
+                       Use this for verification to get ground truth.
 
     Returns:
         VLAN tag or None if not found
     """
     url = f"{get_agent_url(agent)}/labs/{lab_id}/interfaces/{node_name}/{interface}/vlan"
+    if read_from_ovs:
+        url += "?read_from_ovs=true"
     client = get_http_client()
 
     try:
