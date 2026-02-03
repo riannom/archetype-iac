@@ -1449,24 +1449,6 @@ async def get_overlay_status_from_agent(agent: models.Host) -> dict:
         return {"tunnels": [], "bridges": []}
 
 
-async def get_overlay_status_from_agent(agent: models.Host) -> dict:
-    """Get overlay network status from an agent.
-
-    Returns:
-        Dict with 'tunnels' and 'bridges' lists
-    """
-    url = f"{get_agent_url(agent)}/overlay/status"
-
-    try:
-        client = get_http_client()
-        response = await client.get(url, timeout=10.0)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        logger.error(f"Failed to get overlay status from agent {agent.id}: {e}")
-        return {"tunnels": [], "bridges": []}
-
-
 def agent_supports_vxlan(agent: models.Host) -> bool:
     """Check if an agent supports VXLAN overlay."""
     caps = parse_capabilities(agent)

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
+from app.utils.link import lookup_endpoint_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class LinkManager:
 
         if not source_host_id or not target_host_id:
             # Look up from NodePlacement or Node records
-            source_host_id, target_host_id = self._lookup_endpoint_hosts(link_state)
+            source_host_id, target_host_id = lookup_endpoint_hosts(self.session, link_state)
 
         if not source_host_id or not target_host_id:
             logger.error(f"Cannot determine hosts for link {link_state.link_name}")
@@ -174,8 +175,8 @@ class LinkManager:
         lab_id = link_state.lab_id
 
         # Get agent IP addresses
-        agent_ip_a = self._extract_agent_ip(agent_a)
-        agent_ip_b = self._extract_agent_ip(agent_b)
+        agent_ip_a = agent_client.resolve_agent_ip(agent_a.address)
+        agent_ip_b = agent_client.resolve_agent_ip(agent_b.address)
 
         # Use new trunk VTEP model
         result = await agent_client.setup_cross_host_link_v2(
@@ -252,8 +253,8 @@ class LinkManager:
             return True
 
         # Get agent IP addresses for VTEP reference counting
-        agent_ip_a = self._extract_agent_ip(agent_a)
-        agent_ip_b = self._extract_agent_ip(agent_b)
+        agent_ip_a = agent_client.resolve_agent_ip(agent_a.address)
+        agent_ip_b = agent_client.resolve_agent_ip(agent_b.address)
         vlan_tag = link_state.vlan_tag
 
         logger.info(
@@ -413,85 +414,6 @@ class LinkManager:
         else:
             logger.warning(f"Unknown desired_state: {link_state.desired_state}")
             return False
-
-    # =========================================================================
-    # Private methods
-    # =========================================================================
-
-    def _lookup_endpoint_hosts(
-        self,
-        link_state: models.LinkState,
-    ) -> tuple[str | None, str | None]:
-        """Look up which hosts have the source and target nodes.
-
-        First checks Node.host_id (explicit placement), then NodePlacement
-        (runtime placement tracking).
-
-        Returns:
-            Tuple of (source_host_id, target_host_id)
-        """
-        lab_id = link_state.lab_id
-
-        source_host_id = None
-        target_host_id = None
-
-        # Check Node.host_id first (explicit placement)
-        source_node = (
-            self.session.query(models.Node)
-            .filter(
-                models.Node.lab_id == lab_id,
-                models.Node.container_name == link_state.source_node,
-            )
-            .first()
-        )
-        if source_node and source_node.host_id:
-            source_host_id = source_node.host_id
-
-        target_node = (
-            self.session.query(models.Node)
-            .filter(
-                models.Node.lab_id == lab_id,
-                models.Node.container_name == link_state.target_node,
-            )
-            .first()
-        )
-        if target_node and target_node.host_id:
-            target_host_id = target_node.host_id
-
-        # Fall back to NodePlacement
-        if not source_host_id:
-            placement = (
-                self.session.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.node_name == link_state.source_node,
-                )
-                .first()
-            )
-            if placement:
-                source_host_id = placement.host_id
-
-        if not target_host_id:
-            placement = (
-                self.session.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.node_name == link_state.target_node,
-                )
-                .first()
-            )
-            if placement:
-                target_host_id = placement.host_id
-
-        return source_host_id, target_host_id
-
-    def _extract_agent_ip(self, agent: models.Host) -> str:
-        """Extract and resolve IP address from agent's address field.
-
-        For VXLAN endpoints, we need actual IP addresses not hostnames.
-        """
-        from app.agent_client import resolve_agent_ip
-        return resolve_agent_ip(agent.address)
 
     async def _connect_same_host_link(
         self,
