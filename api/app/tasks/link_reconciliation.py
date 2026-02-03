@@ -4,9 +4,9 @@ This module periodically verifies that link states match actual OVS
 configuration and attempts repair if discrepancies are found.
 
 Key operations:
-1. Query all links marked as "up"
+1. Query all links marked as "up" or in "error" state needing recovery
 2. Verify VLAN tags match on both endpoints
-3. Attempt repair if mismatch detected
+3. Attempt repair if mismatch detected (supports partial re-attachment)
 4. Mark as error if repair fails
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
@@ -22,6 +23,7 @@ from app.db import SessionLocal
 from app.services.link_validator import verify_link_connected
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
 from app.topology import _normalize_interface_name
+from app.utils.locks import get_link_state_by_id_for_update
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +35,9 @@ RECONCILIATION_ENABLED = True
 async def reconcile_link_states(session: Session) -> dict:
     """Reconcile link_states with actual OVS configuration.
 
-    For each link marked as "up":
-    1. Query VLAN tags from both agents
-    2. Compare with expected configuration
-    3. If mismatch: attempt repair or mark as error
+    Processes two categories of links:
+    1. Links marked as "up" - verify VLAN tags match
+    2. Cross-host links in "error" state with partial attachment - attempt recovery
 
     Args:
         session: Database session
@@ -48,18 +49,35 @@ async def reconcile_link_states(session: Session) -> dict:
         "checked": 0,
         "valid": 0,
         "repaired": 0,
+        "recovered": 0,
         "errors": 0,
         "skipped": 0,
     }
 
-    # Get all links marked as "up"
-    up_links = (
+    # Get links that need attention:
+    # - Links marked as "up" (verification)
+    # - Cross-host links in "error" with partial attachment (recovery)
+    links_to_check = (
         session.query(models.LinkState)
-        .filter(models.LinkState.actual_state == "up")
+        .filter(
+            or_(
+                models.LinkState.actual_state == "up",
+                # Error links needing recovery (at least one side needs re-attachment)
+                (
+                    (models.LinkState.actual_state == "error") &
+                    (models.LinkState.is_cross_host == True) &
+                    (models.LinkState.desired_state == "up") &
+                    (
+                        (models.LinkState.source_vxlan_attached == False) |
+                        (models.LinkState.target_vxlan_attached == False)
+                    )
+                ),
+            )
+        )
         .all()
     )
 
-    if not up_links:
+    if not links_to_check:
         return results
 
     # Build host_to_agent map for all online agents
@@ -70,7 +88,7 @@ async def reconcile_link_states(session: Session) -> dict:
     )
     host_to_agent = {a.id: a for a in agents}
 
-    for link in up_links:
+    for link in links_to_check:
         results["checked"] += 1
 
         # Skip if required agents are offline
@@ -82,6 +100,23 @@ async def reconcile_link_states(session: Session) -> dict:
             continue
 
         try:
+            # Handle error links needing recovery
+            if link.actual_state == "error" and link.is_cross_host:
+                logger.info(
+                    f"Attempting recovery for link {link.link_name} "
+                    f"(source_attached={link.source_vxlan_attached}, "
+                    f"target_attached={link.target_vxlan_attached})"
+                )
+                recovered = await attempt_partial_recovery(session, link, host_to_agent)
+                if recovered:
+                    results["recovered"] += 1
+                    logger.info(f"Link {link.link_name} recovered successfully")
+                else:
+                    results["errors"] += 1
+                    logger.error(f"Link {link.link_name} recovery failed")
+                continue
+
+            # For "up" links, verify connectivity
             is_valid, error = await verify_link_connected(session, link, host_to_agent)
 
             if is_valid:
@@ -108,12 +143,138 @@ async def reconcile_link_states(session: Session) -> dict:
     return results
 
 
+async def attempt_partial_recovery(
+    session: Session,
+    link: models.LinkState,
+    host_to_agent: dict[str, models.Host],
+) -> bool:
+    """Attempt partial recovery of a cross-host link after agent restart.
+
+    This function re-attaches only the missing side(s) of a link instead
+    of recreating the entire link. This is more efficient when only one
+    agent restarted.
+
+    Args:
+        session: Database session
+        link: The link to recover
+        host_to_agent: Map of host_id to Host objects
+
+    Returns:
+        True if recovery succeeded, False otherwise
+    """
+    # Re-query with row-level lock to prevent concurrent modifications
+    link = get_link_state_by_id_for_update(session, link.id)
+    if not link:
+        logger.warning(f"Link not found for recovery (may have been deleted)")
+        return False
+
+    if not link.is_cross_host:
+        # This shouldn't happen, but handle gracefully
+        logger.warning(f"Partial recovery called on same-host link {link.link_name}")
+        return False
+
+    agent_a = host_to_agent.get(link.source_host_id)
+    agent_b = host_to_agent.get(link.target_host_id)
+
+    if not agent_a or not agent_b:
+        logger.warning(f"Agents not available for link {link.link_name} recovery")
+        return False
+
+    # Get agent IPs and VLAN tag
+    from app.agent_client import resolve_agent_ip
+    agent_ip_a = resolve_agent_ip(agent_a.address)
+    agent_ip_b = resolve_agent_ip(agent_b.address)
+
+    # Use existing VLAN tag or allocate new one
+    vlan_tag = link.vlan_tag
+    if not vlan_tag:
+        from app.services.link_manager import allocate_vni
+        # Use VNI allocation for VLAN tag (deterministic)
+        vlan_tag = allocate_vni(link.lab_id, link.link_name) % 4000 + 100
+        link.vlan_tag = vlan_tag
+
+    interface_a = _normalize_interface_name(link.source_interface) if link.source_interface else ""
+    interface_b = _normalize_interface_name(link.target_interface) if link.target_interface else ""
+
+    source_ok = link.source_vxlan_attached
+    target_ok = link.target_vxlan_attached
+
+    # Re-attach source side if needed
+    if not source_ok:
+        try:
+            # Ensure VTEP exists
+            await agent_client.ensure_vtep_on_agent(
+                agent_a, agent_ip_a, agent_ip_b, agent_b.id
+            )
+            # Attach interface
+            result = await agent_client.attach_overlay_interface_on_agent(
+                agent_a,
+                lab_id=link.lab_id,
+                container_name=link.source_node,
+                interface_name=interface_a,
+                vlan_tag=vlan_tag,
+                link_id=link.link_name,
+                remote_ip=agent_ip_b,
+            )
+            if result.get("success"):
+                source_ok = True
+                link.source_vxlan_attached = True
+                logger.info(f"Re-attached source side of {link.link_name}")
+            else:
+                logger.error(f"Failed to re-attach source: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Source re-attachment failed for {link.link_name}: {e}")
+
+    # Re-attach target side if needed
+    if not target_ok:
+        try:
+            # Ensure VTEP exists
+            await agent_client.ensure_vtep_on_agent(
+                agent_b, agent_ip_b, agent_ip_a, agent_a.id
+            )
+            # Attach interface
+            result = await agent_client.attach_overlay_interface_on_agent(
+                agent_b,
+                lab_id=link.lab_id,
+                container_name=link.target_node,
+                interface_name=interface_b,
+                vlan_tag=vlan_tag,
+                link_id=link.link_name,
+                remote_ip=agent_ip_a,
+            )
+            if result.get("success"):
+                target_ok = True
+                link.target_vxlan_attached = True
+                logger.info(f"Re-attached target side of {link.link_name}")
+            else:
+                logger.error(f"Failed to re-attach target: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Target re-attachment failed for {link.link_name}: {e}")
+
+    # Check if both sides are now attached
+    if source_ok and target_ok:
+        link.actual_state = "up"
+        link.error_message = None
+        link.source_carrier_state = "on"
+        link.target_carrier_state = "on"
+        logger.info(f"Link {link.link_name} fully recovered")
+        return True
+    else:
+        link.error_message = (
+            f"Partial recovery: source={'ok' if source_ok else 'failed'}, "
+            f"target={'ok' if target_ok else 'failed'}"
+        )
+        return False
+
+
 async def attempt_link_repair(
     session: Session,
     link: models.LinkState,
     host_to_agent: dict[str, models.Host],
 ) -> bool:
     """Try to repair a broken link by re-calling hot_connect or VTEP attach.
+
+    Uses row-level locking to prevent concurrent modifications.
 
     Args:
         session: Database session
@@ -124,6 +285,12 @@ async def attempt_link_repair(
         True if repair succeeded, False otherwise
     """
     log_parts: list[str] = []
+
+    # Re-query with row-level lock to prevent concurrent modifications
+    link = get_link_state_by_id_for_update(session, link.id)
+    if not link:
+        logger.warning(f"Link not found for repair (may have been deleted)")
+        return False
 
     try:
         if link.is_cross_host:
@@ -176,6 +343,7 @@ async def link_reconciliation_monitor():
                     logger.info(
                         f"Link reconciliation: checked={results['checked']}, "
                         f"valid={results['valid']}, repaired={results['repaired']}, "
+                        f"recovered={results['recovered']}, "
                         f"errors={results['errors']}, skipped={results['skipped']}"
                     )
 
@@ -211,21 +379,34 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
         "checked": 0,
         "valid": 0,
         "repaired": 0,
+        "recovered": 0,
         "errors": 0,
         "skipped": 0,
     }
 
-    # Get all links for this lab marked as "up"
-    up_links = (
+    # Get links that need attention for this lab
+    links_to_check = (
         session.query(models.LinkState)
         .filter(
             models.LinkState.lab_id == lab_id,
-            models.LinkState.actual_state == "up",
+            or_(
+                models.LinkState.actual_state == "up",
+                # Error links needing recovery
+                (
+                    (models.LinkState.actual_state == "error") &
+                    (models.LinkState.is_cross_host == True) &
+                    (models.LinkState.desired_state == "up") &
+                    (
+                        (models.LinkState.source_vxlan_attached == False) |
+                        (models.LinkState.target_vxlan_attached == False)
+                    )
+                ),
+            ),
         )
         .all()
     )
 
-    if not up_links:
+    if not links_to_check:
         return results
 
     # Build host_to_agent map
@@ -236,7 +417,7 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
     )
     host_to_agent = {a.id: a for a in agents}
 
-    for link in up_links:
+    for link in links_to_check:
         results["checked"] += 1
 
         # Skip if required agents are offline
@@ -248,6 +429,16 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
             continue
 
         try:
+            # Handle error links needing recovery
+            if link.actual_state == "error" and link.is_cross_host:
+                recovered = await attempt_partial_recovery(session, link, host_to_agent)
+                if recovered:
+                    results["recovered"] += 1
+                else:
+                    results["errors"] += 1
+                continue
+
+            # For "up" links, verify connectivity
             is_valid, error = await verify_link_connected(session, link, host_to_agent)
 
             if is_valid:

@@ -399,12 +399,20 @@ class AttachOverlayInterfaceResponse(BaseModel):
 
 
 class DetachOverlayInterfaceRequest(BaseModel):
-    """Controller -> Agent: Detach a link from VTEP reference counting.
+    """Controller -> Agent: Detach a link from the overlay.
 
-    This removes the link from the VTEP's reference set. If the VTEP
-    has no more links using it, it can optionally be deleted.
+    This performs a complete detach operation:
+    1. Restores the container interface to an isolated VLAN (unique tag)
+    2. Removes the link from VTEP reference counting
+    3. Optionally deletes the VTEP if no more links use it
+
+    The interface isolation ensures the port no longer participates in
+    the cross-host link's L2 domain.
     """
-    link_id: str  # Link identifier to detach
+    lab_id: str  # Lab identifier
+    container_name: str  # Container name (short form, e.g., "eos_1")
+    interface_name: str  # Interface inside container (e.g., eth1)
+    link_id: str  # Link identifier for VTEP tracking
     remote_ip: str  # Remote VTEP IP
     delete_vtep_if_unused: bool = True  # Delete VTEP if no more links
 
@@ -412,6 +420,8 @@ class DetachOverlayInterfaceRequest(BaseModel):
 class DetachOverlayInterfaceResponse(BaseModel):
     """Agent -> Controller: Detach result."""
     success: bool
+    interface_isolated: bool = False  # True if interface was restored to isolated VLAN
+    new_vlan: int | None = None  # The new isolated VLAN assigned
     vtep_deleted: bool = False  # True if VTEP was deleted
     remaining_links: int = 0  # Links still using the VTEP
     error: str | None = None

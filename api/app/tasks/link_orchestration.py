@@ -22,6 +22,7 @@ from app.services.link_manager import LinkManager
 from app.services.link_validator import verify_link_connected, update_interface_mappings
 from app.services.topology import TopologyService
 from app.topology import _normalize_interface_name
+from app.utils.locks import get_link_state_for_update
 
 logger = logging.getLogger(__name__)
 
@@ -374,10 +375,12 @@ async def create_cross_host_link(
             existing_tunnel.vlan_tag = vlan_tag
             existing_tunnel.status = "active"
 
-        # Only now mark as "up"
+        # Only now mark as "up" and set attachment flags
         link_state.actual_state = "up"
         link_state.source_carrier_state = "on"
         link_state.target_carrier_state = "on"
+        link_state.source_vxlan_attached = True
+        link_state.target_vxlan_attached = True
         link_state.error_message = None
         log_parts.append(
             f"  {link_state.link_name}: OK (VLAN {vlan_tag}, cross-host VTEP)"
@@ -479,6 +482,8 @@ async def teardown_deployment_links(
         ls.vni = None
         ls.vlan_tag = None
         ls.actual_state = "down"
+        ls.source_vxlan_attached = False
+        ls.target_vxlan_attached = False
 
     session.commit()
 

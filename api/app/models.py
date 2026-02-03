@@ -282,6 +282,12 @@ class LinkState(Base):
     source_carrier_state: Mapped[str] = mapped_column(String(10), default="on")
     target_carrier_state: Mapped[str] = mapped_column(String(10), default="on")
 
+    # Partial VXLAN attachment tracking for cross-host links
+    # Used to track which side has been successfully attached to the overlay
+    # Enables partial recovery when one agent restarts
+    source_vxlan_attached: Mapped[bool] = mapped_column(default=False)
+    target_vxlan_attached: Mapped[bool] = mapped_column(default=False)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

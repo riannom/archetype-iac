@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import db, models
@@ -305,12 +306,63 @@ async def _handle_agent_restart_cleanup(database: Session, agent_id: str) -> Non
 
         database.commit()
 
-    # Note: Link reconciliation on agent restart is handled by the periodic
-    # state_reconciliation_monitor (every 30s). Triggering it immediately
-    # during registration caused database connection issues because the
-    # reconciliation holds sessions open while making HTTP calls to agents.
-    # The 30-second delay is acceptable for recovery from agent restarts.
+    # Mark cross-host links for recovery
+    # This sets the appropriate attachment flags so link reconciliation
+    # knows which side needs to be re-attached
+    await _mark_links_for_recovery(database, agent_id)
 
+
+async def _mark_links_for_recovery(database: Session, agent_id: str) -> None:
+    """Mark cross-host links as needing recovery after agent restart.
+
+    When an agent restarts, its VXLAN overlay state is lost. This function:
+    1. Finds all cross-host links where this agent hosts either endpoint
+    2. Marks them as "error" state with appropriate message
+    3. Clears the VXLAN attachment flag for this agent's side
+
+    The periodic link reconciliation will then detect these links and
+    re-establish connectivity by re-attaching the affected endpoints.
+
+    Args:
+        database: Database session
+        agent_id: ID of the restarted agent
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Find all cross-host links involving this agent where actual_state is "up"
+    links = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.actual_state == "up",
+            models.LinkState.is_cross_host == True,
+            or_(
+                models.LinkState.source_host_id == agent_id,
+                models.LinkState.target_host_id == agent_id,
+            ),
+        )
+        .all()
+    )
+
+    if not links:
+        logger.debug(f"No cross-host links to recover for agent {agent_id}")
+        return
+
+    for link in links:
+        link.actual_state = "error"
+        link.error_message = "Agent restarted, pending recovery"
+
+        # Clear the attachment flag for the restarted agent's side
+        if link.source_host_id == agent_id:
+            link.source_vxlan_attached = False
+        if link.target_host_id == agent_id:
+            link.target_vxlan_attached = False
+
+    database.commit()
+
+    logger.info(
+        f"Marked {len(links)} cross-host links for recovery after agent {agent_id} restart"
+    )
 
 
 @router.post("/{agent_id}/heartbeat", response_model=HeartbeatResponse)
