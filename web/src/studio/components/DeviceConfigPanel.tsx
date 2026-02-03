@@ -1,10 +1,12 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../../api';
-import { DeviceModel, DeviceConfig } from '../types';
+import { DeviceModel, DeviceConfig, ImageLibraryEntry } from '../types';
 import VendorOptionsPanel from './VendorOptionsPanel';
+import { formatSize } from '../../utils/format';
 
 interface DeviceConfigPanelProps {
   device: DeviceModel;
+  imageLibrary: ImageLibraryEntry[];
   onRefresh: () => void;
 }
 
@@ -100,6 +102,7 @@ const ConfigField: React.FC<ConfigFieldProps> = ({
 
 const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
   device,
+  imageLibrary,
   onRefresh,
 }) => {
   const [config, setConfig] = useState<DeviceConfig | null>(null);
@@ -110,6 +113,11 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
 
   // Local edit state
   const [editValues, setEditValues] = useState<Record<string, unknown>>({});
+
+  // Filter images assigned to this device
+  const deviceImages = useMemo(() => {
+    return imageLibrary.filter((img) => img.device_id === device.id);
+  }, [imageLibrary, device.id]);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -238,15 +246,16 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
             </div>
             <div>
               <h2 className="text-lg font-bold text-stone-900 dark:text-white">{device.name}</h2>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs text-stone-500">{device.vendor}</span>
-                <span className="w-1 h-1 rounded-full bg-stone-300 dark:bg-stone-600"></span>
-                <span className="text-xs text-stone-400 font-mono">{device.id}</span>
-                {(base.isBuiltIn as boolean) && (
-                  <span className="px-1.5 py-0.5 text-[8px] font-bold uppercase bg-stone-100 dark:bg-stone-800 text-stone-500 rounded">
-                    Built-in
-                  </span>
-                )}
+              <div className="flex flex-col gap-0.5 mt-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-stone-500">{device.vendor}</span>
+                  {(base.isBuiltIn as boolean) && (
+                    <span className="px-1.5 py-0.5 text-[8px] font-bold uppercase bg-stone-100 dark:bg-stone-800 text-stone-500 rounded">
+                      Built-in
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px] text-stone-400 font-mono">{device.id}</span>
               </div>
             </div>
           </div>
@@ -433,6 +442,68 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
               </span>
             ))}
           </div>
+        </ConfigSection>
+
+        {/* Associated Images */}
+        <ConfigSection title="Associated Images" icon="fa-images" defaultOpen={false}>
+          {deviceImages.length === 0 ? (
+            <p className="text-xs text-stone-500 dark:text-stone-400 italic">
+              No images assigned to this device
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {deviceImages.map((img) => (
+                <div
+                  key={img.id}
+                  className="flex items-center gap-3 p-2 bg-stone-50 dark:bg-stone-900/50 border border-stone-200 dark:border-stone-800 rounded-lg"
+                >
+                  {/* Kind icon */}
+                  <div
+                    className={`
+                      w-8 h-8 rounded flex items-center justify-center shrink-0
+                      ${img.kind === 'docker'
+                        ? 'bg-blue-100 dark:bg-blue-900/30'
+                        : 'bg-orange-100 dark:bg-orange-900/30'
+                      }
+                    `}
+                  >
+                    <i
+                      className={`fa-brands ${img.kind === 'docker' ? 'fa-docker text-blue-500' : 'fa-hard-drive text-orange-500'}`}
+                    />
+                  </div>
+
+                  {/* Image info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-stone-700 dark:text-stone-200 truncate">
+                        {img.filename || img.reference}
+                      </span>
+                      {img.is_default && (
+                        <span className="px-1.5 py-0.5 text-[8px] font-bold uppercase bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded">
+                          DEFAULT
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5 text-[10px] text-stone-400">
+                      <span className="uppercase font-bold">{img.kind}</span>
+                      {img.version && (
+                        <>
+                          <span>·</span>
+                          <span>{img.version}</span>
+                        </>
+                      )}
+                      {img.size_bytes && (
+                        <>
+                          <span>·</span>
+                          <span>{formatSize(img.size_bytes)}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </ConfigSection>
       </div>
     </div>

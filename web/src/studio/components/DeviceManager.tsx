@@ -676,6 +676,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                       <ImageCard
                         key={img.id}
                         image={img}
+                        device={img.device_id ? deviceModels.find((d) => d.id === img.device_id) : undefined}
                         onUnassign={() => handleUnassignImage(img.id)}
                         onDelete={() => handleDeleteImage(img.id)}
                         onSync={onRefresh}
@@ -703,6 +704,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                         <ImageCard
                           key={img.id}
                           image={img}
+                          device={device}
                           onUnassign={() => handleUnassignImage(img.id)}
                           onSetDefault={() => handleSetDefaultImage(img.id, deviceId)}
                           onDelete={() => handleDeleteImage(img.id)}

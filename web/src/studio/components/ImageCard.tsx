@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { ImageLibraryEntry, ImageHostStatus } from '../types';
+import { ImageLibraryEntry, ImageHostStatus, DeviceModel } from '../types';
 import { useDragHandlers, useDragContext } from '../contexts/DragContext';
 import { formatSize, formatDate } from '../../utils/format';
 import { apiRequest } from '../../api';
 
 interface ImageCardProps {
   image: ImageLibraryEntry;
+  device?: DeviceModel;
   onUnassign?: () => void;
   onSetDefault?: () => void;
   onDelete?: () => void;
@@ -16,6 +17,7 @@ interface ImageCardProps {
 
 const ImageCard: React.FC<ImageCardProps> = ({
   image,
+  device,
   onUnassign,
   onSetDefault,
   onDelete,
@@ -260,6 +262,38 @@ const ImageCard: React.FC<ImageCardProps> = ({
               <span className="text-stone-500">Assigned to</span>
               <span className="font-bold text-stone-700 dark:text-stone-300">{image.device_id}</span>
             </div>
+
+            {/* Device properties (read-only) */}
+            {device && (
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                <div className="flex items-center gap-1">
+                  <span className="text-stone-400">Type:</span>
+                  <span className="text-stone-600 dark:text-stone-300">{device.type}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-stone-400">Vendor:</span>
+                  <span className="text-stone-600 dark:text-stone-300">{device.vendor}</span>
+                </div>
+                {device.memory && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-stone-400">Memory:</span>
+                    <span className="text-stone-600 dark:text-stone-300">{device.memory}MB</span>
+                  </div>
+                )}
+                {device.cpu && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-stone-400">CPU:</span>
+                    <span className="text-stone-600 dark:text-stone-300">{device.cpu}</span>
+                  </div>
+                )}
+                {device.maxPorts && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-stone-400">Ports:</span>
+                    <span className="text-stone-600 dark:text-stone-300">{device.maxPorts}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

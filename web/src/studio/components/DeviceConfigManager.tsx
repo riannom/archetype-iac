@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { DeviceModel } from '../types';
+import { DeviceModel, ImageLibraryEntry } from '../types';
 import DeviceConfigCard from './DeviceConfigCard';
 import DeviceConfigPanel from './DeviceConfigPanel';
 import FilterChip from './FilterChip';
@@ -12,6 +12,7 @@ interface CustomDevice {
 interface DeviceConfigManagerProps {
   deviceModels: DeviceModel[];
   customDevices: CustomDevice[];
+  imageLibrary: ImageLibraryEntry[];
   onAddCustomDevice: (device: CustomDevice) => void;
   onRemoveCustomDevice: (deviceId: string) => void;
   onRefresh: () => void;
@@ -20,6 +21,7 @@ interface DeviceConfigManagerProps {
 const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
   deviceModels,
   customDevices,
+  imageLibrary,
   onAddCustomDevice,
   onRemoveCustomDevice,
   onRefresh,
@@ -373,6 +375,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
             {selectedDevice ? (
               <DeviceConfigPanel
                 device={selectedDevice}
+                imageLibrary={imageLibrary}
                 onRefresh={onRefresh}
               />
             ) : (

@@ -168,6 +168,7 @@ const NodesPage: React.FC = () => {
             <DeviceConfigManager
               deviceModels={deviceModels}
               customDevices={customDevices}
+              imageLibrary={imageLibrary}
               onAddCustomDevice={handleAddCustomDevice}
               onRemoveCustomDevice={handleRemoveCustomDevice}
               onRefresh={refreshCatalog}

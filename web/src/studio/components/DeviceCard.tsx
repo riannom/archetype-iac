@@ -102,15 +102,20 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
                 {breadcrumb}
               </p>
             )}
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase">
-                {device.vendor}
-              </span>
-              {device.licenseRequired && (
-                <span className="text-[9px] px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded font-bold">
-                  License
+            <div className="flex flex-col gap-0.5 mt-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase">
+                  {device.vendor}
                 </span>
-              )}
+                {device.licenseRequired && (
+                  <span className="text-[9px] px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded font-bold">
+                    License
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] text-stone-400 dark:text-stone-500 font-mono">
+                {device.id}
+              </span>
             </div>
           </div>
 
