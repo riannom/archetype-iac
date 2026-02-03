@@ -948,15 +948,35 @@ async def refresh_node_states(
     )
 
     for ns in node_states:
+        # Skip nodes with active transitional operations - let the job handle state updates
+        # This prevents refresh from overwriting "stopping" with "running" mid-operation
+        if ns.stopping_started_at:
+            stopping_duration = datetime.now(timezone.utc) - ns.stopping_started_at
+            if stopping_duration.total_seconds() < 360:  # 6 minutes
+                continue  # Don't overwrite transitional state
+
+        if ns.starting_started_at:
+            starting_duration = datetime.now(timezone.utc) - ns.starting_started_at
+            if starting_duration.total_seconds() < 360:  # 6 minutes
+                continue  # Don't overwrite transitional state
+
+        # Also skip if actual_state is transitional (backup for timestamp edge cases)
+        if ns.actual_state in ("stopping", "starting", "pending"):
+            continue
+
         container_status = container_status_map.get(ns.node_name)
         if container_status:
             if container_status == "running":
                 ns.actual_state = "running"
+                ns.stopping_started_at = None  # Clear if recovering
+                ns.starting_started_at = None
                 ns.error_message = None
                 if not ns.boot_started_at:
                     ns.boot_started_at = datetime.now(timezone.utc)
             elif container_status in ("stopped", "exited"):
                 ns.actual_state = "stopped"
+                ns.stopping_started_at = None  # Clear if recovering
+                ns.starting_started_at = None
                 ns.error_message = None
                 ns.boot_started_at = None
         else:

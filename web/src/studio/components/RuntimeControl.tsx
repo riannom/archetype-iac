@@ -39,9 +39,10 @@ interface RuntimeControlProps {
   agents?: { id: string; name: string }[];
   onUpdateNode?: (id: string, updates: Partial<Node>) => void;
   pendingNodeOps?: Set<string>;
+  onFlushTopologySave?: () => Promise<void>;
 }
 
-const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onSetRuntimeStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig, agents = [], onUpdateNode, pendingNodeOps = new Set() }) => {
+const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onSetRuntimeStatus, onRefreshStates, studioRequest, onOpenConfigViewer, onOpenNodeConfig, agents = [], onUpdateNode, pendingNodeOps = new Set(), onFlushTopologySave }) => {
   const [isExtracting, setIsExtracting] = useState(false);
   const [pendingOps, setPendingOps] = useState<Set<PendingOp>>(new Set());
   const [containerMetrics, setContainerMetrics] = useState<Record<string, ContainerMetrics>>({});
@@ -138,6 +139,12 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
 
     setPendingOps(prev => new Set(prev).add('bulk'));
     try {
+      // Flush any pending topology saves before deploying
+      // This ensures host assignments are committed to DB before the deploy job reads them
+      if (onFlushTopologySave) {
+        await onFlushTopologySave();
+      }
+
       // Optimistically update UI (without triggering API calls)
       nodes.forEach(node => {
         onSetRuntimeStatus(node.id, action === 'running' ? 'booting' : 'stopping');
@@ -160,7 +167,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
         return next;
       });
     }
-  }, [labId, nodes, studioRequest, onSetRuntimeStatus, onRefreshStates, isOperationPending]);
+  }, [labId, nodes, studioRequest, onSetRuntimeStatus, onRefreshStates, isOperationPending, onFlushTopologySave]);
 
   const handleExtractConfigs = useCallback(async () => {
     const confirmed = window.confirm(
