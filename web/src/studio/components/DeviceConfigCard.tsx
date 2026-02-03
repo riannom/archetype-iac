@@ -96,6 +96,10 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
               {device.vendor}
             </span>
             <span className="w-1 h-1 rounded-full bg-stone-300 dark:bg-stone-600"></span>
+            <span className="text-[10px] text-stone-400 dark:text-stone-500 font-mono">
+              {device.id}
+            </span>
+            <span className="w-1 h-1 rounded-full bg-stone-300 dark:bg-stone-600"></span>
             <span className="text-[10px] text-stone-400 dark:text-stone-500 capitalize">
               {device.type}
             </span>
