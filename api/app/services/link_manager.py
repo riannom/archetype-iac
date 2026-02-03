@@ -415,9 +415,12 @@ class LinkManager:
         return source_host_id, target_host_id
 
     def _extract_agent_ip(self, agent: models.Host) -> str:
-        """Extract IP address from agent's address field."""
-        addr = agent.address.replace("http://", "").replace("https://", "")
-        return addr.split(":")[0]
+        """Extract and resolve IP address from agent's address field.
+
+        For VXLAN endpoints, we need actual IP addresses not hostnames.
+        """
+        from app.agent_client import resolve_agent_ip
+        return resolve_agent_ip(agent.address)
 
     async def _connect_same_host_link(
         self,
