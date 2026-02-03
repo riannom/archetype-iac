@@ -163,10 +163,8 @@ cleanup() {
     log_info "Removing test containers..."
     docker rm -f "test-node-${TEST_LAB_ID}" 2>/dev/null || true
 
-    # Clean up OVS bridge if it exists
-    local bridge_name="ovs-${TEST_LAB_ID:0:12}"
-    log_info "Cleaning up OVS bridge ${bridge_name}..."
-    ovs-vsctl --if-exists del-br "$bridge_name" 2>/dev/null || true
+    # Note: We use the shared arch-ovs bridge, no per-lab cleanup needed
+    log_info "Shared arch-ovs bridge - no per-lab cleanup needed"
 
     log_info "Cleanup complete"
 }
@@ -330,13 +328,13 @@ else
     log_fail "Docker network not found after creation"
 fi
 
-# Check OVS bridge was created
-BRIDGE_NAME="ovs-${TEST_LAB_ID:0:12}"
-log_info "Checking OVS bridge: $BRIDGE_NAME"
+# Check shared OVS bridge exists (arch-ovs)
+BRIDGE_NAME="arch-ovs"
+log_info "Checking shared OVS bridge: $BRIDGE_NAME"
 if ovs-vsctl br-exists "$BRIDGE_NAME" 2>/dev/null; then
-    log_success "OVS bridge created: $BRIDGE_NAME"
+    log_success "Shared OVS bridge exists: $BRIDGE_NAME"
 else
-    log_fail "OVS bridge not found: $BRIDGE_NAME"
+    log_fail "Shared OVS bridge not found: $BRIDGE_NAME"
 fi
 
 # ═══════════════════════════════════════════════════════════════

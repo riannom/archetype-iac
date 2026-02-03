@@ -10,7 +10,7 @@ A web-based network lab management platform. Design network topologies with a dr
 - **One-Click Deployment** - Deploy labs with a single click
 - **Web Console Access** - SSH/console access to devices directly in the browser via WebSocket, with boot logs displayed before CLI prompt
 - **Multi-Host Support** - Distributed agents for running labs across multiple hosts with VXLAN overlay
-- **OVS Network Plugin** - Per-lab Open vSwitch bridges with pre-boot interface provisioning for devices that require interfaces at startup (cEOS, etc.)
+- **OVS Network Plugin** - Shared Open vSwitch bridge (`arch-ovs`) with VLAN isolation and pre-boot interface provisioning for devices that require interfaces at startup (cEOS, etc.)
 - **Image Library** - Upload and manage container images (cEOS, etc.) and QCOW2 disk images
 - **YAML Import/Export** - Import existing topologies or export for use elsewhere
 - **User Management** - Local authentication and OIDC/SSO support
@@ -64,7 +64,7 @@ A web-based network lab management platform. Design network topologies with a dr
 │  │  cEOS   │  │  SRLinux│  │   FRR   │  │  Linux  │  ...   │
 │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘        │
 │       └────────────┴───────┬────┴────────────┘              │
-│                     OVS Bridge (per-lab)                     │
+│                   OVS Bridge (arch-ovs)                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -421,7 +421,7 @@ cEOS requires network interfaces to exist before the container starts for proper
 
 ### OVS Plugin Issues
 
-The OVS plugin manages per-lab bridges and interface provisioning. If containers fail to start:
+The OVS plugin manages the shared `arch-ovs` bridge and interface provisioning. If containers fail to start:
 
 1. Check OVS is running: `ovs-vsctl show`
 2. View plugin logs: `docker compose -f docker-compose.gui.yml logs agent | grep -i ovs`
