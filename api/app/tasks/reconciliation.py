@@ -136,6 +136,42 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
             if not source_node or not target_node:
                 continue
 
+            # Determine host placement from nodes or node_placements
+            source_host_id = source_node.host_id
+            target_host_id = target_node.host_id
+
+            # Fall back to NodePlacement if node.host_id not set
+            if not source_host_id:
+                placement = (
+                    session.query(models.NodePlacement)
+                    .filter(
+                        models.NodePlacement.lab_id == lab_id,
+                        models.NodePlacement.node_name == source_node.container_name,
+                    )
+                    .first()
+                )
+                if placement:
+                    source_host_id = placement.host_id
+
+            if not target_host_id:
+                placement = (
+                    session.query(models.NodePlacement)
+                    .filter(
+                        models.NodePlacement.lab_id == lab_id,
+                        models.NodePlacement.node_name == target_node.container_name,
+                    )
+                    .first()
+                )
+                if placement:
+                    target_host_id = placement.host_id
+
+            # Determine if cross-host
+            is_cross_host = (
+                source_host_id is not None
+                and target_host_id is not None
+                and source_host_id != target_host_id
+            )
+
             new_state = models.LinkState(
                 lab_id=lab_id,
                 link_name=link.link_name,
@@ -144,6 +180,9 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
                 source_interface=link.source_interface,
                 target_node=target_node.container_name,
                 target_interface=link.target_interface,
+                source_host_id=source_host_id,
+                target_host_id=target_host_id,
+                is_cross_host=is_cross_host,
                 desired_state="up",
                 actual_state="unknown",
             )

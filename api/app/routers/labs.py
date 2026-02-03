@@ -1639,6 +1639,27 @@ def _upsert_link_states(
         # Use container_name (YAML key) for consistency
         node_id_to_name[node.id] = node.container_name or node.name
 
+    # Build node name to host_id mapping from database
+    # This is used to populate source_host_id/target_host_id on new LinkState records
+    db_nodes = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id)
+        .all()
+    )
+    node_name_to_host: dict[str, str | None] = {
+        n.container_name: n.host_id for n in db_nodes
+    }
+
+    # Also check NodePlacement for nodes without host_id set
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id)
+        .all()
+    )
+    for p in placements:
+        if p.node_name not in node_name_to_host or not node_name_to_host.get(p.node_name):
+            node_name_to_host[p.node_name] = p.host_id
+
     # Track which links are in the current topology
     current_link_names: set[str] = set()
     created_count = 0
@@ -1693,6 +1714,15 @@ def _upsert_link_states(
                 src_n, src_i = target_node, target_interface
                 tgt_n, tgt_i = source_node, source_interface
 
+            # Look up host_ids for the endpoints
+            src_host_id = node_name_to_host.get(src_n)
+            tgt_host_id = node_name_to_host.get(tgt_n)
+            is_cross_host = (
+                src_host_id is not None
+                and tgt_host_id is not None
+                and src_host_id != tgt_host_id
+            )
+
             new_state = models.LinkState(
                 lab_id=lab_id,
                 link_name=link_name,
@@ -1700,6 +1730,9 @@ def _upsert_link_states(
                 source_interface=src_i,
                 target_node=tgt_n,
                 target_interface=tgt_i,
+                source_host_id=src_host_id,
+                target_host_id=tgt_host_id,
+                is_cross_host=is_cross_host,
                 desired_state="up",
                 actual_state="unknown",
             )
@@ -2418,6 +2451,45 @@ async def hot_connect_link(
         else:
             src_n, src_i = request.target_node, request.target_interface
             tgt_n, tgt_i = request.source_node, request.source_interface
+
+        # Look up host_ids for the endpoints
+        src_node = (
+            database.query(models.Node)
+            .filter(models.Node.lab_id == lab_id, models.Node.container_name == src_n)
+            .first()
+        )
+        tgt_node = (
+            database.query(models.Node)
+            .filter(models.Node.lab_id == lab_id, models.Node.container_name == tgt_n)
+            .first()
+        )
+        src_host_id = src_node.host_id if src_node else None
+        tgt_host_id = tgt_node.host_id if tgt_node else None
+
+        # Fall back to NodePlacement if host_id not set on node
+        if not src_host_id:
+            placement = (
+                database.query(models.NodePlacement)
+                .filter(models.NodePlacement.lab_id == lab_id, models.NodePlacement.node_name == src_n)
+                .first()
+            )
+            if placement:
+                src_host_id = placement.host_id
+        if not tgt_host_id:
+            placement = (
+                database.query(models.NodePlacement)
+                .filter(models.NodePlacement.lab_id == lab_id, models.NodePlacement.node_name == tgt_n)
+                .first()
+            )
+            if placement:
+                tgt_host_id = placement.host_id
+
+        is_cross_host = (
+            src_host_id is not None
+            and tgt_host_id is not None
+            and src_host_id != tgt_host_id
+        )
+
         link_state = models.LinkState(
             lab_id=lab_id,
             link_name=link_name,
@@ -2425,6 +2497,9 @@ async def hot_connect_link(
             source_interface=src_i,
             target_node=tgt_n,
             target_interface=tgt_i,
+            source_host_id=src_host_id,
+            target_host_id=tgt_host_id,
+            is_cross_host=is_cross_host,
             desired_state="up",
             actual_state="unknown",
         )
