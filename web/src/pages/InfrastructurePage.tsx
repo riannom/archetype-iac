@@ -1594,13 +1594,13 @@ const InfrastructurePage: React.FC = () => {
                 <div className="flex gap-2 mt-2">
                   <button
                     onClick={() => setDesiredMtu(1500)}
-                    className={`px-2 py-1 text-xs rounded ${desiredMtu === 1500 ? 'bg-sage-100 dark:bg-sage-900/30 text-sage-700 dark:text-sage-400' : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400'}`}
+                    className={`px-2 py-1 text-xs rounded transition-colors ${desiredMtu === 1500 ? 'bg-sage-600 text-white' : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:bg-stone-200 dark:hover:bg-stone-700'}`}
                   >
                     1500 (Standard)
                   </button>
                   <button
                     onClick={() => setDesiredMtu(9000)}
-                    className={`px-2 py-1 text-xs rounded ${desiredMtu === 9000 ? 'bg-sage-100 dark:bg-sage-900/30 text-sage-700 dark:text-sage-400' : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400'}`}
+                    className={`px-2 py-1 text-xs rounded transition-colors ${desiredMtu === 9000 ? 'bg-sage-600 text-white' : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:bg-stone-200 dark:hover:bg-stone-700'}`}
                   >
                     9000 (Jumbo)
                   </button>
