@@ -220,7 +220,14 @@ class LinkManager:
         agent_a: models.Host,
         agent_b: models.Host,
     ) -> bool:
-        """Tear down a VXLAN tunnel for a cross-host link.
+        """Tear down a cross-host link using two-phase detach with rollback.
+
+        This implements a safe teardown that:
+        1. Marks the tunnel as "cleanup" status
+        2. Detaches the source interface (isolates to unique VLAN)
+        3. Detaches the target interface
+        4. If target fails, rolls back by re-attaching source
+        5. Deletes the VxlanTunnel record only if both succeeded
 
         Args:
             link_state: The LinkState record
@@ -228,50 +235,114 @@ class LinkManager:
             agent_b: Agent hosting the target endpoint
 
         Returns:
-            True if tunnel was torn down successfully
+            True if link was torn down successfully
         """
         lab_id = link_state.lab_id
-        vni = link_state.vni
+        link_name = link_state.link_name
 
-        if not vni:
-            logger.warning(f"No VNI for link {link_state.link_name}, nothing to tear down")
-            return True
-
-        success = True
-
-        # Delete VXLAN tunnel on both agents
-        try:
-            result_a = await agent_client.cleanup_overlay_on_agent(agent_a, lab_id)
-            if result_a.get("errors"):
-                logger.warning(f"Errors cleaning overlay on agent_a: {result_a['errors']}")
-        except Exception as e:
-            logger.error(f"Failed to clean overlay on agent_a: {e}")
-            success = False
-
-        try:
-            result_b = await agent_client.cleanup_overlay_on_agent(agent_b, lab_id)
-            if result_b.get("errors"):
-                logger.warning(f"Errors cleaning overlay on agent_b: {result_b['errors']}")
-        except Exception as e:
-            logger.error(f"Failed to clean overlay on agent_b: {e}")
-            success = False
-
-        # Update VxlanTunnel record
+        # Get VxlanTunnel record
         tunnel = (
             self.session.query(models.VxlanTunnel)
-            .filter(
-                models.VxlanTunnel.link_state_id == link_state.id,
-            )
+            .filter(models.VxlanTunnel.link_state_id == link_state.id)
             .first()
         )
-        if tunnel:
-            tunnel.status = "cleanup" if success else "failed"
+
+        if not tunnel:
+            logger.warning(f"No VxlanTunnel for link {link_name}, nothing to tear down")
+            return True
+
+        # Get agent IP addresses for VTEP reference counting
+        agent_ip_a = self._extract_agent_ip(agent_a)
+        agent_ip_b = self._extract_agent_ip(agent_b)
+        vlan_tag = link_state.vlan_tag
+
+        logger.info(
+            f"Tearing down cross-host link {link_name} between "
+            f"{agent_a.name} and {agent_b.name}"
+        )
+
+        # Phase 1: Mark tunnel as cleanup in progress
+        tunnel.status = "cleanup"
+        self.session.flush()
+
+        # Phase 2a: Detach source interface
+        source_ok = False
+        try:
+            result_a = await agent_client.detach_overlay_interface_on_agent(
+                agent_a,
+                lab_id=lab_id,
+                container_name=link_state.source_node,
+                interface_name=link_state.source_interface,
+                link_id=link_name,
+                remote_ip=agent_ip_b,
+                delete_vtep_if_unused=True,
+            )
+            source_ok = result_a.get("success", False)
+            if not source_ok:
+                logger.error(
+                    f"Failed to detach source {link_state.source_node}:"
+                    f"{link_state.source_interface}: {result_a.get('error')}"
+                )
+        except Exception as e:
+            logger.error(f"Failed to detach source on agent_a: {e}")
+
+        if not source_ok:
+            tunnel.status = "failed"
+            return False
+
+        # Phase 2b: Detach target interface
+        target_ok = False
+        try:
+            result_b = await agent_client.detach_overlay_interface_on_agent(
+                agent_b,
+                lab_id=lab_id,
+                container_name=link_state.target_node,
+                interface_name=link_state.target_interface,
+                link_id=link_name,
+                remote_ip=agent_ip_a,
+                delete_vtep_if_unused=True,
+            )
+            target_ok = result_b.get("success", False)
+            if not target_ok:
+                logger.error(
+                    f"Failed to detach target {link_state.target_node}:"
+                    f"{link_state.target_interface}: {result_b.get('error')}"
+                )
+        except Exception as e:
+            logger.error(f"Failed to detach target on agent_b: {e}")
+
+        if not target_ok:
+            # Rollback: Re-attach source interface
+            logger.warning(
+                f"Target detach failed, rolling back source for link {link_name}"
+            )
+            if vlan_tag:
+                try:
+                    await agent_client.attach_overlay_interface_on_agent(
+                        agent_a,
+                        lab_id=lab_id,
+                        container_name=link_state.source_node,
+                        interface_name=link_state.source_interface,
+                        vlan_tag=vlan_tag,
+                        link_id=link_name,
+                        remote_ip=agent_ip_b,
+                    )
+                    logger.info(f"Rolled back source attachment for link {link_name}")
+                except Exception as e:
+                    logger.error(f"Rollback failed for link {link_name}: {e}")
+
+            tunnel.status = "failed"
+            return False
+
+        # Phase 3: Both sides detached successfully - delete tunnel record
+        self.session.delete(tunnel)
 
         # Clear VXLAN fields from link_state
         link_state.vni = None
         link_state.vlan_tag = None
 
-        return success
+        logger.info(f"Successfully tore down cross-host link {link_name}")
+        return True
 
     async def set_endpoint_carrier(
         self,

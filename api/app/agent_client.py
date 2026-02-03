@@ -1239,28 +1239,39 @@ async def attach_overlay_interface_on_agent(
 
 async def detach_overlay_interface_on_agent(
     agent: models.Host,
+    lab_id: str,
+    container_name: str,
+    interface_name: str,
     link_id: str,
     remote_ip: str,
     delete_vtep_if_unused: bool = True,
 ) -> dict:
-    """Detach a link from VTEP reference counting on an agent.
+    """Detach a link from the overlay on an agent.
 
-    This removes the link from the VTEP's reference set. If the VTEP
-    has no more links using it and delete_vtep_if_unused is True,
-    the VTEP is deleted to free resources.
+    This performs a complete detach operation:
+    1. Restores the container interface to an isolated VLAN (unique tag)
+    2. Removes the link from VTEP reference counting
+    3. Optionally deletes the VTEP if no more links use it
 
     Args:
         agent: The agent to detach on
-        link_id: Link identifier to detach
+        lab_id: Lab identifier
+        container_name: Container name (short form, e.g., "eos_1")
+        interface_name: Interface name inside container (e.g., eth1)
+        link_id: Link identifier for VTEP tracking
         remote_ip: Remote VTEP IP
         delete_vtep_if_unused: If True, delete VTEP when no links remain
 
     Returns:
-        Dict with 'success', 'vtep_deleted', 'remaining_links' keys
+        Dict with 'success', 'interface_isolated', 'new_vlan',
+        'vtep_deleted', 'remaining_links' keys
     """
     url = f"{get_agent_url(agent)}/overlay/detach-link"
 
     payload = {
+        "lab_id": lab_id,
+        "container_name": container_name,
+        "interface_name": interface_name,
         "link_id": link_id,
         "remote_ip": remote_ip,
         "delete_vtep_if_unused": delete_vtep_if_unused,
@@ -1272,9 +1283,11 @@ async def detach_overlay_interface_on_agent(
         response.raise_for_status()
         result = response.json()
         if result.get("success"):
+            isolated_msg = f" (interface isolated to VLAN {result.get('new_vlan')})" if result.get("interface_isolated") else ""
             vtep_msg = " (VTEP deleted)" if result.get("vtep_deleted") else ""
             logger.info(
-                f"Detached link {link_id} from VTEP {remote_ip} on {agent.id}{vtep_msg}, "
+                f"Detached {container_name}:{interface_name} link {link_id} "
+                f"from VTEP {remote_ip} on {agent.id}{isolated_msg}{vtep_msg}, "
                 f"{result.get('remaining_links', 0)} links remaining"
             )
         else:

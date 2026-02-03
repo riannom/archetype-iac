@@ -26,6 +26,12 @@ from app.tasks.link_orchestration import (
     create_cross_host_link,
 )
 from app.topology import _normalize_interface_name
+from app.utils.locks import (
+    link_ops_lock,
+    extend_link_ops_lock,
+    get_link_state_for_update,
+    get_vxlan_tunnel_for_update,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,9 @@ async def create_link_if_ready(
     "running" state. If so, it creates the network connection using either
     same-host (OVS hot-connect) or cross-host (VXLAN tunnel) methods.
 
+    Uses row-level locking to prevent concurrent modifications to the
+    same LinkState record.
+
     Args:
         session: Database session
         lab_id: Lab identifier
@@ -61,6 +70,13 @@ async def create_link_if_ready(
     """
     if log_parts is None:
         log_parts = []
+
+    # Re-query with row-level lock to prevent concurrent modifications
+    link_name = link_state.link_name
+    link_state = get_link_state_for_update(session, lab_id, link_name)
+    if not link_state:
+        log_parts.append(f"  {link_name}: FAILED - link state not found")
+        return False
 
     # Check NodeState.actual_state for both endpoints
     source_state = (
@@ -180,50 +196,118 @@ async def teardown_link(
     target_host_id = link_info.get("target_host_id")
 
     if is_cross_host:
-        # Clean up VXLAN tunnel on both agents
-        success = True
+        # Two-phase teardown with rollback for cross-host links
+        source_agent = host_to_agent.get(source_host_id) if source_host_id else None
+        target_agent = host_to_agent.get(target_host_id) if target_host_id else None
 
-        # Clean up on source host
-        if source_host_id:
-            agent = host_to_agent.get(source_host_id)
-            if agent:
-                try:
-                    await agent_client.cleanup_overlay_on_agent(agent, lab_id)
-                except Exception as e:
-                    logger.warning(f"Overlay cleanup on source agent failed: {e}")
-                    success = False
+        if not source_agent or not target_agent:
+            log_parts.append(f"  {link_name}: skipped (agents unavailable)")
+            logger.warning(f"Agents not available for cross-host link {link_name}")
+            return True  # Can't clean up without both agents
 
-        # Clean up on target host
-        if target_host_id and target_host_id != source_host_id:
-            agent = host_to_agent.get(target_host_id)
-            if agent:
-                try:
-                    await agent_client.cleanup_overlay_on_agent(agent, lab_id)
-                except Exception as e:
-                    logger.warning(f"Overlay cleanup on target agent failed: {e}")
-                    success = False
+        # Get link details for the detach operation
+        source_node = link_info.get("source_node", "")
+        target_node = link_info.get("target_node", "")
+        source_iface = _normalize_interface_name(link_info.get("source_interface", "") or "")
+        target_iface = _normalize_interface_name(link_info.get("target_interface", "") or "")
+        vlan_tag = link_info.get("vlan_tag")
 
-        # Delete VxlanTunnel record if exists
-        # We need the link_state_id but we only have link_info
-        # Since the LinkState is about to be deleted, query VxlanTunnel by other means
-        tunnels = (
-            session.query(models.VxlanTunnel)
-            .filter(models.VxlanTunnel.lab_id == lab_id)
-            .all()
+        # Get agent IPs for VTEP reference counting
+        source_agent_ip = agent_client.resolve_agent_ip(source_agent.address)
+        target_agent_ip = agent_client.resolve_agent_ip(target_agent.address)
+
+        # Find and mark tunnel as cleanup
+        tunnel = None
+        ls = (
+            session.query(models.LinkState)
+            .filter(
+                models.LinkState.lab_id == lab_id,
+                models.LinkState.link_name == link_name,
+            )
+            .first()
         )
-        for tunnel in tunnels:
-            # Check if this tunnel belongs to the removed link by checking
-            # if its link_state no longer exists or is marked for deletion
-            ls = session.get(models.LinkState, tunnel.link_state_id)
-            if ls and ls.link_name == link_name:
-                session.delete(tunnel)
+        if ls:
+            tunnel = (
+                session.query(models.VxlanTunnel)
+                .filter(models.VxlanTunnel.link_state_id == ls.id)
+                .first()
+            )
+            if tunnel:
+                tunnel.status = "cleanup"
+                session.flush()
 
-        if success:
-            log_parts.append(f"  {link_name}: removed (cross-host VXLAN)")
-            logger.info(f"Cross-host link {link_name} torn down")
-        else:
-            log_parts.append(f"  {link_name}: FAILED (cross-host cleanup error)")
-        return success
+        # Phase 2a: Detach source interface
+        source_ok = False
+        try:
+            result_a = await agent_client.detach_overlay_interface_on_agent(
+                source_agent,
+                lab_id=lab_id,
+                container_name=source_node,
+                interface_name=source_iface,
+                link_id=link_name,
+                remote_ip=target_agent_ip,
+                delete_vtep_if_unused=True,
+            )
+            source_ok = result_a.get("success", False)
+            if not source_ok:
+                logger.warning(f"Detach source failed: {result_a.get('error')}")
+        except Exception as e:
+            logger.warning(f"Overlay detach on source agent failed: {e}")
+
+        if not source_ok:
+            if tunnel:
+                tunnel.status = "failed"
+            log_parts.append(f"  {link_name}: FAILED (source detach error)")
+            return False
+
+        # Phase 2b: Detach target interface
+        target_ok = False
+        try:
+            result_b = await agent_client.detach_overlay_interface_on_agent(
+                target_agent,
+                lab_id=lab_id,
+                container_name=target_node,
+                interface_name=target_iface,
+                link_id=link_name,
+                remote_ip=source_agent_ip,
+                delete_vtep_if_unused=True,
+            )
+            target_ok = result_b.get("success", False)
+            if not target_ok:
+                logger.warning(f"Detach target failed: {result_b.get('error')}")
+        except Exception as e:
+            logger.warning(f"Overlay detach on target agent failed: {e}")
+
+        if not target_ok:
+            # Rollback: Re-attach source interface
+            logger.warning(f"Target detach failed, rolling back source for {link_name}")
+            if vlan_tag:
+                try:
+                    await agent_client.attach_overlay_interface_on_agent(
+                        source_agent,
+                        lab_id=lab_id,
+                        container_name=source_node,
+                        interface_name=source_iface,
+                        vlan_tag=vlan_tag,
+                        link_id=link_name,
+                        remote_ip=target_agent_ip,
+                    )
+                    logger.info(f"Rolled back source attachment for {link_name}")
+                except Exception as e:
+                    logger.error(f"Rollback failed for {link_name}: {e}")
+
+            if tunnel:
+                tunnel.status = "failed"
+            log_parts.append(f"  {link_name}: FAILED (target detach error, source rolled back)")
+            return False
+
+        # Phase 3: Both sides detached - delete tunnel record
+        if tunnel:
+            session.delete(tunnel)
+
+        log_parts.append(f"  {link_name}: removed (cross-host VXLAN)")
+        logger.info(f"Cross-host link {link_name} torn down")
+        return True
     else:
         # Same-host link - call agent to delete it
         host_id = source_host_id or target_host_id
@@ -278,6 +362,8 @@ async def process_link_changes(
     1. Creating new links if both endpoint nodes are running
     2. Tearing down removed links and cleaning up their network resources
 
+    Uses a distributed Redis lock to prevent conflicts with reconciliation.
+
     Args:
         lab_id: Lab identifier
         added_link_names: List of link names that were added
@@ -287,124 +373,133 @@ async def process_link_changes(
     job = None
     log_parts: list[str] = []
 
-    with get_session() as session:
-        try:
-            # Create a job to track this operation
-            add_count = len(added_link_names)
-            remove_count = len(removed_link_info)
-            action_desc = []
-            if add_count > 0:
-                action_desc.append(f"add:{add_count}")
-            if remove_count > 0:
-                action_desc.append(f"remove:{remove_count}")
-
-            job = models.Job(
-                lab_id=lab_id,
-                user_id=user_id,
-                action=f"links:{','.join(action_desc)}",
-                status="running",
-                started_at=datetime.now(timezone.utc),
+    # Acquire distributed lock to prevent conflicts with reconciliation
+    with link_ops_lock(lab_id) as lock_acquired:
+        if not lock_acquired:
+            logger.warning(
+                f"Could not acquire link ops lock for lab {lab_id}, "
+                f"skipping link changes (will retry via reconciliation)"
             )
-            session.add(job)
-            session.commit()
-            session.refresh(job)
+            return
 
-            log_parts.append("=== Live Link Update ===")
-            log_parts.append(f"Lab: {lab_id}")
-            log_parts.append(f"Links to add: {add_count}")
-            log_parts.append(f"Links to remove: {remove_count}")
-            log_parts.append("")
+        with get_session() as session:
+            try:
+                # Create a job to track this operation
+                add_count = len(added_link_names)
+                remove_count = len(removed_link_info)
+                action_desc = []
+                if add_count > 0:
+                    action_desc.append(f"add:{add_count}")
+                if remove_count > 0:
+                    action_desc.append(f"remove:{remove_count}")
 
-            # Build host_to_agent mapping
-            host_to_agent = await _build_host_to_agent_map(session, lab_id)
+                job = models.Job(
+                    lab_id=lab_id,
+                    user_id=user_id,
+                    action=f"links:{','.join(action_desc)}",
+                    status="running",
+                    started_at=datetime.now(timezone.utc),
+                )
+                session.add(job)
+                session.commit()
+                session.refresh(job)
 
-            if not host_to_agent:
-                log_parts.append("WARNING: No agents available, skipping link operations")
-                logger.warning(f"No agents available for lab {lab_id}, skipping live link operations")
-                job.status = "completed"
-                job.completed_at = datetime.now(timezone.utc)
-                _update_job_log(session, job, log_parts)
-                return
-
-            error_count = 0
-
-            # Process removed links first (teardown)
-            if removed_link_info:
-                log_parts.append("=== Removing Links ===")
-                for link_info in removed_link_info:
-                    try:
-                        success = await teardown_link(session, lab_id, link_info, host_to_agent, log_parts)
-                        if not success:
-                            error_count += 1
-                    except Exception as e:
-                        error_count += 1
-                        log_parts.append(f"  {link_info.get('link_name')}: FAILED - {e}")
-                        logger.error(f"Error tearing down link {link_info.get('link_name')}: {e}")
+                log_parts.append("=== Live Link Update ===")
+                log_parts.append(f"Lab: {lab_id}")
+                log_parts.append(f"Links to add: {add_count}")
+                log_parts.append(f"Links to remove: {remove_count}")
                 log_parts.append("")
 
-            # Now delete the LinkState records for removed links
-            for link_info in removed_link_info:
-                link_name = link_info.get("link_name")
-                if link_name:
-                    ls = (
-                        session.query(models.LinkState)
-                        .filter(
-                            models.LinkState.lab_id == lab_id,
-                            models.LinkState.link_name == link_name,
-                        )
-                        .first()
-                    )
-                    if ls:
-                        session.delete(ls)
+                # Build host_to_agent mapping
+                host_to_agent = await _build_host_to_agent_map(session, lab_id)
 
-            # Process added links
-            if added_link_names:
-                log_parts.append("=== Adding Links ===")
-                for link_name in added_link_names:
-                    link_state = (
-                        session.query(models.LinkState)
-                        .filter(
-                            models.LinkState.lab_id == lab_id,
-                            models.LinkState.link_name == link_name,
-                        )
-                        .first()
-                    )
-                    if link_state:
+                if not host_to_agent:
+                    log_parts.append("WARNING: No agents available, skipping link operations")
+                    logger.warning(f"No agents available for lab {lab_id}, skipping live link operations")
+                    job.status = "completed"
+                    job.completed_at = datetime.now(timezone.utc)
+                    _update_job_log(session, job, log_parts)
+                    return
+
+                error_count = 0
+
+                # Process removed links first (teardown)
+                if removed_link_info:
+                    log_parts.append("=== Removing Links ===")
+                    for link_info in removed_link_info:
                         try:
-                            success = await create_link_if_ready(
-                                session, lab_id, link_state, host_to_agent, log_parts
-                            )
-                            if not success and link_state.actual_state == "error":
+                            success = await teardown_link(session, lab_id, link_info, host_to_agent, log_parts)
+                            if not success:
                                 error_count += 1
                         except Exception as e:
                             error_count += 1
-                            log_parts.append(f"  {link_name}: FAILED - {e}")
-                            logger.error(f"Error creating link {link_name}: {e}")
-                            link_state.actual_state = "error"
-                            link_state.error_message = str(e)
-                log_parts.append("")
+                            log_parts.append(f"  {link_info.get('link_name')}: FAILED - {e}")
+                            logger.error(f"Error tearing down link {link_info.get('link_name')}: {e}")
+                    log_parts.append("")
 
-            # Summary
-            log_parts.append("=== Summary ===")
-            if error_count > 0:
-                log_parts.append(f"Completed with {error_count} error(s)")
-                job.status = "completed"  # Still completed, just with errors
-            else:
-                log_parts.append("All link operations completed successfully")
-                job.status = "completed"
+                # Now delete the LinkState records for removed links
+                for link_info in removed_link_info:
+                    link_name = link_info.get("link_name")
+                    if link_name:
+                        ls = (
+                            session.query(models.LinkState)
+                            .filter(
+                                models.LinkState.lab_id == lab_id,
+                                models.LinkState.link_name == link_name,
+                            )
+                            .first()
+                        )
+                        if ls:
+                            session.delete(ls)
 
-            job.completed_at = datetime.now(timezone.utc)
-            _update_job_log(session, job, log_parts)
-            session.commit()
+                # Process added links
+                if added_link_names:
+                    log_parts.append("=== Adding Links ===")
+                    for link_name in added_link_names:
+                        link_state = (
+                            session.query(models.LinkState)
+                            .filter(
+                                models.LinkState.lab_id == lab_id,
+                                models.LinkState.link_name == link_name,
+                            )
+                            .first()
+                        )
+                        if link_state:
+                            try:
+                                success = await create_link_if_ready(
+                                    session, lab_id, link_state, host_to_agent, log_parts
+                                )
+                                if not success and link_state.actual_state == "error":
+                                    error_count += 1
+                            except Exception as e:
+                                error_count += 1
+                                log_parts.append(f"  {link_name}: FAILED - {e}")
+                                logger.error(f"Error creating link {link_name}: {e}")
+                                link_state.actual_state = "error"
+                                link_state.error_message = str(e)
+                    log_parts.append("")
 
-        except Exception as e:
-            logger.error(f"Error processing link changes for lab {lab_id}: {e}")
-            log_parts.append(f"\nFATAL ERROR: {e}")
-            if job:
-                job.status = "failed"
+                # Summary
+                log_parts.append("=== Summary ===")
+                if error_count > 0:
+                    log_parts.append(f"Completed with {error_count} error(s)")
+                    job.status = "completed"  # Still completed, just with errors
+                else:
+                    log_parts.append("All link operations completed successfully")
+                    job.status = "completed"
+
                 job.completed_at = datetime.now(timezone.utc)
                 _update_job_log(session, job, log_parts)
-            session.commit()  # Commit the job status update
+                session.commit()
+
+            except Exception as e:
+                logger.error(f"Error processing link changes for lab {lab_id}: {e}")
+                log_parts.append(f"\nFATAL ERROR: {e}")
+                if job:
+                    job.status = "failed"
+                    job.completed_at = datetime.now(timezone.utc)
+                    _update_job_log(session, job, log_parts)
+                session.commit()  # Commit the job status update
 
 
 def _lookup_endpoint_hosts(

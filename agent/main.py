@@ -2200,11 +2200,16 @@ async def attach_overlay_interface(
 async def detach_overlay_interface(
     request: DetachOverlayInterfaceRequest,
 ) -> DetachOverlayInterfaceResponse:
-    """Detach a link from VTEP reference counting.
+    """Detach a link from the overlay network.
 
-    Removes the link from the VTEP's reference set. If the VTEP has no
-    more links using it and delete_vtep_if_unused is True, the VTEP
-    is deleted to free resources.
+    This performs a complete detach:
+    1. Isolates the container interface by assigning a unique VLAN tag
+    2. Removes the link from VTEP reference counting
+    3. Optionally deletes the VTEP if no more links use it
+
+    This ensures the interface no longer participates in the cross-host
+    link's L2 domain while preserving the underlying network infrastructure
+    for other links.
     """
     if not settings.enable_vxlan:
         return DetachOverlayInterfaceResponse(
@@ -2212,7 +2217,46 @@ async def detach_overlay_interface(
             error="VXLAN overlay is disabled on this agent",
         )
 
+    logger.info(
+        f"Detach overlay interface: lab={request.lab_id}, "
+        f"container={request.container_name}, interface={request.interface_name}, "
+        f"link_id={request.link_id}"
+    )
+
+    interface_isolated = False
+    new_vlan = None
+
     try:
+        # Step 1: Isolate the interface by assigning a unique VLAN
+        # This prevents traffic flow through the overlay for this link
+        try:
+            plugin = _get_docker_ovs_plugin()
+            if plugin is None:
+                logger.warning("Docker OVS plugin not available, skipping interface isolation")
+            else:
+                # Build full container name
+                provider = get_provider_for_request()
+                container_name = provider.get_container_name(request.lab_id, request.container_name)
+
+                new_vlan = await plugin.isolate_port(
+                    request.lab_id,
+                    container_name,
+                    request.interface_name,
+                )
+                if new_vlan is not None:
+                    interface_isolated = True
+                    logger.info(
+                        f"Interface {container_name}:{request.interface_name} "
+                        f"isolated to VLAN {new_vlan}"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to isolate {container_name}:{request.interface_name}"
+                    )
+        except Exception as e:
+            logger.warning(f"Interface isolation failed (continuing with VTEP cleanup): {e}")
+
+        # Step 2: Handle VTEP reference counting
         overlay = get_overlay_manager()
 
         result = await overlay.detach_overlay_interface(
@@ -2223,6 +2267,8 @@ async def detach_overlay_interface(
 
         return DetachOverlayInterfaceResponse(
             success=result["success"],
+            interface_isolated=interface_isolated,
+            new_vlan=new_vlan,
             vtep_deleted=result["vtep_deleted"],
             remaining_links=result["remaining_links"],
             error=result["error"],
@@ -2230,7 +2276,12 @@ async def detach_overlay_interface(
 
     except Exception as e:
         logger.error(f"Detach overlay interface failed: {e}")
-        return DetachOverlayInterfaceResponse(success=False, error=str(e))
+        return DetachOverlayInterfaceResponse(
+            success=False,
+            interface_isolated=interface_isolated,
+            new_vlan=new_vlan,
+            error=str(e),
+        )
 
 
 @app.post("/network/test-mtu")
