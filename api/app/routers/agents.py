@@ -261,6 +261,7 @@ async def _handle_agent_restart_cleanup(database: Session, agent_id: str) -> Non
     1. Finds all running jobs assigned to this agent
     2. Marks them as failed with appropriate error message
     3. Updates associated lab state if needed
+    4. Triggers link reconciliation for labs with nodes on this agent
 
     Args:
         database: Database session
@@ -279,31 +280,90 @@ async def _handle_agent_restart_cleanup(database: Session, agent_id: str) -> Non
         .all()
     )
 
-    if not stale_jobs:
-        return
+    # Handle stale jobs
+    if stale_jobs:
+        logger.warning(
+            f"Agent {agent_id} restarted - marking {len(stale_jobs)} running jobs as failed"
+        )
 
-    logger.warning(
-        f"Agent {agent_id} restarted - marking {len(stale_jobs)} running jobs as failed"
+        now = datetime.now(timezone.utc)
+        for job in stale_jobs:
+            job.status = "failed"
+            job.completed_at = now
+            job.log_path = (job.log_path or "") + "\n--- Agent restarted, job terminated ---"
+
+            logger.info(f"Marked job {job.id} (action={job.action}) as failed due to agent restart")
+
+            # Update lab state to error if this was a deploy/destroy job
+            if job.lab_id and job.action in ("up", "down"):
+                lab = database.get(models.Lab, job.lab_id)
+                if lab:
+                    lab.state = "error"
+                    lab.state_error = f"Job {job.action} failed: agent restarted during execution"
+                    lab.state_updated_at = now
+                    logger.info(f"Set lab {job.lab_id} state to error due to agent restart")
+
+        database.commit()
+
+    # Trigger link reconciliation for labs with nodes on this agent
+    # Agent restart resets OVS VLAN tags to isolation mode, breaking links
+    await _trigger_link_reconciliation_for_agent(database, agent_id, logger)
+
+
+async def _trigger_link_reconciliation_for_agent(
+    database: Session, agent_id: str, logger
+) -> None:
+    """Trigger link reconciliation for all labs with nodes on an agent.
+
+    When an agent restarts, OVS resets all VLAN tags to isolation mode,
+    breaking any established links. This function finds all affected labs
+    and triggers immediate state reconciliation to repair the links.
+
+    The state reconciliation will:
+    1. Detect that links are in error/down state
+    2. Re-call create_link_if_ready() which reapplies correct VLAN tags
+    3. VLAN allocation is deterministic so both agents get the same tag
+
+    Args:
+        database: Database session
+        agent_id: ID of the restarted agent
+        logger: Logger instance
+    """
+    from app.tasks.reconciliation import _reconcile_single_lab
+
+    # Find all labs with nodes placed on this agent
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.host_id == agent_id)
+        .all()
     )
 
-    now = datetime.now(timezone.utc)
-    for job in stale_jobs:
-        job.status = "failed"
-        job.completed_at = now
-        job.log_path = (job.log_path or "") + "\n--- Agent restarted, job terminated ---"
+    # Get unique lab IDs
+    lab_ids = {p.lab_id for p in placements}
 
-        logger.info(f"Marked job {job.id} (action={job.action}) as failed due to agent restart")
+    if not lab_ids:
+        logger.debug(f"No labs with nodes on agent {agent_id}, skipping link reconciliation")
+        return
 
-        # Update lab state to error if this was a deploy/destroy job
-        if job.lab_id and job.action in ("up", "down"):
-            lab = database.get(models.Lab, job.lab_id)
-            if lab:
-                lab.state = "error"
-                lab.state_error = f"Job {job.action} failed: agent restarted during execution"
-                lab.state_updated_at = now
-                logger.info(f"Set lab {job.lab_id} state to error due to agent restart")
+    logger.info(
+        f"Agent {agent_id} restarted - triggering link reconciliation for "
+        f"{len(lab_ids)} lab(s): {list(lab_ids)}"
+    )
 
-    database.commit()
+    # Trigger reconciliation for each affected lab in background
+    # Don't block registration response - agent needs to complete startup
+    async def reconcile_labs():
+        from app.db import get_session
+        # Use a fresh session since the original may be closed by the time this runs
+        with get_session() as session:
+            for lab_id in lab_ids:
+                try:
+                    await _reconcile_single_lab(session, lab_id)
+                    logger.info(f"Completed link reconciliation for lab {lab_id}")
+                except Exception as e:
+                    logger.error(f"Failed to reconcile links for lab {lab_id}: {e}")
+
+    asyncio.create_task(reconcile_labs())
 
 
 @router.post("/{agent_id}/heartbeat", response_model=HeartbeatResponse)
