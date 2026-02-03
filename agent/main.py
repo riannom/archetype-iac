@@ -78,6 +78,12 @@ from agent.schemas import (
     OVSPortInfo,
     OVSStatusResponse,
     OverlayStatusResponse,
+    # New VTEP model schemas
+    VtepInfo,
+    EnsureVtepRequest,
+    EnsureVtepResponse,
+    AttachOverlayInterfaceRequest,
+    AttachOverlayInterfaceResponse,
     Provider,
     ExternalConnectRequest,
     ExternalConnectResponse,
@@ -2139,6 +2145,7 @@ async def overlay_status() -> OverlayStatusResponse:
         ]
 
         return OverlayStatusResponse(
+            vteps=status.get("vteps", []),
             tunnels=tunnels,
             bridges=status["bridges"],
         )
@@ -2146,6 +2153,107 @@ async def overlay_status() -> OverlayStatusResponse:
     except Exception as e:
         logger.error(f"Overlay status failed: {e}")
         return OverlayStatusResponse()
+
+
+@app.post("/overlay/vtep")
+async def ensure_vtep(request: EnsureVtepRequest) -> EnsureVtepResponse:
+    """Ensure a VTEP exists to the remote host.
+
+    This implements the new trunk VTEP model where there is one VTEP per
+    remote host (not one per link). The VTEP is created in trunk mode
+    (no VLAN tag) and all cross-host links to that remote host share it.
+
+    If a VTEP already exists to the remote host, it is returned without
+    creating a new one.
+    """
+    if not settings.enable_vxlan:
+        return EnsureVtepResponse(
+            success=False,
+            error="VXLAN overlay is disabled on this agent",
+        )
+
+    try:
+        overlay = get_overlay_manager()
+
+        # Check if VTEP already exists
+        existing = overlay.get_vtep(request.remote_ip)
+        if existing:
+            return EnsureVtepResponse(
+                success=True,
+                vtep=VtepInfo(
+                    interface_name=existing.interface_name,
+                    vni=existing.vni,
+                    local_ip=existing.local_ip,
+                    remote_ip=existing.remote_ip,
+                    remote_host_id=existing.remote_host_id,
+                    tenant_mtu=existing.tenant_mtu,
+                ),
+                created=False,
+            )
+
+        # Create new VTEP
+        vtep = await overlay.ensure_vtep(
+            local_ip=request.local_ip,
+            remote_ip=request.remote_ip,
+            remote_host_id=request.remote_host_id,
+        )
+
+        return EnsureVtepResponse(
+            success=True,
+            vtep=VtepInfo(
+                interface_name=vtep.interface_name,
+                vni=vtep.vni,
+                local_ip=vtep.local_ip,
+                remote_ip=vtep.remote_ip,
+                remote_host_id=vtep.remote_host_id,
+                tenant_mtu=vtep.tenant_mtu,
+            ),
+            created=True,
+        )
+
+    except Exception as e:
+        logger.error(f"Ensure VTEP failed: {e}")
+        return EnsureVtepResponse(success=False, error=str(e))
+
+
+@app.post("/overlay/attach-link")
+async def attach_overlay_interface(
+    request: AttachOverlayInterfaceRequest,
+) -> AttachOverlayInterfaceResponse:
+    """Attach a container interface to the overlay with a specific VLAN tag.
+
+    This is the new model where the VLAN tag is specified by the controller
+    (coordinated across agents) rather than derived from a per-link tunnel.
+    The VTEP should already exist (via /overlay/vtep) in trunk mode.
+    """
+    if not settings.enable_vxlan:
+        return AttachOverlayInterfaceResponse(
+            success=False,
+            error="VXLAN overlay is disabled on this agent",
+        )
+
+    try:
+        overlay = get_overlay_manager()
+
+        success = await overlay.attach_overlay_interface(
+            lab_id=request.lab_id,
+            container_name=request.container_name,
+            interface_name=request.interface_name,
+            vlan_tag=request.vlan_tag,
+            tenant_mtu=request.tenant_mtu,
+        )
+
+        if success:
+            return AttachOverlayInterfaceResponse(success=True)
+        else:
+            return AttachOverlayInterfaceResponse(
+                success=False,
+                error="Failed to attach interface",
+            )
+
+    except Exception as e:
+        logger.error(f"Attach overlay interface failed: {e}")
+        return AttachOverlayInterfaceResponse(success=False, error=str(e))
 
 
 @app.post("/network/test-mtu")

@@ -159,10 +159,9 @@ class LinkManager:
         agent_a: models.Host,
         agent_b: models.Host,
     ) -> bool:
-        """Create a VXLAN tunnel for a cross-host link.
+        """Create a cross-host link using the trunk VTEP model.
 
-        This creates the VXLAN infrastructure on both agents but does not
-        connect the containers - use connect_link for that.
+        Uses one VTEP per host-pair with VLAN tags for link isolation.
 
         Args:
             link_state: The LinkState record
@@ -170,20 +169,16 @@ class LinkManager:
             agent_b: Agent hosting the target endpoint
 
         Returns:
-            True if tunnel was created successfully
+            True if link was created successfully
         """
         lab_id = link_state.lab_id
-
-        # Allocate deterministic VNI
-        vni = allocate_vni(lab_id, link_state.link_name)
-        link_state.vni = vni
 
         # Get agent IP addresses
         agent_ip_a = self._extract_agent_ip(agent_a)
         agent_ip_b = self._extract_agent_ip(agent_b)
 
-        # Create VXLAN tunnel on both agents
-        result = await agent_client.setup_cross_host_link(
+        # Use new trunk VTEP model
+        result = await agent_client.setup_cross_host_link_v2(
             database=self.session,
             lab_id=lab_id,
             link_id=link_state.link_name,
@@ -193,16 +188,18 @@ class LinkManager:
             interface_a=link_state.source_interface,
             node_b=link_state.target_node,
             interface_b=link_state.target_interface,
-            vni=vni,
         )
 
         if result.get("success"):
-            # Create VxlanTunnel record
+            vlan_tag = result.get("vlan_tag", 0)
+            link_state.vlan_tag = vlan_tag
+
+            # Create VxlanTunnel record for tracking
             tunnel = models.VxlanTunnel(
                 lab_id=lab_id,
                 link_state_id=link_state.id,
-                vni=vni,
-                vlan_tag=result.get("vlan_tag", 0),
+                vni=0,  # Not per-link in new model
+                vlan_tag=vlan_tag,
                 agent_a_id=agent_a.id,
                 agent_a_ip=agent_ip_a,
                 agent_b_id=agent_b.id,
@@ -211,11 +208,10 @@ class LinkManager:
             )
             self.session.add(tunnel)
 
-            link_state.vlan_tag = result.get("vlan_tag")
             return True
         else:
             link_state.actual_state = "error"
-            link_state.error_message = result.get("error", "VXLAN tunnel creation failed")
+            link_state.error_message = result.get("error", "VTEP setup failed")
             return False
 
     async def teardown_cross_host_link(

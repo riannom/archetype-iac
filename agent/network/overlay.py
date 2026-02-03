@@ -49,7 +49,7 @@ OVERLAY_VLAN_MAX = 4000
 
 @dataclass
 class VxlanTunnel:
-    """Represents a VXLAN tunnel to another host."""
+    """Represents a VXLAN tunnel to another host (legacy per-link model)."""
 
     vni: int  # VXLAN Network Identifier
     local_ip: str  # Local host IP for VXLAN endpoint
@@ -64,6 +64,29 @@ class VxlanTunnel:
     def key(self) -> str:
         """Unique key for this tunnel."""
         return f"{self.lab_id}:{self.link_id}"
+
+
+@dataclass
+class Vtep:
+    """Represents a VXLAN Tunnel Endpoint to a remote host (new trunk model).
+
+    In the new architecture, there is one VTEP per remote host (not per link).
+    The VTEP is created in trunk mode (no VLAN tag) and carries traffic for
+    all cross-host links to that remote host. Link isolation is achieved via
+    VLAN tags on the container interface ports, not on the VTEP itself.
+    """
+
+    interface_name: str  # OVS port name (e.g., "vtep-10.0.0.2")
+    vni: int  # Derived from host-pair hash (deterministic)
+    local_ip: str  # Local VXLAN endpoint IP
+    remote_ip: str  # Remote VXLAN endpoint IP
+    remote_host_id: str | None = None  # Optional remote host identifier
+    tenant_mtu: int = 0  # Discovered path MTU minus VXLAN overhead
+
+    @property
+    def key(self) -> str:
+        """Unique key for this VTEP (keyed by remote IP)."""
+        return self.remote_ip
 
 
 @dataclass
@@ -126,8 +149,9 @@ class OverlayManager:
 
     def __init__(self):
         self._docker: docker.DockerClient | None = None
-        self._tunnels: dict[str, VxlanTunnel] = {}  # key -> tunnel
-        self._bridges: dict[str, OverlayBridge] = {}  # key -> bridge
+        self._tunnels: dict[str, VxlanTunnel] = {}  # key -> tunnel (legacy)
+        self._bridges: dict[str, OverlayBridge] = {}  # key -> bridge (legacy)
+        self._vteps: dict[str, Vtep] = {}  # remote_ip -> VTEP (new trunk model)
         self._vni_allocator = VniAllocator()
         self._ovs_initialized = False
         self._bridge_name = settings.ovs_bridge_name  # Default: "arch-ovs"
@@ -291,6 +315,150 @@ class OverlayManager:
         """Convert VNI to a VLAN tag for OVS isolation."""
         # Map VNI to VLAN range to avoid conflicts
         return OVERLAY_VLAN_BASE + (vni % (OVERLAY_VLAN_MAX - OVERLAY_VLAN_BASE))
+
+    def _host_pair_vni(self, local_ip: str, remote_ip: str) -> int:
+        """Generate a deterministic VNI for a host-pair.
+
+        The VNI is derived from a hash of the sorted IP addresses, ensuring
+        both hosts generate the same VNI for their shared VTEP.
+
+        Args:
+            local_ip: Local host IP address
+            remote_ip: Remote host IP address
+
+        Returns:
+            Deterministic VNI in the configured range
+        """
+        import hashlib
+
+        # Sort IPs to ensure same hash regardless of which side calls
+        sorted_ips = tuple(sorted([local_ip, remote_ip]))
+        combined = f"{sorted_ips[0]}:{sorted_ips[1]}"
+        hash_val = int(hashlib.md5(combined.encode()).hexdigest()[:8], 16)
+        # Map to VNI range (avoid first 1000 reserved)
+        vni_range = self._vni_allocator._max - self._vni_allocator._base
+        return self._vni_allocator._base + (hash_val % vni_range)
+
+    async def ensure_vtep(
+        self,
+        local_ip: str,
+        remote_ip: str,
+        remote_host_id: str | None = None,
+    ) -> Vtep:
+        """Ensure a VTEP exists to the remote host.
+
+        This implements the new trunk VTEP model where there is one VTEP
+        per remote host, not one per link. The VTEP is created in trunk
+        mode (no VLAN tag) and all cross-host links share it.
+
+        Args:
+            local_ip: Local host IP address for VXLAN endpoint
+            remote_ip: Remote host IP address for VXLAN endpoint
+            remote_host_id: Optional identifier for the remote host
+
+        Returns:
+            Vtep object (existing or newly created)
+
+        Raises:
+            RuntimeError: If VTEP creation fails
+        """
+        await self._ensure_ovs_bridge()
+
+        # Check if VTEP already exists for this remote host
+        if remote_ip in self._vteps:
+            existing = self._vteps[remote_ip]
+            logger.debug(f"VTEP already exists for {remote_ip}: {existing.interface_name}")
+            return existing
+
+        # Generate deterministic VNI from host-pair
+        vni = self._host_pair_vni(local_ip, remote_ip)
+
+        # Discover path MTU to remote peer
+        path_mtu = await self._discover_path_mtu(remote_ip)
+        if path_mtu > 0:
+            tenant_mtu = path_mtu - self.VXLAN_OVERHEAD
+            logger.info(f"VTEP tenant MTU for {remote_ip}: {tenant_mtu} (path {path_mtu} - {self.VXLAN_OVERHEAD})")
+        else:
+            tenant_mtu = settings.overlay_mtu
+            logger.info(f"VTEP using fallback tenant MTU for {remote_ip}: {tenant_mtu}")
+
+        # Create interface name from remote IP (replace dots with dashes)
+        # e.g., "vtep-10-0-0-2" for remote IP 10.0.0.2
+        safe_ip = remote_ip.replace(".", "-")
+        interface_name = f"vtep-{safe_ip}"[:15]  # OVS port names max 15 chars
+
+        # Delete existing OVS port if present (from previous run)
+        if await self._ovs_port_exists(interface_name):
+            logger.warning(f"VTEP port {interface_name} already exists, deleting")
+            await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, interface_name)
+
+        # Create VXLAN port on OVS in TRUNK mode (no tag parameter)
+        # This allows all VLANs to pass through the tunnel
+        code, _, stderr = await self._ovs_vsctl(
+            "--", "add-port", self._bridge_name, interface_name,
+            "--", "set", "interface", interface_name, "type=vxlan",
+            f"options:remote_ip={remote_ip}",
+            f"options:local_ip={local_ip}",
+            f"options:key={vni}",
+        )
+        if code != 0:
+            raise RuntimeError(f"Failed to create VTEP port on OVS: {stderr}")
+
+        vtep = Vtep(
+            interface_name=interface_name,
+            vni=vni,
+            local_ip=local_ip,
+            remote_ip=remote_ip,
+            remote_host_id=remote_host_id,
+            tenant_mtu=tenant_mtu,
+        )
+
+        self._vteps[remote_ip] = vtep
+        logger.info(
+            f"Created trunk VTEP {interface_name} (VNI {vni}, MTU {tenant_mtu}) to {remote_ip}"
+        )
+
+        return vtep
+
+    async def delete_vtep(self, remote_ip: str) -> bool:
+        """Delete a VTEP to a remote host.
+
+        Args:
+            remote_ip: The remote host IP whose VTEP to delete
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        vtep = self._vteps.get(remote_ip)
+        if not vtep:
+            logger.warning(f"No VTEP found for {remote_ip}")
+            return False
+
+        try:
+            # Delete OVS VXLAN port
+            code, _, stderr = await self._ovs_vsctl(
+                "--if-exists", "del-port", self._bridge_name, vtep.interface_name
+            )
+            if code != 0:
+                logger.warning(f"Failed to delete VTEP port {vtep.interface_name}: {stderr}")
+
+            # Remove from tracking
+            del self._vteps[remote_ip]
+
+            logger.info(f"Deleted VTEP {vtep.interface_name} to {remote_ip}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error deleting VTEP: {e}")
+            return False
+
+    def get_vtep(self, remote_ip: str) -> Vtep | None:
+        """Get the VTEP for a remote host, if it exists."""
+        return self._vteps.get(remote_ip)
+
+    def get_all_vteps(self) -> list[Vtep]:
+        """Get all active VTEPs."""
+        return list(self._vteps.values())
 
     async def create_tunnel(
         self,
@@ -637,6 +805,147 @@ class OverlayManager:
             logger.error(f"Error attaching container to bridge: {e}")
             return False
 
+    async def attach_overlay_interface(
+        self,
+        lab_id: str,
+        container_name: str,
+        interface_name: str,
+        vlan_tag: int,
+        tenant_mtu: int = 0,
+    ) -> bool:
+        """Attach a container interface to the overlay with a specific VLAN tag.
+
+        This is the new method for the trunk VTEP model. It sets the VLAN tag
+        directly on the container's OVS port. The VTEP should already exist
+        (created via ensure_vtep) in trunk mode carrying all VLANs.
+
+        Args:
+            lab_id: Lab identifier (for logging/tracking)
+            container_name: Docker container name
+            interface_name: Interface name inside container (e.g., eth1)
+            vlan_tag: VLAN tag for link isolation (must match remote side)
+            tenant_mtu: MTU for the interface (0 = use default)
+
+        Returns:
+            True if attached successfully
+        """
+        try:
+            await self._ensure_ovs_bridge()
+
+            # Prefer using pre-provisioned OVS ports from the Docker OVS plugin.
+            # This preserves interfaces created before boot (critical for cEOS).
+            try:
+                from agent.network.docker_plugin import get_docker_ovs_plugin
+
+                plugin = get_docker_ovs_plugin()
+                host_veth = await plugin.get_endpoint_host_veth(
+                    lab_id, container_name, interface_name
+                )
+                if host_veth:
+                    code, _, stderr = await self._ovs_vsctl(
+                        "set", "port", host_veth, f"tag={vlan_tag}"
+                    )
+                    if code != 0:
+                        raise RuntimeError(f"Failed to set VLAN on {host_veth}: {stderr}")
+
+                    await self._run_cmd(["ip", "link", "set", host_veth, "up"])
+
+                    logger.info(
+                        f"Attached OVS port {host_veth} for {container_name}:{interface_name} "
+                        f"with VLAN {vlan_tag} (trunk VTEP model)"
+                    )
+                    return True
+            except Exception as e:
+                logger.warning(
+                    f"OVS plugin attach failed for {container_name}:{interface_name}, "
+                    f"falling back to veth attach: {e}"
+                )
+
+            # Fallback: Create new veth pair and attach to OVS
+            def _sync_get_container_info():
+                container = self.docker.containers.get(container_name)
+                if container.status != "running":
+                    return None, "not running"
+                pid = container.attrs["State"]["Pid"]
+                if not pid:
+                    return None, "no PID"
+                return pid, None
+
+            pid, error = await asyncio.to_thread(_sync_get_container_info)
+            if pid is None:
+                logger.error(f"Container {container_name}: {error}")
+                return False
+
+            # Create unique veth names
+            suffix = secrets.token_hex(2)
+            veth_host = f"vo{vlan_tag % 10000}{suffix}"[:15]
+            veth_cont = f"vc{vlan_tag % 10000}{suffix}"[:15]
+
+            # Delete if exists
+            await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, veth_host)
+            await self._run_cmd(["ip", "link", "delete", veth_host])
+
+            # Create veth pair
+            code, _, stderr = await self._run_cmd([
+                "ip", "link", "add", veth_host, "type", "veth", "peer", "name", veth_cont
+            ])
+            if code != 0:
+                raise RuntimeError(f"Failed to create veth pair: {stderr}")
+
+            # Set MTU
+            mtu_to_use = tenant_mtu if tenant_mtu > 0 else settings.overlay_mtu
+            if mtu_to_use > 0:
+                await self._run_cmd(["ip", "link", "set", veth_host, "mtu", str(mtu_to_use)])
+                await self._run_cmd(["ip", "link", "set", veth_cont, "mtu", str(mtu_to_use)])
+
+            # Add host end to OVS with VLAN tag
+            code, _, stderr = await self._ovs_vsctl(
+                "add-port", self._bridge_name, veth_host, f"tag={vlan_tag}"
+            )
+            if code != 0:
+                await self._run_cmd(["ip", "link", "delete", veth_host])
+                raise RuntimeError(f"Failed to add veth to OVS: {stderr}")
+
+            await self._run_cmd(["ip", "link", "set", veth_host, "up"])
+
+            # Move container end to container namespace
+            code, _, stderr = await self._run_cmd([
+                "ip", "link", "set", veth_cont, "netns", str(pid)
+            ])
+            if code != 0:
+                await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, veth_host)
+                await self._run_cmd(["ip", "link", "delete", veth_host])
+                raise RuntimeError(f"Failed to move veth to container namespace: {stderr}")
+
+            # Delete any existing interface with target name
+            await self._run_cmd([
+                "nsenter", "-t", str(pid), "-n",
+                "ip", "link", "delete", interface_name
+            ])
+
+            # Rename and bring up
+            await self._run_cmd([
+                "nsenter", "-t", str(pid), "-n",
+                "ip", "link", "set", veth_cont, "name", interface_name
+            ])
+            await self._run_cmd([
+                "nsenter", "-t", str(pid), "-n",
+                "ip", "link", "set", interface_name, "up"
+            ])
+
+            logger.info(
+                f"Attached {container_name}:{interface_name} to OVS "
+                f"via {veth_host} with VLAN {vlan_tag} (trunk VTEP model)"
+            )
+            return True
+
+        except NotFound:
+            logger.error(f"Container {container_name} not found")
+            return False
+        except Exception as e:
+            logger.error(f"Error attaching container interface: {e}")
+            return False
+
     async def cleanup_lab(self, lab_id: str) -> dict[str, Any]:
         """Clean up all overlay networking for a lab.
 
@@ -700,6 +1009,19 @@ class OverlayManager:
         return {
             "ovs_bridge": self._bridge_name,
             "mtu_cache": dict(self._mtu_cache),
+            # New trunk VTEP model
+            "vteps": [
+                {
+                    "interface": v.interface_name,
+                    "vni": v.vni,
+                    "local_ip": v.local_ip,
+                    "remote_ip": v.remote_ip,
+                    "remote_host_id": v.remote_host_id,
+                    "tenant_mtu": v.tenant_mtu,
+                }
+                for v in self._vteps.values()
+            ],
+            # Legacy per-link tunnels
             "tunnels": [
                 {
                     "vni": t.vni,

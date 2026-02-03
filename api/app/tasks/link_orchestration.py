@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
-from app.services.link_manager import LinkManager, allocate_vni
+from app.services.link_manager import LinkManager
 from app.services.topology import TopologyService
 from app.topology import _normalize_interface_name
 
@@ -240,7 +240,8 @@ async def create_cross_host_link(
 ) -> bool:
     """Create a link between interfaces on different hosts.
 
-    Creates VXLAN tunnel between agents and then connects interfaces.
+    Uses the new trunk VTEP model: one VTEP per host-pair (not per link),
+    with VLAN tags providing link isolation.
     """
     agent_a = host_to_agent.get(link_state.source_host_id)
     agent_b = host_to_agent.get(link_state.target_host_id)
@@ -251,15 +252,12 @@ async def create_cross_host_link(
         log_parts.append(f"  {link_state.link_name}: FAILED - agents not available")
         return False
 
-    # Allocate VNI
-    vni = allocate_vni(lab_id, link_state.link_name)
-    link_state.vni = vni
-
     try:
         interface_a = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
         interface_b = _normalize_interface_name(link_state.target_interface) if link_state.target_interface else ""
 
-        result = await agent_client.setup_cross_host_link(
+        # Use new trunk VTEP model (setup_cross_host_link_v2)
+        result = await agent_client.setup_cross_host_link_v2(
             database=session,
             lab_id=lab_id,
             link_id=link_state.link_name,
@@ -269,39 +267,51 @@ async def create_cross_host_link(
             interface_a=interface_a,
             node_b=link_state.target_node,
             interface_b=interface_b,
-            vni=vni,
         )
 
         if result.get("success"):
-            # Create VxlanTunnel record
+            # Store VLAN tag (no longer per-link VNI in new model)
+            vlan_tag = result.get("vlan_tag", 0)
+            link_state.vlan_tag = vlan_tag
+
+            # Create VxlanTunnel record for tracking (VNI is now per-host-pair)
             agent_ip_a = _extract_agent_ip(agent_a)
             agent_ip_b = _extract_agent_ip(agent_b)
 
-            tunnel = models.VxlanTunnel(
-                lab_id=lab_id,
-                link_state_id=link_state.id,
-                vni=vni,
-                vlan_tag=result.get("vlan_tag", 0),
-                agent_a_id=agent_a.id,
-                agent_a_ip=agent_ip_a,
-                agent_b_id=agent_b.id,
-                agent_b_ip=agent_ip_b,
-                status="active",
+            # Check if tunnel record already exists for this link
+            existing_tunnel = (
+                session.query(models.VxlanTunnel)
+                .filter(models.VxlanTunnel.link_state_id == link_state.id)
+                .first()
             )
-            session.add(tunnel)
+            if not existing_tunnel:
+                tunnel = models.VxlanTunnel(
+                    lab_id=lab_id,
+                    link_state_id=link_state.id,
+                    vni=0,  # Not meaningful in new model (VTEP VNI is per-host-pair)
+                    vlan_tag=vlan_tag,
+                    agent_a_id=agent_a.id,
+                    agent_a_ip=agent_ip_a,
+                    agent_b_id=agent_b.id,
+                    agent_b_ip=agent_ip_b,
+                    status="active",
+                )
+                session.add(tunnel)
+            else:
+                existing_tunnel.vlan_tag = vlan_tag
+                existing_tunnel.status = "active"
 
-            link_state.vlan_tag = result.get("vlan_tag")
             link_state.actual_state = "up"
             link_state.source_carrier_state = "on"
             link_state.target_carrier_state = "on"
             link_state.error_message = None
             log_parts.append(
-                f"  {link_state.link_name}: OK (VNI {vni}, cross-host)"
+                f"  {link_state.link_name}: OK (VLAN {vlan_tag}, cross-host VTEP)"
             )
             return True
         else:
             link_state.actual_state = "error"
-            link_state.error_message = result.get("error", "VXLAN setup failed")
+            link_state.error_message = result.get("error", "VTEP setup failed")
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
 
