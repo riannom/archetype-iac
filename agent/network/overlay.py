@@ -74,6 +74,9 @@ class Vtep:
     The VTEP is created in trunk mode (no VLAN tag) and carries traffic for
     all cross-host links to that remote host. Link isolation is achieved via
     VLAN tags on the container interface ports, not on the VTEP itself.
+
+    Reference counting: The `links` set tracks which links use this VTEP.
+    When the last link is detached, the VTEP can be deleted.
     """
 
     interface_name: str  # OVS port name (e.g., "vtep-10.0.0.2")
@@ -82,11 +85,17 @@ class Vtep:
     remote_ip: str  # Remote VXLAN endpoint IP
     remote_host_id: str | None = None  # Optional remote host identifier
     tenant_mtu: int = 0  # Discovered path MTU minus VXLAN overhead
+    links: set[str] = field(default_factory=set)  # link_ids using this VTEP
 
     @property
     def key(self) -> str:
         """Unique key for this VTEP (keyed by remote IP)."""
         return self.remote_ip
+
+    @property
+    def link_count(self) -> int:
+        """Number of links using this VTEP."""
+        return len(self.links)
 
 
 @dataclass
@@ -812,6 +821,8 @@ class OverlayManager:
         interface_name: str,
         vlan_tag: int,
         tenant_mtu: int = 0,
+        link_id: str | None = None,
+        remote_ip: str | None = None,
     ) -> bool:
         """Attach a container interface to the overlay with a specific VLAN tag.
 
@@ -825,6 +836,8 @@ class OverlayManager:
             interface_name: Interface name inside container (e.g., eth1)
             vlan_tag: VLAN tag for link isolation (must match remote side)
             tenant_mtu: MTU for the interface (0 = use default)
+            link_id: Unique identifier for the link (for VTEP reference counting)
+            remote_ip: Remote VTEP IP (for VTEP reference counting)
 
         Returns:
             True if attached successfully
@@ -849,6 +862,13 @@ class OverlayManager:
                         raise RuntimeError(f"Failed to set VLAN on {host_veth}: {stderr}")
 
                     await self._run_cmd(["ip", "link", "set", host_veth, "up"])
+
+                    # Track link -> VTEP association for reference counting
+                    if link_id and remote_ip and remote_ip in self._vteps:
+                        self._vteps[remote_ip].links.add(link_id)
+                        logger.debug(
+                            f"VTEP {remote_ip} now has {self._vteps[remote_ip].link_count} links"
+                        )
 
                     logger.info(
                         f"Attached OVS port {host_veth} for {container_name}:{interface_name} "
@@ -933,6 +953,13 @@ class OverlayManager:
                 "ip", "link", "set", interface_name, "up"
             ])
 
+            # Track link -> VTEP association for reference counting
+            if link_id and remote_ip and remote_ip in self._vteps:
+                self._vteps[remote_ip].links.add(link_id)
+                logger.debug(
+                    f"VTEP {remote_ip} now has {self._vteps[remote_ip].link_count} links"
+                )
+
             logger.info(
                 f"Attached {container_name}:{interface_name} to OVS "
                 f"via {veth_host} with VLAN {vlan_tag} (trunk VTEP model)"
@@ -944,6 +971,102 @@ class OverlayManager:
             return False
         except Exception as e:
             logger.error(f"Error attaching container interface: {e}")
+            return False
+
+    async def detach_overlay_interface(
+        self,
+        link_id: str,
+        remote_ip: str,
+        delete_vtep_if_unused: bool = True,
+    ) -> dict[str, Any]:
+        """Detach a link and optionally delete the VTEP if no more links use it.
+
+        This implements VTEP reference counting cleanup. When the last link
+        using a VTEP is detached, the VTEP can be deleted to free resources.
+
+        Args:
+            link_id: The link identifier to detach
+            remote_ip: Remote VTEP IP address
+            delete_vtep_if_unused: If True, delete VTEP when no links remain
+
+        Returns:
+            Dict with detach results:
+            - success: bool
+            - vtep_deleted: bool
+            - remaining_links: int
+            - error: str | None
+        """
+        result = {
+            "success": False,
+            "vtep_deleted": False,
+            "remaining_links": 0,
+            "error": None,
+        }
+
+        vtep = self._vteps.get(remote_ip)
+        if not vtep:
+            result["error"] = f"VTEP not found for remote IP {remote_ip}"
+            logger.warning(result["error"])
+            return result
+
+        # Remove link from VTEP's reference set
+        vtep.links.discard(link_id)
+        result["remaining_links"] = vtep.link_count
+        result["success"] = True
+
+        logger.info(
+            f"Detached link {link_id} from VTEP {remote_ip}, "
+            f"{vtep.link_count} links remaining"
+        )
+
+        # Delete VTEP if no more links use it
+        if delete_vtep_if_unused and vtep.link_count == 0:
+            deleted = await self.delete_vtep(remote_ip)
+            result["vtep_deleted"] = deleted
+            if deleted:
+                logger.info(f"Deleted unused VTEP {vtep.interface_name} to {remote_ip}")
+
+        return result
+
+    async def delete_vtep(self, remote_ip: str) -> bool:
+        """Delete a VTEP and its OVS port.
+
+        This should only be called when no links are using the VTEP.
+        Use detach_overlay_interface for safe reference-counted deletion.
+
+        Args:
+            remote_ip: Remote IP of the VTEP to delete
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        vtep = self._vteps.get(remote_ip)
+        if not vtep:
+            logger.warning(f"VTEP not found for remote IP {remote_ip}")
+            return False
+
+        # Safety check: warn if links still reference this VTEP
+        if vtep.link_count > 0:
+            logger.warning(
+                f"Deleting VTEP {vtep.interface_name} with {vtep.link_count} remaining links"
+            )
+
+        try:
+            # Delete OVS port
+            code, _, stderr = await self._ovs_vsctl(
+                "--if-exists", "del-port", self._bridge_name, vtep.interface_name
+            )
+            if code != 0:
+                logger.error(f"Failed to delete VTEP port {vtep.interface_name}: {stderr}")
+                return False
+
+            # Remove from tracking
+            del self._vteps[remote_ip]
+            logger.info(f"Deleted VTEP {vtep.interface_name} to {remote_ip}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error deleting VTEP {vtep.interface_name}: {e}")
             return False
 
     async def cleanup_lab(self, lab_id: str) -> dict[str, Any]:
@@ -1009,7 +1132,7 @@ class OverlayManager:
         return {
             "ovs_bridge": self._bridge_name,
             "mtu_cache": dict(self._mtu_cache),
-            # New trunk VTEP model
+            # New trunk VTEP model with reference counting
             "vteps": [
                 {
                     "interface": v.interface_name,
@@ -1018,6 +1141,8 @@ class OverlayManager:
                     "remote_ip": v.remote_ip,
                     "remote_host_id": v.remote_host_id,
                     "tenant_mtu": v.tenant_mtu,
+                    "link_count": v.link_count,
+                    "links": list(v.links),
                 }
                 for v in self._vteps.values()
             ],

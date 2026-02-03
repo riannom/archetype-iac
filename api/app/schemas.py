@@ -845,3 +845,41 @@ class MtuTestAllResponse(BaseModel):
     successful: int
     failed: int
     results: list[MtuTestResponse]
+
+
+# =============================================================================
+# Interface Mapping Schemas
+# =============================================================================
+
+
+class InterfaceMappingOut(BaseModel):
+    """Output schema for interface mapping.
+
+    Maps between OVS ports, Linux interfaces, and vendor interface names.
+    """
+
+    id: str
+    lab_id: str
+    node_id: str
+    # OVS layer
+    ovs_port: str | None = None
+    ovs_bridge: str | None = None
+    vlan_tag: int | None = None
+    # Linux layer
+    linux_interface: str
+    # Vendor layer
+    vendor_interface: str | None = None
+    device_type: str | None = None
+    # Metadata
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class InterfaceMappingsResponse(BaseModel):
+    """Response for listing interface mappings."""
+
+    mappings: list[InterfaceMappingOut]
+    total: int

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.services.link_manager import LinkManager
+from app.services.link_validator import verify_link_connected, update_interface_mappings
 from app.services.topology import TopologyService
 from app.topology import _normalize_interface_name
 
@@ -182,10 +183,26 @@ async def create_same_host_link(
     link_state: models.LinkState,
     host_to_agent: dict[str, models.Host],
     log_parts: list[str],
+    verify: bool = True,
 ) -> bool:
-    """Create a link between interfaces on the same host.
+    """Create a link between interfaces on the same host with atomic semantics.
 
     Uses OVS hot_connect to put both interfaces in the same VLAN.
+    Only marks link as "up" after verifying VLAN tags match.
+
+    State machine: pending -> creating -> up
+                                       `-> error
+
+    Args:
+        session: Database session
+        lab_id: Lab identifier
+        link_state: LinkState record to update
+        host_to_agent: Map of host_id to Host objects
+        log_parts: List to append log messages to
+        verify: Whether to verify VLAN tags after creation (default: True)
+
+    Returns:
+        True if link was created successfully, False otherwise
     """
     agent = host_to_agent.get(link_state.source_host_id)
     if not agent:
@@ -193,6 +210,10 @@ async def create_same_host_link(
         link_state.error_message = f"Agent not found for host {link_state.source_host_id}"
         log_parts.append(f"  {link_state.link_name}: FAILED - agent not found")
         return False
+
+    # Set state to "creating" before making any changes
+    link_state.actual_state = "creating"
+    session.flush()
 
     try:
         source_iface = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
@@ -207,21 +228,37 @@ async def create_same_host_link(
             target_interface=target_iface,
         )
 
-        if result.get("success"):
-            link_state.vlan_tag = result.get("vlan_tag")
-            link_state.actual_state = "up"
-            link_state.source_carrier_state = "on"
-            link_state.target_carrier_state = "on"
-            link_state.error_message = None
-            log_parts.append(
-                f"  {link_state.link_name}: OK (VLAN {link_state.vlan_tag})"
-            )
-            return True
-        else:
+        if not result.get("success"):
             link_state.actual_state = "error"
             link_state.error_message = result.get("error", "hot_connect failed")
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
+
+        # Store the reported VLAN tag
+        reported_vlan = result.get("vlan_tag")
+        link_state.vlan_tag = reported_vlan
+
+        # Verify the link is actually connected (VLAN tags match)
+        if verify:
+            is_valid, error = await verify_link_connected(session, link_state, host_to_agent)
+            if not is_valid:
+                link_state.actual_state = "error"
+                link_state.error_message = f"Verification failed: {error}"
+                log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
+                return False
+
+            # Update interface mappings after successful link creation
+            await update_interface_mappings(session, link_state, host_to_agent)
+
+        # Only now mark as "up"
+        link_state.actual_state = "up"
+        link_state.source_carrier_state = "on"
+        link_state.target_carrier_state = "on"
+        link_state.error_message = None
+        log_parts.append(
+            f"  {link_state.link_name}: OK (VLAN {link_state.vlan_tag})"
+        )
+        return True
 
     except Exception as e:
         logger.error(f"Failed to create same-host link {link_state.link_name}: {e}")
@@ -237,11 +274,26 @@ async def create_cross_host_link(
     link_state: models.LinkState,
     host_to_agent: dict[str, models.Host],
     log_parts: list[str],
+    verify: bool = True,
 ) -> bool:
-    """Create a link between interfaces on different hosts.
+    """Create a link between interfaces on different hosts with atomic semantics.
 
     Uses the new trunk VTEP model: one VTEP per host-pair (not per link),
     with VLAN tags providing link isolation.
+
+    State machine: pending -> creating -> up
+                                       `-> error
+
+    Args:
+        session: Database session
+        lab_id: Lab identifier
+        link_state: LinkState record to update
+        host_to_agent: Map of host_id to Host objects
+        log_parts: List to append log messages to
+        verify: Whether to verify VLAN tags after creation (default: True)
+
+    Returns:
+        True if link was created successfully, False otherwise
     """
     agent_a = host_to_agent.get(link_state.source_host_id)
     agent_b = host_to_agent.get(link_state.target_host_id)
@@ -251,6 +303,10 @@ async def create_cross_host_link(
         link_state.error_message = "One or more agents not available"
         log_parts.append(f"  {link_state.link_name}: FAILED - agents not available")
         return False
+
+    # Set state to "creating" before making any changes
+    link_state.actual_state = "creating"
+    session.flush()
 
     try:
         interface_a = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
@@ -269,51 +325,64 @@ async def create_cross_host_link(
             interface_b=interface_b,
         )
 
-        if result.get("success"):
-            # Store VLAN tag (no longer per-link VNI in new model)
-            vlan_tag = result.get("vlan_tag", 0)
-            link_state.vlan_tag = vlan_tag
-
-            # Create VxlanTunnel record for tracking (VNI is now per-host-pair)
-            agent_ip_a = _extract_agent_ip(agent_a)
-            agent_ip_b = _extract_agent_ip(agent_b)
-
-            # Check if tunnel record already exists for this link
-            existing_tunnel = (
-                session.query(models.VxlanTunnel)
-                .filter(models.VxlanTunnel.link_state_id == link_state.id)
-                .first()
-            )
-            if not existing_tunnel:
-                tunnel = models.VxlanTunnel(
-                    lab_id=lab_id,
-                    link_state_id=link_state.id,
-                    vni=0,  # Not meaningful in new model (VTEP VNI is per-host-pair)
-                    vlan_tag=vlan_tag,
-                    agent_a_id=agent_a.id,
-                    agent_a_ip=agent_ip_a,
-                    agent_b_id=agent_b.id,
-                    agent_b_ip=agent_ip_b,
-                    status="active",
-                )
-                session.add(tunnel)
-            else:
-                existing_tunnel.vlan_tag = vlan_tag
-                existing_tunnel.status = "active"
-
-            link_state.actual_state = "up"
-            link_state.source_carrier_state = "on"
-            link_state.target_carrier_state = "on"
-            link_state.error_message = None
-            log_parts.append(
-                f"  {link_state.link_name}: OK (VLAN {vlan_tag}, cross-host VTEP)"
-            )
-            return True
-        else:
+        if not result.get("success"):
             link_state.actual_state = "error"
             link_state.error_message = result.get("error", "VTEP setup failed")
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
+
+        # Store VLAN tag (no longer per-link VNI in new model)
+        vlan_tag = result.get("vlan_tag", 0)
+        link_state.vlan_tag = vlan_tag
+
+        # Verify the link is actually connected (VLAN tags match on both agents)
+        if verify:
+            is_valid, error = await verify_link_connected(session, link_state, host_to_agent)
+            if not is_valid:
+                link_state.actual_state = "error"
+                link_state.error_message = f"Verification failed: {error}"
+                log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
+                return False
+
+            # Update interface mappings after successful link creation
+            await update_interface_mappings(session, link_state, host_to_agent)
+
+        # Create VxlanTunnel record for tracking (VNI is now per-host-pair)
+        agent_ip_a = _extract_agent_ip(agent_a)
+        agent_ip_b = _extract_agent_ip(agent_b)
+
+        # Check if tunnel record already exists for this link
+        existing_tunnel = (
+            session.query(models.VxlanTunnel)
+            .filter(models.VxlanTunnel.link_state_id == link_state.id)
+            .first()
+        )
+        if not existing_tunnel:
+            tunnel = models.VxlanTunnel(
+                lab_id=lab_id,
+                link_state_id=link_state.id,
+                vni=0,  # Not meaningful in new model (VTEP VNI is per-host-pair)
+                vlan_tag=vlan_tag,
+                agent_a_id=agent_a.id,
+                agent_a_ip=agent_ip_a,
+                agent_b_id=agent_b.id,
+                agent_b_ip=agent_ip_b,
+                status="active",
+            )
+            session.add(tunnel)
+        else:
+            existing_tunnel.vlan_tag = vlan_tag
+            existing_tunnel.status = "active"
+
+        # Only now mark as "up"
+        link_state.actual_state = "up"
+        link_state.source_carrier_state = "on"
+        link_state.target_carrier_state = "on"
+        link_state.error_message = None
+        log_parts.append(
+            f"  {link_state.link_name}: OK (VLAN {vlan_tag}, cross-host VTEP)"
+        )
+        return True
 
     except Exception as e:
         logger.error(f"Failed to create cross-host link {link_state.link_name}: {e}")

@@ -226,17 +226,23 @@ class LinkState(Base):
 
     This model enables per-link control where each link tracks:
     - desired_state: What the user wants ("up" or "down")
-    - actual_state: Current reality ("up", "down", "unknown", "error")
+    - actual_state: Current reality (see states below)
 
     Links are identified by a unique name generated from their endpoints.
     The source/target node and interface fields store the link topology
     for reference and display purposes.
 
-    Link states:
-    - "up": Link is enabled and active
+    Link actual_state values:
+    - "pending": Link is waiting to be created (initial state)
+    - "creating": Link creation in progress (transitional)
+    - "up": Link is enabled and active (verified VLAN tags match)
     - "down": Link is administratively disabled
     - "unknown": Link state cannot be determined
-    - "error": Link is in an error state
+    - "error": Link creation or verification failed
+
+    State machine:
+        pending -> creating -> up
+                            `-> error
 
     For cross-host links (nodes on different agents), additional fields
     track the VXLAN tunnel used for L2 connectivity.
@@ -665,6 +671,45 @@ class InfraSettings(Base):
     mtu_verification_enabled: Mapped[bool] = mapped_column(default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     updated_by_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+
+
+class InterfaceMapping(Base):
+    """Maps OVS ports to Linux interfaces to vendor interface names.
+
+    This model provides a translation layer between different naming conventions:
+    - OVS layer: ovs_port ("vh614ed63ed40"), ovs_bridge ("arch-ovs")
+    - Linux layer: linux_interface ("eth1")
+    - Vendor layer: vendor_interface ("Ethernet1", "ge-0/0/0")
+
+    This enables:
+    - Translating link_states interfaces (eth1) to vendor names (Ethernet1) for display
+    - Looking up OVS port names for VLAN tag verification
+    - Validating link connectivity by querying OVS state
+    """
+    __tablename__ = "interface_mappings"
+    __table_args__ = (
+        UniqueConstraint("lab_id", "node_id", "linux_interface", name="uq_interface_mapping_lab_node_interface"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+    node_id: Mapped[str] = mapped_column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), index=True)
+
+    # OVS layer
+    ovs_port: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)  # "vh614ed63ed40"
+    ovs_bridge: Mapped[str | None] = mapped_column(String(50), nullable=True)  # "arch-ovs" or "ovs-{lab_id}"
+    vlan_tag: Mapped[int | None] = mapped_column(nullable=True)
+
+    # Linux layer
+    linux_interface: Mapped[str] = mapped_column(String(20))  # "eth1"
+
+    # Vendor layer
+    vendor_interface: Mapped[str | None] = mapped_column(String(50), nullable=True)  # "Ethernet1"
+    device_type: Mapped[str | None] = mapped_column(String(50), nullable=True)  # "arista_ceos"
+
+    # Metadata
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class AgentLink(Base):
