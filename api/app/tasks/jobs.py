@@ -2264,23 +2264,36 @@ async def run_node_reconcile(
                     container_name = _get_container_name(lab_id, ns.node_name)
                     log_parts.append(f"Stopping {ns.node_name} ({container_name})...")
 
-                    # For stop operations, try the target agent first, then fall back to
-                    # the lab's default agent if container not found (migration scenario)
-                    stop_agent = agent
+                    # For stop operations, use the ACTUAL container location from node_placements
+                    # not the configured host (nodes.host_id) which may differ after migration
+                    placement = (
+                        session.query(models.NodePlacement)
+                        .filter(
+                            models.NodePlacement.lab_id == lab_id,
+                            models.NodePlacement.node_name == ns.node_name,
+                        )
+                        .first()
+                    )
+                    if placement and placement.host_id != agent.id:
+                        actual_agent = session.get(models.Host, placement.host_id)
+                        if actual_agent and agent_client.is_agent_online(actual_agent):
+                            stop_agent = actual_agent
+                            log_parts.append(f"    (container on {actual_agent.name}, not {agent.name})")
+                        else:
+                            stop_agent = agent
+                    else:
+                        stop_agent = agent
                     try:
                         result = await agent_client.container_action(
                             stop_agent, container_name, "stop"
                         )
-                        # If container not found on target agent, try lab's default agent
+                        # If container not found on placement agent, try the configured agent as fallback
                         if not result.get("success") and "not found" in result.get("error", "").lower():
-                            if lab.agent_id and lab.agent_id != agent.id:
-                                old_agent = session.get(models.Host, lab.agent_id)
-                                if old_agent and agent_client.is_agent_online(old_agent):
-                                    log_parts.append(f"    Container not on {agent.name}, trying {old_agent.name}...")
-                                    stop_agent = old_agent
-                                    result = await agent_client.container_action(
-                                        stop_agent, container_name, "stop"
-                                    )
+                            if stop_agent.id != agent.id:
+                                log_parts.append(f"    Container not on {stop_agent.name}, trying {agent.name}...")
+                                result = await agent_client.container_action(
+                                    agent, container_name, "stop"
+                                )
                         if result.get("success"):
                             ns.actual_state = "stopped"
                             ns.stopping_started_at = None

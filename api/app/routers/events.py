@@ -110,10 +110,17 @@ def _event_type_to_actual_state(
         # These are intentional stops, not errors
         if "code 137" in status or "code 143" in status:
             return "stopped"
+        # Status "kill" means Docker sent SIGKILL - this is from docker stop timeout
+        # Treat it as a successful stop, not an error
+        if status == "kill":
+            return "stopped"
         # Don't downgrade from "stopped" to "error" - this can happen when
         # events arrive out of order (die after stop)
         if current_state == "stopped":
             return ""  # Skip update
+        # If we were already stopping, treat any death as a successful stop
+        if current_state == "stopping":
+            return "stopped"
         return "error"
     elif event_type == "creating":
         return "pending"
@@ -179,6 +186,11 @@ async def receive_node_event(
         )
 
     node_state.actual_state = new_state
+
+    # Clear transitional timestamps when reaching final states
+    if new_state in ("stopped", "running", "error"):
+        node_state.stopping_started_at = None
+        node_state.starting_started_at = None
 
     # Set or clear error message
     if new_state == "error":

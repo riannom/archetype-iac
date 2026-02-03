@@ -879,6 +879,73 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             if ls.desired_state == "deleted":
                 session.delete(ls)
 
+        # === ENFORCEMENT: Trigger sync for nodes where actual != desired ===
+        # This makes reconciliation actively enforce desired state, not just observe
+        out_of_sync_nodes = []
+        for ns in node_states:
+            # Skip nodes in transitional states (being handled by active job)
+            if ns.actual_state in ("stopping", "starting", "pending"):
+                continue
+            # Skip if timestamps indicate active operation
+            if ns.stopping_started_at or ns.starting_started_at:
+                continue
+
+            # Check for state mismatch
+            needs_start = (
+                ns.desired_state == "running"
+                and ns.actual_state in ("stopped", "undeployed", "error")
+            )
+            needs_stop = (
+                ns.desired_state == "stopped"
+                and ns.actual_state == "running"
+            )
+            if needs_start or needs_stop:
+                out_of_sync_nodes.append(ns)
+
+        if out_of_sync_nodes:
+            # Check for active job that might already be handling this
+            active_job = (
+                session.query(models.Job)
+                .filter(
+                    models.Job.lab_id == lab_id,
+                    models.Job.status.in_(["queued", "running"]),
+                )
+                .first()
+            )
+
+            if not active_job:
+                # No active job - trigger sync to enforce desired state
+                node_ids = [ns.node_id for ns in out_of_sync_nodes]
+                node_names = [ns.node_name for ns in out_of_sync_nodes]
+                logger.info(
+                    f"Reconciliation enforcement: triggering sync for {len(out_of_sync_nodes)} "
+                    f"out-of-sync node(s) in lab {lab_id}: {node_names}"
+                )
+
+                from app.tasks.jobs import run_node_reconcile
+                from app.utils.lab import get_lab_provider
+                from app.utils.task import safe_create_task
+
+                provider = get_lab_provider(lab)
+                enforcement_job = models.Job(
+                    lab_id=lab_id,
+                    user_id=None,  # System-initiated
+                    action=f"reconcile:enforce:{','.join(node_ids[:5])}{'...' if len(node_ids) > 5 else ''}",
+                    status="queued",
+                )
+                session.add(enforcement_job)
+                session.flush()  # Get the job ID
+
+                safe_create_task(
+                    run_node_reconcile(enforcement_job.id, lab_id, node_ids, provider=provider),
+                    name=f"reconcile:enforce:{enforcement_job.id}"
+                )
+            else:
+                logger.debug(
+                    f"Reconciliation: {len(out_of_sync_nodes)} node(s) out of sync in lab {lab_id} "
+                    f"but active job {active_job.id} exists, skipping enforcement"
+                )
+
         session.commit()
 
     except Exception as e:

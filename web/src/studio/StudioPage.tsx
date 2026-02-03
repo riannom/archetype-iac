@@ -548,6 +548,21 @@ const StudioPage: React.FC = () => {
     }, 2000); // 2 second debounce for topology saves
   }, [activeLab, saveTopology]);
 
+  // Flush any pending topology save immediately (for use before deploy)
+  // Returns a promise that resolves when the save is complete
+  const flushTopologySave = useCallback(async () => {
+    if (!activeLab) return;
+    // Cancel pending debounced save
+    if (saveTopologyTimeoutRef.current) {
+      window.clearTimeout(saveTopologyTimeoutRef.current);
+      saveTopologyTimeoutRef.current = null;
+    }
+    // If dirty, save immediately
+    if (topologyDirtyRef.current) {
+      await saveTopology(activeLab.id, nodesRef.current, linksRef.current);
+    }
+  }, [activeLab, saveTopology]);
+
   const loadLabs = useCallback(async () => {
     const data = await studioRequest<{ labs: LabSummary[] }>('/labs');
     setLabs(data.labs || []);
@@ -1563,6 +1578,7 @@ const StudioPage: React.FC = () => {
             agents={agents}
             onUpdateNode={handleUpdateNode}
             pendingNodeOps={pendingNodeOps}
+            onFlushTopologySave={flushTopologySave}
           />
         );
       default:

@@ -338,6 +338,76 @@ def delete_custom_device(device_id: str) -> Optional[dict]:
     return None
 
 
+def ensure_custom_device_exists(device_id: str) -> Optional[dict]:
+    """Ensure a custom device entry exists for a device_id.
+
+    If the device_id doesn't exist as a vendor config or custom device,
+    create a custom device entry based on the canonical vendor config
+    (resolved via alias).
+
+    This is called during image import to ensure that device_ids like "eos"
+    get proper custom device entries with portNaming, etc.
+
+    Args:
+        device_id: Device ID to ensure exists (e.g., "eos")
+
+    Returns:
+        The existing or newly created custom device, or None if no
+        canonical vendor config exists
+    """
+    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
+
+    if not device_id:
+        return None
+
+    # Check if it already exists as a vendor config
+    if device_id in VENDOR_CONFIGS:
+        return None  # Built-in, no custom device needed
+
+    # Check if it already exists as a custom device
+    existing = find_custom_device(device_id)
+    if existing:
+        return existing
+
+    # Resolve alias to canonical vendor ID (e.g., "eos" -> "ceos")
+    canonical_id = get_kind_for_device(device_id)
+
+    # If canonical is same as device_id and not in VENDOR_CONFIGS, no base config
+    if canonical_id not in VENDOR_CONFIGS:
+        return None
+
+    # Get the canonical vendor config
+    config = VENDOR_CONFIGS[canonical_id]
+
+    # Create custom device entry with properties from the vendor config
+    custom_device = {
+        "id": device_id,
+        "name": config.label or f"{config.vendor} ({device_id})",
+        "type": config.device_type.value,
+        "vendor": config.vendor,
+        "icon": config.icon,
+        "versions": config.versions.copy() if config.versions else ["latest"],
+        "isActive": config.is_active,
+        "category": config.category,
+        "subcategory": config.subcategory,
+        "portNaming": config.port_naming,
+        "portStartIndex": config.port_start_index,
+        "maxPorts": config.max_ports,
+        "memory": config.memory,
+        "cpu": config.cpu,
+        "requiresImage": config.requires_image,
+        "supportedImageKinds": config.supported_image_kinds.copy() if config.supported_image_kinds else ["docker"],
+        "documentationUrl": config.documentation_url,
+        "licenseRequired": config.license_required,
+        "tags": config.tags.copy() if config.tags else [],
+        "kind": canonical_id,  # Reference to the canonical vendor for runtime config
+        "consoleShell": config.console_shell,
+        "isCustom": True,
+    }
+
+    return add_custom_device(custom_device)
+
+
 def get_device_image_count(device_id: str) -> int:
     """Count how many images are assigned to a device type.
 
@@ -427,6 +497,11 @@ def create_image_entry(
         Dictionary with all image metadata fields
     """
     vendor = get_vendor_for_device(device_id) if device_id else None
+
+    # Ensure custom device entry exists for this device_id
+    # This creates entries like "eos" with proper portNaming from the canonical "ceos" config
+    if device_id:
+        ensure_custom_device_exists(device_id)
 
     return {
         "id": image_id,
