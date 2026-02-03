@@ -532,57 +532,64 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         )
 
         for ns in node_states:
-            # Skip "stopping" nodes - they're being handled by an active job
-            # or need timeout recovery (handled below)
+            # Skip nodes with active transitional operations
+            # The job will handle state updates - reconciliation should not interfere
+            #
+            # Check stopping_started_at/starting_started_at FIRST, regardless of actual_state.
+            # This handles race conditions where the job hasn't updated actual_state yet
+            # but has already started the operation.
+
+            # Check for active stop operation
+            if ns.stopping_started_at:
+                stopping_duration = datetime.now(timezone.utc) - ns.stopping_started_at
+                if stopping_duration.total_seconds() < 360:  # 6 minutes
+                    # Stop operation in progress - let the job handle it
+                    stopped_count += 1
+                    continue
+                # Timeout exceeded - fall through to normal reconciliation
+                logger.warning(
+                    f"Node {ns.node_name} in lab {lab_id} stuck in stopping operation for "
+                    f"{stopping_duration.total_seconds():.0f}s, recovering via reconciliation"
+                )
+                # Clear the stale timestamp
+                ns.stopping_started_at = None
+
+            # Check for active start operation
+            if ns.starting_started_at:
+                starting_duration = datetime.now(timezone.utc) - ns.starting_started_at
+                if starting_duration.total_seconds() < 360:  # 6 minutes
+                    # Start operation in progress - let the job handle it
+                    running_count += 1
+                    continue
+                # Timeout exceeded - fall through to normal reconciliation
+                logger.warning(
+                    f"Node {ns.node_name} in lab {lab_id} stuck in starting operation for "
+                    f"{starting_duration.total_seconds():.0f}s, recovering via reconciliation"
+                )
+                # Clear the stale timestamp
+                ns.starting_started_at = None
+
+            # Additional check: skip "stopping" or "starting" states even without timestamp
+            # if there's an active job (the job will manage state)
             if ns.actual_state == "stopping":
                 if active_stop_job:
-                    # Active job is handling this - don't interfere
-                    stopped_count += 1  # Count as stopped for lab state calculation
+                    stopped_count += 1
                     continue
-                # Check timeout: if stopping > 6 min with no job, recover from container status
-                if ns.stopping_started_at:
-                    stopping_duration = datetime.now(timezone.utc) - ns.stopping_started_at
-                    if stopping_duration.total_seconds() < 360:  # 6 minutes
-                        # Still within timeout window, don't interfere
-                        stopped_count += 1
-                        continue
-                    # Timeout exceeded - fall through to normal reconciliation
-                    logger.warning(
-                        f"Node {ns.node_name} in lab {lab_id} stuck in 'stopping' for "
-                        f"{stopping_duration.total_seconds():.0f}s, recovering via reconciliation"
-                    )
-                else:
-                    # No timestamp but no job - something is wrong, recover
-                    logger.warning(
-                        f"Node {ns.node_name} in lab {lab_id} in 'stopping' state without "
-                        f"timestamp or active job, recovering via reconciliation"
-                    )
+                # No timestamp and no job - something is wrong, recover
+                logger.warning(
+                    f"Node {ns.node_name} in lab {lab_id} in 'stopping' state without "
+                    f"timestamp or active job, recovering via reconciliation"
+                )
 
-            # Skip "starting" nodes - they're being handled by an active job
-            # or need timeout recovery (handled by job_health monitor)
             if ns.actual_state == "starting":
                 if active_stop_job:
-                    # Active job is handling this - don't interfere
-                    running_count += 1  # Count as running for lab state calculation
+                    running_count += 1
                     continue
-                # Check timeout: if starting > 6 min with no job, recover from container status
-                if ns.starting_started_at:
-                    starting_duration = datetime.now(timezone.utc) - ns.starting_started_at
-                    if starting_duration.total_seconds() < 360:  # 6 minutes
-                        # Still within timeout window, don't interfere
-                        running_count += 1
-                        continue
-                    # Timeout exceeded - fall through to normal reconciliation
-                    logger.warning(
-                        f"Node {ns.node_name} in lab {lab_id} stuck in 'starting' for "
-                        f"{starting_duration.total_seconds():.0f}s, recovering via reconciliation"
-                    )
-                else:
-                    # No timestamp but no job - something is wrong, recover
-                    logger.warning(
-                        f"Node {ns.node_name} in lab {lab_id} in 'starting' state without "
-                        f"timestamp or active job, recovering via reconciliation"
-                    )
+                # No timestamp and no job - something is wrong, recover
+                logger.warning(
+                    f"Node {ns.node_name} in lab {lab_id} in 'starting' state without "
+                    f"timestamp or active job, recovering via reconciliation"
+                )
 
             container_status = container_status_map.get(ns.node_name)
             old_state = ns.actual_state
