@@ -441,8 +441,8 @@ def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
         if re.search(pattern, name):
             return device_id, _extract_version(filename)
     keyword_map = {
-        "ceos": "eos",
-        "eos": "eos",
+        "ceos": "ceos",
+        "eos": "ceos",
         "iosv": "iosv",
         "csr": "csr",
         "nxos": "nxos",
