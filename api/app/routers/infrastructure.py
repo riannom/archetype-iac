@@ -236,8 +236,9 @@ async def test_mtu_between_agents(
     # Get settings
     settings = get_or_create_settings(database)
 
-    # Extract target IP from agent address (host:port format)
-    target_ip = target_agent.address.split(":")[0]
+    # Extract and resolve target IP from agent address (handles hostnames)
+    from app.agent_client import resolve_agent_ip
+    target_ip = resolve_agent_ip(target_agent.address)
 
     # Get or create the link record
     link = (
