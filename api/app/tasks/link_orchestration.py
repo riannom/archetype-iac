@@ -349,8 +349,8 @@ async def create_cross_host_link(
             await update_interface_mappings(session, link_state, host_to_agent)
 
         # Create VxlanTunnel record for tracking (VNI is now per-host-pair)
-        agent_ip_a = _extract_agent_ip(agent_a)
-        agent_ip_b = _extract_agent_ip(agent_b)
+        agent_ip_a = agent_client.resolve_agent_ip(agent_a.address)
+        agent_ip_b = agent_client.resolve_agent_ip(agent_b.address)
 
         # Check if tunnel record already exists for this link
         existing_tunnel = (
@@ -489,12 +489,3 @@ async def teardown_deployment_links(
 
     logger.info(f"VXLAN teardown complete: {success_count} agents OK, {fail_count} failed")
     return success_count, fail_count
-
-
-def _extract_agent_ip(agent: models.Host) -> str:
-    """Extract and resolve IP address from agent's address field.
-
-    For VXLAN endpoints, we need actual IP addresses not hostnames.
-    """
-    from app.agent_client import resolve_agent_ip
-    return resolve_agent_ip(agent.address)

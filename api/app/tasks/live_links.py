@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app import agent_client, models
 from app.db import SessionLocal, get_session
 from app.services.link_manager import LinkManager, allocate_vni
+from app.utils.link import lookup_endpoint_hosts
 from app.tasks.link_orchestration import (
     create_same_host_link,
     create_cross_host_link,
@@ -117,7 +118,7 @@ async def create_link_if_ready(
         return False
 
     # Both nodes are running - determine host placement
-    source_host_id, target_host_id = _lookup_endpoint_hosts(session, link_state)
+    source_host_id, target_host_id = lookup_endpoint_hosts(session, link_state)
 
     if not source_host_id or not target_host_id:
         link_state.actual_state = "error"
@@ -500,74 +501,6 @@ async def process_link_changes(
                     job.completed_at = datetime.now(timezone.utc)
                     _update_job_log(session, job, log_parts)
                 session.commit()  # Commit the job status update
-
-
-def _lookup_endpoint_hosts(
-    session: Session,
-    link_state: models.LinkState,
-) -> tuple[str | None, str | None]:
-    """Look up which hosts have the source and target nodes.
-
-    First checks Node.host_id (explicit placement), then NodePlacement
-    (runtime placement tracking).
-
-    Returns:
-        Tuple of (source_host_id, target_host_id)
-    """
-    lab_id = link_state.lab_id
-
-    source_host_id = None
-    target_host_id = None
-
-    # Check Node.host_id first (explicit placement)
-    source_node = (
-        session.query(models.Node)
-        .filter(
-            models.Node.lab_id == lab_id,
-            models.Node.container_name == link_state.source_node,
-        )
-        .first()
-    )
-    if source_node and source_node.host_id:
-        source_host_id = source_node.host_id
-
-    target_node = (
-        session.query(models.Node)
-        .filter(
-            models.Node.lab_id == lab_id,
-            models.Node.container_name == link_state.target_node,
-        )
-        .first()
-    )
-    if target_node and target_node.host_id:
-        target_host_id = target_node.host_id
-
-    # Fall back to NodePlacement
-    if not source_host_id:
-        placement = (
-            session.query(models.NodePlacement)
-            .filter(
-                models.NodePlacement.lab_id == lab_id,
-                models.NodePlacement.node_name == link_state.source_node,
-            )
-            .first()
-        )
-        if placement:
-            source_host_id = placement.host_id
-
-    if not target_host_id:
-        placement = (
-            session.query(models.NodePlacement)
-            .filter(
-                models.NodePlacement.lab_id == lab_id,
-                models.NodePlacement.node_name == link_state.target_node,
-            )
-            .first()
-        )
-        if placement:
-            target_host_id = placement.host_id
-
-    return source_host_id, target_host_id
 
 
 async def _build_host_to_agent_map(

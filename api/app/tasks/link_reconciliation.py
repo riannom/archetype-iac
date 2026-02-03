@@ -23,6 +23,7 @@ from app.db import SessionLocal
 from app.services.link_validator import verify_link_connected
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
 from app.topology import _normalize_interface_name
+from app.utils.link import links_needing_reconciliation_filter
 from app.utils.locks import get_link_state_by_id_for_update
 
 logger = logging.getLogger(__name__)
@@ -59,21 +60,7 @@ async def reconcile_link_states(session: Session) -> dict:
     # - Cross-host links in "error" with partial attachment (recovery)
     links_to_check = (
         session.query(models.LinkState)
-        .filter(
-            or_(
-                models.LinkState.actual_state == "up",
-                # Error links needing recovery (at least one side needs re-attachment)
-                (
-                    (models.LinkState.actual_state == "error") &
-                    (models.LinkState.is_cross_host == True) &
-                    (models.LinkState.desired_state == "up") &
-                    (
-                        (models.LinkState.source_vxlan_attached == False) |
-                        (models.LinkState.target_vxlan_attached == False)
-                    )
-                ),
-            )
-        )
+        .filter(links_needing_reconciliation_filter())
         .all()
     )
 
@@ -437,19 +424,7 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
         session.query(models.LinkState)
         .filter(
             models.LinkState.lab_id == lab_id,
-            or_(
-                models.LinkState.actual_state == "up",
-                # Error links needing recovery
-                (
-                    (models.LinkState.actual_state == "error") &
-                    (models.LinkState.is_cross_host == True) &
-                    (models.LinkState.desired_state == "up") &
-                    (
-                        (models.LinkState.source_vxlan_attached == False) |
-                        (models.LinkState.target_vxlan_attached == False)
-                    )
-                ),
-            ),
+            links_needing_reconciliation_filter(),
         )
         .all()
     )

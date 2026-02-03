@@ -1,6 +1,114 @@
 """Link-related utility functions."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+    from app import models
+
+
+def lookup_endpoint_hosts(
+    session: "Session",
+    link_state: "models.LinkState",
+) -> tuple[str | None, str | None]:
+    """Look up which hosts have the source and target nodes for a link.
+
+    First checks Node.host_id (explicit placement), then NodePlacement
+    (runtime placement tracking).
+
+    Args:
+        session: Database session
+        link_state: LinkState object with source/target node info
+
+    Returns:
+        Tuple of (source_host_id, target_host_id)
+    """
+    from app import models as m
+
+    lab_id = link_state.lab_id
+
+    source_host_id = None
+    target_host_id = None
+
+    # Check Node.host_id first (explicit placement)
+    source_node = (
+        session.query(m.Node)
+        .filter(
+            m.Node.lab_id == lab_id,
+            m.Node.container_name == link_state.source_node,
+        )
+        .first()
+    )
+    if source_node and source_node.host_id:
+        source_host_id = source_node.host_id
+
+    target_node = (
+        session.query(m.Node)
+        .filter(
+            m.Node.lab_id == lab_id,
+            m.Node.container_name == link_state.target_node,
+        )
+        .first()
+    )
+    if target_node and target_node.host_id:
+        target_host_id = target_node.host_id
+
+    # Fall back to NodePlacement
+    if not source_host_id:
+        placement = (
+            session.query(m.NodePlacement)
+            .filter(
+                m.NodePlacement.lab_id == lab_id,
+                m.NodePlacement.node_name == link_state.source_node,
+            )
+            .first()
+        )
+        if placement:
+            source_host_id = placement.host_id
+
+    if not target_host_id:
+        placement = (
+            session.query(m.NodePlacement)
+            .filter(
+                m.NodePlacement.lab_id == lab_id,
+                m.NodePlacement.node_name == link_state.target_node,
+            )
+            .first()
+        )
+        if placement:
+            target_host_id = placement.host_id
+
+    return source_host_id, target_host_id
+
+
+def links_needing_reconciliation_filter():
+    """Return SQLAlchemy filter for links that need reconciliation attention.
+
+    This includes:
+    - Links marked as "up" (for verification)
+    - Cross-host links in "error" with partial VXLAN attachment (for recovery)
+
+    Returns:
+        SQLAlchemy filter expression
+    """
+    from sqlalchemy import or_
+    from app import models
+
+    return or_(
+        models.LinkState.actual_state == "up",
+        # Error links needing recovery (at least one side needs re-attachment)
+        (
+            (models.LinkState.actual_state == "error") &
+            (models.LinkState.is_cross_host == True) &
+            (models.LinkState.desired_state == "up") &
+            (
+                (models.LinkState.source_vxlan_attached == False) |
+                (models.LinkState.target_vxlan_attached == False)
+            )
+        ),
+    )
+
 
 def generate_link_name(
     source_node: str,
