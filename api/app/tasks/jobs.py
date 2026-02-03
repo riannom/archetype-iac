@@ -2286,13 +2286,41 @@ async def run_node_reconcile(
                             ns.stopping_started_at = None
                             ns.error_message = None
                             ns.boot_started_at = None
+                            ns.is_ready = False
                             log_parts.append(f"  {ns.node_name}: stopped")
+                            # Broadcast final state immediately so frontend gets authoritative state
+                            safe_create_task(
+                                broadcast_node_state_change(
+                                    lab_id=lab_id,
+                                    node_id=ns.node_id,
+                                    node_name=ns.node_name,
+                                    desired_state=ns.desired_state,
+                                    actual_state=ns.actual_state,
+                                    is_ready=ns.is_ready,
+                                    error_message=ns.error_message,
+                                ),
+                                name=f"broadcast:stopped:{lab_id}:{ns.node_id}"
+                            )
                         else:
                             ns.actual_state = "error"
                             ns.stopping_started_at = None
                             ns.error_message = result.get("error") or "Stop failed"
                             ns.boot_started_at = None
+                            ns.is_ready = False
                             log_parts.append(f"  {ns.node_name}: FAILED - {ns.error_message}")
+                            # Broadcast error state
+                            safe_create_task(
+                                broadcast_node_state_change(
+                                    lab_id=lab_id,
+                                    node_id=ns.node_id,
+                                    node_name=ns.node_name,
+                                    desired_state=ns.desired_state,
+                                    actual_state=ns.actual_state,
+                                    is_ready=ns.is_ready,
+                                    error_message=ns.error_message,
+                                ),
+                                name=f"broadcast:error:{lab_id}:{ns.node_id}"
+                            )
                     except AgentUnavailableError as e:
                         # Transient error - agent unreachable, don't mark as permanently failed
                         error_msg = f"Agent unreachable (transient): {e.message}"
@@ -2302,9 +2330,24 @@ async def run_node_reconcile(
                         logger.warning(f"Stop {ns.node_name} in job {job_id} failed due to agent unavailability")
                     except Exception as e:
                         ns.actual_state = "error"
+                        ns.stopping_started_at = None
                         ns.error_message = str(e)
                         ns.boot_started_at = None
+                        ns.is_ready = False
                         log_parts.append(f"  {ns.node_name}: FAILED - {e}")
+                        # Broadcast error state
+                        safe_create_task(
+                            broadcast_node_state_change(
+                                lab_id=lab_id,
+                                node_id=ns.node_id,
+                                node_name=ns.node_name,
+                                desired_state=ns.desired_state,
+                                actual_state=ns.actual_state,
+                                is_ready=ns.is_ready,
+                                error_message=ns.error_message,
+                            ),
+                            name=f"broadcast:error:{lab_id}:{ns.node_id}"
+                        )
 
                 session.commit()
 

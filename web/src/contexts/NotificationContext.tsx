@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useUser } from './UserContext';
 import { API_BASE_URL } from '../api';
 import type {
@@ -9,6 +9,9 @@ import type {
   CanvasSettings,
 } from '../types/notifications';
 import { DEFAULT_USER_PREFERENCES } from '../types/notifications';
+
+// Duration to suppress duplicate notifications (in milliseconds)
+const DEDUP_WINDOW_MS = 10000;
 
 interface NotificationContextType {
   // Notifications
@@ -43,6 +46,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [toasts, setToasts] = useState<Notification[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Track recent notifications by content hash to prevent duplicates
+  const recentNotificationsRef = useRef<Set<string>>(new Set());
 
   // Fetch preferences from API when user loads
   useEffect(() => {
@@ -81,6 +87,19 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       message?: string,
       options?: Partial<Notification>
     ) => {
+      // Deduplication: skip if we've shown this exact notification recently
+      // Key is level + title + message to allow same title with different messages
+      const dedupKey = `${level}:${title}:${message || ''}`;
+      if (recentNotificationsRef.current.has(dedupKey)) {
+        return; // Skip duplicate notification
+      }
+
+      // Mark this notification as shown and auto-clear after window
+      recentNotificationsRef.current.add(dedupKey);
+      setTimeout(() => {
+        recentNotificationsRef.current.delete(dedupKey);
+      }, DEDUP_WINDOW_MS);
+
       const id = `notif-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const notification: Notification = {
         id,

@@ -826,10 +826,18 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    // Helper to check if job is a sync job (internal operation, no toast notifications)
+    // sync:node:xxx, sync:lab:xxx, sync:agent:xxx are internal state sync operations
+    const isSyncJob = (action: string) => action.startsWith('sync:');
+
     for (const job of jobs) {
       const jobKey = job.id;
       const prevStatus = prevStatuses.get(jobKey);
       newStatuses.set(jobKey, job.status);
+
+      // Skip notifications for sync jobs - they're internal operations
+      // Still log them to the task log for debugging, but no toast spam
+      const skipNotifications = isSyncJob(job.action);
 
       if (prevStatus && prevStatus !== job.status) {
         const actionLabel = job.action.startsWith('node:')
@@ -838,20 +846,21 @@ const StudioPage: React.FC = () => {
 
         if (job.status === 'running') {
           addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
-          // Trigger notification if enabled
-          if (toastSettings?.showJobStart) {
+          // Trigger notification if enabled (skip for sync jobs)
+          if (!skipNotifications && toastSettings?.showJobStart) {
             addNotification('info', `${actionLabel} started`, undefined, { jobId: job.id, labId: job.lab_id });
           }
         } else if (job.status === 'completed') {
           addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
-          // Trigger notification if enabled
-          if (toastSettings?.showJobComplete) {
+          // Trigger notification if enabled (skip for sync jobs)
+          if (!skipNotifications && toastSettings?.showJobComplete) {
             addNotification('success', `${actionLabel} completed`, undefined, { jobId: job.id, labId: job.lab_id });
           }
         } else if (job.status === 'failed') {
           const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
           addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
-          // Trigger notification if enabled
+          // Trigger notification if enabled (skip for sync jobs unless they fail)
+          // Note: We still show failed sync job notifications since failures need attention
           if (toastSettings?.showJobFailed) {
             addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
               jobId: job.id,
@@ -869,12 +878,12 @@ const StudioPage: React.FC = () => {
           addTaskLogEntry('info', `Job queued: ${actionLabel}`, job.id);
         } else if (job.status === 'running') {
           addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
-          if (toastSettings?.showJobStart) {
+          if (!skipNotifications && toastSettings?.showJobStart) {
             addNotification('info', `${actionLabel} started`, undefined, { jobId: job.id, labId: job.lab_id });
           }
         } else if (job.status === 'completed') {
           addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
-          if (toastSettings?.showJobComplete) {
+          if (!skipNotifications && toastSettings?.showJobComplete) {
             addNotification('success', `${actionLabel} completed`, undefined, { jobId: job.id, labId: job.lab_id });
           }
         } else if (job.status === 'failed') {
