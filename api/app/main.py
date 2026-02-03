@@ -35,6 +35,7 @@ from app.tasks.reconciliation import state_reconciliation_monitor
 from app.tasks.disk_cleanup import disk_cleanup_monitor
 from app.tasks.image_reconciliation import image_reconciliation_monitor
 from app.tasks.state_enforcement import state_enforcement_monitor
+from app.tasks.link_reconciliation import link_reconciliation_monitor
 from app.utils.async_tasks import setup_asyncio_exception_handler, safe_create_task
 from alembic.config import Config as AlembicConfig
 from alembic import command as alembic_command
@@ -51,12 +52,13 @@ _job_health_task: asyncio.Task | None = None
 _disk_cleanup_task: asyncio.Task | None = None
 _image_reconciliation_task: asyncio.Task | None = None
 _state_enforcement_task: asyncio.Task | None = None
+_link_reconciliation_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - start background tasks on startup, cleanup on shutdown."""
-    global _agent_monitor_task, _reconciliation_task, _job_health_task, _disk_cleanup_task, _image_reconciliation_task, _state_enforcement_task
+    global _agent_monitor_task, _reconciliation_task, _job_health_task, _disk_cleanup_task, _image_reconciliation_task, _state_enforcement_task, _link_reconciliation_task
 
     # Startup
     logger.info("Starting Archetype API controller")
@@ -115,6 +117,9 @@ async def lifespan(app: FastAPI):
     _state_enforcement_task = safe_create_task(
         state_enforcement_monitor(), name="state_enforcement_monitor"
     )
+    _link_reconciliation_task = safe_create_task(
+        link_reconciliation_monitor(), name="link_reconciliation_monitor"
+    )
 
     yield
 
@@ -160,6 +165,13 @@ async def lifespan(app: FastAPI):
         _state_enforcement_task.cancel()
         try:
             await _state_enforcement_task
+        except asyncio.CancelledError:
+            pass
+
+    if _link_reconciliation_task:
+        _link_reconciliation_task.cancel()
+        try:
+            await _link_reconciliation_task
         except asyncio.CancelledError:
             pass
 

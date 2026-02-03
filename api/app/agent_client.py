@@ -1154,6 +1154,8 @@ async def attach_overlay_interface_on_agent(
     interface_name: str,
     vlan_tag: int,
     tenant_mtu: int = 0,
+    link_id: str | None = None,
+    remote_ip: str | None = None,
 ) -> dict:
     """Attach a container interface to the overlay with a specific VLAN tag.
 
@@ -1167,6 +1169,8 @@ async def attach_overlay_interface_on_agent(
         interface_name: Interface name inside container (e.g., eth1)
         vlan_tag: VLAN tag for link isolation (must match remote side)
         tenant_mtu: Optional MTU (0 = use default)
+        link_id: Link identifier for VTEP reference counting
+        remote_ip: Remote VTEP IP for reference counting
 
     Returns:
         Dict with 'success' and optionally 'error' keys
@@ -1180,6 +1184,10 @@ async def attach_overlay_interface_on_agent(
         "vlan_tag": vlan_tag,
         "tenant_mtu": tenant_mtu,
     }
+    if link_id:
+        payload["link_id"] = link_id
+    if remote_ip:
+        payload["remote_ip"] = remote_ip
 
     try:
         client = get_http_client()
@@ -1195,6 +1203,54 @@ async def attach_overlay_interface_on_agent(
         return result
     except Exception as e:
         logger.error(f"Failed to attach overlay interface on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def detach_overlay_interface_on_agent(
+    agent: models.Host,
+    link_id: str,
+    remote_ip: str,
+    delete_vtep_if_unused: bool = True,
+) -> dict:
+    """Detach a link from VTEP reference counting on an agent.
+
+    This removes the link from the VTEP's reference set. If the VTEP
+    has no more links using it and delete_vtep_if_unused is True,
+    the VTEP is deleted to free resources.
+
+    Args:
+        agent: The agent to detach on
+        link_id: Link identifier to detach
+        remote_ip: Remote VTEP IP
+        delete_vtep_if_unused: If True, delete VTEP when no links remain
+
+    Returns:
+        Dict with 'success', 'vtep_deleted', 'remaining_links' keys
+    """
+    url = f"{get_agent_url(agent)}/overlay/detach-link"
+
+    payload = {
+        "link_id": link_id,
+        "remote_ip": remote_ip,
+        "delete_vtep_if_unused": delete_vtep_if_unused,
+    }
+
+    try:
+        client = get_http_client()
+        response = await client.post(url, json=payload, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            vtep_msg = " (VTEP deleted)" if result.get("vtep_deleted") else ""
+            logger.info(
+                f"Detached link {link_id} from VTEP {remote_ip} on {agent.id}{vtep_msg}, "
+                f"{result.get('remaining_links', 0)} links remaining"
+            )
+        else:
+            logger.warning(f"Overlay detach failed on {agent.id}: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to detach overlay interface on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -1271,6 +1327,8 @@ async def setup_cross_host_link_v2(
         interface_name=interface_a,
         vlan_tag=vlan_tag,
         tenant_mtu=tenant_mtu,
+        link_id=link_id,
+        remote_ip=agent_ip_b,  # For VTEP reference counting
     )
     attach_b_task = attach_overlay_interface_on_agent(
         agent_b,
@@ -1279,6 +1337,8 @@ async def setup_cross_host_link_v2(
         interface_name=interface_b,
         vlan_tag=vlan_tag,
         tenant_mtu=tenant_mtu,
+        link_id=link_id,
+        remote_ip=agent_ip_a,  # For VTEP reference counting
     )
 
     attach_a_result, attach_b_result = await asyncio.gather(attach_a_task, attach_b_task)
@@ -1878,3 +1938,72 @@ async def setup_cross_host_link(
             "b": attach_b.get("success", False),
         },
     }
+
+
+async def get_lab_ports_from_agent(
+    agent: models.Host,
+    lab_id: str,
+) -> list[dict]:
+    """Get OVS port information for a lab from an agent.
+
+    Returns list of port info dicts with:
+    - port_name: OVS port name
+    - bridge_name: OVS bridge name
+    - container: Container name (if known)
+    - interface: Linux interface name (e.g., "eth1")
+    - vlan_tag: Current VLAN tag
+
+    Args:
+        agent: The agent to query
+        lab_id: Lab identifier
+
+    Returns:
+        List of port info dicts
+    """
+    url = f"{get_agent_url(agent)}/ovs-plugin/labs/{lab_id}/ports"
+    client = get_http_client()
+
+    try:
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("ports", [])
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"Get lab ports failed ({e.response.status_code}): {e}")
+        return []
+    except httpx.RequestError as e:
+        logger.warning(f"Get lab ports request failed: {e}")
+        return []
+
+
+async def get_interface_vlan_from_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    interface: str,
+) -> int | None:
+    """Get the current VLAN tag for a specific interface from an agent.
+
+    Args:
+        agent: The agent managing the node
+        lab_id: Lab identifier
+        node_name: Container name or node name
+        interface: Interface name (e.g., "eth1")
+
+    Returns:
+        VLAN tag or None if not found
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/interfaces/{node_name}/{interface}/vlan"
+    client = get_http_client()
+
+    try:
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("vlan_tag")
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"Get interface VLAN failed ({e.response.status_code}): {e}")
+        return None
+    except httpx.RequestError as e:
+        logger.warning(f"Get interface VLAN request failed: {e}")
+        return None

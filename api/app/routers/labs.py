@@ -30,6 +30,8 @@ from app.utils.lab import get_lab_or_404, get_lab_provider
 from app.utils.link import generate_link_name
 from app.topology import _normalize_interface_name
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map, teardown_link
+from app.tasks.link_reconciliation import reconcile_lab_links
+from app.services import interface_mapping as interface_mapping_service
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
 
@@ -2932,4 +2934,136 @@ async def cleanup_lab_orphans(
     return CleanupOrphansResponse(
         removed_by_agent=removed_by_agent,
         errors=errors,
+    )
+
+
+# =============================================================================
+# Interface Mapping Endpoints
+# =============================================================================
+
+
+@router.get("/labs/{lab_id}/interface-mappings")
+async def get_lab_interface_mappings(
+    lab_id: str,
+    database: Session = Depends(db.get_session),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.InterfaceMappingsResponse:
+    """Get all interface mappings for a lab.
+
+    Returns OVS port, Linux interface, and vendor interface mappings
+    for all interfaces in the lab.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    mappings = (
+        database.query(models.InterfaceMapping)
+        .filter(models.InterfaceMapping.lab_id == lab_id)
+        .all()
+    )
+
+    return schemas.InterfaceMappingsResponse(
+        mappings=[schemas.InterfaceMappingOut.model_validate(m) for m in mappings],
+        total=len(mappings),
+    )
+
+
+@router.get("/labs/{lab_id}/nodes/{node_id}/interfaces")
+async def get_node_interfaces(
+    lab_id: str,
+    node_id: str,
+    database: Session = Depends(db.get_session),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.InterfaceMappingsResponse:
+    """Get interface mappings for a specific node.
+
+    Returns OVS port, Linux interface, and vendor interface mappings
+    for all interfaces on the specified node.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    # Get the Node definition
+    node = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id, models.Node.gui_id == node_id)
+        .first()
+    )
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    mappings = (
+        database.query(models.InterfaceMapping)
+        .filter(
+            models.InterfaceMapping.lab_id == lab_id,
+            models.InterfaceMapping.node_id == node.id,
+        )
+        .all()
+    )
+
+    return schemas.InterfaceMappingsResponse(
+        mappings=[schemas.InterfaceMappingOut.model_validate(m) for m in mappings],
+        total=len(mappings),
+    )
+
+
+class InterfaceMappingSyncResponse(BaseModel):
+    """Response from syncing interface mappings."""
+    created: int
+    updated: int
+    errors: int
+    agents_queried: int
+
+
+@router.post("/labs/{lab_id}/interface-mappings/sync")
+async def sync_interface_mappings(
+    lab_id: str,
+    database: Session = Depends(db.get_session),
+    current_user: models.User = Depends(get_current_user),
+) -> InterfaceMappingSyncResponse:
+    """Sync interface mappings from all agents for a lab.
+
+    Fetches OVS port information from agents and updates the
+    interface_mappings table with current state.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    result = await interface_mapping_service.populate_all_agents(database, lab_id)
+
+    return InterfaceMappingSyncResponse(
+        created=result["created"],
+        updated=result["updated"],
+        errors=result["errors"],
+        agents_queried=result["agents_queried"],
+    )
+
+
+class LinkReconciliationResponse(BaseModel):
+    """Response from link reconciliation."""
+    checked: int
+    valid: int
+    repaired: int
+    errors: int
+    skipped: int
+
+
+@router.post("/labs/{lab_id}/links/reconcile")
+async def reconcile_links(
+    lab_id: str,
+    database: Session = Depends(db.get_session),
+    current_user: models.User = Depends(get_current_user),
+) -> LinkReconciliationResponse:
+    """Reconcile link states for a lab.
+
+    Verifies all links marked as "up" have matching VLAN tags on both
+    endpoints. Attempts to repair any mismatched links.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    result = await reconcile_lab_links(database, lab_id)
+
+    return LinkReconciliationResponse(
+        checked=result["checked"],
+        valid=result["valid"],
+        repaired=result["repaired"],
+        errors=result["errors"],
+        skipped=result["skipped"],
     )

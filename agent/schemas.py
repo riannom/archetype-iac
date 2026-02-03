@@ -387,11 +387,33 @@ class AttachOverlayInterfaceRequest(BaseModel):
     interface_name: str  # Interface inside container (e.g., eth1)
     vlan_tag: int  # VLAN for link isolation (must match remote side)
     tenant_mtu: int = 0  # Optional MTU (0 = use default)
+    # For VTEP reference counting
+    link_id: str | None = None  # Link identifier for tracking
+    remote_ip: str | None = None  # Remote VTEP IP for reference counting
 
 
 class AttachOverlayInterfaceResponse(BaseModel):
     """Agent -> Controller: Attachment result."""
     success: bool
+    error: str | None = None
+
+
+class DetachOverlayInterfaceRequest(BaseModel):
+    """Controller -> Agent: Detach a link from VTEP reference counting.
+
+    This removes the link from the VTEP's reference set. If the VTEP
+    has no more links using it, it can optionally be deleted.
+    """
+    link_id: str  # Link identifier to detach
+    remote_ip: str  # Remote VTEP IP
+    delete_vtep_if_unused: bool = True  # Delete VTEP if no more links
+
+
+class DetachOverlayInterfaceResponse(BaseModel):
+    """Agent -> Controller: Detach result."""
+    success: bool
+    vtep_deleted: bool = False  # True if VTEP was deleted
+    remaining_links: int = 0  # Links still using the VTEP
     error: str | None = None
 
 
@@ -729,6 +751,7 @@ class PluginStatusResponse(BaseModel):
 class PluginPortInfo(BaseModel):
     """Information about an OVS port in the plugin."""
     port_name: str
+    bridge_name: str | None = None  # OVS bridge name
     container: str | None = None
     interface: str
     vlan_tag: int = 0

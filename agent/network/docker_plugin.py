@@ -1860,6 +1860,7 @@ class DockerOVSPlugin:
 
             ports_info.append({
                 "port_name": ep.host_veth,
+                "bridge_name": lab_bridge.bridge_name,
                 "container": ep.container_name,
                 "interface": ep.interface_name,
                 "vlan_tag": ep.vlan_tag,

@@ -84,6 +84,8 @@ from agent.schemas import (
     EnsureVtepResponse,
     AttachOverlayInterfaceRequest,
     AttachOverlayInterfaceResponse,
+    DetachOverlayInterfaceRequest,
+    DetachOverlayInterfaceResponse,
     Provider,
     ExternalConnectRequest,
     ExternalConnectResponse,
@@ -2241,6 +2243,8 @@ async def attach_overlay_interface(
             interface_name=request.interface_name,
             vlan_tag=request.vlan_tag,
             tenant_mtu=request.tenant_mtu,
+            link_id=request.link_id,
+            remote_ip=request.remote_ip,
         )
 
         if success:
@@ -2254,6 +2258,43 @@ async def attach_overlay_interface(
     except Exception as e:
         logger.error(f"Attach overlay interface failed: {e}")
         return AttachOverlayInterfaceResponse(success=False, error=str(e))
+
+
+@app.post("/overlay/detach-link")
+async def detach_overlay_interface(
+    request: DetachOverlayInterfaceRequest,
+) -> DetachOverlayInterfaceResponse:
+    """Detach a link from VTEP reference counting.
+
+    Removes the link from the VTEP's reference set. If the VTEP has no
+    more links using it and delete_vtep_if_unused is True, the VTEP
+    is deleted to free resources.
+    """
+    if not settings.enable_vxlan:
+        return DetachOverlayInterfaceResponse(
+            success=False,
+            error="VXLAN overlay is disabled on this agent",
+        )
+
+    try:
+        overlay = get_overlay_manager()
+
+        result = await overlay.detach_overlay_interface(
+            link_id=request.link_id,
+            remote_ip=request.remote_ip,
+            delete_vtep_if_unused=request.delete_vtep_if_unused,
+        )
+
+        return DetachOverlayInterfaceResponse(
+            success=result["success"],
+            vtep_deleted=result["vtep_deleted"],
+            remaining_links=result["remaining_links"],
+            error=result["error"],
+        )
+
+    except Exception as e:
+        logger.error(f"Detach overlay interface failed: {e}")
+        return DetachOverlayInterfaceResponse(success=False, error=str(e))
 
 
 @app.post("/network/test-mtu")
@@ -2846,6 +2887,7 @@ async def ovs_plugin_lab_ports(lab_id: str) -> PluginLabPortsResponse:
         ports = [
             PluginPortInfo(
                 port_name=p["port_name"],
+                bridge_name=p.get("bridge_name"),
                 container=p.get("container"),
                 interface=p["interface"],
                 vlan_tag=p["vlan_tag"],
