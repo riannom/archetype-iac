@@ -459,12 +459,20 @@ async def enforce_lab_states():
                         f"Error enforcing state for {node_state.node_name} "
                         f"in lab {node_state.lab_id}: {e}"
                     )
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
 
             if enforced_count > 0:
                 logger.info(f"State enforcement triggered {enforced_count} corrective actions")
 
         except Exception as e:
             logger.error(f"Error in state enforcement: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
 
 
 async def state_enforcement_monitor():

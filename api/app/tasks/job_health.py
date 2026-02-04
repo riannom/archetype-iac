@@ -81,9 +81,17 @@ async def check_stuck_jobs():
                     await _check_single_job(session, job, now)
                 except Exception as e:
                     logger.error(f"Error checking job {job.id}: {e}")
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
 
         except Exception as e:
             logger.error(f"Error in job health check: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
 
 
 async def _check_single_job(session, job: models.Job, now: datetime):

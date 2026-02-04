@@ -403,6 +403,10 @@ async def _check_readiness_for_nodes(session, nodes: list):
 
         except Exception as e:
             logger.error(f"Error checking readiness for lab {lab_id}: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
 
 
 async def _reconcile_single_lab(session, lab_id: str):
