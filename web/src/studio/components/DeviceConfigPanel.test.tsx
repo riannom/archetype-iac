@@ -101,6 +101,7 @@ describe("DeviceConfigPanel", () => {
 
   const defaultProps = {
     device: mockDevice,
+    imageLibrary: [],
     onRefresh: mockOnRefresh,
   };
 
