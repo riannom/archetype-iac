@@ -172,26 +172,41 @@ class VIRL2Parser(ISOParser):
         disk_image_path = ""
         disk_image_size = 0
 
-        # Look for the disk image file
+        # Look for the disk image file - first try known extensions
         for f in file_list:
             if f.startswith(image_dir + "/") and (
-                f.endswith(".qcow2") or f.endswith(".tar.gz") or f.endswith(".tar")
+                f.endswith(".qcow2") or f.endswith(".img") or f.endswith(".tar.gz") or f.endswith(".tar") or f.endswith(".bin")
             ):
                 disk_image_path = f
                 break
 
-        # If not found by directory, try exact name match
+        # If not found by extension, try exact name match (for IOL images without extension)
         if not disk_image_path:
             for f in file_list:
                 if f.endswith("/" + disk_image) or f == disk_image:
                     disk_image_path = f
                     break
 
-        # Determine image type
-        if disk_image.endswith(".qcow2"):
+        # If still not found, look for any file in the image directory that's not a yaml
+        # (IOL images often have no standard extension)
+        if not disk_image_path:
+            for f in file_list:
+                if f.startswith(image_dir + "/") and not f.endswith(".yaml") and not f.endswith(".yml"):
+                    disk_image_path = f
+                    break
+
+        # Determine image type from actual file path (preferred) or YAML disk_image field
+        # Use the actual file found if available, otherwise fall back to YAML value
+        type_source = disk_image_path if disk_image_path else disk_image
+        if type_source.endswith((".qcow2", ".img")):
             image_type = "qcow2"
-        elif disk_image.endswith((".tar.gz", ".tar", ".tar.xz")):
+        elif type_source.endswith((".tar.gz", ".tar", ".tar.xz")):
             image_type = "docker"
+        elif type_source.endswith(".bin"):
+            image_type = "iol"
+        elif "iol" in node_def_id.lower():
+            # IOL images often don't have a file extension - detect by node definition
+            image_type = "iol"
         else:
             image_type = "unknown"
 

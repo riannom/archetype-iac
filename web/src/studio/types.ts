@@ -100,6 +100,7 @@ export interface ImageLibraryEntry {
   is_default?: boolean;
   notes?: string;
   compatible_devices?: string[];
+  source?: string | null; // Import source (e.g., ISO filename)
   // Sync status across agents (populated by API)
   host_status?: ImageHostStatus[];
 }

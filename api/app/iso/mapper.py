@@ -34,6 +34,10 @@ VIRL2_TO_VENDOR_MAP = {
     "csr1000v": "cisco_csr1000v",
     "iosxrv9000": "cisco_iosxr",
     "nxos": "cisco_n9kv",
+    # IOL (IOS on Linux) - binary images
+    "iol-xe": "iol-xe",
+    "iol": "iol",
+    "iol-l2": "iol-l2",
     # Linux/Containers
     "alpine": "linux",
     "ubuntu": "linux",
@@ -115,8 +119,14 @@ def create_device_config_from_node_def(node_def: ParsedNodeDefinition) -> dict:
     port_naming = node_def.interface_naming_pattern
     port_start_index = node_def.port_start_index
 
-    # Determine supported image kinds
-    supported_kinds = ["qcow2"]  # Default for VMs
+    # Determine supported image kinds based on device type
+    node_id_lower = node_def.id.lower()
+    if node_id_lower.startswith("iol") or "iol" in node_id_lower:
+        # IOL (IOS on Linux) devices use .bin files
+        supported_kinds = ["iol"]
+    else:
+        # Default for VMs (qcow2)
+        supported_kinds = ["qcow2"]
 
     # Build the device config
     config = {

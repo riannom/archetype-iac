@@ -545,6 +545,33 @@ disk_image: alpine.tar.gz
         assert result.image_type == "docker"
         assert result.is_container is True
 
+    def test_parse_image_iol_bin(self):
+        """Test parsing an IOL/IOL-XE binary image (.bin)."""
+        parser = VIRL2Parser()
+
+        yaml_content = """
+id: iol-xe-17.16
+node_definition_id: iol-xe
+disk_image: i86bi_linux_l2-adventerprisek9-ms.SSA.high_iron_20230523.bin
+"""
+        file_list = [
+            "virl-base-images/iol-xe/iol-xe-17.16.yaml",
+            "virl-base-images/iol-xe/i86bi_linux_l2-adventerprisek9-ms.SSA.high_iron_20230523.bin",
+        ]
+
+        result = parser._parse_image(
+            yaml_content,
+            "virl-base-images/iol-xe/iol-xe-17.16.yaml",
+            file_list,
+        )
+
+        assert result is not None
+        assert result.id == "iol-xe-17.16"
+        assert result.node_definition_id == "iol-xe"
+        assert result.disk_image_filename == "i86bi_linux_l2-adventerprisek9-ms.SSA.high_iron_20230523.bin"
+        assert result.disk_image_path == "virl-base-images/iol-xe/i86bi_linux_l2-adventerprisek9-ms.SSA.high_iron_20230523.bin"
+        assert result.image_type == "iol"
+
     def test_parse_image_invalid_yaml(self):
         """Test parsing invalid YAML returns None."""
         parser = VIRL2Parser()

@@ -42,16 +42,14 @@ const ImageCard: React.FC<ImageCardProps> = ({
   const isDragging = dragState.draggedImageId === image.id;
 
   const getKindIcon = () => {
-    if (image.kind === 'docker') {
-      return 'fa-docker';
-    }
-    return 'fa-hard-drive';
+    if (image.kind === 'docker') return 'fa-brands fa-docker';
+    if (image.kind === 'iol') return 'fa-solid fa-microchip';
+    return 'fa-solid fa-hard-drive';
   };
 
   const getKindColor = () => {
-    if (image.kind === 'docker') {
-      return 'text-blue-500';
-    }
+    if (image.kind === 'docker') return 'text-blue-500';
+    if (image.kind === 'iol') return 'text-purple-500';
     return 'text-orange-500';
   };
 
@@ -104,7 +102,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
           }
         `}
       >
-        <i className={`fa-brands ${getKindIcon()} ${getKindColor()}`} />
+        <i className={`${getKindIcon()} ${getKindColor()}`} />
         <span className="flex-1 text-xs text-stone-700 dark:text-stone-200 truncate font-medium">
           {image.filename || image.reference}
         </span>
@@ -116,97 +114,119 @@ const ImageCard: React.FC<ImageCardProps> = ({
     );
   }
 
+  // Build tooltip content
+  const tooltipLines = [
+    image.vendor && `Vendor: ${image.vendor}`,
+    image.size_bytes && `Size: ${formatSize(image.size_bytes)}`,
+    image.uploaded_at && `Imported: ${formatDate(image.uploaded_at)}`,
+    image.source && `Source: ${image.source}`,
+    image.notes && `Notes: ${image.notes}`,
+  ].filter(Boolean);
+  const tooltipText = tooltipLines.join('\n');
+
   return (
     <div
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      title={tooltipText}
       className={`
-        group relative rounded-xl border transition-all duration-200 cursor-grab active:cursor-grabbing
+        group relative rounded-lg border transition-all duration-200 cursor-grab active:cursor-grabbing
         ${isDragging
-          ? 'opacity-50 scale-95 border-sage-500 bg-sage-50 dark:bg-sage-900/20 rotate-1'
-          : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-md'
+          ? 'opacity-50 scale-95 border-sage-500 bg-sage-50 dark:bg-sage-900/20'
+          : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
         }
       `}
     >
-      {/* Drag handle indicator */}
-      <div className="absolute top-0 left-0 right-0 h-1.5 bg-stone-100 dark:bg-stone-800 rounded-t-xl opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-        <div className="w-8 h-1 bg-stone-300 dark:bg-stone-600 rounded-full" />
-      </div>
-
-      <div className="p-4 pt-5">
-        {/* Header row */}
-        <div className="flex items-start gap-3">
+      <div className="p-2.5">
+        {/* Single row layout */}
+        <div className="flex items-center gap-2">
           {/* Icon */}
           <div
             className={`
-              w-10 h-10 rounded-lg flex items-center justify-center shrink-0
+              w-7 h-7 rounded flex items-center justify-center shrink-0
               ${image.kind === 'docker'
                 ? 'bg-blue-100 dark:bg-blue-900/30'
+                : image.kind === 'iol'
+                ? 'bg-purple-100 dark:bg-purple-900/30'
                 : 'bg-orange-100 dark:bg-orange-900/30'
               }
             `}
           >
-            <i className={`fa-brands ${getKindIcon()} ${getKindColor()} text-lg`} />
+            <i className={`${getKindIcon()} ${getKindColor()} text-xs`} />
           </div>
 
           {/* Info */}
           <div className="flex-1 min-w-0">
-            <h4 className="font-bold text-sm text-stone-900 dark:text-white truncate">
-              {image.filename || image.reference}
-            </h4>
-            <div className="flex items-center gap-2 mt-1 text-[10px] text-stone-500">
+            <div className="flex items-center gap-1.5">
+              <h4 className="font-bold text-xs text-stone-900 dark:text-white truncate">
+                {image.filename || image.reference}
+              </h4>
+              {image.is_default && (
+                <span className="px-1 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded text-[8px] font-bold shrink-0">
+                  DEFAULT
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px] text-stone-500">
               <span className="uppercase font-bold">{image.kind}</span>
-              {image.size_bytes && (
+              {image.version && (
                 <>
-                  <span className="text-stone-300 dark:text-stone-600">|</span>
-                  <span>{formatSize(image.size_bytes)}</span>
+                  <span className="text-stone-300 dark:text-stone-600">•</span>
+                  <span>{image.version}</span>
                 </>
               )}
-              {image.vendor && (
+              {image.device_id && (
                 <>
-                  <span className="text-stone-300 dark:text-stone-600">|</span>
-                  <span>{image.vendor}</span>
+                  <span className="text-stone-300 dark:text-stone-600">•</span>
+                  <span className="text-sage-600 dark:text-sage-400">{image.device_id}</span>
+                </>
+              )}
+              {image.uploaded_at && (
+                <>
+                  <span className="text-stone-300 dark:text-stone-600">•</span>
+                  <span className="text-stone-400">{formatDate(image.uploaded_at)}</span>
+                </>
+              )}
+              {syncStatus && (
+                <>
+                  <span className="text-stone-300 dark:text-stone-600">•</span>
+                  <span className={syncStatus.color} title={`Agent sync: ${syncStatus.label}`}>
+                    <i className={`fa-solid ${syncStatus.icon}`} />
+                  </span>
                 </>
               )}
             </div>
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            {/* Sync button for Docker images */}
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
             {showSyncStatus && image.kind === 'docker' && (
               <button
                 onClick={handleSync}
                 disabled={syncing}
-                className="p-1.5 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 disabled:opacity-50"
+                className="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 disabled:opacity-50"
                 title="Sync to all agents"
               >
-                <i className={`fa-solid fa-sync text-xs ${syncing ? 'fa-spin' : ''}`} />
+                <i className={`fa-solid fa-sync text-[10px] ${syncing ? 'fa-spin' : ''}`} />
               </button>
             )}
             {image.device_id && !image.is_default && onSetDefault && (
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSetDefault();
-                }}
-                className="p-1.5 hover:bg-sage-100 dark:hover:bg-sage-900/30 rounded text-stone-400 hover:text-sage-600 dark:hover:text-sage-400"
+                onClick={(e) => { e.stopPropagation(); onSetDefault(); }}
+                className="p-1 hover:bg-sage-100 dark:hover:bg-sage-900/30 rounded text-stone-400 hover:text-sage-600 dark:hover:text-sage-400"
                 title="Set as default"
               >
-                <i className="fa-solid fa-star text-xs" />
+                <i className="fa-solid fa-star text-[10px]" />
               </button>
             )}
             {onUnassign && (
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUnassign();
-                }}
-                className="p-1.5 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded text-stone-400 hover:text-amber-600"
+                onClick={(e) => { e.stopPropagation(); onUnassign(); }}
+                className="p-1 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded text-stone-400 hover:text-amber-600"
                 title="Unassign from device"
               >
-                <i className="fa-solid fa-link-slash text-xs" />
+                <i className="fa-solid fa-link-slash text-[10px]" />
               </button>
             )}
             {onDelete && (
@@ -217,92 +237,15 @@ const ImageCard: React.FC<ImageCardProps> = ({
                     onDelete();
                   }
                 }}
-                className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-stone-400 hover:text-red-500"
+                className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-stone-400 hover:text-red-500"
                 title="Delete image"
               >
-                <i className="fa-solid fa-trash text-xs" />
+                <i className="fa-solid fa-trash text-[10px]" />
               </button>
             )}
+            <i className="fa-solid fa-grip-vertical text-[10px] text-stone-300 dark:text-stone-600 ml-1" />
           </div>
         </div>
-
-        {/* Metadata row */}
-        <div className="mt-3 flex items-center gap-3 text-[10px]">
-          {image.version && (
-            <div className="flex items-center gap-1">
-              <i className="fa-solid fa-tag text-stone-400" />
-              <span className="text-stone-600 dark:text-stone-400">{image.version}</span>
-            </div>
-          )}
-          {image.uploaded_at && (
-            <div className="flex items-center gap-1">
-              <i className="fa-solid fa-calendar text-stone-400" />
-              <span className="text-stone-600 dark:text-stone-400">{formatDate(image.uploaded_at)}</span>
-            </div>
-          )}
-          {image.is_default && (
-            <span className="px-1.5 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded font-bold">
-              DEFAULT
-            </span>
-          )}
-          {/* Sync status indicator */}
-          {syncStatus && (
-            <div className="flex items-center gap-1" title={`Agent sync: ${syncStatus.label}`}>
-              <i className={`fa-solid ${syncStatus.icon} ${syncStatus.color}`} />
-              <span className="text-stone-600 dark:text-stone-400">{syncStatus.label}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Current assignment */}
-        {image.device_id && (
-          <div className="mt-3 pt-3 border-t border-stone-100 dark:border-stone-800">
-            <div className="flex items-center gap-2 text-[10px]">
-              <i className="fa-solid fa-link text-stone-400" />
-              <span className="text-stone-500">Assigned to</span>
-              <span className="font-bold text-stone-700 dark:text-stone-300">{image.device_id}</span>
-            </div>
-
-            {/* Device properties (read-only) */}
-            {device && (
-              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
-                <div className="flex items-center gap-1">
-                  <span className="text-stone-400">Type:</span>
-                  <span className="text-stone-600 dark:text-stone-300">{device.type}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-stone-400">Vendor:</span>
-                  <span className="text-stone-600 dark:text-stone-300">{device.vendor}</span>
-                </div>
-                {device.memory && (
-                  <div className="flex items-center gap-1">
-                    <span className="text-stone-400">Memory:</span>
-                    <span className="text-stone-600 dark:text-stone-300">{device.memory}MB</span>
-                  </div>
-                )}
-                {device.cpu && (
-                  <div className="flex items-center gap-1">
-                    <span className="text-stone-400">CPU:</span>
-                    <span className="text-stone-600 dark:text-stone-300">{device.cpu}</span>
-                  </div>
-                )}
-                {device.maxPorts && (
-                  <div className="flex items-center gap-1">
-                    <span className="text-stone-400">Ports:</span>
-                    <span className="text-stone-600 dark:text-stone-300">{device.maxPorts}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Notes */}
-        {image.notes && (
-          <div className="mt-2">
-            <p className="text-[10px] text-stone-400 italic truncate">{image.notes}</p>
-          </div>
-        )}
       </div>
     </div>
   );

@@ -558,7 +558,7 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
                           onClick={() => setIsoPath(iso.path)}
                           className={`w-full text-left p-3 rounded-lg border transition-all ${
                             isoPath === iso.path
-                              ? 'bg-sage-50 dark:bg-sage-900/20 border-sage-300 dark:border-sage-700'
+                              ? 'bg-sage-50 dark:bg-stone-800 border-sage-300 dark:border-sage-600'
                               : 'bg-white dark:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
                           }`}
                         >
