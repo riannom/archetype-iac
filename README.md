@@ -18,16 +18,26 @@ A web-based network lab management platform. Design network topologies with a dr
 
 ## Supported Devices
 
+### Container-Based (Docker)
+
 | Vendor | Devices |
 |--------|---------|
-| Arista | cEOS, CVX |
-| Cisco | IOSv, IOS-XR, XRd, CSR1000v, Nexus 9000v, ASAv |
-| Juniper | cRPD, vSRX3, vJunos Switch, vQFX |
+| Arista | cEOS |
+| Cisco | IOS-XR, XRd |
+| Juniper | cRPD |
 | Nokia | SR Linux |
+| NVIDIA | Cumulus VX |
+| Open Source | FRR, VyOS, SONiC, HAProxy, Linux |
+
+### VM-Based (Libvirt/KVM)
+
+| Vendor | Devices |
+|--------|---------|
+| Cisco | IOSv, CSR1000v, Catalyst 8000v, ASAv, Nexus 9000v, SD-WAN (Edge/Manager/Controller/Validator) |
+| Juniper | vSRX3, vJunos Switch, vQFX |
 | Fortinet | FortiGate |
 | Palo Alto | VM-Series |
 | F5 | BIG-IP |
-| Open Source | FRR, VyOS, SONiC, HAProxy, Linux |
 
 ## Architecture
 
@@ -204,6 +214,80 @@ When nodes in the same lab are placed on different hosts, Archetype automaticall
 - **Cross-host links**: Connected via VXLAN tunnels with deterministic VNI allocation
 - **Link state**: Each link endpoint tracks carrier state (up/down) independently
 
+## VM/Libvirt Setup
+
+To run VM-based network devices (Cisco IOSv, CSR1000v, ASAv, Juniper vSRX, etc.), the host must have libvirt/KVM configured.
+
+### Host Requirements
+
+**Install packages:**
+
+```bash
+# Debian/Ubuntu
+apt install qemu-kvm libvirt-daemon-system libvirt-clients virtinst openvswitch-switch
+
+# RHEL/Rocky/Alma
+dnf install qemu-kvm libvirt virt-install openvswitch
+```
+
+**CPU virtualization:**
+- **Intel**: VT-x must be enabled in BIOS (`grep vmx /proc/cpuinfo`)
+- **AMD**: AMD-V must be enabled in BIOS (`grep svm /proc/cpuinfo`)
+- Nested virtualization must be enabled if running in a VM
+
+**Permissions:**
+
+```bash
+# Add user to libvirt group
+sudo usermod -aG libvirt $USER
+```
+
+### VM Resource Requirements
+
+| Device | RAM | vCPUs | NIC Driver | Notes |
+|--------|-----|-------|------------|-------|
+| Cisco IOSv | 2GB | 1 | e1000 | Lightweight IOS router |
+| Cisco CSR1000v | 4GB | 2 | virtio | IOS-XE router |
+| Cisco Catalyst 8000v | 5GB | 2 | virtio | SD-WAN edge |
+| Cisco ASAv | 2GB | 1 | e1000 | Firewall |
+| Cisco Nexus 9000v | 8GB | 2 | virtio | NX-OS switch |
+| Juniper vSRX3 | 4GB | 2 | virtio | SRX firewall |
+| Palo Alto VM-Series | 6GB | 2 | virtio | NGFW |
+
+### Enable Libvirt Provider
+
+Set the following environment variable for the agent:
+
+```bash
+ARCHETYPE_AGENT_ENABLE_LIBVIRT=true
+```
+
+Or in docker-compose, add:
+
+```yaml
+agent:
+  environment:
+    - ARCHETYPE_AGENT_ENABLE_LIBVIRT=true
+  volumes:
+    - /var/run/libvirt:/var/run/libvirt  # Libvirt socket
+```
+
+### Troubleshooting VMs
+
+```bash
+# Check libvirt is running
+systemctl status libvirtd
+
+# Check for KVM access
+ls -la /dev/kvm
+
+# View VM domain status
+virsh list --all
+
+# Check VM console
+virsh console <domain-name> --force
+```
+
 ## Usage
 
 ### Creating a Lab
@@ -315,7 +399,9 @@ alembic revision --autogenerate -m "description"  # Create migration
 | `ARCHETYPE_AGENT_ENABLE_DOCKER` | Enable DockerProvider | `true` |
 | `ARCHETYPE_AGENT_ENABLE_LIBVIRT` | Enable LibvirtProvider for VMs | `false` |
 | `ARCHETYPE_AGENT_ENABLE_VXLAN` | Enable VXLAN overlay for multi-host | `true` |
+| `ARCHETYPE_AGENT_ENABLE_OVS` | Enable OVS-based networking | `true` |
 | `ARCHETYPE_AGENT_ENABLE_OVS_PLUGIN` | Enable OVS Docker plugin for pre-boot interface provisioning | `true` |
+| `ARCHETYPE_AGENT_OVS_BRIDGE_NAME` | OVS bridge name | `arch-ovs` |
 | `ARCHETYPE_AGENT_OVERLAY_MTU` | MTU for overlay tunnel interfaces (0 to disable) | `1450` |
 
 ### OIDC/SSO Configuration
@@ -409,15 +495,24 @@ cEOS requires network interfaces to exist before the container starts for proper
 
 ### Console Connection Fails
 
-1. Check that the device is running: `docker ps`
+1. Check that the device is running: `docker ps` (containers) or `virsh list` (VMs)
 2. Verify WebSocket connectivity to the API
 3. Check API logs for connection errors
+4. For VMs, verify virsh is installed in agent: `docker exec archetype-agent virsh --version`
 
 ### Agent Not Registering
 
 1. Verify network connectivity between agent and controller
 2. Check agent logs: `journalctl -u archetype-agent -f`
 3. Ensure firewall allows traffic on agent port (default 8001)
+
+### VM Deployment Fails
+
+1. Verify libvirt is enabled: `ARCHETYPE_AGENT_ENABLE_LIBVIRT=true`
+2. Check libvirt socket is mounted: `/var/run/libvirt:/var/run/libvirt`
+3. Verify host has KVM support: `ls -la /dev/kvm`
+4. Check agent logs for libvirt errors
+5. Verify image path is accessible from host (not just container)
 
 ### OVS Plugin Issues
 

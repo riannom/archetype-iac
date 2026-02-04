@@ -90,6 +90,7 @@ class VendorConfig:
     disk_driver: str = "virtio"  # Disk bus type: virtio, ide, sata
     nic_driver: str = "virtio"   # NIC model: virtio, e1000, rtl8139
     data_volume_gb: int = 0      # Size of additional data volume (0 = none)
+    force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
 
     # Image requirements
     requires_image: bool = True
@@ -116,6 +117,28 @@ class VendorConfig:
     console_method: str = "docker_exec"
     console_user: str = "admin"  # Username for SSH console access
     console_password: str = "admin"  # Password for SSH console access
+
+    # ==========================================================================
+    # Configuration extraction settings (used by console_extractor.py)
+    # These settings control how running configs are extracted from devices
+    # ==========================================================================
+
+    # Method for extracting config: "serial" (virsh console), "docker" (docker exec), "none"
+    config_extract_method: str = "none"
+    # Command to run to extract config (e.g., "show running-config")
+    config_extract_command: str = "show running-config"
+    # Login username (empty = no login required, device boots to CLI prompt)
+    config_extract_user: str = ""
+    # Login password
+    config_extract_password: str = ""
+    # Enable mode password (empty = no enable needed or enable has no password)
+    config_extract_enable_password: str = ""
+    # Timeout in seconds for extraction process
+    config_extract_timeout: int = 30
+    # Regex pattern to detect CLI prompt (used to know when command output is complete)
+    config_extract_prompt_pattern: str = r"[\w\-]+[>#]\s*$"
+    # Command to disable paging (empty = use default for device type)
+    config_extract_paging_disable: str = ""
 
     # ==========================================================================
     # Container runtime configuration (used by DockerProvider)
@@ -280,6 +303,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started",
         readiness_timeout=180,
+        # Config extraction via serial console
+        config_extract_method="serial",
+        config_extract_command="show running-config",
+        config_extract_timeout=30,
+        config_extract_prompt_pattern=r"[\w\-]+[>#]\s*$",
+        config_extract_paging_disable="terminal length 0",
     ),
     "cisco_csr1000v": VendorConfig(
         kind="cisco_csr1000v",
@@ -308,6 +337,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started",
         readiness_timeout=300,
+        # Config extraction via serial console
+        config_extract_method="serial",
+        config_extract_command="show running-config",
+        config_extract_timeout=60,  # CSR can be slower
+        config_extract_prompt_pattern=r"[\w\-]+[>#]\s*$",
+        config_extract_paging_disable="terminal length 0",
     ),
     "juniper_crpd": VendorConfig(
         kind="juniper_crpd",
@@ -752,6 +787,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"ciscoasa>|ciscoasa#",
         readiness_timeout=180,
+        # Config extraction via serial console
+        config_extract_method="serial",
+        config_extract_command="show running-config",
+        config_extract_timeout=30,
+        config_extract_prompt_pattern=r"ciscoasa[>#]\s*$",
+        config_extract_paging_disable="terminal pager 0",
     ),
     "fortinet_fortigate": VendorConfig(
         kind="fortinet_fortigate",
@@ -927,6 +968,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         console_method="ssh",
         console_user="admin",
         console_password="admin",
+        # Config extraction via serial console
+        config_extract_method="serial",
+        config_extract_command="show running-config",
+        config_extract_timeout=60,
+        config_extract_prompt_pattern=r"[\w\-]+[>#]\s*$",
+        config_extract_paging_disable="terminal length 0",
     ),
     "cat-sdwan-controller": VendorConfig(
         kind="cat-sdwan-controller",
@@ -1387,6 +1434,7 @@ class LibvirtRuntimeConfig:
     readiness_probe: str
     readiness_pattern: str | None
     readiness_timeout: int
+    force_stop: bool = True  # Skip ACPI shutdown (most network VMs don't support it)
 
 
 def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
@@ -1417,6 +1465,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             readiness_probe="none",
             readiness_pattern=None,
             readiness_timeout=120,
+            force_stop=True,
         )
 
     return LibvirtRuntimeConfig(
@@ -1428,6 +1477,58 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         readiness_probe=config.readiness_probe,
         readiness_pattern=config.readiness_pattern,
         readiness_timeout=config.readiness_timeout,
+        force_stop=config.force_stop,
+    )
+
+
+@dataclass
+class ConfigExtractionSettings:
+    """Settings for config extraction from a device."""
+    method: str  # "serial", "docker", "none"
+    command: str
+    user: str
+    password: str
+    enable_password: str
+    timeout: int
+    prompt_pattern: str
+    paging_disable: str
+
+
+def get_config_extraction_settings(kind: str) -> ConfigExtractionSettings:
+    """Get config extraction settings for a device kind.
+
+    Args:
+        kind: Device kind (e.g., "cisco_iosv")
+
+    Returns:
+        ConfigExtractionSettings for this device type
+    """
+    config = _get_config_by_kind(kind)
+    if not config:
+        # Try direct key lookup
+        config = VENDOR_CONFIGS.get(kind)
+
+    if not config:
+        return ConfigExtractionSettings(
+            method="none",
+            command="",
+            user="",
+            password="",
+            enable_password="",
+            timeout=30,
+            prompt_pattern="",
+            paging_disable="",
+        )
+
+    return ConfigExtractionSettings(
+        method=config.config_extract_method,
+        command=config.config_extract_command,
+        user=config.config_extract_user,
+        password=config.config_extract_password,
+        enable_password=config.config_extract_enable_password,
+        timeout=config.config_extract_timeout,
+        prompt_pattern=config.config_extract_prompt_pattern,
+        paging_disable=config.config_extract_paging_disable,
     )
 
 
