@@ -404,9 +404,12 @@ async def enforce_node_state(
         f"job={job.id})"
     )
 
-    # Get lab provider
-    from app.utils.lab import get_lab_provider
-    provider = get_lab_provider(lab)
+    # Determine provider based on node's image type
+    from app.utils.lab import get_lab_provider, get_node_provider
+    if node_def:
+        provider = get_node_provider(node_def, session)
+    else:
+        provider = get_lab_provider(lab)
 
     # Start sync job - this sets transitional states (starting/stopping)
     safe_create_task(

@@ -141,6 +141,101 @@ Copy `.env.example` to `.env`. Key settings:
 - `ARCHETYPE_AGENT_ENABLE_OVS`: Enable OVS-based networking (default: true)
 - `ARCHETYPE_AGENT_OVS_BRIDGE_NAME`: OVS bridge name (default: "arch-ovs")
 
+## Libvirt/VM Host Requirements
+
+To run VM-based network devices (IOSv, CSR1000v, ASAv, Nexus 9000v, etc.), the host must have libvirt/KVM configured.
+
+### Host Packages
+```bash
+# Debian/Ubuntu
+apt install qemu-kvm libvirt-daemon-system libvirt-clients virtinst
+
+# RHEL/Rocky/Alma
+dnf install qemu-kvm libvirt virt-install
+```
+
+### CPU Virtualization
+- **Intel**: VT-x must be enabled in BIOS (`grep vmx /proc/cpuinfo`)
+- **AMD**: AMD-V must be enabled in BIOS (`grep svm /proc/cpuinfo`)
+- Nested virtualization must be enabled if running in a VM
+
+### Permissions
+The agent needs access to the libvirt socket:
+- **Docker agent**: Mount `/var/run/libvirt:/var/run/libvirt` in docker-compose
+- **User running agent**: Must be in the `libvirt` group, or run as root
+
+```bash
+# Add user to libvirt group
+sudo usermod -aG libvirt $USER
+```
+
+### Image Storage
+VM images (qcow2 files) must be accessible from the host, not just from Docker:
+- Default path: `/var/lib/archetype/images/`
+- Set `ARCHETYPE_HOST_IMAGE_PATH` if using a different host path
+- Libvirt runs on the host and needs direct file access to disk images
+
+### OVS Bridge for VM Networking
+VMs connect to the same OVS bridge as containers:
+```bash
+# Verify OVS bridge exists
+ovs-vsctl show
+# Should show arch-ovs bridge
+```
+
+### Docker Compose Configuration
+Required mounts for the agent container:
+```yaml
+agent:
+  volumes:
+    - /var/run/libvirt:/var/run/libvirt      # Libvirt socket
+    - archetype_workspaces:/var/lib/archetype:ro  # Shared images
+  environment:
+    - ARCHETYPE_AGENT_ENABLE_LIBVIRT=true
+```
+
+### VM Resource Requirements by Device
+
+| Device | RAM | vCPUs | NIC Driver | Notes |
+|--------|-----|-------|------------|-------|
+| Cisco IOSv | 512MB-2GB | 1 | e1000 | Lightweight |
+| Cisco IOSvL2 | 768MB | 1 | e1000 | Layer 2 switch |
+| Cisco CSR1000v | 4GB | 1-2 | virtio | IOS-XE router |
+| Cisco Cat8000v | 4GB | 2 | virtio | Catalyst 8000 |
+| Cisco ASAv | 2GB | 1 | virtio | Firewall |
+| Cisco Nexus 9000v | 8GB | 2 | virtio | NX-OS switch |
+| Cisco XRv9k | 16GB | 4 | virtio | IOS-XR router |
+
+### Troubleshooting
+
+**VM not starting:**
+```bash
+# Check libvirt is running
+systemctl status libvirtd
+
+# Check for KVM access
+ls -la /dev/kvm
+
+# View VM domain status
+virsh list --all
+```
+
+**Console not connecting:**
+```bash
+# Verify virsh is installed in agent container
+docker exec archetype-agent virsh --version
+
+# Try manual console connection
+virsh console <domain-name> --force
+```
+
+**Image not found:**
+```bash
+# Check image path translation
+# Container path /var/lib/archetype/images/ should map to host path
+docker inspect archetype-agent | grep -A5 Mounts
+```
+
 ## Data Sources of Truth
 
 This section documents the canonical/authoritative source for each data type in the system.

@@ -737,7 +737,17 @@ async def set_node_desired_state(
             )
 
             if is_out_of_sync:
-                provider = get_lab_provider(lab)
+                # Determine provider based on node's image type
+                from app.utils.lab import get_node_provider
+                db_node = database.query(models.Node).filter(
+                    models.Node.lab_id == lab.id,
+                    models.Node.gui_id == node_id
+                ).first()
+                if db_node:
+                    provider = get_node_provider(db_node, database)
+                else:
+                    provider = get_lab_provider(lab)
+
                 job = models.Job(
                     lab_id=lab.id,
                     user_id=current_user.id,
@@ -1058,7 +1068,7 @@ async def reconcile_node(
     import asyncio
     from app import agent_client
     from app.tasks.jobs import run_node_reconcile
-    from app.utils.lab import get_lab_provider
+    from app.utils.lab import get_lab_provider, get_node_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
@@ -1075,11 +1085,20 @@ async def reconcile_node(
             nodes_to_reconcile=[],
         )
 
-    # Get agent for this lab
-    lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    # Determine provider based on node's image type
+    db_node = database.query(models.Node).filter(
+        models.Node.lab_id == lab.id,
+        models.Node.gui_id == node_id
+    ).first()
+    if db_node:
+        node_provider = get_node_provider(db_node, database)
+    else:
+        node_provider = get_lab_provider(lab)
+
+    # Get agent for this node
+    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=node_provider)
     if not agent:
-        raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+        raise HTTPException(status_code=503, detail=f"No healthy agent available with {node_provider} support")
 
     # Note: Don't set state to pending here - let the task handle state transitions
     # after it reads the current state to determine what action is needed
@@ -1097,7 +1116,7 @@ async def reconcile_node(
 
     # Start background reconcile task
     safe_create_task(
-        run_node_reconcile(job.id, lab.id, [node_id], provider=lab_provider),
+        run_node_reconcile(job.id, lab.id, [node_id], provider=node_provider),
         name=f"reconcile:node:{job.id}"
     )
 

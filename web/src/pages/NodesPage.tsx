@@ -74,7 +74,7 @@ const NodesPage: React.FC = () => {
 
   return (
     <>
-      <div className="min-h-screen bg-stone-50 dark:bg-stone-900 flex flex-col overflow-hidden">
+      <div className="h-screen bg-stone-50 dark:bg-stone-900 flex flex-col overflow-hidden">
         <header className="h-16 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10 shrink-0">
           <div className="flex items-center gap-4">
             <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />

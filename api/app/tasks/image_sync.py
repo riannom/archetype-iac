@@ -121,15 +121,46 @@ async def _sync_image_to_agent_impl(
 
 
 async def check_agent_has_image(host: models.Host, reference: str) -> bool:
-    """Check if an agent has a specific Docker image.
+    """Check if an agent has a specific image available.
+
+    For Docker images: queries the agent's /images endpoint
+    For qcow2/file images: checks if file exists and agent has libvirt capability
 
     Args:
         host: The host/agent to check
-        reference: Docker image reference (e.g., "ceos:4.28.0F")
+        reference: Image reference (Docker tag or file path for qcow2)
 
     Returns:
-        True if the image exists on the agent
+        True if the image is available for the agent
     """
+    import json
+    import os
+
+    # Check if this is a file-based image (qcow2, iol)
+    if reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol")):
+        # For file-based images, check:
+        # 1. File exists on controller
+        # 2. Agent has appropriate provider capability
+        if not os.path.exists(reference):
+            return False
+
+        # Parse host capabilities
+        host_providers = []
+        if host.capabilities:
+            try:
+                caps = json.loads(host.capabilities) if isinstance(host.capabilities, str) else host.capabilities
+                host_providers = caps.get("providers", [])
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # qcow2/img files need libvirt, iol files need docker
+        if reference.endswith((".qcow2", ".img")):
+            return "libvirt" in host_providers
+        elif reference.endswith(".iol"):
+            return "docker" in host_providers
+        return False
+
+    # Docker image - query agent
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             # URL-encode the reference for the path

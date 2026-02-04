@@ -656,14 +656,16 @@ def delete_device_override(device_id: str) -> bool:
 
 
 def find_image_reference(device_id: str, version: str | None = None) -> str | None:
-    """Look up the actual Docker image reference for a device type and version.
+    """Look up the image reference for a device type and version.
+
+    Supports Docker, qcow2, and IOL images.
 
     Args:
-        device_id: Device type (e.g., 'eos', 'ceos', 'iosv')
+        device_id: Device type (e.g., 'eos', 'ceos', 'iosv', 'cisco_iosv')
         version: Optional version string (e.g., '4.35.1F')
 
     Returns:
-        Docker image reference (e.g., 'ceos64-lab-4.35.1f:imported') or None if not found
+        Image reference (Docker tag or file path for qcow2/IOL) or None if not found
     """
     manifest = load_manifest()
     images = manifest.get("images", [])
@@ -673,11 +675,14 @@ def find_image_reference(device_id: str, version: str | None = None) -> str | No
     if normalized_device in ("ceos", "arista_ceos", "arista_eos"):
         normalized_device = "eos"
 
+    # Supported image kinds
+    supported_kinds = ("docker", "qcow2", "iol")
+
     # First try exact version match
     if version:
         version_lower = version.lower()
         for img in images:
-            if img.get("kind") != "docker":
+            if img.get("kind") not in supported_kinds:
                 continue
             img_device = (img.get("device_id") or "").lower()
             if img_device in ("ceos", "arista_ceos", "arista_eos"):
@@ -686,9 +691,19 @@ def find_image_reference(device_id: str, version: str | None = None) -> str | No
             if img_device == normalized_device and img_version == version_lower:
                 return img.get("reference")
 
+    # Fall back to default image for this device type
+    for img in images:
+        if img.get("kind") not in supported_kinds:
+            continue
+        img_device = (img.get("device_id") or "").lower()
+        if img_device in ("ceos", "arista_ceos", "arista_eos"):
+            img_device = "eos"
+        if img_device == normalized_device and img.get("is_default"):
+            return img.get("reference")
+
     # Fall back to any image for this device type
     for img in images:
-        if img.get("kind") != "docker":
+        if img.get("kind") not in supported_kinds:
             continue
         img_device = (img.get("device_id") or "").lower()
         if img_device in ("ceos", "arista_ceos", "arista_eos"):
@@ -697,3 +712,27 @@ def find_image_reference(device_id: str, version: str | None = None) -> str | No
             return img.get("reference")
 
     return None
+
+
+def get_image_provider(image_reference: str | None) -> str:
+    """Determine the provider type for an image based on its reference.
+
+    Args:
+        image_reference: Image reference (Docker tag or file path)
+
+    Returns:
+        Provider name: "libvirt" for qcow2/img files, "docker" otherwise
+    """
+    if not image_reference:
+        return "docker"
+
+    # File-based images that need libvirt/QEMU
+    if image_reference.endswith((".qcow2", ".img")):
+        return "libvirt"
+
+    # IOL images run in a Docker container wrapper
+    if image_reference.endswith(".iol"):
+        return "docker"
+
+    # Default to docker for Docker image tags
+    return "docker"

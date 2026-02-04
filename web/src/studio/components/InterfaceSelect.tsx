@@ -53,7 +53,7 @@ const InterfaceSelect: React.FC<InterfaceSelectProps> = ({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
-      className={`w-full bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-[11px] text-sage-700 dark:text-sage-300 focus:outline-none focus:border-sage-500 appearance-none cursor-pointer ${
+      className={`w-full bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-[11px] text-sage-700 dark:text-sage-300 focus:outline-none focus:border-sage-500 appearance-none cursor-pointer ${
         disabled ? 'opacity-50 cursor-not-allowed' : ''
       } ${className}`}
       style={{

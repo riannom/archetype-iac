@@ -31,11 +31,17 @@ export function formatStorageSize(gb: number): string {
 /**
  * Format a date string into localized date format.
  * @param dateStr - ISO date string (can be null)
- * @returns Formatted date like "Jan 15, 2024", empty string if null
+ * @returns Formatted date like "Jan 15, 2024", empty string if null/invalid
  */
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '';
-  const date = new Date(dateStr);
+  // Fix malformed dates with both +00:00 and Z (e.g., "2026-02-03T23:15:00+00:00Z")
+  let fixedDateStr = dateStr;
+  if (dateStr.includes('+00:00Z')) {
+    fixedDateStr = dateStr.replace('+00:00Z', 'Z');
+  }
+  const date = new Date(fixedDateStr);
+  if (isNaN(date.getTime())) return '';
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
