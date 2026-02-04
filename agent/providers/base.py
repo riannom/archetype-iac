@@ -204,3 +204,36 @@ class Provider(ABC):
         Default implementation returns None.
         """
         return None
+
+    async def discover_labs(self) -> dict[str, list[NodeInfo]]:
+        """Discover all running labs managed by this provider.
+
+        Optional method for providers that support lab discovery.
+        Returns dict mapping lab_id -> list of NodeInfo.
+
+        Default implementation returns empty dict.
+        """
+        return {}
+
+    async def cleanup_orphan_resources(
+        self,
+        valid_lab_ids: set[str],
+        workspace_base: Path | None = None,
+    ) -> dict[str, list[str]]:
+        """Remove resources for labs that no longer exist.
+
+        Optional method for providers that support orphan cleanup.
+        Discovers all resources managed by this provider and removes those
+        belonging to labs not in the valid_lab_ids set.
+
+        Args:
+            valid_lab_ids: Set of lab IDs that are known to be valid.
+            workspace_base: Base workspace path for file cleanup.
+
+        Returns:
+            Dict with provider-specific keys listing removed items.
+            Common keys: 'containers', 'domains', 'disks', 'networks'.
+
+        Default implementation returns empty dict (no cleanup).
+        """
+        return {}
