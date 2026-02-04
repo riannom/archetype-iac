@@ -12,6 +12,7 @@ set -e
 #   --port PORT           Agent port (default: 8001)
 #   --mtu MTU             Target MTU for jumbo frames (default: 9000, 0 to skip)
 #   --no-docker           Skip Docker installation
+#   --libvirt             Install libvirt/KVM for VM-based devices (IOSv, CSR1000v, etc.)
 #   --update              Quick update: pull latest code and restart (no full reinstall)
 #   --uninstall           Remove the agent
 #
@@ -42,6 +43,8 @@ REDIS_URL=""
 LOCAL_IP=""
 AGENT_PORT="8001"
 INSTALL_DOCKER=true
+INSTALL_LIBVIRT=false
+INSTALL_LIBVIRT_PYTHON=false
 UNINSTALL=false
 UPDATE_ONLY=false
 TARGET_MTU="9000"  # Desired MTU for jumbo frames (0 = skip MTU config)
@@ -75,6 +78,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-docker)
             INSTALL_DOCKER=false
+            shift
+            ;;
+        --libvirt)
+            INSTALL_LIBVIRT=true
             shift
             ;;
         --uninstall)
@@ -357,6 +364,42 @@ if [ "$INSTALL_DOCKER" = true ]; then
     fi
 fi
 
+# Install Libvirt/KVM for VM-based devices (IOSv, CSR1000v, NX-OSv, etc.)
+if [ "$INSTALL_LIBVIRT" = true ]; then
+    if command -v virsh &> /dev/null && systemctl is-active --quiet libvirtd; then
+        log_info "Libvirt already installed and running: $(virsh --version)"
+    else
+        log_info "Installing Libvirt/KVM for VM support..."
+
+        # Check KVM support
+        if [ ! -e /dev/kvm ]; then
+            log_warn "/dev/kvm not found. Hardware virtualization may not be available."
+            log_warn "VM-based devices may run slowly without KVM acceleration."
+        fi
+
+        case $OS in
+            ubuntu|debian)
+                apt-get install -y -qq qemu-kvm libvirt-daemon-system libvirt-clients \
+                    libvirt-dev pkg-config gcc libc-dev qemu-utils
+                ;;
+            centos|rhel|rocky|almalinux|fedora)
+                dnf install -y qemu-kvm libvirt libvirt-client \
+                    libvirt-devel pkgconfig gcc qemu-img
+                ;;
+            *)
+                log_warn "Please install libvirt manually for VM support"
+                ;;
+        esac
+
+        # Start and enable libvirtd
+        systemctl enable --now libvirtd
+        log_info "Libvirt installed successfully"
+    fi
+
+    # Install libvirt-python in venv (done later after venv is created)
+    INSTALL_LIBVIRT_PYTHON=true
+fi
+
 # Create install directory
 log_info "Setting up Archetype Agent in $INSTALL_DIR..."
 mkdir -p $INSTALL_DIR
@@ -382,6 +425,12 @@ log_info "Installing Python dependencies..."
 pip install --quiet --upgrade pip
 pip install --quiet -r $INSTALL_DIR/repo/agent/requirements.txt
 
+# Install libvirt-python if libvirt was installed
+if [ "${INSTALL_LIBVIRT_PYTHON:-false}" = true ]; then
+    log_info "Installing libvirt-python..."
+    pip install --quiet libvirt-python
+fi
+
 # Create environment file
 log_info "Creating configuration..."
 cat > $INSTALL_DIR/agent.env << EOF
@@ -392,6 +441,7 @@ ARCHETYPE_AGENT_REDIS_URL=$REDIS_URL
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT
 ARCHETYPE_AGENT_ENABLE_DOCKER=true
+ARCHETYPE_AGENT_ENABLE_LIBVIRT=$INSTALL_LIBVIRT
 ARCHETYPE_AGENT_ENABLE_VXLAN=true
 ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
 
@@ -410,7 +460,7 @@ log_info "Creating systemd service..."
 cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
 [Unit]
 Description=Archetype Network Lab Agent
-After=network.target docker.service
+After=network.target docker.service libvirtd.service
 Requires=docker.service
 
 [Service]
@@ -464,6 +514,9 @@ echo "Overlay MTU:   $OVERLAY_MTU (VXLAN tenant interfaces)"
 echo "Local MTU:     $LOCAL_MTU (same-host veth pairs)"
 if [ -n "$CONFIGURED_IFACE" ]; then
     echo "Network:       $CONFIGURED_IFACE @ MTU $TARGET_MTU (jumbo frames)"
+fi
+if [ "$INSTALL_LIBVIRT" = true ]; then
+    echo "Libvirt:       Enabled (VM support for IOSv, CSR1000v, etc.)"
 fi
 echo ""
 echo "Useful commands:"

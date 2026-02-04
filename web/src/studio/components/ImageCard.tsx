@@ -95,7 +95,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         className={`
-          group flex items-center gap-2 p-2 rounded-lg border transition-all cursor-grab active:cursor-grabbing
+          group flex items-center gap-2 p-2 rounded-lg border transition-all cursor-grab active:cursor-grabbing select-none
           ${isDragging
             ? 'opacity-50 scale-95 border-sage-500 bg-sage-50 dark:bg-sage-900/20'
             : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
@@ -116,6 +116,8 @@ const ImageCard: React.FC<ImageCardProps> = ({
 
   // Build tooltip content
   const tooltipLines = [
+    `ID: ${image.id}`,
+    `Kind: ${image.kind}`,
     image.vendor && `Vendor: ${image.vendor}`,
     image.size_bytes && `Size: ${formatSize(image.size_bytes)}`,
     image.uploaded_at && `Imported: ${formatDate(image.uploaded_at)}`,
@@ -131,7 +133,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
       onDragEnd={handleDragEnd}
       title={tooltipText}
       className={`
-        group relative rounded-lg border transition-all duration-200 cursor-grab active:cursor-grabbing
+        group relative rounded-lg border transition-all duration-200 cursor-grab active:cursor-grabbing select-none
         ${isDragging
           ? 'opacity-50 scale-95 border-sage-500 bg-sage-50 dark:bg-sage-900/20'
           : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
@@ -205,7 +207,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
               <button
                 onClick={handleSync}
                 disabled={syncing}
-                className="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 disabled:opacity-50"
+                className="p-1 rounded text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100/50 dark:hover:bg-blue-800/50 disabled:opacity-50"
                 title="Sync to all agents"
               >
                 <i className={`fa-solid fa-sync text-[10px] ${syncing ? 'fa-spin' : ''}`} />
@@ -214,7 +216,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
             {image.device_id && !image.is_default && onSetDefault && (
               <button
                 onClick={(e) => { e.stopPropagation(); onSetDefault(); }}
-                className="p-1 hover:bg-sage-100 dark:hover:bg-sage-900/30 rounded text-stone-400 hover:text-sage-600 dark:hover:text-sage-400"
+                className="p-1 rounded text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 hover:bg-sage-100/50 dark:hover:bg-sage-800/50"
                 title="Set as default"
               >
                 <i className="fa-solid fa-star text-[10px]" />
@@ -223,7 +225,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
             {onUnassign && (
               <button
                 onClick={(e) => { e.stopPropagation(); onUnassign(); }}
-                className="p-1 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded text-stone-400 hover:text-amber-600"
+                className="p-1 rounded text-stone-400 hover:text-amber-600 hover:bg-amber-100/50 dark:hover:bg-amber-800/50"
                 title="Unassign from device"
               >
                 <i className="fa-solid fa-link-slash text-[10px]" />
@@ -237,7 +239,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
                     onDelete();
                   }
                 }}
-                className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-stone-400 hover:text-red-500"
+                className="p-1 rounded text-stone-400 hover:text-red-500 hover:bg-red-100/50 dark:hover:bg-red-800/50"
                 title="Delete image"
               >
                 <i className="fa-solid fa-trash text-[10px]" />

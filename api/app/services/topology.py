@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import or_
 
 from agent.vendors import get_kind_for_device, get_default_image, get_config_by_device
-from app.image_store import find_image_reference, find_custom_device, get_device_override
+from app.image_store import find_image_reference, find_custom_device, get_device_override, get_image_provider
 from sqlalchemy.orm import Session
 
 from app import models

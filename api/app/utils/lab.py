@@ -91,6 +91,26 @@ def get_lab_provider(lab: models.Lab) -> str:
     return lab.provider if lab.provider else "docker"
 
 
+def get_node_provider(node: models.Node, session) -> str:
+    """Get the provider for a specific node based on its image type.
+
+    Args:
+        node: The node to get provider for
+        session: Database session for looking up image info
+
+    Returns:
+        Provider name: "libvirt" for qcow2/img images, "docker" otherwise
+    """
+    from app.image_store import get_image_provider
+    from app.services.topology import resolve_node_image, resolve_device_kind
+
+    # Resolve the node's image
+    kind = resolve_device_kind(node.device)
+    image = node.image or resolve_node_image(node.device, kind, node.image, node.version)
+
+    return get_image_provider(image)
+
+
 def get_lab_or_404(lab_id: str, database: Session, user: models.User) -> models.Lab:
     """Get a lab by ID, checking permissions.
 

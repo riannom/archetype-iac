@@ -184,7 +184,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
               <select
                 value={node.parentInterface || ''}
                 onChange={(e) => onUpdate(node.id, { parentInterface: e.target.value || undefined })}
-                className="w-full bg-white dark:bg-stone-800 border border-blue-300 dark:border-blue-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-blue-500 appearance-none"
+                className="w-full bg-stone-50 dark:bg-stone-800 border border-blue-300 dark:border-blue-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-blue-500 appearance-none"
                 disabled={!node.host}
               >
                 <option value="">{node.host ? 'Select interface...' : 'Select host first'}</option>
@@ -207,7 +207,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
                 max="4094"
                 value={node.vlanId || ''}
                 onChange={(e) => onUpdate(node.id, { vlanId: e.target.value ? parseInt(e.target.value, 10) : undefined })}
-                className="w-full bg-white dark:bg-stone-800 border border-blue-300 dark:border-blue-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-blue-500"
+                className="w-full bg-stone-50 dark:bg-stone-800 border border-blue-300 dark:border-blue-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-blue-500"
                 placeholder="100"
               />
               <p className="text-[9px] text-blue-600/60 dark:text-blue-400/60">
@@ -235,7 +235,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
               <select
                 value={node.bridgeName || ''}
                 onChange={(e) => onUpdate(node.id, { bridgeName: e.target.value || undefined })}
-                className="w-full bg-white dark:bg-stone-800 border border-purple-300 dark:border-purple-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-purple-500 appearance-none"
+                className="w-full bg-stone-50 dark:bg-stone-800 border border-purple-300 dark:border-purple-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-purple-500 appearance-none"
                 disabled={!node.host}
               >
                 <option value="">{node.host ? 'Select bridge...' : 'Select host first'}</option>
@@ -257,7 +257,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
               type="text"
               value={node.bridgeName || ''}
               onChange={(e) => onUpdate(node.id, { bridgeName: e.target.value || undefined })}
-              className="w-full bg-white dark:bg-stone-800 border border-purple-300 dark:border-purple-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-purple-500"
+              className="w-full bg-stone-50 dark:bg-stone-800 border border-purple-300 dark:border-purple-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-purple-500"
               placeholder="br-prod"
             />
           </div>

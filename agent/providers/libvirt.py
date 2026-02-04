@@ -61,11 +61,19 @@ class LibvirtProvider(Provider):
     disk overlay creation and console access.
     """
 
+    # VLAN range for VM interfaces (separate from Docker's 100-2999 range)
+    VLAN_RANGE_START = 2000
+    VLAN_RANGE_END = 2999
+
     def __init__(self):
         if not LIBVIRT_AVAILABLE:
             raise ImportError("libvirt-python package is not installed")
         self._conn: libvirt.virConnect | None = None
         self._uri = getattr(settings, 'libvirt_uri', 'qemu:///system')
+        # Track VLAN allocations per lab: {lab_id: {node_name: [vlan_tags]}}
+        self._vlan_allocations: dict[str, dict[str, list[int]]] = {}
+        # Next VLAN to allocate per lab
+        self._next_vlan: dict[str, int] = {}
 
     @property
     def name(self) -> str:
@@ -105,6 +113,49 @@ class LibvirtProvider(Provider):
         disks = workspace / "disks"
         disks.mkdir(parents=True, exist_ok=True)
         return disks
+
+    def _allocate_vlans(self, lab_id: str, node_name: str, count: int) -> list[int]:
+        """Allocate VLAN tags for a VM's interfaces.
+
+        Each interface gets a unique VLAN tag for isolation on the OVS bridge.
+        This mirrors how Docker containers get isolated VLANs.
+
+        Args:
+            lab_id: Lab identifier
+            node_name: Node name
+            count: Number of VLANs to allocate
+
+        Returns:
+            List of VLAN tags
+        """
+        if lab_id not in self._next_vlan:
+            self._next_vlan[lab_id] = self.VLAN_RANGE_START
+        if lab_id not in self._vlan_allocations:
+            self._vlan_allocations[lab_id] = {}
+
+        vlans = []
+        for _ in range(count):
+            vlan = self._next_vlan[lab_id]
+            vlans.append(vlan)
+            self._next_vlan[lab_id] += 1
+            if self._next_vlan[lab_id] > self.VLAN_RANGE_END:
+                self._next_vlan[lab_id] = self.VLAN_RANGE_START
+
+        self._vlan_allocations[lab_id][node_name] = vlans
+        logger.debug(f"Allocated VLANs for {node_name}: {vlans}")
+        return vlans
+
+    def get_node_vlans(self, lab_id: str, node_name: str) -> list[int]:
+        """Get the VLAN tags allocated to a VM's interfaces.
+
+        Args:
+            lab_id: Lab identifier
+            node_name: Node name
+
+        Returns:
+            List of VLAN tags, or empty list if not found
+        """
+        return self._vlan_allocations.get(lab_id, {}).get(node_name, [])
 
     def _get_base_image(self, node_config: dict) -> str | None:
         """Get the base image path for a node.
@@ -281,13 +332,28 @@ class LibvirtProvider(Provider):
         """
         return await asyncio.to_thread(self._create_data_volume_sync, path, size_gb)
 
+    def _generate_mac_address(self, domain_name: str, interface_index: int) -> str:
+        """Generate a deterministic MAC address for a VM interface.
+
+        Uses domain name and interface index to generate consistent MACs.
+        Format: 52:54:00:XX:XX:XX (QEMU/KVM OUI prefix)
+        """
+        import hashlib
+        # Create deterministic hash from domain name and interface index
+        hash_input = f"{domain_name}:{interface_index}".encode()
+        hash_bytes = hashlib.md5(hash_input).digest()
+        # Use QEMU/KVM OUI prefix (52:54:00) + 3 bytes from hash
+        mac = f"52:54:00:{hash_bytes[0]:02x}:{hash_bytes[1]:02x}:{hash_bytes[2]:02x}"
+        return mac
+
     def _generate_domain_xml(
         self,
         name: str,
         node_config: dict,
         overlay_path: Path,
         data_volume_path: Path | None = None,
-        bridge_interfaces: list[str] | None = None,
+        interface_count: int = 1,
+        vlan_tags: list[int] | None = None,
     ) -> str:
         """Generate libvirt domain XML for a VM.
 
@@ -296,7 +362,8 @@ class LibvirtProvider(Provider):
             node_config: Node configuration from topology
             overlay_path: Path to the overlay disk
             data_volume_path: Optional path to data volume
-            bridge_interfaces: List of bridge names for network interfaces
+            interface_count: Number of network interfaces to create
+            vlan_tags: VLAN tags for each interface (for OVS isolation)
 
         Returns:
             Domain XML string
@@ -330,23 +397,32 @@ class LibvirtProvider(Provider):
 
         # Build network interface elements
         # VMs connect to the OVS bridge (arch-ovs) for networking
-        # This integrates with the same networking as Docker containers
+        # Each interface gets a unique VLAN tag for isolation (like Docker containers)
         ovs_bridge = getattr(settings, 'ovs_bridge_name', 'arch-ovs')
         interfaces_xml = ""
-        if bridge_interfaces:
-            for i, bridge in enumerate(bridge_interfaces):
-                interfaces_xml += f'''
+
+        # Ensure we have at least 1 interface
+        interface_count = max(1, interface_count)
+
+        for i in range(interface_count):
+            mac_address = self._generate_mac_address(name, i)
+            interface_id = str(uuid.uuid4())
+
+            # Add VLAN tag if provided (for OVS isolation)
+            vlan_xml = ""
+            if vlan_tags and i < len(vlan_tags):
+                vlan_xml = f'''
+      <vlan>
+        <tag id='{vlan_tags[i]}'/>
+      </vlan>'''
+
+            interfaces_xml += f'''
     <interface type='bridge'>
-      <source bridge='{bridge}'/>
-      <virtualport type='openvswitch'/>
-      <model type='{nic_driver}'/>
-    </interface>'''
-        else:
-            # Default: single interface connected to OVS bridge
-            interfaces_xml = f'''
-    <interface type='bridge'>
+      <mac address='{mac_address}'/>
       <source bridge='{ovs_bridge}'/>
-      <virtualport type='openvswitch'/>
+      <virtualport type='openvswitch'>
+        <parameters interfaceid='{interface_id}'/>
+      </virtualport>{vlan_xml}
       <model type='{nic_driver}'/>
     </interface>'''
 
@@ -484,6 +560,8 @@ class LibvirtProvider(Provider):
             libvirt_config = get_libvirt_config(node.kind)
 
             # Build node config dict for helper methods
+            # interface_count comes from topology (based on links) or defaults to 1
+            interface_count = node.interface_count or 1
             node_config = {
                 "image": node.image,
                 "memory": libvirt_config.memory_mb,
@@ -494,12 +572,13 @@ class LibvirtProvider(Provider):
                 "readiness_probe": libvirt_config.readiness_probe,
                 "readiness_pattern": libvirt_config.readiness_pattern,
                 "readiness_timeout": libvirt_config.readiness_timeout,
+                "interface_count": interface_count,
                 "_display_name": display_name,
             }
             logger.info(
                 f"VM config for {log_name}: {libvirt_config.memory_mb}MB RAM, "
                 f"{libvirt_config.cpu_count} vCPU, disk={libvirt_config.disk_driver}, "
-                f"nic={libvirt_config.nic_driver}"
+                f"nic={libvirt_config.nic_driver}, interfaces={interface_count}"
             )
 
             try:
@@ -585,14 +664,20 @@ class LibvirtProvider(Provider):
             if not await self._create_data_volume(data_volume_path, data_volume_size):
                 raise RuntimeError(f"Failed to create data volume for {node_name}")
 
-        # Generate domain XML
-        # TODO: Handle bridge interfaces from topology links
+        # Get interface count from node config (default to 1)
+        interface_count = node_config.get("interface_count", 1)
+
+        # Allocate VLAN tags for each interface (for OVS isolation)
+        vlan_tags = self._allocate_vlans(lab_id, node_name, interface_count)
+
+        # Generate domain XML with multiple interfaces
         xml = self._generate_domain_xml(
             domain_name,
             node_config,
             overlay_path,
             data_volume_path,
-            bridge_interfaces=None,  # Will be populated from links
+            interface_count=interface_count,
+            vlan_tags=vlan_tags,
         )
 
         # Define and start the domain
@@ -655,6 +740,12 @@ class LibvirtProvider(Provider):
                         logger.info(f"Removed disk: {disk_file}")
                     except Exception as e:
                         logger.warning(f"Failed to remove disk {disk_file}: {e}")
+
+            # Clean up VLAN allocations for this lab
+            if lab_id in self._vlan_allocations:
+                del self._vlan_allocations[lab_id]
+            if lab_id in self._next_vlan:
+                del self._next_vlan[lab_id]
 
             if errors and destroyed_count == 0:
                 return DestroyResult(
@@ -825,6 +916,128 @@ class LibvirtProvider(Provider):
             return None
         except Exception:
             return None
+
+    async def get_vm_interface_port(
+        self,
+        lab_id: str,
+        node_name: str,
+        interface_index: int,
+    ) -> str | None:
+        """Get the OVS port name for a VM interface.
+
+        Libvirt creates ports on OVS with names like 'vnet0', 'vnet1', etc.
+        We can find the port by looking for the interface with our MAC address.
+
+        Args:
+            lab_id: Lab identifier
+            node_name: Node name
+            interface_index: Interface index (0-based)
+
+        Returns:
+            OVS port name, or None if not found
+        """
+        domain_name = self._domain_name(lab_id, node_name)
+        expected_mac = self._generate_mac_address(domain_name, interface_index)
+
+        try:
+            # Get OVS ports and find the one with matching MAC
+            result = subprocess.run(
+                ["ovs-vsctl", "--format=json", "list-ports", settings.ovs_bridge_name],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return None
+
+            ports = result.stdout.strip().split('\n')
+            for port in ports:
+                if not port:
+                    continue
+                # Check if this port has our MAC address
+                mac_result = subprocess.run(
+                    ["ovs-vsctl", "get", "interface", port, "mac_in_use"],
+                    capture_output=True,
+                    text=True,
+                )
+                if mac_result.returncode == 0:
+                    port_mac = mac_result.stdout.strip().strip('"')
+                    if port_mac.lower() == expected_mac.lower():
+                        return port
+
+            return None
+        except Exception as e:
+            logger.error(f"Error finding VM interface port: {e}")
+            return None
+
+    async def hot_connect(
+        self,
+        lab_id: str,
+        source_node: str,
+        source_interface: int,
+        target_node: str,
+        target_interface: int,
+    ) -> bool:
+        """Connect two VM interfaces by matching their VLAN tags.
+
+        This creates a layer 2 link between two VM interfaces by setting
+        them to the same VLAN on the OVS bridge.
+
+        Args:
+            lab_id: Lab identifier
+            source_node: Source node name
+            source_interface: Source interface index (0-based)
+            target_node: Target node name
+            target_interface: Target interface index (0-based)
+
+        Returns:
+            True if successful
+        """
+        # Get the VLAN tags for both interfaces
+        source_vlans = self.get_node_vlans(lab_id, source_node)
+        target_vlans = self.get_node_vlans(lab_id, target_node)
+
+        if source_interface >= len(source_vlans):
+            logger.error(f"Source interface {source_interface} not found for {source_node}")
+            return False
+        if target_interface >= len(target_vlans):
+            logger.error(f"Target interface {target_interface} not found for {target_node}")
+            return False
+
+        # Use the source VLAN for both interfaces (they need to match)
+        shared_vlan = source_vlans[source_interface]
+
+        # Find the OVS ports for both interfaces
+        source_port = await self.get_vm_interface_port(lab_id, source_node, source_interface)
+        target_port = await self.get_vm_interface_port(lab_id, target_node, target_interface)
+
+        if not source_port:
+            logger.error(f"Could not find OVS port for {source_node} interface {source_interface}")
+            return False
+        if not target_port:
+            logger.error(f"Could not find OVS port for {target_node} interface {target_interface}")
+            return False
+
+        # Set both ports to the same VLAN
+        try:
+            for port in [source_port, target_port]:
+                result = subprocess.run(
+                    ["ovs-vsctl", "set", "port", port, f"tag={shared_vlan}"],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    logger.error(f"Failed to set VLAN on port {port}: {result.stderr}")
+                    return False
+
+            logger.info(
+                f"Connected {source_node}:{source_interface} <-> {target_node}:{target_interface} "
+                f"via VLAN {shared_vlan}"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Error during hot_connect: {e}")
+            return False
 
     async def check_readiness(
         self,

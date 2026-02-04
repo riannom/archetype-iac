@@ -89,7 +89,8 @@ async def reconcile_image_hosts() -> ImageReconciliationResult:
             # 3. For images in manifest, ensure ImageHost records exist for online hosts
             for img in manifest.get("images", []):
                 image_id = img.get("id")
-                if not image_id:
+                reference = img.get("reference")
+                if not image_id or not reference:
                     continue
 
                 # Get existing host records for this image
@@ -106,6 +107,7 @@ async def reconcile_image_hosts() -> ImageReconciliationResult:
                     new_ih = models.ImageHost(
                         image_id=image_id,
                         host_id=host_id,
+                        reference=reference,
                         status="unknown",
                     )
                     session.add(new_ih)
@@ -144,12 +146,22 @@ async def verify_image_status_on_agents() -> ImageReconciliationResult:
                 .all()
             )
 
-            # Load manifest for Docker image lookups
+            # Load manifest for image lookups by kind
             manifest = load_manifest()
             docker_images = {
                 img.get("id"): img.get("reference")
                 for img in manifest.get("images", [])
                 if img.get("kind") == "docker"
+            }
+            qcow2_images = {
+                img.get("id"): img.get("reference")
+                for img in manifest.get("images", [])
+                if img.get("kind") == "qcow2"
+            }
+            iol_images = {
+                img.get("id"): img.get("reference")
+                for img in manifest.get("images", [])
+                if img.get("kind") == "iol"
             }
 
             for host in online_hosts:
@@ -174,33 +186,83 @@ async def verify_image_status_on_agents() -> ImageReconciliationResult:
                         .all()
                     )
 
-                    for ih in host_image_records:
-                        # Get the Docker reference for this image
-                        reference = docker_images.get(ih.image_id)
-                        if not reference:
-                            continue  # Skip non-Docker images
+                    # Get agent's capabilities from host record (stored as JSON string)
+                    host_providers = []
+                    if host.capabilities:
+                        import json
+                        try:
+                            caps = json.loads(host.capabilities) if isinstance(host.capabilities, str) else host.capabilities
+                            host_providers = caps.get("providers", [])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
 
-                        # Check if agent has this image (by tag/reference)
+                    for ih in host_image_records:
                         old_status = ih.status
-                        if reference in agent_image_tags:
-                            if ih.status != "synced":
-                                ih.status = "synced"
-                                ih.synced_at = datetime.now(timezone.utc)
-                                ih.error_message = None
-                                result.status_updates += 1
-                                logger.debug(
-                                    f"Updated ImageHost status: image={ih.image_id}, "
-                                    f"host={host.id}, {old_status} -> synced"
-                                )
-                        else:
-                            if ih.status == "synced":
-                                ih.status = "missing"
-                                ih.error_message = "Image not found on agent"
-                                result.status_updates += 1
-                                logger.debug(
-                                    f"Updated ImageHost status: image={ih.image_id}, "
-                                    f"host={host.id}, synced -> missing"
-                                )
+
+                        # Check Docker images against agent's image list
+                        if ih.image_id in docker_images:
+                            reference = docker_images[ih.image_id]
+                            if reference in agent_image_tags:
+                                if ih.status != "synced":
+                                    ih.status = "synced"
+                                    ih.synced_at = datetime.now(timezone.utc)
+                                    ih.error_message = None
+                                    result.status_updates += 1
+                                    logger.debug(
+                                        f"Updated ImageHost status: image={ih.image_id}, "
+                                        f"host={host.id}, {old_status} -> synced"
+                                    )
+                            else:
+                                if ih.status == "synced":
+                                    ih.status = "missing"
+                                    ih.error_message = "Image not found on agent"
+                                    result.status_updates += 1
+                                    logger.debug(
+                                        f"Updated ImageHost status: image={ih.image_id}, "
+                                        f"host={host.id}, synced -> missing"
+                                    )
+
+                        # qcow2 images: mark as synced if agent has libvirt provider
+                        # (qcow2 files are centrally stored, not synced to agents)
+                        elif ih.image_id in qcow2_images:
+                            if "libvirt" in host_providers:
+                                if ih.status != "synced":
+                                    ih.status = "synced"
+                                    ih.synced_at = datetime.now(timezone.utc)
+                                    ih.error_message = None
+                                    result.status_updates += 1
+                                    logger.debug(
+                                        f"Updated ImageHost status (qcow2): image={ih.image_id}, "
+                                        f"host={host.id}, {old_status} -> synced"
+                                    )
+                            else:
+                                if ih.status != "missing":
+                                    ih.status = "missing"
+                                    ih.error_message = "Agent lacks libvirt provider for qcow2 images"
+                                    result.status_updates += 1
+                                    logger.debug(
+                                        f"Updated ImageHost status (qcow2): image={ih.image_id}, "
+                                        f"host={host.id}, {old_status} -> missing (no libvirt)"
+                                    )
+
+                        # IOL images: mark as synced if agent has docker provider
+                        # (IOL runs in a container wrapper)
+                        elif ih.image_id in iol_images:
+                            if "docker" in host_providers:
+                                if ih.status != "synced":
+                                    ih.status = "synced"
+                                    ih.synced_at = datetime.now(timezone.utc)
+                                    ih.error_message = None
+                                    result.status_updates += 1
+                                    logger.debug(
+                                        f"Updated ImageHost status (IOL): image={ih.image_id}, "
+                                        f"host={host.id}, {old_status} -> synced"
+                                    )
+                            else:
+                                if ih.status != "missing":
+                                    ih.status = "missing"
+                                    ih.error_message = "Agent lacks docker provider for IOL images"
+                                    result.status_updates += 1
 
                 except Exception as e:
                     logger.warning(f"Failed to verify images on agent {host.name}: {e}")

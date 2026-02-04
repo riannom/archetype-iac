@@ -438,8 +438,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     : null;
 
   return (
-    <div className="flex-1 bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden animate-in fade-in duration-300">
-      <div className="flex flex-col h-full">
+    <div className="h-full bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden">
+      <div className="flex flex-col h-full min-h-0">
         {/* Header */}
         <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 bg-white/50 dark:bg-stone-900/50 backdrop-blur-sm">
           <div className="flex flex-wrap justify-between items-end gap-4">
@@ -520,9 +520,9 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
         </header>
 
         {/* Two-panel layout */}
-        <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex overflow-hidden min-h-0">
           {/* Left panel - Devices (40%) */}
-          <div className="w-2/5 border-r border-stone-200 dark:border-stone-800 flex flex-col overflow-hidden">
+          <div className="w-2/5 border-r border-stone-200 dark:border-stone-800 flex flex-col overflow-hidden min-h-0">
             {/* Device filters */}
             <div className="p-4 border-b border-stone-200 dark:border-stone-800 bg-stone-100/50 dark:bg-stone-900/30 space-y-3">
               {/* Search and sort row */}
@@ -618,7 +618,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           </div>
 
           {/* Right panel - Images (60%) */}
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
             {/* Image filter bar */}
             <ImageFilterBar
               images={imageLibrary}
