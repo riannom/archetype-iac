@@ -1918,3 +1918,105 @@ class LibvirtProvider(Provider):
         """
         result = await self.cleanup_orphan_domains(valid_lab_ids)
         return result.get("domains", [])
+
+    async def cleanup_lab_orphan_domains(
+        self,
+        lab_id: str,
+        keep_node_names: set[str],
+        workspace_base: Path | None = None,
+    ) -> dict[str, list[str]]:
+        """Remove VMs for nodes that no longer exist within a specific lab.
+
+        Used when nodes are deleted from a lab's topology. Finds all VMs for
+        this lab and removes those not in the keep_node_names set.
+
+        Args:
+            lab_id: Lab identifier to clean up.
+            keep_node_names: Set of node names that should be kept.
+            workspace_base: Base workspace path for disk cleanup.
+                           If None, skips disk cleanup.
+
+        Returns:
+            Dict with keys 'domains', 'disks' listing removed items.
+        """
+        removed: dict[str, list[str]] = {"domains": [], "disks": []}
+
+        try:
+            # Get the lab prefix to find all domains for this lab
+            lab_prefix = self._lab_prefix(lab_id)
+
+            # Get all domains (running and defined/stopped)
+            all_domains = self.conn.listAllDomains(0)
+
+            for domain in all_domains:
+                name = domain.name()
+
+                # Only process domains for this lab
+                if not name.startswith(lab_prefix + "-"):
+                    continue
+
+                # Parse node name from domain name: arch-{lab_id}-{node_name}
+                parts = name.split("-", 2)
+                if len(parts) < 3:
+                    continue
+                node_name = parts[2]
+
+                if node_name in keep_node_names:
+                    logger.debug(f"Keeping VM {name} (node {node_name} still in topology)")
+                    continue
+
+                # This VM is for a node not in topology - remove it
+                try:
+                    logger.info(f"Removing orphan VM {name} (node {node_name} deleted from topology)")
+
+                    # Force stop if running
+                    state, _ = domain.state()
+                    if state == libvirt.VIR_DOMAIN_RUNNING:
+                        logger.info(f"Force stopping orphan domain: {name}")
+                        domain.destroy()
+
+                    # Undefine domain (remove from libvirt)
+                    domain.undefine()
+                    removed["domains"].append(name)
+
+                    # Clean up VLAN allocation for this node
+                    if lab_id in self._vlan_allocations:
+                        if node_name in self._vlan_allocations[lab_id]:
+                            del self._vlan_allocations[lab_id][node_name]
+                            logger.debug(f"Freed VLAN allocations for orphan node: {node_name}")
+
+                except libvirt.libvirtError as e:
+                    logger.warning(f"Error removing orphan domain {name}: {e}")
+
+            # Clean up disk overlays for removed nodes
+            if workspace_base and removed["domains"]:
+                lab_workspace = workspace_base / lab_id
+                disks_dir = lab_workspace / "disks"
+                if disks_dir.exists():
+                    for domain_name in removed["domains"]:
+                        # Parse node_name from domain_name
+                        parts = domain_name.split("-", 2)
+                        if len(parts) < 3:
+                            continue
+                        node_name = parts[2]
+
+                        # Look for disk files matching this node
+                        for disk_file in disks_dir.iterdir():
+                            if disk_file.name.startswith(node_name):
+                                try:
+                                    disk_file.unlink()
+                                    removed["disks"].append(str(disk_file))
+                                    logger.info(f"Removed orphan disk: {disk_file}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to remove disk {disk_file}: {e}")
+
+            if removed["domains"]:
+                logger.info(
+                    f"Lab orphan cleanup complete for {lab_id}: removed {len(removed['domains'])} VMs, "
+                    f"{len(removed['disks'])} disks"
+                )
+
+        except Exception as e:
+            logger.error(f"Error during lab orphan cleanup for {lab_id}: {e}")
+
+        return removed

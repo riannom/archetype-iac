@@ -8,13 +8,15 @@ interface ContainerInfo {
   lab_name: string | null;
   node_name: string | null;
   node_kind: string | null;
-  image: string;
+  image?: string;
   agent_name: string;
+  is_vm?: boolean;
 }
 
 interface LabContainers {
   name: string;
   containers: ContainerInfo[];
+  vms?: ContainerInfo[];
 }
 
 interface ContainersData {
@@ -22,6 +24,8 @@ interface ContainersData {
   system_containers: ContainerInfo[];
   total_running: number;
   total_stopped: number;
+  vms_running?: number;
+  vms_stopped?: number;
 }
 
 interface ContainersPopupProps {
@@ -39,14 +43,16 @@ const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose, filt
   const filteredData = useMemo(() => {
     if (!data || !filterHostName) return data;
 
-    // Filter lab containers
+    // Filter lab containers and VMs
     const filteredByLab: Record<string, LabContainers> = {};
     for (const [labId, labData] of Object.entries(data.by_lab)) {
       const filteredContainers = labData.containers.filter(c => c.agent_name === filterHostName);
-      if (filteredContainers.length > 0) {
+      const filteredVms = (labData.vms || []).filter(vm => vm.agent_name === filterHostName);
+      if (filteredContainers.length > 0 || filteredVms.length > 0) {
         filteredByLab[labId] = {
           name: labData.name,
           containers: filteredContainers,
+          vms: filteredVms,
         };
       }
     }
@@ -59,18 +65,23 @@ const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose, filt
       ...Object.values(filteredByLab).flatMap(l => l.containers),
       ...filteredSystemContainers,
     ];
+    const allFilteredVms = Object.values(filteredByLab).flatMap(l => l.vms || []);
     const totalRunning = allFilteredContainers.filter(c => c.status === 'running').length;
     const totalStopped = allFilteredContainers.filter(c => c.status !== 'running').length;
+    const vmsRunning = allFilteredVms.filter(vm => vm.status === 'running').length;
+    const vmsStopped = allFilteredVms.filter(vm => vm.status !== 'running').length;
 
     return {
       by_lab: filteredByLab,
       system_containers: filteredSystemContainers,
       total_running: totalRunning,
       total_stopped: totalStopped,
+      vms_running: vmsRunning,
+      vms_stopped: vmsStopped,
     };
   }, [data, filterHostName]);
 
-  const popupTitle = filterHostName ? `Containers on ${filterHostName}` : 'Containers';
+  const popupTitle = filterHostName ? `Nodes on ${filterHostName}` : 'Nodes';
 
   useEffect(() => {
     if (isOpen) {
@@ -115,68 +126,115 @@ const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose, filt
       ) : filteredData ? (
         <div className="space-y-4">
           {/* Summary */}
-          <div className="flex items-center gap-4 p-3 bg-stone-100 dark:bg-stone-800 rounded-lg">
+          <div className="flex items-center gap-4 p-3 bg-stone-100 dark:bg-stone-800 rounded-lg flex-wrap">
+            {/* Containers */}
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-green-500"></div>
+              <i className="fa-solid fa-cube text-stone-400 text-xs"></i>
               <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
-                {filteredData.total_running} running
+                {filteredData.total_running} containers running
               </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-stone-400"></div>
-              <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
-                {filteredData.total_stopped} stopped
-              </span>
-            </div>
-          </div>
-
-          {/* Lab Containers */}
-          {Object.entries(filteredData.by_lab).map(([labId, labData]) => (
-            <div key={labId} className="border border-stone-200 dark:border-stone-700 rounded-lg overflow-hidden">
-              <button
-                onClick={() => toggleLab(labId)}
-                className="w-full flex items-center justify-between px-4 py-3 bg-stone-50 dark:bg-stone-800/50 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <i className={`fa-solid fa-chevron-${expandedLabs.has(labId) ? 'down' : 'right'} text-xs text-stone-400`} />
-                  <i className="fa-solid fa-diagram-project text-sage-500" />
-                  <span className="font-medium text-stone-800 dark:text-stone-200">{labData.name}</span>
-                  <span className="text-xs text-stone-500 dark:text-stone-400">
-                    {labData.containers.length} container{labData.containers.length !== 1 ? 's' : ''}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-green-600 dark:text-green-400">
-                    {labData.containers.filter(c => c.status === 'running').length} running
-                  </span>
-                </div>
-              </button>
-              {expandedLabs.has(labId) && (
-                <div className="divide-y divide-stone-100 dark:divide-stone-700">
-                  {labData.containers.map((container, idx) => (
-                    <div key={idx} className="px-4 py-2 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <i className="fa-solid fa-cube text-stone-400 text-xs" />
-                        <div>
-                          <div className="text-sm font-medium text-stone-700 dark:text-stone-300">
-                            {container.node_name || container.name}
-                          </div>
-                          <div className="text-xs text-stone-500 dark:text-stone-500">
-                            {container.node_kind && <span className="mr-2">{container.node_kind}</span>}
-                            <span className="text-stone-400">{container.image}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-stone-400 dark:text-stone-500">{container.agent_name}</span>
-                        <StatusBadge status={container.status} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              {filteredData.total_stopped > 0 && (
+                <span className="text-sm text-stone-500 dark:text-stone-400">
+                  ({filteredData.total_stopped} stopped)
+                </span>
               )}
             </div>
-          ))}
+            {/* VMs - only show if there are VMs */}
+            {((filteredData.vms_running || 0) > 0 || (filteredData.vms_stopped || 0) > 0) && (
+              <div className="flex items-center gap-2">
+                <i className="fa-solid fa-desktop text-stone-400 text-xs"></i>
+                <span className="text-sm font-medium text-stone-700 dark:text-stone-300">
+                  {filteredData.vms_running || 0} VMs running
+                </span>
+                {(filteredData.vms_stopped || 0) > 0 && (
+                  <span className="text-sm text-stone-500 dark:text-stone-400">
+                    ({filteredData.vms_stopped} stopped)
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Lab Nodes (Containers + VMs) */}
+          {Object.entries(filteredData.by_lab).map(([labId, labData]) => {
+            const totalNodes = labData.containers.length + (labData.vms?.length || 0);
+            const runningContainers = labData.containers.filter(c => c.status === 'running').length;
+            const runningVms = (labData.vms || []).filter(vm => vm.status === 'running').length;
+            const totalRunning = runningContainers + runningVms;
+            return (
+              <div key={labId} className="border border-stone-200 dark:border-stone-700 rounded-lg overflow-hidden">
+                <button
+                  onClick={() => toggleLab(labId)}
+                  className="w-full flex items-center justify-between px-4 py-3 bg-stone-50 dark:bg-stone-800/50 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <i className={`fa-solid fa-chevron-${expandedLabs.has(labId) ? 'down' : 'right'} text-xs text-stone-400`} />
+                    <i className="fa-solid fa-diagram-project text-sage-500" />
+                    <span className="font-medium text-stone-800 dark:text-stone-200">{labData.name}</span>
+                    <span className="text-xs text-stone-500 dark:text-stone-400">
+                      {totalNodes} node{totalNodes !== 1 ? 's' : ''}
+                      {labData.containers.length > 0 && labData.vms && labData.vms.length > 0 && (
+                        <span className="ml-1 text-stone-400">
+                          ({labData.containers.length} containers, {labData.vms.length} VMs)
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-green-600 dark:text-green-400">
+                      {totalRunning} running
+                    </span>
+                  </div>
+                </button>
+                {expandedLabs.has(labId) && (
+                  <div className="divide-y divide-stone-100 dark:divide-stone-700">
+                    {/* Containers */}
+                    {labData.containers.map((container, idx) => (
+                      <div key={`c-${idx}`} className="px-4 py-2 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <i className="fa-solid fa-cube text-stone-400 text-xs" />
+                          <div>
+                            <div className="text-sm font-medium text-stone-700 dark:text-stone-300">
+                              {container.node_name || container.name}
+                            </div>
+                            <div className="text-xs text-stone-500 dark:text-stone-500">
+                              {container.node_kind && <span className="mr-2">{container.node_kind}</span>}
+                              {container.image && <span className="text-stone-400">{container.image}</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-stone-400 dark:text-stone-500">{container.agent_name}</span>
+                          <StatusBadge status={container.status} />
+                        </div>
+                      </div>
+                    ))}
+                    {/* VMs */}
+                    {(labData.vms || []).map((vm, idx) => (
+                      <div key={`vm-${idx}`} className="px-4 py-2 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <i className="fa-solid fa-desktop text-blue-400 text-xs" />
+                          <div>
+                            <div className="text-sm font-medium text-stone-700 dark:text-stone-300">
+                              {vm.node_name || vm.name}
+                            </div>
+                            <div className="text-xs text-stone-500 dark:text-stone-500">
+                              <span className="text-blue-500 mr-2">VM</span>
+                              {vm.node_kind && <span className="mr-2">{vm.node_kind}</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-stone-400 dark:text-stone-500">{vm.agent_name}</span>
+                          <StatusBadge status={vm.status} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           {/* System Containers */}
           {filteredData.system_containers.length > 0 && (

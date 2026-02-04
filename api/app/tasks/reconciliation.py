@@ -323,6 +323,75 @@ async def refresh_states_from_agents():
                 .all()
             )
 
+            # Find labs with orphan placements (placement exists but node definition was deleted)
+            # This detects cases where VMs/containers still exist but nodes were removed from topology
+            node_def_exists_subquery = (
+                select(models.Node.id)
+                .where(
+                    models.Node.id == models.NodePlacement.node_definition_id,
+                )
+                .exists()
+            )
+            orphan_placements = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.node_definition_id.isnot(None),
+                    ~node_def_exists_subquery,
+                )
+                .all()
+            )
+
+            # Find labs with inconsistent state (lab.state doesn't match computed state from nodes)
+            # This catches cases like lab="running" but all nodes are "stopped"
+            from sqlalchemy import func
+            inconsistent_labs = []
+            stable_labs = (
+                session.query(models.Lab)
+                .filter(
+                    models.Lab.state.in_([LabState.RUNNING.value, LabState.STOPPED.value, LabState.ERROR.value]),
+                )
+                .all()
+            )
+            for lab in stable_labs:
+                # Aggregate node states for this lab
+                state_counts = (
+                    session.query(
+                        models.NodeState.actual_state,
+                        func.count(models.NodeState.id).label('count')
+                    )
+                    .filter(models.NodeState.lab_id == lab.id)
+                    .group_by(models.NodeState.actual_state)
+                    .all()
+                )
+                counts = {state: count for state, count in state_counts}
+                running = counts.get(NodeActualState.RUNNING.value, 0)
+                stopped = counts.get(NodeActualState.STOPPED.value, 0)
+                undeployed = counts.get(NodeActualState.UNDEPLOYED.value, 0)
+                error = counts.get(NodeActualState.ERROR.value, 0)
+                pending = counts.get(NodeActualState.PENDING.value, 0)
+                starting = counts.get(NodeActualState.STARTING.value, 0)
+                stopping = counts.get(NodeActualState.STOPPING.value, 0)
+                exited = counts.get(NodeActualState.EXITED.value, 0)
+
+                # Compute expected state
+                expected_state = LabStateMachine.compute_lab_state(
+                    running_count=running,
+                    stopped_count=stopped + exited,
+                    undeployed_count=undeployed,
+                    error_count=error,
+                    pending_count=pending,
+                    starting_count=starting,
+                    stopping_count=stopping,
+                )
+
+                if lab.state != expected_state.value:
+                    inconsistent_labs.append(lab)
+                    logger.info(
+                        f"Lab {lab.id} has inconsistent state: current={lab.state}, "
+                        f"expected={expected_state.value} (running={running}, stopped={stopped}, "
+                        f"undeployed={undeployed}, error={error})"
+                    )
+
             # Collect unique lab IDs that need reconciliation
             labs_to_reconcile = set()
             for lab in transitional_labs:
@@ -337,6 +406,11 @@ async def refresh_states_from_agents():
                 labs_to_reconcile.add(node.lab_id)
             for node in stale_stopped_nodes:
                 labs_to_reconcile.add(node.lab_id)
+            for placement in orphan_placements:
+                labs_to_reconcile.add(placement.lab_id)
+                logger.info(f"Lab {placement.lab_id} has orphan placement for deleted node: {placement.node_name}")
+            for lab in inconsistent_labs:
+                labs_to_reconcile.add(lab.id)
 
             # FIRST: Always check readiness for running nodes (this doesn't interfere with jobs)
             # This is separate because readiness checks should happen even when jobs are running
@@ -598,6 +672,67 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 _set_agent_error(agent, f"Query failed: {e}")
 
         logger.debug(f"Lab {lab_id} container status: {container_status_map}")
+
+        # === ORPHAN CLEANUP: Remove containers/VMs not in topology ===
+        # Build set of valid node names from database definitions
+        valid_node_names = {n.container_name for n in db_nodes}
+
+        # Find orphan containers: exist on agents but not in database
+        orphan_node_names = set(container_status_map.keys()) - valid_node_names
+        if orphan_node_names:
+            logger.warning(
+                f"Lab {lab_id} has {len(orphan_node_names)} orphan container(s)/VM(s) "
+                f"not in topology: {list(orphan_node_names)}"
+            )
+
+            # Clean up orphans on each agent
+            # Only run cleanup if no active job (don't interfere with deploy/destroy)
+            check_active_job = (
+                session.query(models.Job)
+                .filter(
+                    models.Job.lab_id == lab_id,
+                    models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+                )
+                .first()
+            )
+            if not check_active_job:
+                for agent_id in agents_successfully_queried:
+                    agent = host_to_agent.get(agent_id)
+                    if not agent:
+                        continue
+
+                    try:
+                        cleanup_result = await agent_client.cleanup_lab_orphans(
+                            agent, lab_id, list(valid_node_names)
+                        )
+                        removed = cleanup_result.get("removed_containers", [])
+                        if removed:
+                            logger.info(
+                                f"Cleaned up {len(removed)} orphan(s) on agent {agent.name}: {removed}"
+                            )
+                            # Remove cleaned up containers from status map
+                            for name in removed:
+                                container_status_map.pop(name, None)
+                                container_agent_map.pop(name, None)
+                    except Exception as e:
+                        logger.warning(f"Failed to cleanup orphans on agent {agent.name}: {e}")
+
+                # Also cleanup orphan NodePlacement records in database
+                orphan_placements_to_delete = (
+                    session.query(models.NodePlacement)
+                    .filter(
+                        models.NodePlacement.lab_id == lab_id,
+                        ~models.NodePlacement.node_name.in_(valid_node_names),
+                    )
+                    .all()
+                )
+                for placement in orphan_placements_to_delete:
+                    logger.info(f"Removing orphan placement for node {placement.node_name} in lab {lab_id}")
+                    session.delete(placement)
+            else:
+                logger.debug(
+                    f"Skipping orphan cleanup for lab {lab_id} - active job {check_active_job.id} in progress"
+                )
 
         # Update NodeState records based on actual container status
         node_states = (

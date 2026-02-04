@@ -465,6 +465,44 @@ def _sync_get_resource_usage() -> dict:
         except Exception as e:
             logger.warning(f"Docker container collection failed: {type(e).__name__}: {e}")
 
+        # VM counts and details (libvirt)
+        vms_running = 0
+        vms_total = 0
+        vm_details = []
+        try:
+            from agent.providers.registry import get_provider
+
+            if settings.enable_libvirt:
+                libvirt_provider = get_provider("libvirt")
+                if libvirt_provider and libvirt_provider.conn:
+                    import libvirt
+                    all_domains = libvirt_provider.conn.listAllDomains(0)
+                    for domain in all_domains:
+                        name = domain.name()
+                        if not name.startswith("arch-"):
+                            continue  # Only Archetype-managed VMs
+
+                        vms_total += 1
+                        state, _ = domain.state()
+                        is_running = state == libvirt.VIR_DOMAIN_RUNNING
+                        if is_running:
+                            vms_running += 1
+
+                        # Parse: arch-{lab_id}-{node_name}
+                        parts = name.split("-", 2)
+                        lab_prefix = parts[1] if len(parts) >= 2 else ""
+                        node_name = parts[2] if len(parts) >= 3 else name
+
+                        vm_details.append({
+                            "name": name,
+                            "status": "running" if is_running else "stopped",
+                            "lab_prefix": lab_prefix,
+                            "node_name": node_name,
+                            "is_vm": True,
+                        })
+        except Exception as e:
+            logger.warning(f"Libvirt VM collection failed: {type(e).__name__}: {e}")
+
         return {
             "cpu_percent": cpu_percent,
             "memory_percent": memory_percent,
@@ -476,6 +514,9 @@ def _sync_get_resource_usage() -> dict:
             "containers_running": containers_running,
             "containers_total": containers_total,
             "container_details": container_details,
+            "vms_running": vms_running,
+            "vms_total": vms_total,
+            "vm_details": vm_details,
         }
     except Exception as e:
         logger.warning(f"Failed to gather resource usage: {e}")
@@ -1837,27 +1878,28 @@ async def cleanup_orphans(request: CleanupOrphansRequest) -> CleanupOrphansRespo
 
 @app.post("/cleanup-lab-orphans")
 async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOrphansResponse:
-    """Remove orphaned containers for a specific lab.
+    """Remove orphaned containers/VMs for a specific lab.
 
-    Used when nodes are migrated between agents. Removes containers for
-    nodes that are no longer assigned to this agent.
+    Used when nodes are deleted from topology or migrated between agents.
+    Removes containers and VMs for nodes that are no longer in the topology.
 
     Args:
         request: Contains lab_id and list of node_names to keep
 
     Returns:
-        Lists of removed and kept containers
+        Lists of removed and kept containers/VMs
     """
     import docker
     from docker.errors import APIError
 
-    logger.info(f"Cleaning up orphan containers for lab {request.lab_id}, keeping {len(request.keep_node_names)} nodes")
+    logger.info(f"Cleaning up orphan containers/VMs for lab {request.lab_id}, keeping {len(request.keep_node_names)} nodes")
 
     removed = []
     kept = []
     errors = []
     keep_set = set(request.keep_node_names)
 
+    # Clean up Docker containers
     try:
         client = docker.from_env()
 
@@ -1875,11 +1917,11 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
 
             if node_name in keep_set:
                 kept.append(container.name)
-                logger.debug(f"Keeping container {container.name} (node {node_name} assigned to this agent)")
+                logger.debug(f"Keeping container {container.name} (node {node_name} in topology)")
             else:
-                # This container is for a node not assigned to this agent - remove it
+                # This container is for a node not in topology - remove it
                 try:
-                    logger.info(f"Removing orphan container {container.name} (node {node_name} not assigned to this agent)")
+                    logger.info(f"Removing orphan container {container.name} (node {node_name} deleted from topology)")
                     container.remove(force=True)
                     removed.append(container.name)
                 except APIError as e:
@@ -1888,9 +1930,32 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
                     errors.append(error_msg)
 
     except Exception as e:
-        error_msg = f"Error during lab orphan cleanup: {e}"
+        error_msg = f"Error during Docker orphan cleanup: {e}"
         logger.error(error_msg)
         errors.append(error_msg)
+
+    # Clean up libvirt VMs if enabled
+    if settings.enable_libvirt:
+        try:
+            from agent.providers.libvirt import LibvirtProvider, LIBVIRT_AVAILABLE
+            if LIBVIRT_AVAILABLE:
+                libvirt_provider = LibvirtProvider()
+                workspace_base = Path(settings.workspace_path)
+                vm_result = await libvirt_provider.cleanup_lab_orphan_domains(
+                    lab_id=request.lab_id,
+                    keep_node_names=keep_set,
+                    workspace_base=workspace_base,
+                )
+                removed.extend(vm_result.get("domains", []))
+                logger.info(f"Cleaned up {len(vm_result.get('domains', []))} orphan VMs")
+            else:
+                logger.debug("Libvirt not available, skipping VM orphan cleanup")
+        except ImportError:
+            logger.debug("Libvirt provider not available, skipping VM orphan cleanup")
+        except Exception as e:
+            error_msg = f"Error during VM orphan cleanup: {e}"
+            logger.error(error_msg)
+            errors.append(error_msg)
 
     return CleanupLabOrphansResponse(
         removed_containers=removed,

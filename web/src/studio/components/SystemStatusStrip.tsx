@@ -19,12 +19,14 @@ interface PerHostMetrics {
   storage_used_gb: number;
   storage_total_gb: number;
   containers_running: number;
+  vms_running?: number;
   started_at: string | null;
 }
 
 interface SystemMetrics {
   agents: { online: number; total: number };
   containers: { running: number; total: number };
+  vms?: { running: number; total: number };
   cpu_percent: number;
   memory_percent: number;
   memory?: {
@@ -129,6 +131,21 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
             <span className="ml-1 text-stone-500 dark:text-stone-500">containers</span>
           </span>
         </button>
+
+        {/* VMs - only show if there are VMs */}
+        {metrics.vms && metrics.vms.total > 0 && (
+          <button
+            onClick={() => setActivePopup('containers')}
+            className={`flex items-center gap-2 ${clickableClass}`}
+          >
+            <i className="fa-solid fa-desktop text-stone-400 dark:text-stone-500 text-xs"></i>
+            <span className="text-xs text-stone-600 dark:text-stone-400">
+              <span className="font-bold text-stone-800 dark:text-stone-200">{metrics.vms.running}</span>
+              <span className="text-stone-400 dark:text-stone-500">/{metrics.vms.total}</span>
+              <span className="ml-1 text-stone-500 dark:text-stone-500">VMs</span>
+            </span>
+          </button>
+        )}
 
         {/* Labs */}
         <div className="flex items-center gap-2">
@@ -260,6 +277,21 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                     <span className="text-stone-400 dark:text-stone-500 ml-0.5">containers</span>
                   </span>
                 </button>
+
+                {/* VMs for this host - only show if there are VMs */}
+                {host.vms_running !== undefined && host.vms_running > 0 && (
+                  <button
+                    onClick={() => handleOpenHostContainers(host.name)}
+                    className="flex items-center gap-1.5 hover:bg-stone-200/70 dark:hover:bg-stone-600/50 rounded px-1 -mx-1 transition-colors"
+                    title={`View VMs on ${host.name}`}
+                  >
+                    <i className="fa-solid fa-desktop text-stone-400 dark:text-stone-500 text-[10px]"></i>
+                    <span className="text-[11px] text-stone-600 dark:text-stone-400">
+                      <span className="font-bold text-stone-700 dark:text-stone-300">{host.vms_running}</span>
+                      <span className="text-stone-400 dark:text-stone-500 ml-0.5">VMs</span>
+                    </span>
+                  </button>
+                )}
 
                 <div className="h-4 w-px bg-stone-300/50 dark:bg-stone-600/50"></div>
 
