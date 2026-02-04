@@ -86,6 +86,11 @@ class VendorConfig:
     memory: int = 1024  # Memory in MB
     cpu: int = 1  # CPU cores
 
+    # Libvirt/QEMU VM settings (for qcow2-based devices)
+    disk_driver: str = "virtio"  # Disk bus type: virtio, ide, sata
+    nic_driver: str = "virtio"   # NIC model: virtio, e1000, rtl8139
+    data_volume_gb: int = 0      # Size of additional data volume (0 = none)
+
     # Image requirements
     requires_image: bool = True
     supported_image_kinds: list[str] = field(default_factory=lambda: ["docker"])
@@ -248,7 +253,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         tags=["routing", "bgp", "mpls", "segment-routing", "container"],
     ),
     "cisco_iosv": VendorConfig(
-        kind="linux",  # Uses linux kind as fallback (QEMU-based)
+        kind="cisco_iosv",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,  # Requires user-provided image
@@ -260,18 +265,24 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         icon="fa-arrows-to-dot",
         versions=["15.9(3)M4", "15.8"],
         is_active=True,
-        notes="IOSv requires vrnetlab or QEMU setup. User must import image.",
+        notes="IOSv requires QEMU/libvirt. User must import image.",
         port_naming="GigabitEthernet",
         port_start_index=0,
         max_ports=8,
+        memory=2048,  # 2GB recommended
+        cpu=1,
+        nic_driver="e1000",  # IOSv requires e1000 NICs
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/ios/",
         license_required=True,
-        tags=["routing", "bgp", "ospf", "eigrp", "legacy"],
+        tags=["routing", "bgp", "ospf", "eigrp", "legacy", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"Press RETURN to get started",
+        readiness_timeout=180,
     ),
     "cisco_csr1000v": VendorConfig(
-        kind="linux",  # Uses linux kind as fallback (QEMU-based)
+        kind="cisco_csr1000v",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,  # Requires user-provided image
@@ -283,15 +294,20 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         icon="fa-arrows-to-dot",
         versions=["17.3.2", "17.2.1"],
         is_active=True,
-        notes="CSR1000v requires vrnetlab or QEMU setup. User must import image.",
+        notes="CSR1000v requires QEMU/libvirt. User must import image.",
         port_naming="GigabitEthernet",
         port_start_index=1,
         max_ports=8,
+        memory=4096,  # 4GB required
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/routers/csr1000/",
         license_required=True,
-        tags=["routing", "bgp", "sd-wan", "ipsec", "cloud"],
+        tags=["routing", "bgp", "sd-wan", "ipsec", "cloud", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"Press RETURN to get started",
+        readiness_timeout=300,
     ),
     "juniper_crpd": VendorConfig(
         kind="juniper_crpd",
@@ -332,11 +348,16 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="ge-0/0/",
         port_start_index=0,
         max_ports=8,
+        memory=4096,  # 4GB required
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2", "docker"],
         documentation_url="https://www.juniper.net/documentation/product/us/en/vsrx/",
         license_required=True,
-        tags=["routing", "firewall", "security", "ipsec", "nat"],
+        tags=["routing", "firewall", "security", "ipsec", "nat", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"login:",
+        readiness_timeout=300,
     ),
 
     # =========================================================================
@@ -548,11 +569,16 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="ge-0/0/",
         port_start_index=0,
         max_ports=12,
+        memory=4096,  # 4GB required
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2", "docker"],
         documentation_url="https://www.juniper.net/documentation/product/us/en/vjunos-switch/",
         license_required=True,
-        tags=["switching", "evpn", "vxlan", "datacenter"],
+        tags=["switching", "evpn", "vxlan", "datacenter", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"login:",
+        readiness_timeout=300,
     ),
     "juniper_vqfx": VendorConfig(
         kind="juniper_vqfx",
@@ -571,11 +597,16 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="xe-0/0/",
         port_start_index=0,
         max_ports=12,
+        memory=4096,  # 4GB required
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2", "docker"],
         documentation_url="https://www.juniper.net/documentation/product/us/en/virtual-qfx/",
         license_required=True,
-        tags=["switching", "evpn", "datacenter"],
+        tags=["switching", "evpn", "datacenter", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"login:",
+        readiness_timeout=300,
     ),
     "cisco_n9kv": VendorConfig(
         kind="cisco_n9kv",
@@ -590,15 +621,20 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         icon="fa-arrows-left-right-to-line",
         versions=["9.3.9", "9.3.8"],
         is_active=False,  # Requires specific setup
-        notes="Nexus 9000v requires vrnetlab image.",
+        notes="Nexus 9000v requires QEMU/libvirt. High resource requirements.",
         port_naming="Ethernet1/",
         port_start_index=1,
         max_ports=12,
+        memory=8192,  # 8GB required
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
         license_required=True,
-        tags=["switching", "vxlan", "evpn", "datacenter", "aci"],
+        tags=["switching", "vxlan", "evpn", "datacenter", "aci", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"login:",
+        readiness_timeout=600,  # N9Kv takes a long time to boot
         console_method="ssh",
         console_user="admin",
         console_password="admin",
@@ -608,7 +644,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     # NETWORK DEVICES - Load Balancers
     # =========================================================================
     "f5_bigip": VendorConfig(
-        kind="linux",
+        kind="f5_bigip",
         vendor="F5",
         console_shell="/bin/bash",
         default_image=None,  # Requires user-provided image
@@ -624,11 +660,16 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="1.",
         port_start_index=1,
         max_ports=8,
+        memory=4096,  # 4GB minimum
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://clouddocs.f5.com/",
         license_required=True,
-        tags=["load-balancer", "waf", "ssl", "adc"],
+        tags=["load-balancer", "waf", "ssl", "adc", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"login:",
+        readiness_timeout=300,
     ),
     "haproxy": VendorConfig(
         kind="linux",
@@ -652,7 +693,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         tags=["load-balancer", "proxy", "open-source"],
     ),
     "citrix_adc": VendorConfig(
-        kind="linux",
+        kind="citrix_adc",
         vendor="Citrix",
         console_shell="/bin/bash",
         default_image=None,
@@ -668,18 +709,23 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="0/",
         port_start_index=1,
         max_ports=8,
+        memory=2048,  # 2GB minimum
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://docs.citrix.com/en-us/citrix-adc",
         license_required=True,
-        tags=["load-balancer", "adc", "ssl"],
+        tags=["load-balancer", "adc", "ssl", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"Done",
+        readiness_timeout=180,
     ),
 
     # =========================================================================
     # SECURITY DEVICES
     # =========================================================================
     "cisco_asav": VendorConfig(
-        kind="linux",
+        kind="cisco_asav",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,  # Requires user-provided image
@@ -691,18 +737,24 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         icon="fa-shield-halved",
         versions=["9.16.1", "9.15.1"],
         is_active=True,
-        notes="ASAv requires vrnetlab or QEMU setup. User must import image.",
+        notes="ASAv requires QEMU/libvirt. User must import image.",
         port_naming="GigabitEthernet0/",
         port_start_index=0,
         max_ports=10,
+        memory=2048,  # 2GB required
+        cpu=1,
+        nic_driver="e1000",  # ASAv works better with e1000
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/security/asa/",
         license_required=True,
-        tags=["firewall", "vpn", "ipsec", "nat", "security"],
+        tags=["firewall", "vpn", "ipsec", "nat", "security", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"ciscoasa>|ciscoasa#",
+        readiness_timeout=180,
     ),
     "fortinet_fortigate": VendorConfig(
-        kind="linux",
+        kind="fortinet_fortigate",
         vendor="Fortinet",
         console_shell="/bin/sh",
         default_image=None,
@@ -718,14 +770,19 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="port",
         port_start_index=1,
         max_ports=10,
+        memory=2048,  # 2GB minimum
+        cpu=1,
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://docs.fortinet.com/product/fortigate/",
         license_required=True,
-        tags=["firewall", "utm", "vpn", "security", "sd-wan"],
+        tags=["firewall", "utm", "vpn", "security", "sd-wan", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"login:",
+        readiness_timeout=180,
     ),
     "paloalto_vmseries": VendorConfig(
-        kind="linux",
+        kind="paloalto_vmseries",
         vendor="Palo Alto",
         console_shell="/bin/sh",
         default_image=None,
@@ -741,11 +798,16 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="ethernet1/",
         port_start_index=1,
         max_ports=10,
+        memory=6144,  # 6GB minimum
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://docs.paloaltonetworks.com/vm-series",
         license_required=True,
-        tags=["firewall", "ngfw", "security", "threat-prevention"],
+        tags=["firewall", "ngfw", "security", "threat-prevention", "vm"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"login:",
+        readiness_timeout=600,  # PA VMs take a long time to boot
     ),
 
     # =========================================================================
@@ -805,7 +867,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         },
     ),
     "windows": VendorConfig(
-        kind="linux",  # Placeholder - needs special handling
+        kind="windows",
         vendor="Microsoft",
         console_shell="/bin/sh",
         default_image=None,
@@ -821,11 +883,15 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="Ethernet",
         port_start_index=0,
         max_ports=4,
+        memory=4096,  # 4GB minimum
+        cpu=2,
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://docs.microsoft.com/en-us/windows-server/",
         license_required=True,
-        tags=["host", "windows", "server"],
+        tags=["host", "windows", "server", "vm"],
+        readiness_probe="none",  # Windows doesn't have serial console readiness
+        readiness_timeout=600,
     ),
 
     # =========================================================================
@@ -1304,6 +1370,64 @@ def get_container_config(
         hostname=hostname,
         memory_mb=config.memory,
         cpu_count=config.cpu,
+    )
+
+
+@dataclass
+class LibvirtRuntimeConfig:
+    """Libvirt/QEMU runtime configuration for LibvirtProvider.
+
+    This is a simplified view of VendorConfig focused on VM creation.
+    """
+    memory_mb: int
+    cpu_count: int
+    disk_driver: str
+    nic_driver: str
+    data_volume_gb: int
+    readiness_probe: str
+    readiness_pattern: str | None
+    readiness_timeout: int
+
+
+def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
+    """Get libvirt runtime configuration for a device type.
+
+    Args:
+        device: Device type/kind (e.g., "cisco_iosv", "cisco_csr1000v")
+
+    Returns:
+        LibvirtRuntimeConfig for VM creation
+    """
+    # Look up by device key first, then by kind, then by alias
+    config = VENDOR_CONFIGS.get(device)
+    if not config:
+        config = _get_config_by_kind(device)
+    if not config:
+        # Try alias lookup
+        kind = get_kind_for_device(device)
+        config = _get_config_by_kind(kind)
+    if not config:
+        # Fallback to defaults
+        return LibvirtRuntimeConfig(
+            memory_mb=2048,
+            cpu_count=1,
+            disk_driver="virtio",
+            nic_driver="virtio",
+            data_volume_gb=0,
+            readiness_probe="none",
+            readiness_pattern=None,
+            readiness_timeout=120,
+        )
+
+    return LibvirtRuntimeConfig(
+        memory_mb=config.memory,
+        cpu_count=config.cpu,
+        disk_driver=config.disk_driver,
+        nic_driver=config.nic_driver,
+        data_volume_gb=config.data_volume_gb,
+        readiness_probe=config.readiness_probe,
+        readiness_pattern=config.readiness_pattern,
+        readiness_timeout=config.readiness_timeout,
     )
 
 

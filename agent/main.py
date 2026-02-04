@@ -3603,7 +3603,12 @@ async def list_external_connections(lab_id: str) -> ExternalListResponse:
 # --- Node Readiness Endpoint ---
 
 @app.get("/labs/{lab_id}/nodes/{node_name}/ready")
-async def check_node_ready(lab_id: str, node_name: str) -> dict:
+async def check_node_ready(
+    lab_id: str,
+    node_name: str,
+    provider_type: str | None = None,
+    kind: str | None = None,
+) -> dict:
     """Check if a node has completed its boot sequence.
 
     Returns readiness status based on vendor-specific probes that check
@@ -3611,6 +3616,14 @@ async def check_node_ready(lab_id: str, node_name: str) -> dict:
 
     When a node first becomes ready, any configured post-boot commands
     are executed (e.g., cEOS iptables fixes).
+
+    Args:
+        lab_id: Lab identifier
+        node_name: Node name within the lab
+        provider_type: Optional provider type ("docker" or "libvirt").
+                       If not specified, tries Docker first, then libvirt.
+        kind: Optional device kind. Required for libvirt VMs if not
+              auto-detected.
     """
     from agent.readiness import (
         get_probe_for_vendor,
@@ -3618,43 +3631,95 @@ async def check_node_ready(lab_id: str, node_name: str) -> dict:
         run_post_boot_commands,
     )
 
-    # Get container name from provider
-    provider = get_provider("docker")
-    if provider is None:
+    # Try libvirt if explicitly requested or if Docker fails
+    if provider_type == "libvirt":
+        return await _check_libvirt_readiness(lab_id, node_name, kind)
+
+    # Try Docker first
+    docker_provider = get_provider("docker")
+    if docker_provider is not None:
+        container_name = docker_provider.get_container_name(lab_id, node_name)
+
+        # Get the node kind to determine appropriate probe
+        try:
+            import docker
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            detected_kind = container.labels.get("archetype.node_kind", "")
+            kind = kind or detected_kind
+
+            # Get and run the appropriate probe
+            probe = get_probe_for_vendor(kind)
+            result = await probe.check(container_name)
+
+            # If ready, run post-boot commands (idempotent - only runs once per container)
+            if result.is_ready:
+                await run_post_boot_commands(container_name, kind)
+
+            return {
+                "is_ready": result.is_ready,
+                "message": result.message,
+                "progress_percent": result.progress_percent,
+                "timeout": get_readiness_timeout(kind),
+                "provider": "docker",
+            }
+        except Exception:
+            # Docker container not found, try libvirt if no provider specified
+            if provider_type is None:
+                return await _check_libvirt_readiness(lab_id, node_name, kind)
+            return {
+                "is_ready": False,
+                "message": "Container not found",
+                "progress_percent": 0,
+                "provider": "docker",
+            }
+
+    # No Docker provider, try libvirt
+    return await _check_libvirt_readiness(lab_id, node_name, kind)
+
+
+async def _check_libvirt_readiness(
+    lab_id: str,
+    node_name: str,
+    kind: str | None,
+) -> dict:
+    """Check readiness for a libvirt VM.
+
+    Args:
+        lab_id: Lab identifier
+        node_name: Node name
+        kind: Device kind for vendor config lookup
+
+    Returns:
+        Readiness status dict
+    """
+    from agent.readiness import get_readiness_timeout
+
+    libvirt_provider = get_provider("libvirt")
+    if libvirt_provider is None:
         return {
             "is_ready": False,
-            "message": "No provider available",
+            "message": "Libvirt provider not available",
             "progress_percent": None,
+            "provider": "libvirt",
         }
 
-    container_name = provider.get_container_name(lab_id, node_name)
-
-    # Get the node kind to determine appropriate probe
-    try:
-        import docker
-        client = docker.from_env()
-        container = client.containers.get(container_name)
-        kind = container.labels.get("archetype.node_kind", "")
-    except Exception as e:
+    if kind is None:
         return {
             "is_ready": False,
-            "message": f"Container not found: {str(e)}",
-            "progress_percent": 0,
+            "message": "Device kind required for VM readiness check",
+            "progress_percent": None,
+            "provider": "libvirt",
         }
 
-    # Get and run the appropriate probe
-    probe = get_probe_for_vendor(kind)
-    result = await probe.check(container_name)
-
-    # If ready, run post-boot commands (idempotent - only runs once per container)
-    if result.is_ready:
-        await run_post_boot_commands(container_name, kind)
+    result = await libvirt_provider.check_readiness(lab_id, node_name, kind)
 
     return {
         "is_ready": result.is_ready,
         "message": result.message,
         "progress_percent": result.progress_percent,
         "timeout": get_readiness_timeout(kind),
+        "provider": "libvirt",
     }
 
 
@@ -4450,30 +4515,72 @@ async def _get_container_boot_logs(container_name: str, tail_lines: int = 50) ->
 
 
 @app.websocket("/console/{lab_id}/{node_name}")
-async def console_websocket(websocket: WebSocket, lab_id: str, node_name: str):
-    """WebSocket endpoint for console access to a node."""
+async def console_websocket(
+    websocket: WebSocket,
+    lab_id: str,
+    node_name: str,
+    provider_type: str | None = None,
+):
+    """WebSocket endpoint for console access to a node.
+
+    Args:
+        lab_id: Lab identifier
+        node_name: Node name within the lab
+        provider_type: Optional provider type ("docker" or "libvirt").
+                       If not specified, tries Docker first, then libvirt.
+    """
     await websocket.accept()
 
-    # Get container name from provider
-    provider = get_provider("docker")
-    if provider is None:
-        await websocket.send_text("\r\nError: No provider available\r\n")
-        await websocket.close(code=1011)
+    # If libvirt explicitly requested, use virsh console
+    if provider_type == "libvirt":
+        await _console_websocket_libvirt(websocket, lab_id, node_name)
         return
 
-    container_name = provider.get_container_name(lab_id, node_name)
+    # Try Docker first
+    docker_provider = get_provider("docker")
+    if docker_provider is not None:
+        container_name = docker_provider.get_container_name(lab_id, node_name)
 
-    # Get console configuration based on node kind
-    method, shell_cmd, username, password = await _get_console_config(container_name)
+        # Check if Docker container exists
+        container_exists = await _check_container_exists(container_name)
+        if container_exists:
+            # Get console configuration based on node kind
+            method, shell_cmd, username, password = await _get_console_config(container_name)
 
-    if method == "ssh":
-        # SSH-based console for vrnetlab/VM containers
-        await _console_websocket_ssh(
-            websocket, container_name, node_name, username, password
-        )
-    else:
-        # Docker exec-based console for native containers
-        await _console_websocket_docker(websocket, container_name, node_name, shell_cmd)
+            if method == "ssh":
+                # SSH-based console for vrnetlab/VM containers
+                await _console_websocket_ssh(
+                    websocket, container_name, node_name, username, password
+                )
+            else:
+                # Docker exec-based console for native containers
+                await _console_websocket_docker(websocket, container_name, node_name, shell_cmd)
+            return
+
+    # Docker container not found, try libvirt if no specific provider requested
+    if provider_type is None:
+        libvirt_provider = get_provider("libvirt")
+        if libvirt_provider is not None:
+            await _console_websocket_libvirt(websocket, lab_id, node_name)
+            return
+
+    # No console available
+    await websocket.send_text("\r\nError: Node not found (neither Docker nor libvirt)\r\n")
+    await websocket.close(code=1011)
+
+
+async def _check_container_exists(container_name: str) -> bool:
+    """Check if a Docker container exists."""
+    def _sync_check() -> bool:
+        try:
+            import docker
+            client = docker.from_env()
+            client.containers.get(container_name)
+            return True
+        except Exception:
+            return False
+
+    return await asyncio.to_thread(_sync_check)
 
 
 async def _console_websocket_ssh(
@@ -4733,6 +4840,188 @@ async def _console_websocket_docker(
                 pass
     finally:
         console.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+async def _console_websocket_libvirt(
+    websocket: WebSocket,
+    lab_id: str,
+    node_name: str,
+):
+    """Handle console via virsh console (for libvirt VMs)."""
+    import pty
+    import os
+    import select
+    import termios
+    import struct
+    import fcntl
+
+    libvirt_provider = get_provider("libvirt")
+    if libvirt_provider is None:
+        await websocket.send_text("\r\nError: Libvirt provider not available\r\n")
+        await websocket.close(code=1011)
+        return
+
+    # Get the virsh console command
+    console_cmd = await libvirt_provider.get_console_command(
+        lab_id, node_name, Path(settings.workspace_path) / lab_id
+    )
+
+    if not console_cmd:
+        await websocket.send_text(f"\r\nError: VM {node_name} not found or not running\r\n")
+        await websocket.close(code=1011)
+        return
+
+    await websocket.send_text(f"\r\n\x1b[90m--- Connecting to VM console ---\x1b[0m\r\n")
+    await websocket.send_text(f"\x1b[90mPress Ctrl+] to disconnect\x1b[0m\r\n\r\n")
+
+    # Create pseudo-terminal for virsh console
+    master_fd, slave_fd = pty.openpty()
+
+    # Set non-blocking on master
+    flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+    fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+    process = None
+    try:
+        # Start virsh console process
+        process = await asyncio.create_subprocess_exec(
+            *console_cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+        )
+
+        # Close slave_fd in parent process
+        os.close(slave_fd)
+        slave_fd = None
+
+        input_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+        async def read_websocket():
+            """Read from WebSocket and queue input."""
+            try:
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        await input_queue.put(None)
+                        break
+                    elif message["type"] == "websocket.receive":
+                        if "text" in message:
+                            text = message["text"]
+                            # Check for control messages (JSON)
+                            if text.startswith("{"):
+                                try:
+                                    ctrl = json.loads(text)
+                                    if ctrl.get("type") == "resize":
+                                        rows = ctrl.get("rows", 24)
+                                        cols = ctrl.get("cols", 80)
+                                        # Resize PTY
+                                        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+                                        continue
+                                except json.JSONDecodeError:
+                                    pass
+                            await input_queue.put(text.encode())
+                        elif "bytes" in message:
+                            await input_queue.put(message["bytes"])
+            except WebSocketDisconnect:
+                await input_queue.put(None)
+            except Exception:
+                await input_queue.put(None)
+
+        async def read_pty():
+            """Read from PTY and send to WebSocket."""
+            loop = asyncio.get_event_loop()
+            data_available = asyncio.Event()
+
+            def on_readable():
+                data_available.set()
+
+            try:
+                loop.add_reader(master_fd, on_readable)
+
+                while process.returncode is None:
+                    try:
+                        await asyncio.wait_for(data_available.wait(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    data_available.clear()
+
+                    try:
+                        data = os.read(master_fd, 4096)
+                        if not data:
+                            break
+                        await websocket.send_bytes(data)
+                    except (BlockingIOError, OSError):
+                        continue
+
+            except Exception:
+                pass
+            finally:
+                try:
+                    loop.remove_reader(master_fd)
+                except Exception:
+                    pass
+
+        async def write_pty():
+            """Read from input queue and write to PTY."""
+            try:
+                while process.returncode is None:
+                    try:
+                        data = await asyncio.wait_for(input_queue.get(), timeout=1.0)
+                        if data is None:
+                            break
+                        if data:
+                            os.write(master_fd, data)
+                    except asyncio.TimeoutError:
+                        continue
+            except Exception:
+                pass
+
+        # Run all tasks concurrently
+        ws_task = asyncio.create_task(read_websocket())
+        read_task = asyncio.create_task(read_pty())
+        write_task = asyncio.create_task(write_pty())
+
+        try:
+            done, pending = await asyncio.wait(
+                [ws_task, read_task, write_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        finally:
+            pass
+
+    finally:
+        # Cleanup
+        if process and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                process.kill()
+
+        try:
+            os.close(master_fd)
+        except Exception:
+            pass
+
+        if slave_fd is not None:
+            try:
+                os.close(slave_fd)
+            except Exception:
+                pass
+
         try:
             await websocket.close()
         except Exception:
