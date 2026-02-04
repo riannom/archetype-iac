@@ -29,6 +29,14 @@ class ExtractionResult:
     error: str = ""
 
 
+@dataclass
+class CommandResult:
+    """Result of running commands on a VM."""
+    success: bool
+    commands_run: int = 0
+    error: str = ""
+
+
 class SerialConsoleExtractor:
     """Extract configuration from VM serial console using pexpect."""
 
@@ -276,6 +284,108 @@ class SerialConsoleExtractor:
                 logger.debug(f"Cleanup error (non-fatal): {e}")
             self.child = None
 
+    def run_commands(
+        self,
+        commands: list[str],
+        username: str = "",
+        password: str = "",
+        enable_password: str = "",
+        prompt_pattern: str = r"[>#]\s*$",
+    ) -> CommandResult:
+        """Run a list of commands on the VM via serial console.
+
+        This is used for post-boot commands like disabling paging or
+        DNS lookups that need to be executed after the VM is ready.
+
+        Args:
+            commands: List of commands to execute
+            username: Login username (empty = skip login)
+            password: Login password
+            enable_password: Enable mode password (empty = skip enable)
+            prompt_pattern: Regex pattern to detect CLI prompt
+
+        Returns:
+            CommandResult with success status and commands run count
+        """
+        if not commands:
+            return CommandResult(success=True, commands_run=0)
+
+        try:
+            # Start virsh console
+            cmd = f"virsh -c {self.libvirt_uri} console --force {self.domain_name}"
+            logger.debug(f"Starting console for post-boot commands: {cmd}")
+            self.child = pexpect.spawn(cmd, timeout=self.timeout, encoding='utf-8')
+
+            # Wait for initial connection
+            try:
+                self.child.expect(r"Connected to domain", timeout=10)
+                logger.debug("Connected to domain console")
+            except pexpect.TIMEOUT:
+                return CommandResult(
+                    success=False,
+                    error="Timeout waiting for console connection"
+                )
+
+            # Send Enter to get a prompt
+            time.sleep(0.5)
+            self.child.sendline("")
+
+            # Handle login if credentials provided
+            if username:
+                if not self._handle_login(username, password, prompt_pattern):
+                    return CommandResult(
+                        success=False,
+                        error="Failed to login"
+                    )
+            else:
+                # Just wait for prompt
+                if not self._wait_for_prompt(prompt_pattern):
+                    return CommandResult(
+                        success=False,
+                        error="Failed to get CLI prompt"
+                    )
+
+            # Enter enable mode if password provided
+            if enable_password:
+                if not self._enter_enable_mode(enable_password, prompt_pattern):
+                    return CommandResult(
+                        success=False,
+                        error="Failed to enter enable mode"
+                    )
+
+            # Execute each command
+            commands_run = 0
+            for command in commands:
+                logger.info(f"Running post-boot command on {self.domain_name}: {command}")
+                self.child.sendline(command)
+                # Wait for prompt after command
+                if not self._wait_for_prompt(prompt_pattern):
+                    logger.warning(f"Timeout after command: {command}")
+                    # Continue with other commands, don't fail completely
+                else:
+                    commands_run += 1
+
+            return CommandResult(success=True, commands_run=commands_run)
+
+        except pexpect.TIMEOUT:
+            return CommandResult(
+                success=False,
+                error="Timeout waiting for console response"
+            )
+        except pexpect.EOF:
+            return CommandResult(
+                success=False,
+                error="Console connection closed unexpectedly"
+            )
+        except Exception as e:
+            logger.exception(f"Post-boot commands error: {e}")
+            return CommandResult(
+                success=False,
+                error=str(e)
+            )
+        finally:
+            self._cleanup()
+
 
 def extract_vm_config(
     domain_name: str,
@@ -331,3 +441,87 @@ def extract_vm_config(
         success=False,
         error=f"Unsupported extraction method: {settings.method}"
     )
+
+
+# Track which VMs have had post-boot commands executed (idempotency)
+_vm_post_boot_completed: set[str] = set()
+
+
+def run_vm_post_boot_commands(
+    domain_name: str,
+    kind: str,
+    libvirt_uri: str = "qemu:///system",
+) -> CommandResult:
+    """Run post-boot commands on a VM via serial console.
+
+    This function is idempotent - it tracks which VMs have already had
+    their post-boot commands executed and skips them on subsequent calls.
+
+    Args:
+        domain_name: Libvirt domain name
+        kind: Device kind (e.g., "cisco_iosv")
+        libvirt_uri: Libvirt connection URI
+
+    Returns:
+        CommandResult with success status
+    """
+    # Check if already completed
+    if domain_name in _vm_post_boot_completed:
+        logger.debug(f"Post-boot commands already run for {domain_name}")
+        return CommandResult(success=True, commands_run=0)
+
+    if not PEXPECT_AVAILABLE:
+        return CommandResult(
+            success=False,
+            error="pexpect package is not installed"
+        )
+
+    from agent.vendors import get_config_extraction_settings, get_vendor_config
+
+    config = get_vendor_config(kind)
+    if config is None or not config.post_boot_commands:
+        # No commands to run, mark as complete
+        _vm_post_boot_completed.add(domain_name)
+        return CommandResult(success=True, commands_run=0)
+
+    # Get extraction settings for console interaction parameters
+    extraction_settings = get_config_extraction_settings(kind)
+
+    extractor = SerialConsoleExtractor(
+        domain_name=domain_name,
+        libvirt_uri=libvirt_uri,
+        timeout=30,  # Shorter timeout for simple commands
+    )
+
+    result = extractor.run_commands(
+        commands=config.post_boot_commands,
+        username=extraction_settings.user,
+        password=extraction_settings.password,
+        enable_password=extraction_settings.enable_password,
+        prompt_pattern=extraction_settings.prompt_pattern,
+    )
+
+    if result.success:
+        _vm_post_boot_completed.add(domain_name)
+        logger.info(
+            f"Post-boot commands completed for {domain_name}: "
+            f"{result.commands_run}/{len(config.post_boot_commands)} commands"
+        )
+    else:
+        logger.warning(f"Post-boot commands failed for {domain_name}: {result.error}")
+
+    return result
+
+
+def clear_vm_post_boot_cache(domain_name: str | None = None) -> None:
+    """Clear the post-boot command completion cache.
+
+    Used when a VM is restarted and needs post-boot commands re-run.
+
+    Args:
+        domain_name: Specific domain to clear, or None to clear all
+    """
+    if domain_name:
+        _vm_post_boot_completed.discard(domain_name)
+    else:
+        _vm_post_boot_completed.clear()

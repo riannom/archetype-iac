@@ -55,6 +55,7 @@ from agent.schemas import DeployLink, DeployNode, DeployTopology
 from agent.vendors import (
     VendorConfig,
     get_config_by_device,
+    get_config_extraction_settings,
     get_container_config,
     get_console_shell,
     is_ceos_kind,
@@ -2211,12 +2212,15 @@ username admin privilege 15 role network-admin nopassword
         """Get the Docker container name for a node."""
         return self._container_name(lab_id, node_name)
 
-    async def _extract_all_ceos_configs(
+    async def _extract_all_container_configs(
         self,
         lab_id: str,
         workspace: Path,
     ) -> list[tuple[str, str]]:
-        """Extract running-config from all cEOS containers in a lab.
+        """Extract running configs from all containers in a lab that support it.
+
+        Checks each container's vendor config for extraction method and command.
+        Supports any container with config_extract_method="docker".
 
         Returns list of (node_name, config_content) tuples.
         Also saves configs to workspace/configs/{node}/startup-config.
@@ -2238,8 +2242,14 @@ username admin privilege 15 role network-admin nopassword
                 node_name = labels.get(LABEL_NODE_NAME)
                 kind = labels.get(LABEL_NODE_KIND, "")
 
-                # Only extract from cEOS/EOS containers
-                if not is_ceos_kind(kind) or not node_name:
+                if not node_name or not kind:
+                    continue
+
+                # Look up vendor config extraction settings
+                extraction_settings = get_config_extraction_settings(kind)
+
+                # Skip containers that don't support docker exec extraction
+                if extraction_settings.method != "docker":
                     continue
 
                 log_name = _log_name_from_labels(labels)
@@ -2249,18 +2259,28 @@ username admin privilege 15 role network-admin nopassword
                     continue
 
                 try:
-                    # Execute 'show running-config' via FastCli with privilege level 15
+                    # Parse the extraction command
+                    # Handle both simple commands and shell-like commands with arguments
+                    cmd = extraction_settings.command
+                    if not cmd:
+                        logger.warning(f"No extraction command for {kind}, skipping {log_name}")
+                        continue
+
+                    # Use shell execution for complex commands with quotes/pipes
+                    exec_cmd = ["sh", "-c", cmd]
+
                     result = await asyncio.to_thread(
                         container.exec_run,
-                        ["FastCli", "-p", "15", "-c", "show running-config"],
+                        exec_cmd,
                         demux=True,
                     )
                     stdout, stderr = result.output
 
                     if result.exit_code != 0:
+                        stderr_str = stderr.decode("utf-8") if stderr else ""
                         logger.warning(
                             f"Failed to extract config from {log_name}: "
-                            f"exit={result.exit_code}, stderr={stderr}"
+                            f"exit={result.exit_code}, stderr={stderr_str}"
                         )
                         continue
 
@@ -2276,7 +2296,7 @@ username admin privilege 15 role network-admin nopassword
                     config_path.write_text(config_content)
 
                     extracted.append((node_name, config_content))
-                    logger.info(f"Extracted config from {log_name}")
+                    logger.info(f"Extracted config from {log_name} ({kind})")
 
                 except Exception as e:
                     logger.error(f"Error extracting config from {log_name}: {e}")
@@ -2285,6 +2305,18 @@ username admin privilege 15 role network-admin nopassword
             logger.error(f"Error during config extraction for lab {lab_id}: {e}")
 
         return extracted
+
+    # Backwards compatibility alias
+    async def _extract_all_ceos_configs(
+        self,
+        lab_id: str,
+        workspace: Path,
+    ) -> list[tuple[str, str]]:
+        """Deprecated: Use _extract_all_container_configs instead.
+
+        Kept for backwards compatibility.
+        """
+        return await self._extract_all_container_configs(lab_id, workspace)
 
     async def discover_labs(self) -> dict[str, list[NodeInfo]]:
         """Discover all running labs managed by this provider.
