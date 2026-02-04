@@ -364,6 +364,8 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     total_disk_total = 0.0
     total_containers_running = 0
     total_containers = 0
+    total_vms_running = 0
+    total_vms = 0
     online_count = 0
     labs_with_containers: set[str] = set()  # Track labs with running containers
     per_host: list[dict] = []  # Per-host breakdown for multi-host environments
@@ -391,6 +393,8 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
             total_disk_total += host_disk_total
             total_containers_running += host_containers
             total_containers += usage.get("containers_total", 0)
+            total_vms_running += usage.get("vms_running", 0)
+            total_vms += usage.get("vms_total", 0)
 
             # Track per-host data
             per_host.append({
@@ -404,6 +408,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
                 "storage_used_gb": host_disk_used,
                 "storage_total_gb": host_disk_total,
                 "containers_running": host_containers,
+                "vms_running": usage.get("vms_running", 0),
                 "started_at": host.started_at.isoformat() if host.started_at else None,
             })
 
@@ -434,6 +439,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     return {
         "agents": {"online": online_agents, "total": total_agents},
         "containers": {"running": total_containers_running, "total": total_containers},
+        "vms": {"running": total_vms_running, "total": total_vms},
         "cpu_percent": round(avg_cpu, 1),
         "memory_percent": round(avg_memory, 1),
         "memory": {
@@ -455,7 +461,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
 
 @app.get("/dashboard/metrics/containers")
 def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
-    """Get detailed container breakdown by lab."""
+    """Get detailed container and VM breakdown by lab."""
     import json
     from app.utils.lab import find_lab_with_name
 
@@ -466,9 +472,11 @@ def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
     labs_by_prefix = {lab.id[:20]: (lab.id, lab.name) for lab in all_labs}  # short prefix for matching
 
     all_containers = []
+    all_vms = []
     for host in hosts:
         try:
             usage = json.loads(host.resource_usage) if host.resource_usage else {}
+            # Collect containers
             for container in usage.get("container_details", []):
                 container["agent_name"] = host.name
                 lab_id, lab_name = find_lab_with_name(
@@ -477,10 +485,19 @@ def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
                 container["lab_id"] = lab_id
                 container["lab_name"] = lab_name
                 all_containers.append(container)
+            # Collect VMs
+            for vm in usage.get("vm_details", []):
+                vm["agent_name"] = host.name
+                lab_id, lab_name = find_lab_with_name(
+                    vm.get("lab_prefix", ""), labs_by_id, labs_by_prefix
+                )
+                vm["lab_id"] = lab_id
+                vm["lab_name"] = lab_name
+                all_vms.append(vm)
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # Group by lab
+    # Group containers by lab
     by_lab = {}
     system_containers = []
     for c in all_containers:
@@ -489,17 +506,27 @@ def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
         elif c.get("lab_id"):
             lab_id = c["lab_id"]
             if lab_id not in by_lab:
-                by_lab[lab_id] = {"name": c["lab_name"], "containers": []}
+                by_lab[lab_id] = {"name": c["lab_name"], "containers": [], "vms": []}
             by_lab[lab_id]["containers"].append(c)
         else:
             # Orphan container (lab deleted but container still running)
             system_containers.append(c)
+
+    # Add VMs to their labs
+    for vm in all_vms:
+        if vm.get("lab_id"):
+            lab_id = vm["lab_id"]
+            if lab_id not in by_lab:
+                by_lab[lab_id] = {"name": vm["lab_name"], "containers": [], "vms": []}
+            by_lab[lab_id]["vms"].append(vm)
 
     return {
         "by_lab": by_lab,
         "system_containers": system_containers,
         "total_running": sum(1 for c in all_containers if c.get("status") == "running"),
         "total_stopped": sum(1 for c in all_containers if c.get("status") != "running"),
+        "vms_running": sum(1 for vm in all_vms if vm.get("status") == "running"),
+        "vms_stopped": sum(1 for vm in all_vms if vm.get("status") != "running"),
     }
 
 

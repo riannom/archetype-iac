@@ -110,6 +110,12 @@ if PROMETHEUS_AVAILABLE:
         ["host_id", "host_name"],
     )
 
+    agent_vms_running = Gauge(
+        "archetype_agent_vms_running",
+        "Number of running VMs on agent",
+        ["host_id", "host_name"],
+    )
+
     # --- Enforcement Metrics ---
 
     enforcement_actions = Counter(
@@ -179,6 +185,7 @@ else:
     agent_cpu_percent = DummyMetric()
     agent_memory_percent = DummyMetric()
     agent_containers_running = DummyMetric()
+    agent_vms_running = DummyMetric()
     enforcement_actions = DummyMetric()
     enforcement_failures = DummyMetric()
     enforcement_pending = DummyMetric()
@@ -248,6 +255,7 @@ def update_agent_metrics(session: "Session") -> None:
         agent_cpu_percent._metrics.clear()
         agent_memory_percent._metrics.clear()
         agent_containers_running._metrics.clear()
+        agent_vms_running._metrics.clear()
         nodes_by_host._metrics.clear()
 
         for host in hosts:
@@ -276,6 +284,11 @@ def update_agent_metrics(session: "Session") -> None:
                 agent_containers_running.labels(
                     host_id=host.id, host_name=host_name
                 ).set(usage["containers_running"])
+
+            if "vms_running" in usage:
+                agent_vms_running.labels(
+                    host_id=host.id, host_name=host_name
+                ).set(usage["vms_running"])
 
         # Count nodes per host
         placements = session.query(models.NodePlacement).all()

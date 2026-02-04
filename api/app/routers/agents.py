@@ -491,6 +491,8 @@ def list_agents_detailed(
                 "storage_total_gb": resource_usage.get("disk_total_gb", 0),
                 "containers_running": resource_usage.get("containers_running", 0),
                 "containers_total": resource_usage.get("containers_total", 0),
+                "vms_running": resource_usage.get("vms_running", 0),
+                "vms_total": resource_usage.get("vms_total", 0),
             },
             "labs": host_labs,
             "lab_count": len(host_labs),
