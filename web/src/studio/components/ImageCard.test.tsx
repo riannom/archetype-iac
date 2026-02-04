@@ -88,14 +88,18 @@ describe("ImageCard", () => {
       expect(screen.getByText("docker")).toBeInTheDocument();
     });
 
-    it("displays the image size", () => {
+    it("displays the image size in tooltip", () => {
       render(<ImageCard image={defaultImage} />);
-      expect(screen.getByText("2.0 GB")).toBeInTheDocument();
+      // Size is now shown in tooltip, not directly
+      const card = screen.getByText("ceos-4.28.0F.tar").closest("[title]");
+      expect(card?.getAttribute("title")).toContain("Size: 2.0 GB");
     });
 
-    it("displays the vendor", () => {
+    it("displays the vendor in tooltip", () => {
       render(<ImageCard image={defaultImage} />);
-      expect(screen.getByText("Arista")).toBeInTheDocument();
+      // Vendor is now shown in tooltip, not directly
+      const card = screen.getByText("ceos-4.28.0F.tar").closest("[title]");
+      expect(card?.getAttribute("title")).toContain("Vendor: Arista");
     });
 
     it("displays the version", () => {
@@ -108,9 +112,11 @@ describe("ImageCard", () => {
       expect(screen.getByText("Jan 15, 2024")).toBeInTheDocument();
     });
 
-    it("displays notes when provided", () => {
+    it("displays notes in tooltip when provided", () => {
       render(<ImageCard image={defaultImage} />);
-      expect(screen.getByText("Production image for cEOS")).toBeInTheDocument();
+      // Notes are now shown in tooltip, not directly
+      const card = screen.getByText("ceos-4.28.0F.tar").closest("[title]");
+      expect(card?.getAttribute("title")).toContain("Notes: Production image for cEOS");
     });
 
     it("displays DEFAULT badge when is_default is true", () => {
@@ -124,10 +130,10 @@ describe("ImageCard", () => {
       expect(screen.queryByText("DEFAULT")).not.toBeInTheDocument();
     });
 
-    it("displays device assignment when device_id is set", () => {
+    it("displays device_id when set", () => {
       const assignedImage = { ...defaultImage, device_id: "ceos" };
       render(<ImageCard image={assignedImage} />);
-      expect(screen.getByText("Assigned to")).toBeInTheDocument();
+      // Device ID is shown inline in the metadata row
       expect(screen.getByText("ceos")).toBeInTheDocument();
     });
   });
@@ -231,7 +237,7 @@ describe("ImageCard", () => {
         ]),
       };
       render(<ImageCard image={imageWithStatus} showSyncStatus />);
-      expect(screen.getByText("All synced")).toBeInTheDocument();
+      expect(screen.getByTitle("Agent sync: All synced")).toBeInTheDocument();
     });
 
     it("shows syncing status when any host is syncing", () => {
@@ -243,7 +249,7 @@ describe("ImageCard", () => {
         ]),
       };
       render(<ImageCard image={imageWithStatus} showSyncStatus />);
-      expect(screen.getByText("Syncing")).toBeInTheDocument();
+      expect(screen.getByTitle("Agent sync: Syncing")).toBeInTheDocument();
     });
 
     it("shows failed count when any host has failed", () => {
@@ -255,7 +261,7 @@ describe("ImageCard", () => {
         ]),
       };
       render(<ImageCard image={imageWithStatus} showSyncStatus />);
-      expect(screen.getByText("1 failed")).toBeInTheDocument();
+      expect(screen.getByTitle("Agent sync: 1 failed")).toBeInTheDocument();
     });
 
     it("shows partial sync count", () => {
@@ -268,7 +274,7 @@ describe("ImageCard", () => {
         ]),
       };
       render(<ImageCard image={imageWithStatus} showSyncStatus />);
-      expect(screen.getByText("1/3")).toBeInTheDocument();
+      expect(screen.getByTitle("Agent sync: 1/3")).toBeInTheDocument();
     });
 
     it("shows unknown status when no synced, syncing, or failed hosts", () => {
@@ -279,7 +285,7 @@ describe("ImageCard", () => {
         ]),
       };
       render(<ImageCard image={imageWithStatus} showSyncStatus />);
-      expect(screen.getByText("Unknown")).toBeInTheDocument();
+      expect(screen.getByTitle("Agent sync: Unknown")).toBeInTheDocument();
     });
   });
 
@@ -443,22 +449,24 @@ describe("ImageCard", () => {
     it("handles missing size_bytes", () => {
       const imageWithoutSize = { ...defaultImage, size_bytes: null };
       render(<ImageCard image={imageWithoutSize} />);
-      // Should not show size separator or size value
-      expect(screen.queryByText("GB")).not.toBeInTheDocument();
+      // Tooltip should not contain size info
+      const card = screen.getByText("ceos-4.28.0F.tar").closest("[title]");
+      expect(card?.getAttribute("title")).not.toContain("Size:");
     });
 
     it("handles missing vendor", () => {
       const imageWithoutVendor = { ...defaultImage, vendor: null };
       render(<ImageCard image={imageWithoutVendor} />);
-      expect(screen.queryByText("Arista")).not.toBeInTheDocument();
+      // Tooltip should not contain vendor info
+      const card = screen.getByText("ceos-4.28.0F.tar").closest("[title]");
+      expect(card?.getAttribute("title")).not.toContain("Vendor:");
     });
 
     it("handles missing version", () => {
       const imageWithoutVersion = { ...defaultImage, version: null };
       render(<ImageCard image={imageWithoutVersion} />);
-      // Should still render without version tag icon
-      const tagIcon = document.querySelector(".fa-tag");
-      expect(tagIcon).not.toBeInTheDocument();
+      // Version should not appear inline
+      expect(screen.queryByText("4.28.0F")).not.toBeInTheDocument();
     });
 
     it("handles missing uploaded_at", () => {
@@ -470,7 +478,9 @@ describe("ImageCard", () => {
     it("handles missing notes", () => {
       const imageWithoutNotes = { ...defaultImage, notes: undefined };
       render(<ImageCard image={imageWithoutNotes} />);
-      expect(screen.queryByText("Production image for cEOS")).not.toBeInTheDocument();
+      // Tooltip should not contain notes
+      const card = screen.getByText("ceos-4.28.0F.tar").closest("[title]");
+      expect(card?.getAttribute("title")).not.toContain("Notes:");
     });
   });
 
