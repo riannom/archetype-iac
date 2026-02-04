@@ -818,7 +818,8 @@ class LibvirtProvider(Provider):
                 return None
 
             # Return virsh console command
-            return ["virsh", "-c", self._uri, "console", domain_name]
+            # --force takes over console even if another session is connected
+            return ["virsh", "-c", self._uri, "console", "--force", domain_name]
 
         except libvirt.libvirtError:
             return None

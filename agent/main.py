@@ -4887,17 +4887,35 @@ async def _console_websocket_libvirt(
 
     process = None
     try:
-        # Start virsh console process
+        # Start virsh console process with a controlling TTY
         process = await asyncio.create_subprocess_exec(
             *console_cmd,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
+            start_new_session=True,  # Create new session with PTY as controlling terminal
         )
 
         # Close slave_fd in parent process
         os.close(slave_fd)
         slave_fd = None
+
+        # Brief delay to let virsh connect
+        await asyncio.sleep(0.5)
+
+        # Check if process exited immediately (indicates error)
+        if process.returncode is not None:
+            # Try to read any error output
+            try:
+                error_data = os.read(master_fd, 4096)
+                if error_data:
+                    await websocket.send_text(f"\r\n{error_data.decode('utf-8', errors='replace')}\r\n")
+            except Exception:
+                pass
+            await websocket.send_text(f"\r\nError: virsh console exited with code {process.returncode}\r\n")
+            await websocket.send_text(f"Command was: {' '.join(console_cmd)}\r\n")
+            await websocket.close(code=1011)
+            return
 
         input_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
@@ -4999,7 +5017,15 @@ async def _console_websocket_libvirt(
                     await task
                 except asyncio.CancelledError:
                     pass
-        finally:
+
+            # Send disconnect message with reason
+            if process.returncode is not None:
+                await websocket.send_text(
+                    f"\r\n\x1b[90m[virsh console exited with code {process.returncode}]\x1b[0m\r\n"
+                )
+            else:
+                await websocket.send_text("\r\n\x1b[90m[console disconnected]\x1b[0m\r\n")
+        except Exception:
             pass
 
     finally:
