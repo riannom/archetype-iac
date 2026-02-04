@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import models
-from app.utils.lab import get_lab_or_404, get_lab_provider, update_lab_state
+from app.utils.lab import get_lab_or_404, get_lab_provider, update_lab_state, update_lab_provider_from_nodes
 
 
 class TestGetLabProvider:
@@ -542,3 +542,140 @@ class TestUpdateLabStateWithMultipleLabs:
         for lab, expected_state in zip(labs, states):
             test_db.refresh(lab)
             assert lab.state == expected_state
+
+
+class TestUpdateLabProviderFromNodes:
+    """Tests for update_lab_provider_from_nodes function."""
+
+    def test_sets_docker_when_no_nodes(self, test_db: Session, sample_lab: models.Lab):
+        """Sets provider to docker when lab has no nodes."""
+        sample_lab.provider = None
+        test_db.commit()
+
+        result = update_lab_provider_from_nodes(test_db, sample_lab)
+
+        test_db.refresh(sample_lab)
+        assert result == "docker"
+        assert sample_lab.provider == "docker"
+
+    def test_sets_docker_for_docker_image_nodes(
+        self, test_db: Session, test_user: models.User, sample_lab: models.Lab
+    ):
+        """Sets provider to docker when all nodes use Docker images."""
+        # Add a node with a Docker image (ceos)
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="node-1",
+            device="ceos",
+            name="R1",
+            container_name="r1",
+            image="ceos:4.28.0F",  # Docker image reference
+        )
+        test_db.add(node)
+        sample_lab.provider = None
+        test_db.commit()
+
+        result = update_lab_provider_from_nodes(test_db, sample_lab)
+
+        test_db.refresh(sample_lab)
+        assert result == "docker"
+        assert sample_lab.provider == "docker"
+
+    def test_sets_libvirt_for_qcow2_image_nodes(
+        self, test_db: Session, test_user: models.User, sample_lab: models.Lab
+    ):
+        """Sets provider to libvirt when node uses qcow2 image."""
+        # Add a node with a qcow2 image (IOSv)
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="node-1",
+            device="cisco_iosv",
+            name="R1",
+            container_name="r1",
+            image="/var/lib/archetype/images/iosv-15.9.qcow2",
+        )
+        test_db.add(node)
+        sample_lab.provider = "docker"  # Start with docker
+        test_db.commit()
+
+        result = update_lab_provider_from_nodes(test_db, sample_lab)
+
+        test_db.refresh(sample_lab)
+        assert result == "libvirt"
+        assert sample_lab.provider == "libvirt"
+
+    def test_sets_libvirt_for_mixed_nodes(
+        self, test_db: Session, test_user: models.User, sample_lab: models.Lab
+    ):
+        """Sets provider to libvirt when any node requires VM."""
+        # Add a Docker node
+        docker_node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="node-1",
+            device="ceos",
+            name="R1",
+            container_name="r1",
+            image="ceos:4.28.0F",
+        )
+        # Add a VM node
+        vm_node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="node-2",
+            device="cisco_iosv",
+            name="R2",
+            container_name="r2",
+            image="/var/lib/archetype/images/iosv.qcow2",
+        )
+        test_db.add(docker_node)
+        test_db.add(vm_node)
+        sample_lab.provider = "docker"
+        test_db.commit()
+
+        result = update_lab_provider_from_nodes(test_db, sample_lab)
+
+        test_db.refresh(sample_lab)
+        assert result == "libvirt"
+        assert sample_lab.provider == "libvirt"
+
+    def test_no_change_when_already_correct(
+        self, test_db: Session, test_user: models.User, sample_lab: models.Lab
+    ):
+        """Doesn't commit when provider is already correct."""
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="node-1",
+            device="ceos",
+            name="R1",
+            container_name="r1",
+            image="ceos:4.28.0F",
+        )
+        test_db.add(node)
+        sample_lab.provider = "docker"
+        test_db.commit()
+
+        result = update_lab_provider_from_nodes(test_db, sample_lab)
+
+        assert result == "docker"
+        assert sample_lab.provider == "docker"
+
+    def test_handles_img_extension(
+        self, test_db: Session, test_user: models.User, sample_lab: models.Lab
+    ):
+        """Recognizes .img files as libvirt images."""
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="node-1",
+            device="cisco_iosv",
+            name="R1",
+            container_name="r1",
+            image="/var/lib/archetype/images/iosv.img",
+        )
+        test_db.add(node)
+        sample_lab.provider = "docker"
+        test_db.commit()
+
+        result = update_lab_provider_from_nodes(test_db, sample_lab)
+
+        test_db.refresh(sample_lab)
+        assert result == "libvirt"
+        assert sample_lab.provider == "libvirt"

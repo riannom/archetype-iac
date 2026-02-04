@@ -111,6 +111,46 @@ def get_node_provider(node: models.Node, session) -> str:
     return get_image_provider(image)
 
 
+def update_lab_provider_from_nodes(session: Session, lab: models.Lab) -> str:
+    """Update lab provider based on the nodes it contains.
+
+    Examines all nodes in the lab and sets the provider to "libvirt" if any
+    node requires a VM (qcow2/img image), otherwise "docker".
+
+    This ensures labs automatically use the correct provider when VM-based
+    devices like IOSv are added.
+
+    Args:
+        session: Database session
+        lab: Lab model to update
+
+    Returns:
+        The determined provider ("docker" or "libvirt")
+    """
+    from app.image_store import get_image_provider
+    from app.services.topology import resolve_node_image, resolve_device_kind
+
+    # Get all nodes for this lab
+    nodes = session.query(models.Node).filter(models.Node.lab_id == lab.id).all()
+
+    # Check if any node requires libvirt
+    for node in nodes:
+        kind = resolve_device_kind(node.device)
+        image = resolve_node_image(node.device, kind, node.image, node.version)
+        if image and get_image_provider(image) == "libvirt":
+            # Found a VM node - lab needs libvirt
+            if lab.provider != "libvirt":
+                lab.provider = "libvirt"
+                session.commit()
+            return "libvirt"
+
+    # No VM nodes found - use docker
+    if lab.provider != "docker":
+        lab.provider = "docker"
+        session.commit()
+    return "docker"
+
+
 def get_lab_or_404(lab_id: str, database: Session, user: models.User) -> models.Lab:
     """Get a lab by ID, checking permissions.
 

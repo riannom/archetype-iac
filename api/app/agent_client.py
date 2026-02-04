@@ -1493,19 +1493,54 @@ async def container_action(
     agent: models.Host,
     container_name: str,
     action: str,  # "start" or "stop"
+    lab_id: str | None = None,
 ) -> dict:
-    """Execute start/stop action on a specific container.
+    """Execute start/stop action on a specific container or VM.
 
     Args:
-        agent: The agent where the container is running
-        container_name: Full container name (e.g., "archetype-labid-nodename")
+        agent: The agent where the container/VM is running
+        container_name: Full container name (e.g., "arch-labid-nodename")
         action: "start" or "stop"
+        lab_id: Optional lab ID. When provided, uses the reconcile endpoint
+                which supports both Docker containers and libvirt VMs.
 
     Returns:
         Dict with 'success' key and optional 'error' message
     """
-    url = f"{get_agent_url(agent)}/containers/{container_name}/{action}"
     logger.info(f"Container {action} for {container_name} via agent {agent.id}")
+
+    # If lab_id is provided, use the reconcile endpoint which handles both
+    # Docker containers and libvirt VMs
+    if lab_id:
+        desired_state = "running" if action == "start" else "stopped"
+        try:
+            result = await reconcile_nodes_on_agent(
+                agent,
+                lab_id,
+                nodes=[{"container_name": container_name, "desired_state": desired_state}],
+            )
+            # Extract result for this specific node
+            results = result.get("results", [])
+            if results:
+                node_result = results[0]
+                if node_result.get("success"):
+                    logger.info(f"Container {action} completed for {container_name}")
+                    return {"success": True, "message": f"Container {node_result.get('action', action)}"}
+                else:
+                    error_msg = node_result.get("error", f"{action} failed")
+                    logger.warning(f"Container {action} failed for {container_name}: {error_msg}")
+                    return {"success": False, "error": error_msg}
+            else:
+                return {"success": False, "error": "No result from reconcile"}
+        except AgentError as e:
+            logger.error(f"Container {action} failed for {container_name}: {e.message}")
+            return {"success": False, "error": e.message}
+        except Exception as e:
+            logger.error(f"Container {action} failed for {container_name}: {e}")
+            return {"success": False, "error": str(e)}
+
+    # Legacy path: use the Docker-only endpoint when lab_id is not provided
+    url = f"{get_agent_url(agent)}/containers/{container_name}/{action}"
 
     try:
         client = get_http_client()

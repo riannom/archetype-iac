@@ -26,7 +26,7 @@ from app.storage import (
 )
 from app.tasks.jobs import run_agent_job, run_multihost_destroy
 from app.topology import analyze_topology
-from app.utils.lab import get_lab_or_404, get_lab_provider
+from app.utils.lab import get_lab_or_404, get_lab_provider, update_lab_provider_from_nodes
 from app.utils.link import generate_link_name
 from app.topology import _normalize_interface_name
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map, teardown_link
@@ -394,6 +394,10 @@ async def update_topology_from_yaml(
     service = TopologyService(database)
     service.update_from_yaml(lab.id, payload.content)
 
+    # Update lab provider based on node image types
+    # This ensures VMs (IOSv, etc.) use libvirt and containers use docker
+    update_lab_provider_from_nodes(database, lab)
+
     # Sync NodeState/LinkState records from database
     graph = service.export_to_graph(lab.id)
     added_node_ids, removed_node_info = _upsert_node_states(database, lab.id, graph)
@@ -454,6 +458,10 @@ async def update_topology(
     except ValueError as e:
         # Invalid host assignment or other validation error
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Update lab provider based on node image types
+    # This ensures VMs (IOSv, etc.) use libvirt and containers use docker
+    update_lab_provider_from_nodes(database, lab)
 
     # Create/update NodeState records for all nodes in the topology
     added_node_ids, removed_node_info = _upsert_node_states(database, lab.id, payload)
