@@ -116,6 +116,10 @@ async def reconcile_image_hosts() -> ImageReconciliationResult:
         except Exception as e:
             logger.error(f"Error in image reconciliation: {e}")
             result.errors.append(str(e))
+            try:
+                session.rollback()
+            except Exception:
+                pass
 
     return result
 
@@ -201,12 +205,20 @@ async def verify_image_status_on_agents() -> ImageReconciliationResult:
                 except Exception as e:
                     logger.warning(f"Failed to verify images on agent {host.name}: {e}")
                     result.errors.append(f"Agent {host.name}: {e}")
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
 
             session.commit()
 
         except Exception as e:
             logger.error(f"Error verifying image status: {e}")
             result.errors.append(str(e))
+            try:
+                session.rollback()
+            except Exception:
+                pass
 
     return result
 
