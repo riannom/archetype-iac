@@ -401,7 +401,35 @@ const Canvas: React.FC<CanvasProps> = ({
             );
           })}
 
-          {links.map(link => {
+          {/* Build link index maps to avoid label overlap */}
+          {(() => {
+            // Count links per node and assign indices
+            const sourceLinkIndices = new Map<string, Map<string, number>>();
+            const targetLinkIndices = new Map<string, Map<string, number>>();
+            const sourceCounters = new Map<string, number>();
+            const targetCounters = new Map<string, number>();
+
+            links.forEach(link => {
+              // Track source side
+              if (!sourceLinkIndices.has(link.source)) {
+                sourceLinkIndices.set(link.source, new Map());
+                sourceCounters.set(link.source, 0);
+              }
+              const srcIdx = sourceCounters.get(link.source)!;
+              sourceLinkIndices.get(link.source)!.set(link.id, srcIdx);
+              sourceCounters.set(link.source, srcIdx + 1);
+
+              // Track target side
+              if (!targetLinkIndices.has(link.target)) {
+                targetLinkIndices.set(link.target, new Map());
+                targetCounters.set(link.target, 0);
+              }
+              const tgtIdx = targetCounters.get(link.target)!;
+              targetLinkIndices.get(link.target)!.set(link.id, tgtIdx);
+              targetCounters.set(link.target, tgtIdx + 1);
+            });
+
+            return links.map(link => {
             const source = nodeMap.get(link.source);
             const target = nodeMap.get(link.target);
             if (!source || !target) return null;
@@ -433,11 +461,23 @@ const Canvas: React.FC<CanvasProps> = ({
             const perpX = -unitY;
             const perpY = unitX;
             const labelOffset = 60;
-            const perpOffset = 10; // offset perpendicular to the line
-            const sourceLabelX = source.x + unitX * labelOffset + perpX * perpOffset;
-            const sourceLabelY = source.y + unitY * labelOffset + perpY * perpOffset;
-            const targetLabelX = target.x - unitX * labelOffset + perpX * perpOffset;
-            const targetLabelY = target.y - unitY * labelOffset + perpY * perpOffset;
+            // Dynamic perpendicular offset based on link index to avoid overlap
+            const srcLinkIdx = sourceLinkIndices.get(link.source)?.get(link.id) || 0;
+            const tgtLinkIdx = targetLinkIndices.get(link.target)?.get(link.id) || 0;
+            const srcLinkCount = sourceCounters.get(link.source) || 1;
+            const tgtLinkCount = targetCounters.get(link.target) || 1;
+            // Alternate offset direction and increase spacing when multiple links
+            const basePerpOffset = 10;
+            const srcPerpOffset = srcLinkCount > 1
+              ? basePerpOffset + (srcLinkIdx - (srcLinkCount - 1) / 2) * 14
+              : basePerpOffset;
+            const tgtPerpOffset = tgtLinkCount > 1
+              ? basePerpOffset + (tgtLinkIdx - (tgtLinkCount - 1) / 2) * 14
+              : basePerpOffset;
+            const sourceLabelX = source.x + unitX * labelOffset + perpX * srcPerpOffset;
+            const sourceLabelY = source.y + unitY * labelOffset + perpY * srcPerpOffset;
+            const targetLabelX = target.x - unitX * labelOffset + perpX * tgtPerpOffset;
+            const targetLabelY = target.y - unitY * labelOffset + perpY * tgtPerpOffset;
 
             // Label styling for better contrast
             const labelColor = effectiveMode === 'dark' ? '#E7E5E4' : '#44403C';
@@ -495,7 +535,8 @@ const Canvas: React.FC<CanvasProps> = ({
                 )}
               </g>
             );
-          })}
+          });
+          })()}
 
           {linkingNode && (
             <line
