@@ -1183,6 +1183,28 @@ async def run_node_reconcile(
                 session.commit()
                 return
 
+            # Early exit: Check if all nodes are already in their desired state
+            # If so, no agent is needed and we can complete successfully
+            nodes_needing_action = []
+            for ns in node_states:
+                if ns.desired_state == NodeDesiredState.RUNNING.value:
+                    if ns.actual_state not in (NodeActualState.RUNNING.value,):
+                        nodes_needing_action.append(ns)
+                elif ns.desired_state == NodeDesiredState.STOPPED.value:
+                    if ns.actual_state not in (
+                        NodeActualState.STOPPED.value,
+                        NodeActualState.UNDEPLOYED.value,
+                        NodeActualState.EXITED.value,
+                    ):
+                        nodes_needing_action.append(ns)
+            if not nodes_needing_action:
+                job.status = JobStatus.COMPLETED.value
+                job.completed_at = datetime.now(timezone.utc)
+                job.log_path = "All nodes already in desired state"
+                session.commit()
+                logger.info(f"Job {job_id} completed: all nodes already in desired state")
+                return
+
             # Track old agent placements before deploy (for orphan cleanup)
             old_placements = (
                 session.query(models.NodePlacement)
@@ -1396,14 +1418,33 @@ async def run_node_reconcile(
                     node_states = nodes_without_agent
                 else:
                     # We have nodes with assigned agents - mark unassigned nodes as error
+                    # UNLESS the node is already in its desired state (no action needed)
                     # Don't spawn a job that might loop indefinitely
-                    logger.warning(
-                        f"Cannot assign agent for {len(nodes_without_agent)} node(s), marking as error"
-                    )
+                    nodes_needing_action = []
                     for ns in nodes_without_agent:
-                        ns.actual_state = NodeActualState.ERROR.value
-                        ns.error_message = "No agent available for explicit host placement"
-                    session.commit()
+                        # Check if this node actually needs an action
+                        needs_action = False
+                        if ns.desired_state == NodeDesiredState.RUNNING.value:
+                            if ns.actual_state not in (NodeActualState.RUNNING.value,):
+                                needs_action = True
+                        elif ns.desired_state == NodeDesiredState.STOPPED.value:
+                            if ns.actual_state not in (
+                                NodeActualState.STOPPED.value,
+                                NodeActualState.UNDEPLOYED.value,
+                                NodeActualState.EXITED.value,
+                            ):
+                                needs_action = True
+                        if needs_action:
+                            nodes_needing_action.append(ns)
+
+                    if nodes_needing_action:
+                        logger.warning(
+                            f"Cannot assign agent for {len(nodes_needing_action)} node(s), marking as error"
+                        )
+                        for ns in nodes_needing_action:
+                            ns.actual_state = NodeActualState.ERROR.value
+                            ns.error_message = "No agent available for explicit host placement"
+                        session.commit()
 
             # Find the agent - either from explicit placement or for non-placed nodes
             if target_agent_id:
@@ -1577,7 +1618,7 @@ async def run_node_reconcile(
                             container_name = _get_container_name(lab_id, node_name)
                             try:
                                 result = await agent_client.container_action(
-                                    old_agent, container_name, "stop"
+                                    old_agent, container_name, "stop", lab_id=lab_id
                                 )
                                 if result.get("success"):
                                     log_parts.append(f"    {node_name}: stopped on {old_agent.name}")
@@ -1659,7 +1700,7 @@ async def run_node_reconcile(
                                 try:
                                     # Try to stop - if it succeeds, container existed
                                     result = await agent_client.container_action(
-                                        other_agent, container_name, "stop"
+                                        other_agent, container_name, "stop", lab_id=lab_id
                                     )
                                     if result.get("success"):
                                         containers_found.append(node_name)
@@ -1946,7 +1987,7 @@ async def run_node_reconcile(
                                 for ns in nodes_to_stop_after_deploy:
                                     container_name = _get_container_name(lab_id, ns.node_name)
                                     stop_result = await agent_client.container_action(
-                                        agent, container_name, "stop"
+                                        agent, container_name, "stop", lab_id=lab_id
                                     )
                                     if stop_result.get("success"):
                                         ns.actual_state = NodeActualState.STOPPED.value
@@ -2226,7 +2267,7 @@ async def run_node_reconcile(
                                     for ns in nodes_to_stop_after:
                                         container_name = _get_container_name(lab_id, ns.node_name)
                                         stop_result = await agent_client.container_action(
-                                            agent, container_name, "stop"
+                                            agent, container_name, "stop", lab_id=lab_id
                                         )
                                         if stop_result.get("success"):
                                             ns.actual_state = NodeActualState.STOPPED.value
@@ -2307,14 +2348,14 @@ async def run_node_reconcile(
                         stop_agent = agent
                     try:
                         result = await agent_client.container_action(
-                            stop_agent, container_name, "stop"
+                            stop_agent, container_name, "stop", lab_id=lab_id
                         )
                         # If container not found on placement agent, try the configured agent as fallback
                         if not result.get("success") and "not found" in result.get("error", "").lower():
                             if stop_agent.id != agent.id:
                                 log_parts.append(f"    Container not on {stop_agent.name}, trying {agent.name}...")
                                 result = await agent_client.container_action(
-                                    agent, container_name, "stop"
+                                    agent, container_name, "stop", lab_id=lab_id
                                 )
                         if result.get("success"):
                             ns.actual_state = NodeActualState.STOPPED.value
