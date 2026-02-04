@@ -221,6 +221,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         requires_image=False,
         documentation_url="https://docs.vyos.io/",
         tags=["routing", "firewall", "vpn", "bgp", "ospf"],
+        # Config extraction via docker exec
+        config_extract_method="docker",
+        config_extract_command="/opt/vyatta/sbin/vyatta-cfg-cmd-wrapper show configuration commands",
+        config_extract_timeout=15,
         # Container runtime configuration
         capabilities=["NET_ADMIN", "SYS_ADMIN"],
         privileged=True,
@@ -309,6 +313,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_timeout=30,
         config_extract_prompt_pattern=r"[\w\-]+[>#]\s*$",
         config_extract_paging_disable="terminal length 0",
+        # Post-boot commands to run after VM is ready
+        post_boot_commands=[
+            "terminal length 0",  # Disable paging for CLI sessions
+            "no ip domain-lookup",  # Disable DNS lookups that slow down CLI
+        ],
     ),
     "cisco_csr1000v": VendorConfig(
         kind="cisco_csr1000v",
@@ -343,6 +352,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_timeout=60,  # CSR can be slower
         config_extract_prompt_pattern=r"[\w\-]+[>#]\s*$",
         config_extract_paging_disable="terminal length 0",
+        # Post-boot commands to run after VM is ready
+        post_boot_commands=[
+            "terminal length 0",  # Disable paging for CLI sessions
+            "no ip domain-lookup",  # Disable DNS lookups that slow down CLI
+        ],
     ),
     "juniper_crpd": VendorConfig(
         kind="juniper_crpd",
@@ -472,6 +486,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"%SYS-5-CONFIG_I|%SYS-5-SYSTEM_INITIALIZED|%SYS-5-SYSTEM_RESTARTED|%ZTP-6-CANCEL|Startup complete|System ready",
         readiness_timeout=300,  # cEOS can take up to 5 minutes
+        # Config extraction via docker exec (FastCli with privilege level 15)
+        config_extract_method="docker",
+        config_extract_command="FastCli -p 15 -c 'show running-config'",
+        config_extract_timeout=30,
         # Container runtime configuration
         environment={
             "CEOS": "1",                                  # Identify as cEOS
@@ -532,6 +550,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"System is ready|SR Linux.*started|mgmt0.*up",
         readiness_timeout=120,
+        # Config extraction via docker exec
+        config_extract_method="docker",
+        config_extract_command="sr_cli -d 'info flat'",
+        config_extract_timeout=30,
         # Container runtime configuration
         environment={
             "SRLINUX": "1",
@@ -793,6 +815,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_timeout=30,
         config_extract_prompt_pattern=r"ciscoasa[>#]\s*$",
         config_extract_paging_disable="terminal pager 0",
+        # Post-boot commands to run after VM is ready
+        post_boot_commands=[
+            "terminal pager 0",  # Disable paging for CLI sessions
+        ],
     ),
     "fortinet_fortigate": VendorConfig(
         kind="fortinet_fortigate",
@@ -899,6 +925,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         requires_image=False,
         documentation_url="https://docs.frrouting.org/",
         tags=["routing", "bgp", "ospf", "open-source", "container"],
+        # Config extraction via docker exec
+        config_extract_method="docker",
+        config_extract_command="vtysh -c 'show running-config'",
+        config_extract_timeout=15,
         # Container runtime configuration
         capabilities=["NET_ADMIN", "SYS_ADMIN"],
         privileged=True,
@@ -974,6 +1004,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_timeout=60,
         config_extract_prompt_pattern=r"[\w\-]+[>#]\s*$",
         config_extract_paging_disable="terminal length 0",
+        # Post-boot commands to run after VM is ready
+        post_boot_commands=[
+            "terminal length 0",  # Disable paging for CLI sessions
+            "no ip domain-lookup",  # Disable DNS lookups that slow down CLI
+        ],
     ),
     "cat-sdwan-controller": VendorConfig(
         kind="cat-sdwan-controller",
