@@ -33,7 +33,12 @@ from agent.providers.base import (
     StatusResult,
 )
 from agent.readiness import ReadinessResult, get_libvirt_probe, get_readiness_timeout
-from agent.vendors import get_libvirt_config
+from agent.vendors import (
+    get_config_extraction_settings,
+    get_console_credentials,
+    get_console_method,
+    get_libvirt_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1184,7 +1189,14 @@ class LibvirtProvider(Provider):
         node_name: str,
         workspace: Path,
     ) -> list[str] | None:
-        """Get virsh console command for console access."""
+        """Get console command for a VM.
+
+        Supports two console methods:
+        - virsh: Use virsh console (default for serial console devices)
+        - ssh: Use SSH to VM's management IP address
+
+        The console method is determined by the device's vendor config.
+        """
         domain_name = self._domain_name(lab_id, node_name)
 
         try:
@@ -1194,13 +1206,111 @@ class LibvirtProvider(Provider):
             if state != libvirt.VIR_DOMAIN_RUNNING:
                 return None
 
-            # Return virsh console command
-            # --force takes over console even if another session is connected
-            return ["virsh", "-c", self._uri, "console", "--force", domain_name]
+            # Get device kind from domain metadata
+            kind = self._get_domain_kind(domain)
+            if kind:
+                console_method = get_console_method(kind)
+            else:
+                console_method = "docker_exec"  # Default to virsh for VMs
+
+            if console_method == "ssh":
+                # Get VM IP address and SSH credentials
+                ip = await self._get_vm_management_ip(domain_name)
+                if not ip:
+                    logger.warning(
+                        f"No IP address found for SSH console to {domain_name}, "
+                        "falling back to virsh console"
+                    )
+                    return ["virsh", "-c", self._uri, "console", "--force", domain_name]
+
+                user, password = get_console_credentials(kind)
+
+                # Use sshpass for non-interactive password authentication
+                return [
+                    "sshpass", "-p", password,
+                    "ssh",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=/dev/null",
+                    "-o", "LogLevel=ERROR",
+                    f"{user}@{ip}",
+                ]
+            else:
+                # Default: virsh console (serial console)
+                # --force takes over console even if another session is connected
+                return ["virsh", "-c", self._uri, "console", "--force", domain_name]
 
         except libvirt.libvirtError:
             return None
         except Exception:
+            return None
+
+    async def _get_vm_management_ip(self, domain_name: str) -> str | None:
+        """Get the management IP address for a VM.
+
+        Uses virsh domifaddr to query the guest agent or DHCP leases
+        for the VM's IP address.
+
+        Args:
+            domain_name: Libvirt domain name
+
+        Returns:
+            IP address string or None if not found
+        """
+        try:
+            # Try guest agent first (most accurate)
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["virsh", "-c", self._uri, "domifaddr", domain_name, "--source", "agent"],
+                capture_output=True,
+                text=True,
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                # Parse output: "Name       MAC address          Protocol     Address"
+                for line in result.stdout.strip().split("\n")[2:]:  # Skip header
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        # Address is like "192.168.1.100/24"
+                        ip = parts[3].split("/")[0]
+                        if ip and not ip.startswith("127."):
+                            return ip
+
+            # Fall back to DHCP leases
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["virsh", "-c", self._uri, "domifaddr", domain_name, "--source", "lease"],
+                capture_output=True,
+                text=True,
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                for line in result.stdout.strip().split("\n")[2:]:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        ip = parts[3].split("/")[0]
+                        if ip and not ip.startswith("127."):
+                            return ip
+
+            # Fall back to ARP (least reliable)
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["virsh", "-c", self._uri, "domifaddr", domain_name, "--source", "arp"],
+                capture_output=True,
+                text=True,
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                for line in result.stdout.strip().split("\n")[2:]:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        ip = parts[3].split("/")[0]
+                        if ip and not ip.startswith("127."):
+                            return ip
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error getting VM IP for {domain_name}: {e}")
             return None
 
     async def get_vm_interface_port(
@@ -1462,6 +1572,10 @@ class LibvirtProvider(Provider):
     ) -> tuple[str, str] | None:
         """Extract running config from a single VM.
 
+        Supports:
+        - config_extract_method="serial": Use virsh console + pexpect
+        - config_extract_method="ssh": Use SSH to VM's management IP
+
         Args:
             lab_id: Lab identifier
             node_name: Node name within the lab
@@ -1470,12 +1584,6 @@ class LibvirtProvider(Provider):
         Returns:
             Tuple of (node_name, config_content) or None if extraction failed
         """
-        from agent.console_extractor import extract_vm_config, PEXPECT_AVAILABLE
-
-        if not PEXPECT_AVAILABLE:
-            logger.warning("pexpect not available, skipping VM config extraction")
-            return None
-
         domain_name = self._domain_name(lab_id, node_name)
 
         # Check VM is running
@@ -1489,19 +1597,104 @@ class LibvirtProvider(Provider):
             logger.warning(f"Cannot extract config from {node_name}: domain not found")
             return None
 
-        # Run extraction in thread pool to avoid blocking
-        result = await asyncio.to_thread(
-            extract_vm_config,
-            domain_name,
-            kind,
-            self._uri,
-        )
+        # Check extraction method
+        extraction_settings = get_config_extraction_settings(kind)
 
-        if result.success:
-            logger.info(f"Extracted config from {node_name} ({len(result.config)} bytes)")
-            return (node_name, result.config)
+        if extraction_settings.method == "ssh":
+            # Extract via SSH
+            config = await self._extract_config_via_ssh(domain_name, kind, node_name)
+            if config:
+                logger.info(f"Extracted config from {node_name} via SSH ({len(config)} bytes)")
+                return (node_name, config)
+            return None
+
+        elif extraction_settings.method == "serial":
+            # Extract via serial console (pexpect)
+            from agent.console_extractor import extract_vm_config, PEXPECT_AVAILABLE
+
+            if not PEXPECT_AVAILABLE:
+                logger.warning("pexpect not available, skipping VM config extraction")
+                return None
+
+            # Run extraction in thread pool to avoid blocking
+            result = await asyncio.to_thread(
+                extract_vm_config,
+                domain_name,
+                kind,
+                self._uri,
+            )
+
+            if result.success:
+                logger.info(f"Extracted config from {node_name} ({len(result.config)} bytes)")
+                return (node_name, result.config)
+            else:
+                logger.warning(f"Failed to extract config from {node_name}: {result.error}")
+                return None
+
         else:
-            logger.warning(f"Failed to extract config from {node_name}: {result.error}")
+            logger.debug(f"No extraction method for {node_name} (method={extraction_settings.method})")
+            return None
+
+    async def _extract_config_via_ssh(
+        self,
+        domain_name: str,
+        kind: str,
+        node_name: str,
+    ) -> str | None:
+        """Extract config from VM via SSH.
+
+        Args:
+            domain_name: Libvirt domain name
+            kind: Device kind for credential and command lookup
+            node_name: Node name for logging
+
+        Returns:
+            Config content string or None on failure
+        """
+        try:
+            # Get VM IP address
+            ip = await self._get_vm_management_ip(domain_name)
+            if not ip:
+                logger.warning(f"No IP address found for SSH extraction from {node_name}")
+                return None
+
+            # Get extraction settings
+            extraction_settings = get_config_extraction_settings(kind)
+            user = extraction_settings.user or "admin"
+            password = extraction_settings.password or "admin"
+            cmd = extraction_settings.command
+
+            if not cmd:
+                logger.warning(f"No extraction command for {kind}, skipping {node_name}")
+                return None
+
+            # Run SSH command with sshpass
+            proc = await asyncio.create_subprocess_exec(
+                "sshpass", "-p", password,
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-o", "ConnectTimeout=10",
+                f"{user}@{ip}",
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                stderr_str = stderr.decode("utf-8") if stderr else ""
+                logger.warning(
+                    f"SSH extraction failed for {node_name}: "
+                    f"exit={proc.returncode}, stderr={stderr_str}"
+                )
+                return None
+
+            return stdout.decode("utf-8") if stdout else None
+
+        except Exception as e:
+            logger.error(f"SSH extraction failed for {node_name}: {e}")
             return None
 
     async def _extract_all_vm_configs(
