@@ -7,6 +7,7 @@ like Cisco IOS-XRv, FTDv, vManage, etc.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -114,16 +115,214 @@ class LibvirtProvider(Provider):
         disks.mkdir(parents=True, exist_ok=True)
         return disks
 
-    def _allocate_vlans(self, lab_id: str, node_name: str, count: int) -> list[int]:
+    def _vlans_dir(self, workspace: Path) -> Path:
+        """Get directory for VLAN allocation files."""
+        vlans = workspace / "vlans"
+        vlans.mkdir(parents=True, exist_ok=True)
+        return vlans
+
+    def _save_vlan_allocations(self, lab_id: str, workspace: Path) -> None:
+        """Persist VLAN allocations to file for recovery after agent restart.
+
+        Saves the current VLAN allocations for a lab to a JSON file.
+        This enables recovery of network state when the agent restarts
+        or when a lab is redeployed.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+        """
+        allocations = self._vlan_allocations.get(lab_id, {})
+        next_vlan = self._next_vlan.get(lab_id, self.VLAN_RANGE_START)
+
+        vlan_data = {
+            "allocations": allocations,
+            "next_vlan": next_vlan,
+        }
+
+        vlans_dir = self._vlans_dir(workspace)
+        vlan_file = vlans_dir / f"{lab_id}.json"
+
+        try:
+            with open(vlan_file, "w") as f:
+                json.dump(vlan_data, f, indent=2)
+            logger.debug(f"Saved VLAN allocations for lab {lab_id} to {vlan_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save VLAN allocations for lab {lab_id}: {e}")
+
+    def _load_vlan_allocations(self, lab_id: str, workspace: Path) -> bool:
+        """Load VLAN allocations from file.
+
+        Restores VLAN allocation state from a previously saved JSON file.
+        Used during stale network recovery to restore state after agent restart.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+
+        Returns:
+            True if allocations were loaded, False if file doesn't exist or load failed
+        """
+        vlans_dir = self._vlans_dir(workspace)
+        vlan_file = vlans_dir / f"{lab_id}.json"
+
+        if not vlan_file.exists():
+            return False
+
+        try:
+            with open(vlan_file) as f:
+                vlan_data = json.load(f)
+
+            allocations = vlan_data.get("allocations", {})
+            next_vlan = vlan_data.get("next_vlan", self.VLAN_RANGE_START)
+
+            self._vlan_allocations[lab_id] = allocations
+            self._next_vlan[lab_id] = next_vlan
+
+            logger.info(
+                f"Loaded VLAN allocations for lab {lab_id}: "
+                f"{len(allocations)} nodes, next_vlan={next_vlan}"
+            )
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to load VLAN allocations for lab {lab_id}: {e}")
+            return False
+
+    def _remove_vlan_file(self, lab_id: str, workspace: Path) -> None:
+        """Remove VLAN allocation file for a lab.
+
+        Called during destroy to clean up the VLAN file when a lab is removed.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+        """
+        vlans_dir = self._vlans_dir(workspace)
+        vlan_file = vlans_dir / f"{lab_id}.json"
+
+        if vlan_file.exists():
+            try:
+                vlan_file.unlink()
+                logger.debug(f"Removed VLAN file for lab {lab_id}")
+            except Exception as e:
+                logger.warning(f"Failed to remove VLAN file for lab {lab_id}: {e}")
+
+    def _ovs_port_exists(self, port_name: str) -> bool:
+        """Check if an OVS port exists on the bridge.
+
+        Args:
+            port_name: Name of the OVS port (e.g., vnet0)
+
+        Returns:
+            True if the port exists, False otherwise
+        """
+        try:
+            result = subprocess.run(
+                ["ovs-vsctl", "port-to-br", port_name],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _recover_stale_network(self, lab_id: str, workspace: Path) -> dict[str, list[int]]:
+        """Recover network state for a lab being redeployed.
+
+        This method attempts to restore VLAN allocations from a previous
+        deployment. When the agent restarts or a lab is redeployed, the
+        in-memory VLAN allocations are lost. This method:
+
+        1. Loads VLAN allocations from the persisted JSON file
+        2. Validates that the allocations are still usable
+        3. Returns the recovered allocations for reuse
+
+        The recovered allocations can be used to avoid reallocating VLANs
+        for nodes that already have working network connectivity.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+
+        Returns:
+            Dict mapping node_name -> list of VLAN tags for recovered nodes.
+            Empty dict if no recovery was possible.
+        """
+        recovered: dict[str, list[int]] = {}
+
+        # Try to load existing VLAN allocations
+        if not self._load_vlan_allocations(lab_id, workspace):
+            logger.debug(f"No VLAN allocations to recover for lab {lab_id}")
+            return recovered
+
+        allocations = self._vlan_allocations.get(lab_id, {})
+        if not allocations:
+            return recovered
+
+        # Check which allocations have valid domains still defined
+        # (The OVS ports are created by libvirt when VMs are defined/started)
+        try:
+            all_domains = self.conn.listAllDomains(0)
+            existing_nodes = set()
+            prefix = self._lab_prefix(lab_id)
+
+            for domain in all_domains:
+                name = domain.name()
+                if name.startswith(prefix + "-"):
+                    node_name = name[len(prefix) + 1:]
+                    existing_nodes.add(node_name)
+
+            # Keep allocations for nodes that still have domains
+            for node_name, vlans in allocations.items():
+                if node_name in existing_nodes:
+                    recovered[node_name] = vlans
+                    logger.info(
+                        f"Recovered VLAN allocation for {node_name}: {vlans}"
+                    )
+                else:
+                    logger.debug(
+                        f"Discarding stale VLAN allocation for {node_name} "
+                        "(domain no longer exists)"
+                    )
+
+            # Update in-memory state to only keep valid allocations
+            self._vlan_allocations[lab_id] = recovered
+
+            if recovered:
+                logger.info(
+                    f"Recovered network state for lab {lab_id}: "
+                    f"{len(recovered)} nodes with valid VLAN allocations"
+                )
+                # Re-save the cleaned allocations
+                self._save_vlan_allocations(lab_id, workspace)
+
+        except Exception as e:
+            logger.warning(f"Error during stale network recovery for lab {lab_id}: {e}")
+            return {}
+
+        return recovered
+
+    def _allocate_vlans(
+        self,
+        lab_id: str,
+        node_name: str,
+        count: int,
+        workspace: Path | None = None,
+    ) -> list[int]:
         """Allocate VLAN tags for a VM's interfaces.
 
         Each interface gets a unique VLAN tag for isolation on the OVS bridge.
         This mirrors how Docker containers get isolated VLANs.
 
+        If the node already has VLAN allocations (e.g., from stale network
+        recovery), those are returned instead of allocating new VLANs.
+
         Args:
             lab_id: Lab identifier
             node_name: Node name
             count: Number of VLANs to allocate
+            workspace: Lab workspace path for persisting allocations
 
         Returns:
             List of VLAN tags
@@ -132,6 +331,22 @@ class LibvirtProvider(Provider):
             self._next_vlan[lab_id] = self.VLAN_RANGE_START
         if lab_id not in self._vlan_allocations:
             self._vlan_allocations[lab_id] = {}
+
+        # Check if this node already has VLANs allocated (from recovery)
+        existing_vlans = self._vlan_allocations[lab_id].get(node_name)
+        if existing_vlans:
+            # Verify the allocation has enough VLANs for the requested count
+            if len(existing_vlans) >= count:
+                logger.debug(
+                    f"Using recovered VLANs for {node_name}: {existing_vlans[:count]}"
+                )
+                return existing_vlans[:count]
+            else:
+                # Need more VLANs than recovered - clear and reallocate
+                logger.debug(
+                    f"Recovered VLANs insufficient for {node_name} "
+                    f"(have {len(existing_vlans)}, need {count}), reallocating"
+                )
 
         vlans = []
         for _ in range(count):
@@ -143,6 +358,11 @@ class LibvirtProvider(Provider):
 
         self._vlan_allocations[lab_id][node_name] = vlans
         logger.debug(f"Allocated VLANs for {node_name}: {vlans}")
+
+        # Persist allocations to file for recovery
+        if workspace:
+            self._save_vlan_allocations(lab_id, workspace)
+
         return vlans
 
     def get_node_vlans(self, lab_id: str, node_name: str) -> list[int]:
@@ -559,6 +779,14 @@ class LibvirtProvider(Provider):
 
         logger.info(f"Deploying lab {lab_id} with {len(libvirt_nodes)} VMs via libvirt")
 
+        # Attempt to recover stale network state from previous deployment
+        # This handles the case where the agent restarted and lost in-memory VLAN allocations
+        recovered_vlans = self._recover_stale_network(lab_id, workspace)
+        if recovered_vlans:
+            logger.info(
+                f"Recovered network state for {len(recovered_vlans)} existing nodes"
+            )
+
         disks_dir = self._disks_dir(workspace)
         deployed_nodes: list[NodeInfo] = []
         errors: list[str] = []
@@ -682,7 +910,9 @@ class LibvirtProvider(Provider):
         interface_count = node_config.get("interface_count", 1)
 
         # Allocate VLAN tags for each interface (for OVS isolation)
-        vlan_tags = self._allocate_vlans(lab_id, node_name, interface_count)
+        # Pass workspace (parent of disks_dir) for persisting allocations
+        workspace = disks_dir.parent
+        vlan_tags = self._allocate_vlans(lab_id, node_name, interface_count, workspace)
 
         # Generate domain XML with multiple interfaces
         xml = self._generate_domain_xml(
@@ -756,11 +986,12 @@ class LibvirtProvider(Provider):
                     except Exception as e:
                         logger.warning(f"Failed to remove disk {disk_file}: {e}")
 
-            # Clean up VLAN allocations for this lab
+            # Clean up VLAN allocations for this lab (in-memory and on disk)
             if lab_id in self._vlan_allocations:
                 del self._vlan_allocations[lab_id]
             if lab_id in self._next_vlan:
                 del self._next_vlan[lab_id]
+            self._remove_vlan_file(lab_id, workspace)
 
             if errors and destroyed_count == 0:
                 return DestroyResult(
@@ -1094,6 +1325,41 @@ class LibvirtProvider(Provider):
             logger.error(f"Error during hot_connect: {e}")
             return False
 
+    async def _run_post_boot_commands(
+        self,
+        domain_name: str,
+        kind: str,
+    ) -> bool:
+        """Run vendor-specific post-boot commands on a VM.
+
+        This handles workarounds like disabling paging or DNS lookups
+        that need to be executed after the VM is ready.
+
+        Args:
+            domain_name: Libvirt domain name
+            kind: Device kind for looking up vendor config
+
+        Returns:
+            True if commands were run (or already completed), False on error
+        """
+        from agent.console_extractor import run_vm_post_boot_commands, PEXPECT_AVAILABLE
+
+        if not PEXPECT_AVAILABLE:
+            logger.debug("pexpect not available, skipping post-boot commands")
+            return True  # Not an error, just skip
+
+        try:
+            result = await asyncio.to_thread(
+                run_vm_post_boot_commands,
+                domain_name,
+                kind,
+                self._uri,
+            )
+            return result.success
+        except Exception as e:
+            logger.warning(f"Post-boot commands failed for {domain_name}: {e}")
+            return False
+
     async def check_readiness(
         self,
         lab_id: str,
@@ -1103,7 +1369,8 @@ class LibvirtProvider(Provider):
         """Check if a VM has finished booting and is ready.
 
         This uses the serial console output to detect boot completion
-        patterns defined in the vendor config.
+        patterns defined in the vendor config. When the VM becomes ready,
+        post-boot commands are automatically executed (once).
 
         Args:
             lab_id: Lab identifier
@@ -1137,6 +1404,11 @@ class LibvirtProvider(Provider):
 
         # Run the probe
         result = await probe.check(node_name)
+
+        # If ready, run post-boot commands (idempotent - only runs once)
+        if result.is_ready:
+            await self._run_post_boot_commands(domain_name, kind)
+
         return result
 
     def get_readiness_timeout(self, kind: str) -> int:
@@ -1416,12 +1688,14 @@ class LibvirtProvider(Provider):
                         except Exception:
                             pass  # Directory may not be empty
 
-                # Clean up VLAN allocations
+                # Clean up VLAN allocations (in-memory and on disk)
                 if lab_id in self._vlan_allocations:
                     del self._vlan_allocations[lab_id]
                     logger.debug(f"Freed VLAN allocations for orphan lab: {lab_id}")
                 if lab_id in self._next_vlan:
                     del self._next_vlan[lab_id]
+                if workspace_base:
+                    self._remove_vlan_file(lab_id, lab_workspace)
 
             if removed["domains"]:
                 logger.info(
