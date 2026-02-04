@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# System deps for networking and OVS
+# System deps for networking, OVS, and libvirt
 RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   bash \
@@ -10,6 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   iproute2 \
   iputils-ping \
   openvswitch-switch \
+  # Libvirt for VM-based devices (IOSv, CSR1000v, etc.)
+  libvirt-clients \
+  libvirt-dev \
+  pkg-config \
+  qemu-utils \
+  gcc \
+  libc-dev \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Docker CLI from official repo
@@ -21,9 +28,10 @@ RUN install -m 0755 -d /etc/apt/keyrings \
   && apt-get install -y --no-install-recommends docker-ce-cli \
   && rm -rf /var/lib/apt/lists/*
 
-# Python deps
+# Python deps (install libvirt-python separately since it needs API XML files)
 COPY agent/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir libvirt-python
 
 # Agent code
 COPY agent/ ./agent/
