@@ -28,7 +28,7 @@ class NodeStateMachine:
 
     VALID_TRANSITIONS: dict[NodeActualState, set[NodeActualState]] = {
         NodeActualState.UNDEPLOYED: {NodeActualState.PENDING, NodeActualState.ERROR},
-        NodeActualState.PENDING: {NodeActualState.STARTING, NodeActualState.RUNNING, NodeActualState.ERROR},
+        NodeActualState.PENDING: {NodeActualState.STARTING, NodeActualState.RUNNING, NodeActualState.UNDEPLOYED, NodeActualState.ERROR},
         NodeActualState.STARTING: {NodeActualState.RUNNING, NodeActualState.STOPPED, NodeActualState.ERROR},
         NodeActualState.RUNNING: {NodeActualState.STOPPING, NodeActualState.STOPPED, NodeActualState.ERROR},
         NodeActualState.STOPPING: {NodeActualState.STOPPED, NodeActualState.ERROR},
@@ -90,6 +90,9 @@ class NodeStateMachine:
         elif desired == NodeDesiredState.STOPPED:
             if current == NodeActualState.RUNNING:
                 return NodeActualState.STOPPING
+            if current == NodeActualState.PENDING:
+                # Abort pending deployment - no container exists yet
+                return NodeActualState.UNDEPLOYED
         return None
 
     @classmethod
