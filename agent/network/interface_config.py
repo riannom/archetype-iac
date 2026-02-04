@@ -2,6 +2,9 @@
 
 This module provides network manager detection and persistent MTU configuration
 for physical host interfaces. Supports NetworkManager, netplan, and systemd-networkd.
+
+When running in a container with pid:host, uses nsenter to access the host's
+network management tools and configuration files.
 """
 
 from __future__ import annotations
@@ -20,42 +23,222 @@ logger = logging.getLogger(__name__)
 NetworkManager = Literal["networkmanager", "netplan", "systemd-networkd", "unknown"]
 
 
+def _is_in_container() -> bool:
+    """Detect if we're running inside a container.
+
+    Returns:
+        True if running in a container, False otherwise
+    """
+    # Check for /.dockerenv file (Docker)
+    if Path("/.dockerenv").exists():
+        return True
+
+    # Check cgroup for container indicators
+    try:
+        cgroup_path = Path("/proc/1/cgroup")
+        if cgroup_path.exists():
+            content = cgroup_path.read_text()
+            if "docker" in content or "kubepods" in content or "containerd" in content:
+                return True
+    except Exception:
+        pass
+
+    # Check for container environment variable
+    if os.environ.get("container"):
+        return True
+
+    return False
+
+
+def _run_on_host(cmd: list[str], timeout: int = 10) -> subprocess.CompletedProcess:
+    """Run a command, using nsenter if in a container with pid:host.
+
+    When running in a container with pid:host, this uses nsenter to execute
+    the command in the host's mount namespace, allowing access to host tools
+    like nmcli, netplan, and systemctl.
+
+    Args:
+        cmd: Command and arguments to run
+        timeout: Command timeout in seconds
+
+    Returns:
+        CompletedProcess result
+    """
+    if _is_in_container():
+        # Use nsenter to run in host's mount namespace
+        # -t 1: target PID 1 (init process, which is the host's init due to pid:host)
+        # -m: enter mount namespace (access host's filesystem)
+        # --: end of nsenter options
+        nsenter_cmd = ["nsenter", "-t", "1", "-m", "--"] + cmd
+        logger.debug(f"Running via nsenter: {' '.join(nsenter_cmd)}")
+        return subprocess.run(
+            nsenter_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    else:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+
+def _host_path_exists(path: str) -> bool:
+    """Check if a path exists on the host filesystem.
+
+    Args:
+        path: Path to check
+
+    Returns:
+        True if path exists on host
+    """
+    if _is_in_container():
+        result = _run_on_host(["test", "-e", path], timeout=5)
+        return result.returncode == 0
+    else:
+        return Path(path).exists()
+
+
+def _host_glob(directory: str, pattern: str) -> list[str]:
+    """Glob files in a directory on the host filesystem.
+
+    Args:
+        directory: Directory to search
+        pattern: Glob pattern
+
+    Returns:
+        List of matching file paths
+    """
+    if _is_in_container():
+        # Use find command via nsenter
+        result = _run_on_host(
+            ["find", directory, "-maxdepth", "1", "-name", pattern, "-type", "f"],
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split("\n")
+        return []
+    else:
+        return [str(p) for p in Path(directory).glob(pattern)]
+
+
+def _host_read_file(path: str) -> str | None:
+    """Read a file from the host filesystem.
+
+    Args:
+        path: Path to read
+
+    Returns:
+        File contents or None if not readable
+    """
+    if _is_in_container():
+        result = _run_on_host(["cat", path], timeout=5)
+        if result.returncode == 0:
+            return result.stdout
+        return None
+    else:
+        try:
+            return Path(path).read_text()
+        except Exception:
+            return None
+
+
+def _host_write_file(path: str, content: str) -> tuple[bool, str | None]:
+    """Write content to a file on the host filesystem.
+
+    Args:
+        path: Path to write
+        content: Content to write
+
+    Returns:
+        Tuple of (success, error_message)
+    """
+    if _is_in_container():
+        # Use tee to write via nsenter
+        # We pass content via stdin
+        try:
+            result = subprocess.run(
+                ["nsenter", "-t", "1", "-m", "--", "tee", path],
+                input=content,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return False, result.stderr
+            return True, None
+        except Exception as e:
+            return False, str(e)
+    else:
+        try:
+            Path(path).write_text(content)
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+
+def _host_mkdir(path: str) -> tuple[bool, str | None]:
+    """Create a directory on the host filesystem.
+
+    Args:
+        path: Directory path to create
+
+    Returns:
+        Tuple of (success, error_message)
+    """
+    if _is_in_container():
+        result = _run_on_host(["mkdir", "-p", path], timeout=5)
+        if result.returncode != 0:
+            return False, result.stderr
+        return True, None
+    else:
+        try:
+            Path(path).mkdir(parents=True, exist_ok=True)
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+
 def detect_network_manager() -> NetworkManager:
     """Detect which network manager is in use on this system.
+
+    When running in a container with pid:host, uses nsenter to detect
+    the host's network manager.
 
     Returns:
         One of: "networkmanager", "netplan", "systemd-networkd", "unknown"
     """
+    in_container = _is_in_container()
+    if in_container:
+        logger.debug("Running in container, using nsenter for network manager detection")
+
     # Check for NetworkManager (nmcli)
-    if shutil.which("nmcli"):
-        try:
-            result = subprocess.run(
-                ["nmcli", "-t", "-f", "RUNNING", "general"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0 and "running" in result.stdout.lower():
-                logger.debug("Detected NetworkManager as network manager")
-                return "networkmanager"
-        except Exception as e:
-            logger.debug(f"NetworkManager check failed: {e}")
+    try:
+        result = _run_on_host(["nmcli", "-t", "-f", "RUNNING", "general"], timeout=5)
+        if result.returncode == 0 and "running" in result.stdout.lower():
+            logger.debug("Detected NetworkManager as network manager")
+            return "networkmanager"
+    except Exception as e:
+        logger.debug(f"NetworkManager check failed: {e}")
 
     # Check for netplan (Ubuntu)
-    netplan_dir = Path("/etc/netplan")
-    if netplan_dir.exists() and any(netplan_dir.glob("*.yaml")):
-        if shutil.which("netplan"):
-            logger.debug("Detected netplan as network manager")
-            return "netplan"
+    netplan_files = _host_glob("/etc/netplan", "*.yaml")
+    if netplan_files:
+        # Check if netplan command is available
+        try:
+            result = _run_on_host(["which", "netplan"], timeout=5)
+            if result.returncode == 0:
+                logger.debug("Detected netplan as network manager")
+                return "netplan"
+        except Exception as e:
+            logger.debug(f"netplan check failed: {e}")
 
     # Check for systemd-networkd
     try:
-        result = subprocess.run(
-            ["systemctl", "is-active", "systemd-networkd"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
+        result = _run_on_host(["systemctl", "is-active", "systemd-networkd"], timeout=5)
         if result.returncode == 0 and "active" in result.stdout.strip():
             logger.debug("Detected systemd-networkd as network manager")
             return "systemd-networkd"
@@ -99,6 +282,8 @@ async def set_mtu_runtime(interface: str, mtu: int) -> tuple[bool, str | None]:
 async def set_mtu_persistent_networkmanager(interface: str, mtu: int) -> tuple[bool, str | None]:
     """Apply persistent MTU configuration via NetworkManager.
 
+    When running in a container, uses nsenter to run nmcli on the host.
+
     Args:
         interface: Network interface name
         mtu: MTU value to set
@@ -109,10 +294,8 @@ async def set_mtu_persistent_networkmanager(interface: str, mtu: int) -> tuple[b
     def _sync_set_mtu() -> tuple[bool, str | None]:
         try:
             # First, find the connection name for this interface
-            result = subprocess.run(
+            result = _run_on_host(
                 ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show"],
-                capture_output=True,
-                text=True,
                 timeout=10,
             )
             if result.returncode != 0:
@@ -130,20 +313,16 @@ async def set_mtu_persistent_networkmanager(interface: str, mtu: int) -> tuple[b
                 return False, f"No NetworkManager connection found for interface {interface}"
 
             # Modify the connection MTU
-            result = subprocess.run(
+            result = _run_on_host(
                 ["nmcli", "connection", "modify", connection_name, "802-3-ethernet.mtu", str(mtu)],
-                capture_output=True,
-                text=True,
                 timeout=10,
             )
             if result.returncode != 0:
                 return False, f"Failed to modify connection: {result.stderr}"
 
             # Apply the changes (reactivate connection)
-            result = subprocess.run(
+            result = _run_on_host(
                 ["nmcli", "connection", "up", connection_name],
-                capture_output=True,
-                text=True,
                 timeout=30,
             )
             if result.returncode != 0:
@@ -163,6 +342,8 @@ async def set_mtu_persistent_networkmanager(interface: str, mtu: int) -> tuple[b
 async def set_mtu_persistent_netplan(interface: str, mtu: int) -> tuple[bool, str | None]:
     """Apply persistent MTU configuration via netplan.
 
+    When running in a container, uses nsenter to access host's netplan config.
+
     Args:
         interface: Network interface name
         mtu: MTU value to set
@@ -176,34 +357,38 @@ async def set_mtu_persistent_netplan(interface: str, mtu: int) -> tuple[bool, st
         except ImportError:
             return False, "PyYAML not installed, cannot modify netplan"
 
-        netplan_dir = Path("/etc/netplan")
+        netplan_dir = "/etc/netplan"
 
         # Find which netplan file contains this interface
         config_file = None
         config_data = None
 
-        for yaml_file in netplan_dir.glob("*.yaml"):
+        yaml_files = _host_glob(netplan_dir, "*.yaml")
+        for yaml_file in yaml_files:
             try:
-                with open(yaml_file) as f:
-                    data = yaml.safe_load(f)
-                    if not data or "network" not in data:
-                        continue
+                content = _host_read_file(yaml_file)
+                if not content:
+                    continue
 
-                    network = data["network"]
-                    for section in ["ethernets", "bonds", "bridges", "vlans"]:
-                        if section in network and interface in network[section]:
-                            config_file = yaml_file
-                            config_data = data
-                            break
-                    if config_file:
+                data = yaml.safe_load(content)
+                if not data or "network" not in data:
+                    continue
+
+                network = data["network"]
+                for section in ["ethernets", "bonds", "bridges", "vlans"]:
+                    if section in network and interface in network[section]:
+                        config_file = yaml_file
+                        config_data = data
                         break
+                if config_file:
+                    break
             except Exception as e:
                 logger.debug(f"Error reading {yaml_file}: {e}")
                 continue
 
         if not config_file or not config_data:
             # Create a new config file for this interface
-            config_file = netplan_dir / f"90-archetype-{interface}.yaml"
+            config_file = f"{netplan_dir}/90-archetype-{interface}.yaml"
             config_data = {
                 "network": {
                     "version": 2,
@@ -224,16 +409,13 @@ async def set_mtu_persistent_netplan(interface: str, mtu: int) -> tuple[bool, st
 
         try:
             # Write the config file
-            with open(config_file, "w") as f:
-                yaml.dump(config_data, f, default_flow_style=False)
+            yaml_content = yaml.dump(config_data, default_flow_style=False)
+            success, error = _host_write_file(config_file, yaml_content)
+            if not success:
+                return False, f"Failed to write netplan config: {error}"
 
             # Apply netplan
-            result = subprocess.run(
-                ["netplan", "apply"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            result = _run_on_host(["netplan", "apply"], timeout=30)
             if result.returncode != 0:
                 return False, f"netplan apply failed: {result.stderr}"
 
@@ -248,6 +430,8 @@ async def set_mtu_persistent_netplan(interface: str, mtu: int) -> tuple[bool, st
 async def set_mtu_persistent_systemd_networkd(interface: str, mtu: int) -> tuple[bool, str | None]:
     """Apply persistent MTU configuration via systemd-networkd.
 
+    When running in a container, uses nsenter to access host's systemd-networkd config.
+
     Args:
         interface: Network interface name
         mtu: MTU value to set
@@ -256,14 +440,21 @@ async def set_mtu_persistent_systemd_networkd(interface: str, mtu: int) -> tuple
         Tuple of (success, error_message)
     """
     def _sync_set_mtu() -> tuple[bool, str | None]:
-        networkd_dir = Path("/etc/systemd/network")
-        networkd_dir.mkdir(parents=True, exist_ok=True)
+        networkd_dir = "/etc/systemd/network"
+
+        # Ensure directory exists
+        success, error = _host_mkdir(networkd_dir)
+        if not success:
+            return False, f"Failed to create networkd directory: {error}"
 
         # Look for existing .network file for this interface
         config_file = None
-        for network_file in networkd_dir.glob("*.network"):
+        network_files = _host_glob(networkd_dir, "*.network")
+        for network_file in network_files:
             try:
-                content = network_file.read_text()
+                content = _host_read_file(network_file)
+                if not content:
+                    continue
                 # Check if this file matches our interface
                 if f"Name={interface}" in content:
                     config_file = network_file
@@ -274,7 +465,7 @@ async def set_mtu_persistent_systemd_networkd(interface: str, mtu: int) -> tuple
         if not config_file:
             # Create new config file
             # Use high number to ensure it's processed after others
-            config_file = networkd_dir / f"90-archetype-{interface}.network"
+            config_file = f"{networkd_dir}/90-archetype-{interface}.network"
             content = f"""[Match]
 Name={interface}
 
@@ -283,7 +474,9 @@ MTUBytes={mtu}
 """
         else:
             # Update existing file
-            content = config_file.read_text()
+            content = _host_read_file(config_file)
+            if not content:
+                return False, f"Failed to read existing config: {config_file}"
 
             # Check if [Link] section exists
             if "[Link]" in content:
@@ -306,23 +499,15 @@ MTUBytes={mtu}
                 content += f"\n[Link]\nMTUBytes={mtu}\n"
 
         try:
-            config_file.write_text(content)
+            success, error = _host_write_file(config_file, content)
+            if not success:
+                return False, f"Failed to write config: {error}"
 
             # Reload systemd-networkd
-            result = subprocess.run(
-                ["systemctl", "reload", "systemd-networkd"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            result = _run_on_host(["systemctl", "reload", "systemd-networkd"], timeout=30)
             if result.returncode != 0:
                 # Try restart instead
-                result = subprocess.run(
-                    ["systemctl", "restart", "systemd-networkd"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
+                result = _run_on_host(["systemctl", "restart", "systemd-networkd"], timeout=30)
                 if result.returncode != 0:
                     return False, f"Failed to reload systemd-networkd: {result.stderr}"
 
