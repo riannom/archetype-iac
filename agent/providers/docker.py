@@ -28,6 +28,7 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -56,6 +57,8 @@ from agent.vendors import (
     VendorConfig,
     get_config_by_device,
     get_config_extraction_settings,
+    get_console_credentials,
+    get_console_method,
     get_container_config,
     get_console_shell,
     is_ceos_kind,
@@ -67,6 +70,10 @@ logger = logging.getLogger(__name__)
 
 # Container name prefix for Archetype-managed containers
 CONTAINER_PREFIX = "archetype"
+
+# VLAN range for container interfaces (same as OVS plugin)
+VLAN_RANGE_START = 100
+VLAN_RANGE_END = 4000
 
 # Interface wait script for cEOS (adapted from containerlab)
 #
@@ -251,6 +258,11 @@ class DockerProvider(Provider):
         self._docker: docker.DockerClient | None = None
         self._local_network: LocalNetworkManager | None = None
         self._ovs_manager: OVSNetworkManager | None = None
+        # VLAN tracking for persistence (matches LibvirtProvider pattern)
+        # {lab_id: {node_name: [vlan_tags]}}
+        self._vlan_allocations: dict[str, dict[str, list[int]]] = {}
+        # Next VLAN to allocate per lab
+        self._next_vlan: dict[str, int] = {}
 
     @property
     def name(self) -> str:
@@ -312,6 +324,336 @@ class DockerProvider(Provider):
         """Get container name prefix for a lab."""
         safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
         return f"{CONTAINER_PREFIX}-{safe_lab_id}"
+
+    # =========================================================================
+    # VLAN Persistence (matches LibvirtProvider pattern for feature parity)
+    # =========================================================================
+
+    def _vlans_dir(self, workspace: Path) -> Path:
+        """Get directory for VLAN allocation files."""
+        vlans = workspace / "vlans"
+        vlans.mkdir(parents=True, exist_ok=True)
+        return vlans
+
+    def _save_vlan_allocations(self, lab_id: str, workspace: Path) -> None:
+        """Persist VLAN allocations to file for recovery after agent restart.
+
+        Saves the current VLAN allocations for a lab to a JSON file.
+        This enables recovery of network state when the agent restarts
+        or when a lab is redeployed.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+        """
+        allocations = self._vlan_allocations.get(lab_id, {})
+        next_vlan = self._next_vlan.get(lab_id, VLAN_RANGE_START)
+
+        vlan_data = {
+            "allocations": allocations,
+            "next_vlan": next_vlan,
+        }
+
+        vlans_dir = self._vlans_dir(workspace)
+        vlan_file = vlans_dir / f"{lab_id}.json"
+
+        try:
+            with open(vlan_file, "w") as f:
+                json.dump(vlan_data, f, indent=2)
+            logger.debug(f"Saved VLAN allocations for lab {lab_id} to {vlan_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save VLAN allocations for lab {lab_id}: {e}")
+
+    def _load_vlan_allocations(self, lab_id: str, workspace: Path) -> bool:
+        """Load VLAN allocations from file.
+
+        Restores VLAN allocation state from a previously saved JSON file.
+        Used during stale network recovery to restore state after agent restart.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+
+        Returns:
+            True if allocations were loaded, False if file doesn't exist or load failed
+        """
+        vlans_dir = self._vlans_dir(workspace)
+        vlan_file = vlans_dir / f"{lab_id}.json"
+
+        if not vlan_file.exists():
+            return False
+
+        try:
+            with open(vlan_file) as f:
+                vlan_data = json.load(f)
+
+            allocations = vlan_data.get("allocations", {})
+            next_vlan = vlan_data.get("next_vlan", VLAN_RANGE_START)
+
+            self._vlan_allocations[lab_id] = allocations
+            self._next_vlan[lab_id] = next_vlan
+
+            logger.info(
+                f"Loaded VLAN allocations for lab {lab_id}: "
+                f"{len(allocations)} nodes, next_vlan={next_vlan}"
+            )
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to load VLAN allocations for lab {lab_id}: {e}")
+            return False
+
+    def _remove_vlan_file(self, lab_id: str, workspace: Path) -> None:
+        """Remove VLAN allocation file for a lab.
+
+        Called during destroy to clean up the VLAN file when a lab is removed.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+        """
+        vlans_dir = self._vlans_dir(workspace)
+        vlan_file = vlans_dir / f"{lab_id}.json"
+
+        if vlan_file.exists():
+            try:
+                vlan_file.unlink()
+                logger.debug(f"Removed VLAN file for lab {lab_id}")
+            except Exception as e:
+                logger.warning(f"Failed to remove VLAN file for lab {lab_id}: {e}")
+
+    def get_node_vlans(self, lab_id: str, node_name: str) -> list[int]:
+        """Get the VLAN tags allocated to a container's interfaces.
+
+        Args:
+            lab_id: Lab identifier
+            node_name: Node name
+
+        Returns:
+            List of VLAN tags, or empty list if not found
+        """
+        return self._vlan_allocations.get(lab_id, {}).get(node_name, [])
+
+    async def _recover_stale_network(
+        self,
+        lab_id: str,
+        workspace: Path,
+    ) -> dict[str, list[int]]:
+        """Recover network state for a lab being redeployed.
+
+        This method attempts to restore VLAN allocations from a previous
+        deployment. When the agent restarts or a lab is redeployed, the
+        in-memory VLAN allocations are lost. This method:
+
+        1. Loads VLAN allocations from the persisted JSON file
+        2. Validates that the containers still exist via Docker API
+        3. Returns the recovered allocations for reuse
+
+        The recovered allocations can be used to avoid reallocating VLANs
+        for nodes that already have working network connectivity.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+
+        Returns:
+            Dict mapping node_name -> list of VLAN tags for recovered nodes.
+            Empty dict if no recovery was possible.
+        """
+        recovered: dict[str, list[int]] = {}
+
+        # Try to load existing VLAN allocations
+        if not self._load_vlan_allocations(lab_id, workspace):
+            logger.debug(f"No VLAN allocations to recover for lab {lab_id}")
+            return recovered
+
+        allocations = self._vlan_allocations.get(lab_id, {})
+        if not allocations:
+            return recovered
+
+        # Check which allocations have valid containers still running
+        try:
+            # Get all containers for this lab
+            containers = await asyncio.to_thread(
+                self.docker.containers.list,
+                all=True,
+                filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
+            )
+
+            existing_nodes = set()
+            for container in containers:
+                labels = container.labels or {}
+                node_name = labels.get(LABEL_NODE_NAME)
+                if node_name:
+                    existing_nodes.add(node_name)
+
+            # Keep allocations for nodes that still have containers
+            for node_name, vlans in allocations.items():
+                if node_name in existing_nodes:
+                    recovered[node_name] = vlans
+                    logger.info(
+                        f"Recovered VLAN allocation for {node_name}: {vlans}"
+                    )
+                else:
+                    logger.debug(
+                        f"Discarding stale VLAN allocation for {node_name} "
+                        "(container no longer exists)"
+                    )
+
+            # Update in-memory state to only keep valid allocations
+            self._vlan_allocations[lab_id] = recovered
+
+            if recovered:
+                logger.info(
+                    f"Recovered network state for lab {lab_id}: "
+                    f"{len(recovered)} nodes with valid VLAN allocations"
+                )
+                # Re-save the cleaned allocations
+                self._save_vlan_allocations(lab_id, workspace)
+
+        except Exception as e:
+            logger.warning(f"Error during stale network recovery for lab {lab_id}: {e}")
+            return {}
+
+        return recovered
+
+    async def _capture_container_vlans(
+        self,
+        lab_id: str,
+        topology: ParsedTopology,
+        workspace: Path,
+    ) -> None:
+        """Capture VLAN allocations from OVS for all containers in the topology.
+
+        Queries OVS for the current VLAN tag of each container interface
+        and updates the in-memory VLAN tracking. This enables persistence
+        across agent restarts.
+
+        Args:
+            lab_id: Lab identifier
+            topology: Parsed topology with node information
+            workspace: Lab workspace path for saving allocations
+        """
+        if lab_id not in self._vlan_allocations:
+            self._vlan_allocations[lab_id] = {}
+        if lab_id not in self._next_vlan:
+            self._next_vlan[lab_id] = VLAN_RANGE_START
+
+        max_vlan_seen = VLAN_RANGE_START
+
+        for node_name, node in topology.nodes.items():
+            container_name = self._container_name(lab_id, node_name)
+            vlans: list[int] = []
+
+            try:
+                container = await asyncio.to_thread(
+                    self.docker.containers.get, container_name
+                )
+                pid = container.attrs["State"]["Pid"]
+
+                # Get list of all interfaces in the container (except lo)
+                proc = await asyncio.create_subprocess_exec(
+                    "nsenter", "-t", str(pid), "-n",
+                    "ls", "/sys/class/net/",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await proc.communicate()
+                if proc.returncode != 0:
+                    continue
+
+                interfaces = [
+                    iface.strip()
+                    for iface in stdout.decode().split()
+                    if iface.strip() and iface.strip() != "lo"
+                ]
+
+                for interface in interfaces:
+                    vlan = await self._get_interface_vlan(pid, interface)
+                    if vlan is not None:
+                        vlans.append(vlan)
+                        max_vlan_seen = max(max_vlan_seen, vlan)
+
+                if vlans:
+                    self._vlan_allocations[lab_id][node_name] = vlans
+                    logger.debug(f"Captured VLANs for {node_name}: {vlans}")
+
+            except NotFound:
+                logger.debug(f"Container {container_name} not found, skipping VLAN capture")
+            except Exception as e:
+                logger.warning(f"Error capturing VLANs for {node_name}: {e}")
+
+        # Update next_vlan to be above any captured VLANs
+        self._next_vlan[lab_id] = max(self._next_vlan[lab_id], max_vlan_seen + 1)
+
+        # Persist the captured allocations
+        if self._vlan_allocations.get(lab_id):
+            self._save_vlan_allocations(lab_id, workspace)
+            logger.info(
+                f"Captured and saved VLAN allocations for lab {lab_id}: "
+                f"{len(self._vlan_allocations[lab_id])} nodes"
+            )
+
+    async def _get_interface_vlan(self, pid: int, interface: str) -> int | None:
+        """Get the VLAN tag for a container interface from OVS.
+
+        Args:
+            pid: Container PID
+            interface: Interface name inside the container
+
+        Returns:
+            VLAN tag if found, None otherwise
+        """
+        try:
+            # Get the peer interface index from inside container
+            proc = await asyncio.create_subprocess_exec(
+                "nsenter", "-t", str(pid), "-n", "-m",
+                "cat", f"/sys/class/net/{interface}/iflink",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return None
+
+            peer_idx = stdout.decode().strip()
+
+            # Find host interface with this index
+            proc = await asyncio.create_subprocess_exec(
+                "ip", "-o", "link", "show",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+
+            host_veth = None
+            for line in stdout.decode().split("\n"):
+                if line.startswith(f"{peer_idx}:"):
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        host_veth = parts[1].strip().split("@")[0]
+                        break
+
+            if not host_veth:
+                return None
+
+            # Get VLAN tag from OVS
+            proc = await asyncio.create_subprocess_exec(
+                "ovs-vsctl", "get", "port", host_veth, "tag",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return None
+
+            vlan_str = stdout.decode().strip().strip("[]")
+            if vlan_str:
+                return int(vlan_str)
+            return None
+
+        except Exception:
+            return None
 
     def _validate_images(self, topology: ParsedTopology) -> list[tuple[str, str]]:
         """Check that all required images exist.
@@ -1737,6 +2079,14 @@ username admin privilege 15 role network-admin nopassword
 
         logger.info(f"Deploying lab {lab_id} with {len(parsed_topology.nodes)} nodes")
 
+        # Attempt to recover stale network state from previous deployment
+        # This handles the case where the agent restarted and lost in-memory VLAN allocations
+        recovered_vlans = await self._recover_stale_network(lab_id, workspace)
+        if recovered_vlans:
+            logger.info(
+                f"Recovered network state for {len(recovered_vlans)} existing containers"
+            )
+
         # Validate images
         missing_images = self._validate_images(parsed_topology)
         if missing_images:
@@ -1782,6 +2132,9 @@ username admin privilege 15 role network-admin nopassword
         # Create local links
         links_created = await self._create_links(parsed_topology, lab_id)
         logger.info(f"Created {links_created} local links")
+
+        # Capture and persist VLAN allocations for recovery on restart
+        await self._capture_container_vlans(lab_id, parsed_topology, workspace)
 
         # Wait for readiness
         ready_status = await self._wait_for_readiness(
@@ -1865,6 +2218,13 @@ username admin privilege 15 role network-admin nopassword
             if self.use_ovs_plugin:
                 networks_deleted = await self._delete_lab_networks(lab_id)
                 logger.info(f"Docker network cleanup: {networks_deleted} networks deleted")
+
+            # Clean up VLAN allocations for this lab (in-memory and on disk)
+            if lab_id in self._vlan_allocations:
+                del self._vlan_allocations[lab_id]
+            if lab_id in self._next_vlan:
+                del self._next_vlan[lab_id]
+            self._remove_vlan_file(lab_id, workspace)
 
         except Exception as e:
             errors.append(f"Error during destroy: {e}")
@@ -2189,7 +2549,14 @@ username admin privilege 15 role network-admin nopassword
         node_name: str,
         workspace: Path,
     ) -> list[str] | None:
-        """Get docker exec command for console access."""
+        """Get console command for a container.
+
+        Supports two console methods:
+        - docker_exec: Use docker exec with vendor-specific shell (default)
+        - ssh: Use SSH to container's management IP address
+
+        The console method is determined by the device's vendor config.
+        """
         container_name = self._container_name(lab_id, node_name)
 
         try:
@@ -2197,11 +2564,35 @@ username admin privilege 15 role network-admin nopassword
             if container.status != "running":
                 return None
 
-            # Get vendor-specific shell
             kind = container.labels.get(LABEL_NODE_KIND, "linux")
-            shell = get_console_shell(kind)
+            console_method = get_console_method(kind)
 
-            return ["docker", "exec", "-it", container_name, shell]
+            if console_method == "ssh":
+                # Get container IP and SSH credentials
+                ips = self._get_container_ips(container)
+                if not ips:
+                    logger.warning(f"No IP address found for SSH console to {container_name}")
+                    return None
+
+                ip = ips[0]  # Use first available IP
+                user, password = get_console_credentials(kind)
+
+                # Use sshpass for non-interactive password authentication
+                # -o StrictHostKeyChecking=no: Don't prompt for host key verification
+                # -o UserKnownHostsFile=/dev/null: Don't save host key
+                # -o LogLevel=ERROR: Reduce SSH output noise
+                return [
+                    "sshpass", "-p", password,
+                    "ssh",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=/dev/null",
+                    "-o", "LogLevel=ERROR",
+                    f"{user}@{ip}",
+                ]
+            else:
+                # Default: docker exec with vendor-specific shell
+                shell = get_console_shell(kind)
+                return ["docker", "exec", "-it", container_name, shell]
 
         except NotFound:
             return None
@@ -2220,7 +2611,9 @@ username admin privilege 15 role network-admin nopassword
         """Extract running configs from all containers in a lab that support it.
 
         Checks each container's vendor config for extraction method and command.
-        Supports any container with config_extract_method="docker".
+        Supports:
+        - config_extract_method="docker": Use docker exec
+        - config_extract_method="ssh": Use SSH to container's management IP
 
         Returns list of (node_name, config_content) tuples.
         Also saves configs to workspace/configs/{node}/startup-config.
@@ -2248,8 +2641,8 @@ username admin privilege 15 role network-admin nopassword
                 # Look up vendor config extraction settings
                 extraction_settings = get_config_extraction_settings(kind)
 
-                # Skip containers that don't support docker exec extraction
-                if extraction_settings.method != "docker":
+                # Skip containers that don't support extraction
+                if extraction_settings.method not in ("docker", "ssh"):
                     continue
 
                 log_name = _log_name_from_labels(labels)
@@ -2259,33 +2652,25 @@ username admin privilege 15 role network-admin nopassword
                     continue
 
                 try:
-                    # Parse the extraction command
-                    # Handle both simple commands and shell-like commands with arguments
                     cmd = extraction_settings.command
                     if not cmd:
                         logger.warning(f"No extraction command for {kind}, skipping {log_name}")
                         continue
 
-                    # Use shell execution for complex commands with quotes/pipes
-                    exec_cmd = ["sh", "-c", cmd]
+                    config_content = None
 
-                    result = await asyncio.to_thread(
-                        container.exec_run,
-                        exec_cmd,
-                        demux=True,
-                    )
-                    stdout, stderr = result.output
-
-                    if result.exit_code != 0:
-                        stderr_str = stderr.decode("utf-8") if stderr else ""
-                        logger.warning(
-                            f"Failed to extract config from {log_name}: "
-                            f"exit={result.exit_code}, stderr={stderr_str}"
+                    if extraction_settings.method == "ssh":
+                        # Extract via SSH
+                        config_content = await self._extract_config_via_ssh(
+                            container, kind, cmd, log_name
                         )
-                        continue
+                    else:
+                        # Extract via docker exec (default)
+                        config_content = await self._extract_config_via_docker(
+                            container, cmd, log_name
+                        )
 
-                    config_content = stdout.decode("utf-8") if stdout else ""
-                    if not config_content.strip():
+                    if not config_content or not config_content.strip():
                         logger.warning(f"Empty config from {log_name}")
                         continue
 
@@ -2305,6 +2690,104 @@ username admin privilege 15 role network-admin nopassword
             logger.error(f"Error during config extraction for lab {lab_id}: {e}")
 
         return extracted
+
+    async def _extract_config_via_docker(
+        self,
+        container,
+        cmd: str,
+        log_name: str,
+    ) -> str | None:
+        """Extract config from container via docker exec.
+
+        Args:
+            container: Docker container object
+            cmd: Command to run
+            log_name: Display name for logging
+
+        Returns:
+            Config content string or None on failure
+        """
+        try:
+            # Use shell execution for complex commands with quotes/pipes
+            exec_cmd = ["sh", "-c", cmd]
+
+            result = await asyncio.to_thread(
+                container.exec_run,
+                exec_cmd,
+                demux=True,
+            )
+            stdout, stderr = result.output
+
+            if result.exit_code != 0:
+                stderr_str = stderr.decode("utf-8") if stderr else ""
+                logger.warning(
+                    f"Failed to extract config from {log_name}: "
+                    f"exit={result.exit_code}, stderr={stderr_str}"
+                )
+                return None
+
+            return stdout.decode("utf-8") if stdout else None
+
+        except Exception as e:
+            logger.error(f"Docker exec failed for {log_name}: {e}")
+            return None
+
+    async def _extract_config_via_ssh(
+        self,
+        container,
+        kind: str,
+        cmd: str,
+        log_name: str,
+    ) -> str | None:
+        """Extract config from container via SSH.
+
+        Args:
+            container: Docker container object
+            kind: Device kind for credential lookup
+            cmd: Command to run
+            log_name: Display name for logging
+
+        Returns:
+            Config content string or None on failure
+        """
+        try:
+            # Get container IP
+            ips = self._get_container_ips(container)
+            if not ips:
+                logger.warning(f"No IP address found for SSH extraction from {log_name}")
+                return None
+
+            ip = ips[0]
+            user, password = get_console_credentials(kind)
+
+            # Run SSH command with sshpass
+            proc = await asyncio.create_subprocess_exec(
+                "sshpass", "-p", password,
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-o", "ConnectTimeout=10",
+                f"{user}@{ip}",
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                stderr_str = stderr.decode("utf-8") if stderr else ""
+                logger.warning(
+                    f"SSH extraction failed for {log_name}: "
+                    f"exit={proc.returncode}, stderr={stderr_str}"
+                )
+                return None
+
+            return stdout.decode("utf-8") if stdout else None
+
+        except Exception as e:
+            logger.error(f"SSH extraction failed for {log_name}: {e}")
+            return None
 
     # Backwards compatibility alias
     async def _extract_all_ceos_configs(
@@ -2387,6 +2870,16 @@ username admin privilege 15 role network-admin nopassword
                     await asyncio.to_thread(container.remove, force=True)
                     removed.append(container.name)
                     await self.local_network.cleanup_lab(lab_id)
+
+                    # Clean up VLAN allocations for orphaned lab
+                    if lab_id in self._vlan_allocations:
+                        del self._vlan_allocations[lab_id]
+                    if lab_id in self._next_vlan:
+                        del self._next_vlan[lab_id]
+                    # Remove VLAN file if workspace exists
+                    lab_workspace = Path(settings.workspace_path) / lab_id
+                    if lab_workspace.exists():
+                        self._remove_vlan_file(lab_id, lab_workspace)
 
         except Exception as e:
             logger.error(f"Error during orphan cleanup: {e}")
