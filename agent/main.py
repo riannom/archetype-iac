@@ -1485,8 +1485,11 @@ async def reconcile_nodes(
         if libvirt_provider:
             try:
                 # Extract node name from container_name (format: arch-{lab_id}-{node_name})
-                # For VMs, we use the container_name directly as it should match the domain pattern
-                node_name = container_name
+                prefix = f"arch-{lab_id}-"
+                if container_name.startswith(prefix):
+                    node_name = container_name[len(prefix):]
+                else:
+                    node_name = container_name  # fallback
 
                 if desired == "running":
                     result = await libvirt_provider.start_node(lab_id, node_name, workspace)
@@ -1543,25 +1546,51 @@ async def reconcile_nodes(
 
 @app.post("/labs/{lab_id}/extract-configs")
 async def extract_configs(lab_id: str) -> ExtractConfigsResponse:
-    """Extract running configs from all cEOS nodes in a lab.
+    """Extract running configs from all nodes in a lab.
 
-    This extracts the running-config from all running cEOS containers
-    and saves them to the workspace as startup-config files for persistence.
+    This extracts the running-config from:
+    - Docker containers (cEOS and other containerized devices)
+    - Libvirt VMs (Cisco IOSv, CSR1000v, ASAv, etc.)
+
+    Configs are saved to the workspace as startup-config files for persistence.
     Returns both the count and the actual config content for each node.
     """
     logger.info(f"Extract configs request: lab={lab_id}")
 
     try:
-        provider = get_provider_for_request()
         workspace = get_workspace(lab_id)
+        all_configs: list[tuple[str, str]] = []
 
-        # Call the provider's extract method - now returns list of (node_name, content) tuples
-        extracted_configs = await provider._extract_all_ceos_configs(lab_id, workspace)
+        # Extract from Docker containers if enabled
+        if settings.enable_docker:
+            try:
+                docker_provider = get_provider_for_request("docker")
+                docker_configs = await docker_provider._extract_all_ceos_configs(lab_id, workspace)
+                all_configs.extend(docker_configs)
+                logger.info(f"Extracted {len(docker_configs)} Docker configs")
+            except Exception as e:
+                logger.warning(f"Docker config extraction failed: {e}")
+
+        # Extract from libvirt VMs if enabled
+        if settings.enable_libvirt:
+            try:
+                from agent.providers.libvirt import LibvirtProvider, LIBVIRT_AVAILABLE
+                if LIBVIRT_AVAILABLE:
+                    libvirt_provider = LibvirtProvider()
+                    vm_configs = await libvirt_provider._extract_all_vm_configs(lab_id, workspace)
+                    all_configs.extend(vm_configs)
+                    logger.info(f"Extracted {len(vm_configs)} VM configs")
+                else:
+                    logger.debug("Libvirt not available, skipping VM config extraction")
+            except ImportError:
+                logger.debug("Libvirt provider not available, skipping VM config extraction")
+            except Exception as e:
+                logger.warning(f"VM config extraction failed: {e}")
 
         # Convert to response format
         configs = [
             ExtractedConfig(node_name=node_name, content=content)
-            for node_name, content in extracted_configs
+            for node_name, content in all_configs
         ]
 
         return ExtractConfigsResponse(

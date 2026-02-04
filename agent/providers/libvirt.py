@@ -354,6 +354,7 @@ class LibvirtProvider(Provider):
         data_volume_path: Path | None = None,
         interface_count: int = 1,
         vlan_tags: list[int] | None = None,
+        kind: str | None = None,
     ) -> str:
         """Generate libvirt domain XML for a VM.
 
@@ -364,6 +365,7 @@ class LibvirtProvider(Provider):
             data_volume_path: Optional path to data volume
             interface_count: Number of network interfaces to create
             vlan_tags: VLAN tags for each interface (for OVS isolation)
+            kind: Device kind for config extraction lookup
 
         Returns:
             Domain XML string
@@ -426,10 +428,20 @@ class LibvirtProvider(Provider):
       <model type='{nic_driver}'/>
     </interface>'''
 
+        # Build metadata section with device kind for config extraction
+        metadata_xml = ""
+        if kind:
+            metadata_xml = f'''
+  <metadata>
+    <archetype:node xmlns:archetype="http://archetype.io/libvirt/1">
+      <archetype:kind>{kind}</archetype:kind>
+    </archetype:node>
+  </metadata>'''
+
         # Build the full domain XML
         xml = f'''<domain type='kvm'>
   <name>{name}</name>
-  <uuid>{domain_uuid}</uuid>
+  <uuid>{domain_uuid}</uuid>{metadata_xml}
   <memory unit='MiB'>{memory_mb}</memory>
   <vcpu>{cpus}</vcpu>
   <os>
@@ -587,6 +599,7 @@ class LibvirtProvider(Provider):
                     node_name,
                     node_config,
                     disks_dir,
+                    kind=node.kind,
                 )
                 deployed_nodes.append(node_info)
                 logger.info(f"Deployed VM {log_name}")
@@ -619,6 +632,7 @@ class LibvirtProvider(Provider):
         node_name: str,
         node_config: dict,
         disks_dir: Path,
+        kind: str | None = None,
     ) -> NodeInfo:
         """Deploy a single VM node."""
         domain_name = self._domain_name(lab_id, node_name)
@@ -678,6 +692,7 @@ class LibvirtProvider(Provider):
             data_volume_path,
             interface_count=interface_count,
             vlan_tags=vlan_tags,
+            kind=kind,
         )
 
         # Define and start the domain
@@ -843,15 +858,27 @@ class LibvirtProvider(Provider):
         lab_id: str,
         node_name: str,
         workspace: Path,
+        force: bool = True,
     ) -> NodeActionResult:
-        """Stop a specific VM."""
+        """Stop a specific VM.
+
+        Args:
+            lab_id: Lab identifier
+            node_name: Node name within the lab
+            workspace: Lab workspace path
+            force: If True (default), immediately force stop the VM.
+                   If False, try graceful ACPI shutdown first.
+                   Most network VMs don't support ACPI shutdown, so force=True
+                   is the default to avoid long waits.
+        """
         domain_name = self._domain_name(lab_id, node_name)
 
         try:
             domain = self.conn.lookupByName(domain_name)
             state, _ = domain.state()
 
-            if state != libvirt.VIR_DOMAIN_RUNNING:
+            # Already stopped or shutoff
+            if state in (libvirt.VIR_DOMAIN_SHUTOFF, libvirt.VIR_DOMAIN_CRASHED):
                 return NodeActionResult(
                     success=True,
                     node_name=node_name,
@@ -859,18 +886,38 @@ class LibvirtProvider(Provider):
                     stdout="Domain already stopped",
                 )
 
-            # Graceful shutdown first
-            domain.shutdown()
+            # Not running (paused, shutdown in progress, etc.)
+            if state != libvirt.VIR_DOMAIN_RUNNING:
+                # Force stop to ensure it's fully stopped
+                try:
+                    domain.destroy()
+                except libvirt.libvirtError:
+                    pass  # May fail if already stopped
+                return NodeActionResult(
+                    success=True,
+                    node_name=node_name,
+                    new_status=NodeStatus.STOPPED,
+                    stdout=f"Stopped domain {domain_name}",
+                )
 
-            # Wait for shutdown (up to 30 seconds)
-            for _ in range(30):
-                await asyncio.sleep(1)
-                state, _ = domain.state()
-                if state != libvirt.VIR_DOMAIN_RUNNING:
-                    break
-            else:
-                # Force stop if graceful shutdown didn't work
+            if force:
+                # Force stop immediately (default for network VMs)
                 domain.destroy()
+                logger.info(f"Force stopped domain {domain_name}")
+            else:
+                # Try graceful shutdown first
+                domain.shutdown()
+
+                # Wait for shutdown (up to 10 seconds, reduced from 30)
+                for _ in range(10):
+                    await asyncio.sleep(1)
+                    state, _ = domain.state()
+                    if state != libvirt.VIR_DOMAIN_RUNNING:
+                        break
+                else:
+                    # Force stop if graceful shutdown didn't work
+                    domain.destroy()
+                    logger.info(f"Force stopped domain {domain_name} after graceful timeout")
 
             return NodeActionResult(
                 success=True,
@@ -880,6 +927,14 @@ class LibvirtProvider(Provider):
             )
 
         except libvirt.libvirtError as e:
+            # Check if it's just "domain not running" which is fine
+            if "domain is not running" in str(e).lower():
+                return NodeActionResult(
+                    success=True,
+                    node_name=node_name,
+                    new_status=NodeStatus.STOPPED,
+                    stdout="Domain already stopped",
+                )
             return NodeActionResult(
                 success=False,
                 node_name=node_name,
@@ -1094,3 +1149,140 @@ class LibvirtProvider(Provider):
             Timeout in seconds
         """
         return get_readiness_timeout(kind)
+
+    def _get_domain_kind(self, domain) -> str | None:
+        """Get the device kind for a libvirt domain.
+
+        The kind is stored in domain metadata during deployment.
+
+        Args:
+            domain: libvirt domain object
+
+        Returns:
+            Device kind string, or None if not found
+        """
+        try:
+            xml = domain.XMLDesc()
+            # Parse XML and look for our metadata
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(xml)
+            metadata = root.find('metadata')
+            if metadata is not None:
+                # Look for archetype:kind in metadata
+                for child in metadata:
+                    if 'kind' in child.tag:
+                        return child.text
+                # Also look for nested archetype:node/archetype:kind
+                for node_elem in metadata:
+                    if 'node' in node_elem.tag:
+                        for kind_elem in node_elem:
+                            if 'kind' in kind_elem.tag:
+                                return kind_elem.text
+        except Exception as e:
+            logger.debug(f"Error getting domain kind: {e}")
+        return None
+
+    async def _extract_config(
+        self,
+        lab_id: str,
+        node_name: str,
+        kind: str,
+    ) -> tuple[str, str] | None:
+        """Extract running config from a single VM.
+
+        Args:
+            lab_id: Lab identifier
+            node_name: Node name within the lab
+            kind: Device kind for vendor config lookup
+
+        Returns:
+            Tuple of (node_name, config_content) or None if extraction failed
+        """
+        from agent.console_extractor import extract_vm_config, PEXPECT_AVAILABLE
+
+        if not PEXPECT_AVAILABLE:
+            logger.warning("pexpect not available, skipping VM config extraction")
+            return None
+
+        domain_name = self._domain_name(lab_id, node_name)
+
+        # Check VM is running
+        try:
+            domain = self.conn.lookupByName(domain_name)
+            state, _ = domain.state()
+            if state != libvirt.VIR_DOMAIN_RUNNING:
+                logger.warning(f"Cannot extract config from {node_name}: VM not running")
+                return None
+        except libvirt.libvirtError:
+            logger.warning(f"Cannot extract config from {node_name}: domain not found")
+            return None
+
+        # Run extraction in thread pool to avoid blocking
+        result = await asyncio.to_thread(
+            extract_vm_config,
+            domain_name,
+            kind,
+            self._uri,
+        )
+
+        if result.success:
+            logger.info(f"Extracted config from {node_name} ({len(result.config)} bytes)")
+            return (node_name, result.config)
+        else:
+            logger.warning(f"Failed to extract config from {node_name}: {result.error}")
+            return None
+
+    async def _extract_all_vm_configs(
+        self,
+        lab_id: str,
+        workspace: Path,
+    ) -> list[tuple[str, str]]:
+        """Extract running configs from all VMs in a lab.
+
+        Returns list of (node_name, config_content) tuples.
+        Also saves configs to workspace/configs/{node}/startup-config.
+
+        Args:
+            lab_id: Lab identifier
+            workspace: Lab workspace path
+
+        Returns:
+            List of (node_name, config_content) tuples
+        """
+        extracted = []
+        prefix = self._lab_prefix(lab_id)
+
+        try:
+            # Get all running VMs for this lab
+            all_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE)
+
+            for domain in all_domains:
+                name = domain.name()
+                if not name.startswith(prefix + "-"):
+                    continue
+
+                node_name = name[len(prefix) + 1:]
+
+                # Get device kind from domain metadata
+                kind = self._get_domain_kind(domain)
+                if not kind:
+                    logger.warning(f"Unknown device kind for {node_name}, skipping extraction")
+                    continue
+
+                result = await self._extract_config(lab_id, node_name, kind)
+                if result:
+                    node_name, config = result
+
+                    # Save to workspace
+                    config_dir = workspace / "configs" / node_name
+                    config_dir.mkdir(parents=True, exist_ok=True)
+                    config_path = config_dir / "startup-config"
+                    config_path.write_text(config)
+                    logger.info(f"Saved config to {config_path}")
+
+                    extracted.append((node_name, config))
+
+        except Exception as e:
+            logger.error(f"Error during VM config extraction for lab {lab_id}: {e}")
+
+        return extracted

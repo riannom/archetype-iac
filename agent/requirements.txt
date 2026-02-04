@@ -10,6 +10,7 @@ python-multipart==0.0.9
 asyncssh==2.14.2
 redis==5.0.1  # For distributed deploy locks
 aiohttp==3.9.5  # For Docker OVS plugin HTTP server
+pexpect>=4.8.0  # For serial console config extraction from VMs
 # libvirt-python installed via system package (apt install python3-libvirt)
 
 # Testing
