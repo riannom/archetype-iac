@@ -90,13 +90,13 @@ describe("ThemeProvider", () => {
         </ThemeProvider>
       );
 
-      expect(screen.getByTestId("theme-count")).toHaveTextContent("5");
+      expect(screen.getByTestId("theme-count")).toHaveTextContent("16");
     });
 
     it("loads stored preferences", () => {
       localStorage.setItem(
         "archetype_theme_prefs",
-        JSON.stringify({ themeId: "ocean", mode: "light" })
+        JSON.stringify({ themeId: "ocean", mode: "light", backgroundId: "stars", backgroundOpacity: 75 })
       );
 
       render(

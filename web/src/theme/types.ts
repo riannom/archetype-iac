@@ -58,6 +58,9 @@ export interface Theme {
 export interface ThemePreferences {
   themeId: string;
   mode: 'light' | 'dark' | 'system';
+  backgroundId: string;
+  backgroundOpacity: number; // 0-100
+  favoriteBackgrounds?: string[];
 }
 
 /**
@@ -65,11 +68,23 @@ export interface ThemePreferences {
  */
 export interface ThemeContextValue {
   theme: Theme;
+  backgroundId: string;
+  backgroundOpacity: number;
   mode: 'light' | 'dark';
   effectiveMode: 'light' | 'dark';
   preferences: ThemePreferences;
   availableThemes: Theme[];
+  availableBackgrounds: {
+    id: string;
+    name: string;
+    animated: boolean;
+    categories: string[];
+    preferredMode?: 'light' | 'dark' | 'both';
+  }[];
   setTheme: (themeId: string) => void;
+  setBackground: (backgroundId: string) => void;
+  setBackgroundOpacity: (opacity: number) => void;
+  toggleFavoriteBackground: (backgroundId: string) => void;
   setMode: (mode: 'light' | 'dark' | 'system') => void;
   toggleMode: () => void;
   importTheme: (themeJson: string) => Theme | null;

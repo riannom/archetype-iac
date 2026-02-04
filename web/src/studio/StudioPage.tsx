@@ -1636,8 +1636,8 @@ const StudioPage: React.FC = () => {
 
   const backgroundGradient =
     effectiveMode === 'dark'
-      ? 'bg-gradient-to-br from-stone-950 via-stone-900 to-stone-950 bg-gradient-animate'
-      : 'bg-gradient-to-br from-stone-50 via-white to-stone-100 bg-gradient-animate';
+      ? 'bg-gradient-to-br from-stone-950/90 via-stone-900/82 to-stone-950/90 bg-gradient-animate backdrop-blur-[1px]'
+      : 'bg-gradient-to-br from-stone-50/70 via-white/64 to-stone-100/70 bg-gradient-animate backdrop-blur-[1px]';
 
   if (authRequired) {
     return (
@@ -1702,9 +1702,9 @@ const StudioPage: React.FC = () => {
   }
 
   return (
-    <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${backgroundGradient}`}>
+    <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${view === 'designer' ? '' : backgroundGradient}`}>
       <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onExit={() => setActiveLab(null)} onRename={(newName) => handleRenameLab(activeLab.id, newName)} />
-      <div className="h-10 bg-white/60 dark:bg-stone-900/60 backdrop-blur-md border-b border-stone-200 dark:border-stone-800 flex px-6 items-center gap-1 shrink-0">
+      <div className="h-10 bg-white/35 dark:bg-black/35 backdrop-blur-md border-b border-stone-200/70 dark:border-black/70 flex px-6 items-center gap-1 shrink-0">
         <button
           onClick={() => setView('designer')}
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${

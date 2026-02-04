@@ -1,41 +1,33 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useMemo, useRef, useState, useCallback } from 'react';
 import { useTheme } from './ThemeProvider';
 import type { Theme } from './types';
 import { builtInThemes } from './presets';
+import {
+  backgroundCategories,
+  filterBackgroundsByCategory,
+  isBackgroundPreferredInMode,
+  type BackgroundCategory,
+} from './backgrounds';
+import { getSuggestedBackgroundForTheme } from './backgroundPairs';
 
 interface ThemeSelectorProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-/**
- * Render a preview of a theme's colors
- */
-function ThemePreview({ theme, isSelected }: { theme: Theme; isSelected: boolean }) {
+function ThemePreview({ theme }: { theme: Theme }) {
   return (
     <div className="flex gap-1">
-      {/* Accent colors preview */}
-      <div
-        className="w-4 h-4 rounded-sm"
-        style={{ backgroundColor: theme.colors.accent[400] }}
-      />
-      <div
-        className="w-4 h-4 rounded-sm"
-        style={{ backgroundColor: theme.colors.accent[600] }}
-      />
-      <div
-        className="w-4 h-4 rounded-sm"
-        style={{ backgroundColor: theme.colors.neutral[700] }}
-      />
+      <div className="w-4 h-4 rounded-sm" style={{ backgroundColor: theme.colors.accent[400] }} />
+      <div className="w-4 h-4 rounded-sm" style={{ backgroundColor: theme.colors.accent[600] }} />
+      <div className="w-4 h-4 rounded-sm" style={{ backgroundColor: theme.colors.neutral[700] }} />
     </div>
   );
 }
 
-/**
- * Theme card for selection grid
- */
 function ThemeCard({
   theme,
+  iconClass,
   isSelected,
   isCustom,
   onSelect,
@@ -43,6 +35,7 @@ function ThemeCard({
   onRemove,
 }: {
   theme: Theme;
+  iconClass: string;
   isSelected: boolean;
   isCustom: boolean;
   onSelect: () => void;
@@ -52,37 +45,25 @@ function ThemeCard({
   return (
     <div
       onClick={onSelect}
-      className={`
-        relative p-3 rounded-lg border-2 cursor-pointer transition-all
-        ${isSelected
+      className={`relative p-3 rounded-lg border-2 cursor-pointer transition-all ${
+        isSelected
           ? 'border-sage-500 bg-sage-500/10 dark:bg-sage-500/10'
           : 'border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
-        }
-      `}
+      }`}
     >
-      {/* Theme preview colors */}
       <div className="mb-2">
-        <ThemePreview theme={theme} isSelected={isSelected} />
+        <div className="flex items-center justify-between gap-2">
+          <ThemePreview theme={theme} />
+          <i className={`fa-solid ${iconClass} text-stone-500 dark:text-stone-400`} />
+        </div>
       </div>
-
-      {/* Theme name */}
-      <div className="text-sm font-medium text-stone-900 dark:text-stone-100">
-        {theme.name}
-      </div>
-
-      {/* Custom badge */}
-      {isCustom && (
-        <span className="text-xs text-stone-500 dark:text-stone-400">Custom</span>
-      )}
-
-      {/* Selected indicator */}
+      <div className="text-sm font-medium text-stone-900 dark:text-stone-100">{theme.name}</div>
+      {isCustom && <span className="text-xs text-stone-500 dark:text-stone-400">Custom</span>}
       {isSelected && (
         <div className="absolute top-2 right-2">
           <i className="fa-solid fa-check text-sage-500 text-sm" />
         </div>
       )}
-
-      {/* Action buttons */}
       <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
         <button
           onClick={(e) => {
@@ -114,9 +95,16 @@ function ThemeCard({
 export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
   const {
     theme,
+    backgroundId,
+    backgroundOpacity,
+    effectiveMode,
     preferences,
     availableThemes,
+    availableBackgrounds,
     setTheme,
+    setBackground,
+    setBackgroundOpacity,
+    toggleFavoriteBackground,
     setMode,
     importTheme,
     exportTheme,
@@ -124,38 +112,64 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
   } = useTheme();
 
   const [importError, setImportError] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<BackgroundCategory | 'favorites'>('all');
+  const [modeFilter, setModeFilter] = useState<'all' | 'light' | 'dark'>('all');
+  const [animationFilter, setAnimationFilter] = useState<'all' | 'animated' | 'static'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const favoriteSet = useMemo(() => new Set(preferences.favoriteBackgrounds || []), [preferences.favoriteBackgrounds]);
+  const suggestedBackgroundId = useMemo(() => getSuggestedBackgroundForTheme(theme.id), [theme.id]);
 
-  // Handle mode selection
-  const handleModeChange = (mode: 'light' | 'dark' | 'system') => {
-    setMode(mode);
+  const getThemeIconClass = (themeId: string) => {
+    const icons: Record<string, string> = {
+      'sage-stone': 'fa-seedling',
+      'ocean': 'fa-water',
+      'copper': 'fa-fire',
+      'violet': 'fa-gem',
+      'rose': 'fa-heart',
+      'serenity': 'fa-water',
+      'forest': 'fa-tree',
+      'cyber': 'fa-microchip',
+      'sunrise': 'fa-sun',
+      'sunset': 'fa-cloud-sun',
+      'sakura-yoshino': 'fa-leaf',
+      'sakura-sumie': 'fa-pen',
+      'midnight': 'fa-moon',
+      'desert': 'fa-mountain',
+      'seasonal': 'fa-calendar-days',
+    };
+    return icons[themeId] || 'fa-palette';
   };
 
-  // Handle theme selection
-  const handleThemeSelect = (themeId: string) => {
-    setTheme(themeId);
+  const getBackgroundIconClass = (bg: { id: string; categories: string[]; animated: boolean }) => {
+    if (bg.id === 'none') return 'fa-ban';
+    if (bg.animated) return 'fa-sparkles';
+    if (bg.categories.includes('weather')) return 'fa-cloud-rain';
+    if (bg.categories.includes('water')) return 'fa-water';
+    if (bg.categories.includes('sky')) return 'fa-star';
+    if (bg.categories.includes('landscape')) return 'fa-mountain';
+    if (bg.categories.includes('creatures')) return 'fa-dove';
+    if (bg.categories.includes('nature')) return 'fa-leaf';
+    if (bg.categories.includes('geometric')) return 'fa-draw-polygon';
+    if (bg.categories.includes('zen')) return 'fa-circle-notch';
+    return 'fa-image';
   };
 
-  // Handle export
   const handleExport = useCallback((themeId: string) => {
     const json = exportTheme(themeId);
-    if (json) {
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${themeId}-theme.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }
+    if (!json) return;
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${themeId}-theme.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }, [exportTheme]);
 
-  // Handle import
-  const handleImportClick = () => {
-    fileInputRef.current?.click();
-  };
+  const handleImportClick = () => fileInputRef.current?.click();
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -172,41 +186,60 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
         setImportError('Invalid theme file. Please check the format.');
       }
     };
-    reader.onerror = () => {
-      setImportError('Failed to read file.');
-    };
+    reader.onerror = () => setImportError('Failed to read file.');
     reader.readAsText(file);
-
-    // Reset input so same file can be selected again
     e.target.value = '';
   }, [importTheme, setTheme]);
 
-  // Handle remove custom theme
-  const handleRemove = useCallback((themeId: string) => {
-    removeCustomTheme(themeId);
-  }, [removeCustomTheme]);
+  const customThemes = useMemo(
+    () => availableThemes.filter(t => !builtInThemes.some(bt => bt.id === t.id)),
+    [availableThemes]
+  );
+
+  const filteredBackgrounds = useMemo(() => {
+    const inCategory = activeCategory === 'favorites'
+      ? availableBackgrounds.filter((bg) => favoriteSet.has(bg.id))
+      : activeCategory === 'all'
+        ? availableBackgrounds
+        : filterBackgroundsByCategory(activeCategory).map(pattern => pattern.id)
+          .map(id => availableBackgrounds.find(bg => bg.id === id))
+          .filter((value): value is NonNullable<typeof value> => Boolean(value));
+
+    const byQuery = !searchQuery.trim()
+      ? inCategory
+      : inCategory.filter(bg => {
+        const query = searchQuery.toLowerCase();
+        return bg.name.toLowerCase().includes(query) || bg.id.toLowerCase().includes(query);
+      });
+
+    const byModeFilter = byQuery.filter((bg) => {
+      if (modeFilter === 'all') return true;
+      return isBackgroundPreferredInMode(bg.id, modeFilter);
+    });
+
+    const byAnimationFilter = byModeFilter.filter((bg) => {
+      if (animationFilter === 'all') return true;
+      return animationFilter === 'animated' ? bg.animated : !bg.animated;
+    });
+
+    return byAnimationFilter.slice().sort((a, b) => {
+      if (a.id === 'none') return -1;
+      if (b.id === 'none') return 1;
+      const aScore = Number(favoriteSet.has(a.id)) * 2 + Number(a.animated);
+      const bScore = Number(favoriteSet.has(b.id)) * 2 + Number(b.animated);
+      if (aScore !== bScore) return bScore - aScore;
+      return a.name.localeCompare(b.name);
+    });
+  }, [activeCategory, availableBackgrounds, favoriteSet, searchQuery, modeFilter, animationFilter]);
 
   if (!isOpen) return null;
 
-  const customThemes = availableThemes.filter(
-    t => !builtInThemes.some(bt => bt.id === t.id)
-  );
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={onClose}
-      />
-
-      {/* Modal */}
-      <div className="relative bg-stone-50 dark:bg-stone-900 rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-hidden">
-        {/* Header */}
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-stone-50 dark:bg-stone-900 rounded-xl shadow-2xl w-full max-w-5xl mx-4 max-h-[92vh] overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-stone-200 dark:border-stone-700">
-          <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100">
-            Theme Settings
-          </h2>
+          <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100">Theme Settings</h2>
           <button
             onClick={onClose}
             className="p-1 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
@@ -215,25 +248,19 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-6 overflow-y-auto max-h-[calc(90vh-8rem)]">
-          {/* Appearance Mode */}
-          <div className="mb-6">
-            <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3 uppercase tracking-wide">
-              Appearance Mode
-            </h3>
+        <div className="p-6 overflow-y-auto max-h-[calc(92vh-8rem)] space-y-8">
+          <section>
+            <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3 uppercase tracking-wide">Appearance Mode</h3>
             <div className="flex gap-2">
               {(['light', 'dark', 'system'] as const).map((mode) => (
                 <button
                   key={mode}
-                  onClick={() => handleModeChange(mode)}
-                  className={`
-                    flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all
-                    ${preferences.mode === mode
+                  onClick={() => setMode(mode)}
+                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    preferences.mode === mode
                       ? 'bg-sage-600 text-white'
                       : 'bg-stone-200 dark:bg-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-300 dark:hover:bg-stone-600'
-                    }
-                  `}
+                  }`}
                 >
                   {mode === 'light' && <i className="fa-solid fa-sun mr-2" />}
                   {mode === 'dark' && <i className="fa-solid fa-moon mr-2" />}
@@ -242,54 +269,196 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
                 </button>
               ))}
             </div>
-          </div>
+          </section>
 
-          {/* Color Theme */}
-          <div className="mb-6">
-            <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3 uppercase tracking-wide">
-              Color Theme
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
+          <section>
+            <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3 uppercase tracking-wide">Color Theme</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {builtInThemes.map((t) => (
                 <ThemeCard
                   key={t.id}
                   theme={t}
+                  iconClass={getThemeIconClass(t.id)}
                   isSelected={theme.id === t.id}
                   isCustom={false}
-                  onSelect={() => handleThemeSelect(t.id)}
+                  onSelect={() => setTheme(t.id)}
                   onExport={() => handleExport(t.id)}
                 />
               ))}
             </div>
-          </div>
+          </section>
 
-          {/* Custom Themes */}
           {customThemes.length > 0 && (
-            <div className="mb-6">
-              <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3 uppercase tracking-wide">
-                Custom Themes
-              </h3>
-              <div className="grid grid-cols-2 gap-3">
+            <section>
+              <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3 uppercase tracking-wide">Custom Themes</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {customThemes.map((t) => (
                   <ThemeCard
                     key={t.id}
                     theme={t}
+                    iconClass={getThemeIconClass(t.id)}
                     isSelected={theme.id === t.id}
                     isCustom={true}
-                    onSelect={() => handleThemeSelect(t.id)}
+                    onSelect={() => setTheme(t.id)}
                     onExport={() => handleExport(t.id)}
-                    onRemove={() => handleRemove(t.id)}
+                    onRemove={() => removeCustomTheme(t.id)}
                   />
                 ))}
               </div>
-            </div>
+            </section>
           )}
 
-          {/* Import Custom Theme */}
-          <div>
-            <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3 uppercase tracking-wide">
-              Import Custom Theme
-            </h3>
+          <section>
+            <div className="flex items-center justify-between mb-3 gap-3">
+              <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 uppercase tracking-wide">Background</h3>
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search backgrounds"
+                className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-sm text-stone-900 dark:text-stone-100"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {(['all', 'light', 'dark'] as const).map((filterMode) => (
+                <button
+                  key={filterMode}
+                  onClick={() => setModeFilter(filterMode)}
+                  className={`px-3 py-1 rounded-full text-xs border ${
+                    modeFilter === filterMode
+                      ? 'bg-sage-600 text-white border-sage-600'
+                      : 'bg-stone-200 dark:bg-stone-800 border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300'
+                  }`}
+                >
+                  {filterMode === 'all' ? 'All modes' : `${filterMode === 'dark' ? 'Dark' : 'Light'} mode`}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {(['all', 'animated', 'static'] as const).map((filterAnimation) => (
+                <button
+                  key={filterAnimation}
+                  onClick={() => setAnimationFilter(filterAnimation)}
+                  className={`px-3 py-1 rounded-full text-xs border ${
+                    animationFilter === filterAnimation
+                      ? 'bg-sage-600 text-white border-sage-600'
+                      : 'bg-stone-200 dark:bg-stone-800 border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300'
+                  }`}
+                >
+                  {filterAnimation === 'all' ? 'All types' : filterAnimation === 'animated' ? 'Animated' : 'Static'}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button
+                onClick={() => setActiveCategory('favorites')}
+                className={`px-3 py-1 rounded-full text-xs border ${
+                  activeCategory === 'favorites'
+                    ? 'bg-sage-600 text-white border-sage-600'
+                    : 'bg-stone-200 dark:bg-stone-800 border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                Favorites ({favoriteSet.size})
+              </button>
+              {backgroundCategories.map(category => (
+                <button
+                  key={category.id}
+                  onClick={() => setActiveCategory(category.id)}
+                  className={`px-3 py-1 rounded-full text-xs border ${
+                    activeCategory === category.id
+                      ? 'bg-sage-600 text-white border-sage-600'
+                      : 'bg-stone-200 dark:bg-stone-800 border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300'
+                  }`}
+                >
+                  {category.label} ({filterBackgroundsByCategory(category.id).length})
+                </button>
+              ))}
+            </div>
+            <div className="mb-3 text-xs text-stone-500 dark:text-stone-400">
+              Backgrounds that do not match current {effectiveMode} mode are visible but disabled.
+            </div>
+            {backgroundId !== suggestedBackgroundId && (
+              <div className="mb-3 text-xs text-stone-600 dark:text-stone-300">
+                Suggested for {theme.name}:{" "}
+                <button
+                  onClick={() => setBackground(suggestedBackgroundId)}
+                  className="text-sage-600 dark:text-sage-400 hover:underline"
+                >
+                  {suggestedBackgroundId}
+                </button>
+              </div>
+            )}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-[18rem] overflow-y-auto pr-2">
+              {filteredBackgrounds.map((bg) => {
+                const isSelected = backgroundId === bg.id;
+                const isFavorite = favoriteSet.has(bg.id);
+                const isSelectableInCurrentMode = isBackgroundPreferredInMode(bg.id, effectiveMode);
+                return (
+                  <div
+                    key={bg.id}
+                    onClick={() => {
+                      if (!isSelectableInCurrentMode) return;
+                      setBackground(bg.id);
+                    }}
+                    className={`relative rounded-lg p-3 border text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-sage-500 bg-sage-500/10'
+                        : 'border-stone-200 dark:border-stone-700 hover:border-sage-400'
+                    } ${
+                      isSelectableInCurrentMode ? '' : 'opacity-45 cursor-not-allowed'
+                    }`}
+                    title={!isSelectableInCurrentMode ? `Available in ${bg.preferredMode} mode` : undefined}
+                  >
+                    <div className="absolute left-2 top-2 text-stone-400">
+                      <i className={`fa-solid ${getBackgroundIconClass(bg)} text-xs`} />
+                    </div>
+                    <div className="pl-4 text-sm font-medium text-stone-900 dark:text-stone-100 truncate">
+                      {bg.name}
+                    </div>
+                    <div className="mt-1 pl-4 text-xs text-stone-500 dark:text-stone-400 truncate">{bg.id}</div>
+                    <div className="mt-2 flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
+                      <span title={bg.animated ? 'Animated background' : 'Static background'}>
+                        <i className={`fa-solid ${bg.animated ? 'fa-sparkles' : 'fa-image'}`} />
+                      </span>
+                      {bg.preferredMode && bg.preferredMode !== 'both' && (
+                        <span className="px-1.5 py-0.5 rounded bg-stone-200 dark:bg-stone-700">
+                          {bg.preferredMode === 'dark' ? 'Dark only' : 'Light only'}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFavoriteBackground(bg.id);
+                      }}
+                      className={`absolute top-2 right-2 text-xs ${isFavorite ? 'text-rose-500' : 'text-stone-400'}`}
+                      title={isFavorite ? 'Remove favorite' : 'Add favorite'}
+                    >
+                      <i className={`${isFavorite ? 'fa-solid' : 'fa-regular'} fa-heart`} />
+                    </button>
+                    {isSelected && (
+                      <i className="fa-solid fa-check absolute bottom-2 right-2 text-sage-500 text-xs" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-4">
+              <label className="block text-sm text-stone-700 dark:text-stone-300 mb-2">
+                Background Opacity: {backgroundOpacity}%
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={backgroundOpacity}
+                onChange={(event) => setBackgroundOpacity(parseInt(event.target.value, 10))}
+                className="w-full"
+              />
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-sm font-medium text-stone-700 dark:text-stone-300 mb-3 uppercase tracking-wide">Import Custom Theme</h3>
             <input
               ref={fileInputRef}
               type="file"
@@ -304,13 +473,10 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
               <i className="fa-solid fa-upload mr-2" />
               Import Theme JSON
             </button>
-            {importError && (
-              <p className="mt-2 text-sm text-red-500">{importError}</p>
-            )}
-          </div>
+            {importError && <p className="mt-2 text-sm text-red-500">{importError}</p>}
+          </section>
         </div>
 
-        {/* Footer */}
         <div className="px-6 py-4 border-t border-stone-200 dark:border-stone-700 flex justify-end">
           <button
             onClick={onClose}

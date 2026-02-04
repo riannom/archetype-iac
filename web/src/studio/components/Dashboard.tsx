@@ -111,7 +111,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <>
-    <div className="min-h-screen bg-stone-50 dark:bg-stone-900 flex flex-col overflow-hidden">
+    <div className="min-h-screen bg-stone-50/72 dark:bg-stone-900/72 backdrop-blur-[1px] flex flex-col overflow-hidden">
       <header className="h-20 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10">
         <div className="flex items-center gap-4">
           <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />

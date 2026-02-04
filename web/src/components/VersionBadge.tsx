@@ -49,11 +49,11 @@ export const VersionBadge: React.FC<VersionBadgeProps> = ({ className = '' }) =>
         className={`
           flex items-center gap-1.5 px-2 py-1
           text-[10px] font-medium
-          text-stone-500 dark:text-stone-400
-          hover:text-stone-700 dark:hover:text-stone-200
-          bg-stone-100 dark:bg-stone-800/50
-          hover:bg-stone-200 dark:hover:bg-stone-700/50
-          border border-stone-200/50 dark:border-stone-700/50
+          text-stone-500 dark:text-stone-300
+          hover:text-stone-700 dark:hover:text-stone-100
+          bg-stone-100 dark:bg-black/60
+          hover:bg-stone-200 dark:hover:bg-black/75
+          border border-stone-200/50 dark:border-black/70
           rounded-full
           transition-all cursor-pointer
           ${className}
