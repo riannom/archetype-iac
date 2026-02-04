@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import type { Theme, ThemePreferences, ThemeContextValue } from './types';
 import { builtInThemes, DEFAULT_THEME_ID, getBuiltInTheme } from './presets';
+import {
+  backgroundPatterns,
+  getBackgroundById,
+  isAnimatedBackgroundId,
+} from './backgrounds';
+import { getSuggestedBackgroundForTheme } from './backgroundPairs';
+import { AnimatedBackground } from '../components/backgrounds/AnimatedBackground';
 
 // Storage keys
 const PREFS_KEY = 'archetype_theme_prefs';
@@ -10,6 +17,9 @@ const CUSTOM_THEMES_KEY = 'archetype_custom_themes';
 const defaultPreferences: ThemePreferences = {
   themeId: DEFAULT_THEME_ID,
   mode: 'dark',
+  backgroundId: getSuggestedBackgroundForTheme(DEFAULT_THEME_ID),
+  backgroundOpacity: 50,
+  favoriteBackgrounds: [],
 };
 
 // Create context
@@ -26,6 +36,9 @@ function loadPreferences(): ThemePreferences {
       return {
         themeId: parsed.themeId || DEFAULT_THEME_ID,
         mode: parsed.mode || 'dark',
+        backgroundId: parsed.backgroundId || getSuggestedBackgroundForTheme(parsed.themeId || DEFAULT_THEME_ID),
+        backgroundOpacity: typeof parsed.backgroundOpacity === 'number' ? parsed.backgroundOpacity : 50,
+        favoriteBackgrounds: Array.isArray(parsed.favoriteBackgrounds) ? parsed.favoriteBackgrounds : [],
       };
     }
   } catch (e) {
@@ -110,6 +123,20 @@ function applyThemeToDOM(theme: Theme, effectiveMode: 'light' | 'dark'): void {
   root.style.setProperty('--color-scrollbar-thumb', modeColors.scrollbarThumb);
 }
 
+function applyBackgroundToDOM(backgroundId: string, opacity: number): void {
+  const body = document.body;
+  const clampedOpacity = Math.max(0, Math.min(100, opacity));
+  const sanitizedBackgroundId = getBackgroundById(backgroundId) ? backgroundId : 'minimal';
+
+  body.className = body.className
+    .split(' ')
+    .filter(cls => !cls.startsWith('bg-pattern-'))
+    .join(' ');
+  body.classList.add(`bg-pattern-${sanitizedBackgroundId}`);
+
+  document.documentElement.style.setProperty('--background-opacity', String(clampedOpacity));
+}
+
 /**
  * Validate imported theme structure
  */
@@ -158,6 +185,9 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     const found = availableThemes.find(t => t.id === preferences.themeId);
     return found || getBuiltInTheme(DEFAULT_THEME_ID)!;
   }, [availableThemes, preferences.themeId]);
+  const selectedBackground = useMemo(() => {
+    return getBackgroundById(preferences.backgroundId) || getBackgroundById('minimal')!;
+  }, [preferences.backgroundId]);
 
   // Effective mode (resolves 'system' to actual mode)
   const effectiveMode = useMemo(() => {
@@ -182,6 +212,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     applyThemeToDOM(theme, effectiveMode);
   }, [theme, effectiveMode]);
 
+  useEffect(() => {
+    applyBackgroundToDOM(selectedBackground.id, preferences.backgroundOpacity);
+  }, [selectedBackground.id, preferences.backgroundOpacity]);
+
   // Save preferences whenever they change
   useEffect(() => {
     savePreferences(preferences);
@@ -194,7 +228,41 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
   // Set theme by ID
   const setTheme = useCallback((themeId: string) => {
-    setPreferences(prev => ({ ...prev, themeId }));
+    setPreferences(prev => {
+      const previousSuggested = getSuggestedBackgroundForTheme(prev.themeId);
+      const nextSuggested = getSuggestedBackgroundForTheme(themeId);
+      const shouldFollowSuggestion = prev.backgroundId === 'minimal' || prev.backgroundId === previousSuggested;
+
+      return {
+        ...prev,
+        themeId,
+        backgroundId: shouldFollowSuggestion ? nextSuggested : prev.backgroundId,
+      };
+    });
+  }, []);
+
+  const setBackground = useCallback((backgroundId: string) => {
+    const exists = getBackgroundById(backgroundId);
+    setPreferences(prev => ({ ...prev, backgroundId: exists ? backgroundId : 'minimal' }));
+  }, []);
+
+  const setBackgroundOpacity = useCallback((opacity: number) => {
+    const clampedOpacity = Math.max(0, Math.min(100, opacity));
+    setPreferences(prev => ({ ...prev, backgroundOpacity: clampedOpacity }));
+  }, []);
+
+  const toggleFavoriteBackground = useCallback((backgroundId: string) => {
+    setPreferences(prev => {
+      const favorites = prev.favoriteBackgrounds || [];
+      const nextFavorites = favorites.includes(backgroundId)
+        ? favorites.filter(id => id !== backgroundId)
+        : [...favorites, backgroundId];
+
+      return {
+        ...prev,
+        favoriteBackgrounds: nextFavorites,
+      };
+    });
   }, []);
 
   // Set mode (light/dark/system)
@@ -276,11 +344,17 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
   const contextValue: ThemeContextValue = useMemo(() => ({
     theme,
+    backgroundId: selectedBackground.id,
+    backgroundOpacity: preferences.backgroundOpacity,
     mode: preferences.mode === 'system' ? effectiveMode : preferences.mode,
     effectiveMode,
     preferences,
     availableThemes,
+    availableBackgrounds: backgroundPatterns,
     setTheme,
+    setBackground,
+    setBackgroundOpacity,
+    toggleFavoriteBackground,
     setMode,
     toggleMode,
     importTheme,
@@ -288,9 +362,14 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     removeCustomTheme,
   }), [
     theme,
+    selectedBackground.id,
+    preferences.backgroundOpacity,
     effectiveMode,
     preferences,
     availableThemes,
+    setBackground,
+    setBackgroundOpacity,
+    toggleFavoriteBackground,
     setTheme,
     setMode,
     toggleMode,
@@ -301,6 +380,13 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
   return (
     <ThemeContext.Provider value={contextValue}>
+      {isAnimatedBackgroundId(selectedBackground.id) && (
+        <AnimatedBackground
+          pattern={selectedBackground.id}
+          darkMode={effectiveMode === 'dark'}
+          opacity={preferences.backgroundOpacity}
+        />
+      )}
       {children}
     </ThemeContext.Provider>
   );

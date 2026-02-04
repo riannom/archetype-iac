@@ -349,6 +349,160 @@ export const roseTheme: Theme = {
 };
 
 /**
+ * Serenity - Tropical cyan theme
+ */
+export const serenityTheme: Theme = {
+  id: 'serenity',
+  name: 'Serenity',
+  description: 'Tropical cyan accents and tranquil slate tones',
+  colors: {
+    accent: {
+      50: '#ECFEFF', 100: '#CFFAFE', 200: '#A5F3FC', 300: '#67E8F9', 400: '#22D3EE',
+      500: '#06B6D4', 600: '#0891B2', 700: '#0E7490', 800: '#155E75', 900: '#164E63', 950: '#083344',
+    },
+    neutral: slateNeutral,
+    ...semanticColors,
+  },
+  light: { ...oceanTheme.light, accentPrimary: '#0891B2', accentHover: '#0E7490', nodeGlow: 'rgba(8, 145, 178, 0.3)' },
+  dark: { ...oceanTheme.dark, accentPrimary: '#06B6D4', accentHover: '#22D3EE', nodeGlow: 'rgba(6, 182, 212, 0.25)' },
+};
+
+export const forestTheme: Theme = {
+  id: 'forest',
+  name: 'Forest',
+  description: 'Deep evergreen accents and earthy neutrals',
+  colors: {
+    accent: {
+      50: '#ECFDF5', 100: '#D1FAE5', 200: '#A7F3D0', 300: '#6EE7B7', 400: '#34D399',
+      500: '#10B981', 600: '#059669', 700: '#047857', 800: '#065F46', 900: '#064E3B', 950: '#022C22',
+    },
+    neutral: stoneNeutral,
+    ...semanticColors,
+  },
+  light: { ...sageStoneTheme.light, accentPrimary: '#059669', accentHover: '#047857', nodeGlow: 'rgba(5, 150, 105, 0.3)' },
+  dark: { ...sageStoneTheme.dark, accentPrimary: '#10B981', accentHover: '#34D399', nodeGlow: 'rgba(16, 185, 129, 0.25)' },
+};
+
+export const cyberTheme: Theme = {
+  id: 'cyber',
+  name: 'Cyber',
+  description: 'Neon electric palette with dark graphite base',
+  colors: {
+    accent: {
+      50: '#ECFEFF', 100: '#CFFAFE', 200: '#A5F3FC', 300: '#67E8F9', 400: '#22D3EE',
+      500: '#06B6D4', 600: '#0891B2', 700: '#0E7490', 800: '#155E75', 900: '#164E63', 950: '#083344',
+    },
+    neutral: zincNeutral,
+    ...semanticColors,
+  },
+  light: { ...violetTheme.light, accentPrimary: '#0891B2', accentHover: '#0E7490', nodeGlow: 'rgba(8, 145, 178, 0.3)' },
+  dark: { ...violetTheme.dark, accentPrimary: '#22D3EE', accentHover: '#67E8F9', nodeGlow: 'rgba(34, 211, 238, 0.25)' },
+};
+
+export const sunriseTheme: Theme = {
+  id: 'sunrise',
+  name: 'Sunrise',
+  description: 'Warm sunrise oranges and soft dawn neutrals',
+  colors: {
+    accent: {
+      50: '#FFFBEB', 100: '#FEF3C7', 200: '#FDE68A', 300: '#FCD34D', 400: '#FBBF24',
+      500: '#F59E0B', 600: '#D97706', 700: '#B45309', 800: '#92400E', 900: '#78350F', 950: '#451A03',
+    },
+    neutral: warmNeutral,
+    ...semanticColors,
+  },
+  light: { ...copperTheme.light, accentPrimary: '#D97706', accentHover: '#B45309', nodeGlow: 'rgba(217, 119, 6, 0.3)' },
+  dark: { ...copperTheme.dark, accentPrimary: '#F59E0B', accentHover: '#FBBF24', nodeGlow: 'rgba(245, 158, 11, 0.25)' },
+};
+
+export const sunsetTheme: Theme = {
+  id: 'sunset',
+  name: 'Sunset',
+  description: 'Sunset pink and orange accents with dusky neutrals',
+  colors: {
+    accent: {
+      50: '#FFF1F2', 100: '#FFE4E6', 200: '#FECDD3', 300: '#FDA4AF', 400: '#FB7185',
+      500: '#F43F5E', 600: '#E11D48', 700: '#BE123C', 800: '#9F1239', 900: '#881337', 950: '#4C0519',
+    },
+    neutral: neutralGray,
+    ...semanticColors,
+  },
+  light: { ...roseTheme.light },
+  dark: { ...roseTheme.dark },
+};
+
+export const sakuraYoshinoTheme: Theme = {
+  id: 'sakura-yoshino',
+  name: 'Sakura Yoshino',
+  description: 'Delicate cherry blossom tones',
+  colors: {
+    accent: roseAccent,
+    neutral: slateNeutral,
+    ...semanticColors,
+  },
+  light: { ...roseTheme.light, bgBase: '#FFF7FA', bgSurface: '#FFEFF5' },
+  dark: { ...roseTheme.dark, bgBase: '#2A1B24', bgSurface: '#3A2633' },
+};
+
+export const sakuraSumieTheme: Theme = {
+  id: 'sakura-sumie',
+  name: 'Sakura Sumi-e',
+  description: 'Ink-wash charcoal with sakura highlights',
+  colors: {
+    accent: roseAccent,
+    neutral: zincNeutral,
+    ...semanticColors,
+  },
+  light: { ...roseTheme.light, bgBase: '#F7F4F5', bgSurface: '#EFEBED' },
+  dark: { ...roseTheme.dark, bgBase: '#191617', bgSurface: '#252123' },
+};
+
+export const midnightTheme: Theme = {
+  id: 'midnight',
+  name: 'Midnight',
+  description: 'Deep indigo night theme',
+  colors: {
+    accent: {
+      50: '#EEF2FF', 100: '#E0E7FF', 200: '#C7D2FE', 300: '#A5B4FC', 400: '#818CF8',
+      500: '#6366F1', 600: '#4F46E5', 700: '#4338CA', 800: '#3730A3', 900: '#312E81', 950: '#1E1B4B',
+    },
+    neutral: slateNeutral,
+    ...semanticColors,
+  },
+  light: { ...oceanTheme.light, accentPrimary: '#4F46E5', accentHover: '#4338CA', nodeGlow: 'rgba(79, 70, 229, 0.3)' },
+  dark: { ...oceanTheme.dark, bgBase: '#0B1024', bgSurface: '#121A38', border: '#24325E', accentPrimary: '#6366F1', accentHover: '#818CF8', nodeGlow: 'rgba(99, 102, 241, 0.25)' },
+};
+
+export const desertTheme: Theme = {
+  id: 'desert',
+  name: 'Desert',
+  description: 'Sandy neutrals and sun-baked accents',
+  colors: {
+    accent: copperAccent,
+    neutral: {
+      50: '#FFFBEB', 100: '#FEF3C7', 200: '#FDE68A', 300: '#FCD34D', 400: '#FBBF24',
+      500: '#D6A552', 600: '#B68A3B', 700: '#8D6E2E', 800: '#6E551F', 900: '#4E3A15', 950: '#2A1E0C',
+    },
+    ...semanticColors,
+  },
+  light: { ...copperTheme.light, bgBase: '#FFF8ED', bgSurface: '#F9EEDB' },
+  dark: { ...copperTheme.dark, bgBase: '#2A1F15', bgSurface: '#3A2B1E' },
+};
+
+export const seasonalTheme: Theme = {
+  id: 'seasonal',
+  name: 'Seasonal',
+  description: 'Balanced palette designed to pair with rotating backgrounds',
+  colors: {
+    accent: oceanAccent,
+    neutral: stoneNeutral,
+    ...semanticColors,
+  },
+  light: { ...oceanTheme.light },
+  dark: { ...sageStoneTheme.dark },
+};
+
+/**
  * All built-in themes
  */
 export const builtInThemes: Theme[] = [
@@ -357,6 +511,16 @@ export const builtInThemes: Theme[] = [
   copperTheme,
   violetTheme,
   roseTheme,
+  serenityTheme,
+  forestTheme,
+  cyberTheme,
+  sunriseTheme,
+  sunsetTheme,
+  sakuraYoshinoTheme,
+  sakuraSumieTheme,
+  midnightTheme,
+  desertTheme,
+  seasonalTheme,
 ];
 
 /**

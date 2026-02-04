@@ -13,7 +13,7 @@ import {
 describe("theme/presets", () => {
   describe("builtInThemes", () => {
     it("contains expected number of themes", () => {
-      expect(builtInThemes.length).toBe(5);
+      expect(builtInThemes.length).toBe(15);
     });
 
     it("contains all named themes", () => {
@@ -23,6 +23,16 @@ describe("theme/presets", () => {
       expect(themeIds).toContain("copper");
       expect(themeIds).toContain("violet");
       expect(themeIds).toContain("rose");
+      expect(themeIds).toContain("serenity");
+      expect(themeIds).toContain("forest");
+      expect(themeIds).toContain("cyber");
+      expect(themeIds).toContain("sunrise");
+      expect(themeIds).toContain("sunset");
+      expect(themeIds).toContain("sakura-yoshino");
+      expect(themeIds).toContain("sakura-sumie");
+      expect(themeIds).toContain("midnight");
+      expect(themeIds).toContain("desert");
+      expect(themeIds).toContain("seasonal");
     });
 
     it("all themes have required properties", () => {

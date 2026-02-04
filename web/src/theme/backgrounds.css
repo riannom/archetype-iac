@@ -1,0 +1,128 @@
+html,
+body {
+  background-color: var(--color-bg-base);
+}
+
+body {
+  position: relative;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: calc(var(--background-opacity, 50) / 100);
+  background-repeat: repeat;
+  background-size: auto;
+}
+
+body.bg-pattern-minimal::before {
+  background: transparent;
+}
+
+body.bg-pattern-none::before {
+  background: transparent;
+  opacity: 0;
+}
+
+body.bg-pattern-zen::before {
+  background-image: radial-gradient(var(--color-neutral-400) 0.7px, transparent 0.7px);
+  background-size: 26px 26px;
+}
+
+body.bg-pattern-topography::before {
+  background-image:
+    radial-gradient(ellipse at 20% 20%, transparent 45%, var(--color-neutral-700) 46%, transparent 48%),
+    radial-gradient(ellipse at 70% 80%, transparent 40%, var(--color-neutral-700) 41%, transparent 43%);
+  background-size: 180px 180px;
+}
+
+body.bg-pattern-waves::before {
+  background-image:
+    radial-gradient(circle at 0 0, transparent 60%, var(--color-neutral-700) 61%, transparent 63%),
+    radial-gradient(circle at 25px 25px, transparent 60%, var(--color-neutral-700) 61%, transparent 63%);
+  background-size: 50px 50px;
+}
+
+body.bg-pattern-lines::before {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0,
+    transparent 7px,
+    var(--color-neutral-700) 7px,
+    var(--color-neutral-700) 8px
+  );
+}
+
+body.bg-pattern-hexagons::before {
+  background-image:
+    radial-gradient(circle at 25% 25%, var(--color-neutral-700) 1px, transparent 1px),
+    radial-gradient(circle at 75% 75%, var(--color-neutral-700) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+
+body.bg-pattern-triangles::before {
+  background-image: conic-gradient(
+    from 45deg at 50% 50%,
+    transparent 0deg 90deg,
+    var(--color-neutral-700) 90deg 91deg,
+    transparent 91deg 360deg
+  );
+  background-size: 28px 28px;
+}
+
+body.bg-pattern-stars::before {
+  background-image:
+    radial-gradient(circle at 20% 30%, var(--color-neutral-400) 1px, transparent 1px),
+    radial-gradient(circle at 70% 40%, var(--color-neutral-500) 1px, transparent 1px),
+    radial-gradient(circle at 40% 75%, var(--color-neutral-300) 1px, transparent 1px);
+  background-size: 90px 90px;
+}
+
+body.bg-pattern-aurora::before {
+  background-image: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--color-accent-400) 55%, transparent),
+    color-mix(in srgb, var(--color-info) 45%, transparent),
+    transparent
+  );
+  background-size: 220% 220%;
+  animation: bg-aurora-shift 16s ease-in-out infinite;
+}
+
+@keyframes bg-aurora-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+body.bg-pattern-dots::before {
+  background-image: radial-gradient(var(--color-neutral-600) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+body.bg-pattern-cross::before {
+  background-image:
+    linear-gradient(var(--color-neutral-700) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-neutral-700) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+body.bg-pattern-mountains::before {
+  background-image:
+    linear-gradient(160deg, transparent 48%, var(--color-neutral-700) 50%, transparent 52%),
+    linear-gradient(200deg, transparent 48%, var(--color-neutral-700) 50%, transparent 52%);
+  background-size: 160px 120px;
+}
+
+body.bg-pattern-noise::before {
+  background-image: radial-gradient(var(--color-neutral-700) 0.6px, transparent 0.6px);
+  background-size: 8px 8px;
+}

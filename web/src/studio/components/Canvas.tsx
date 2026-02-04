@@ -315,7 +315,9 @@ const Canvas: React.FC<CanvasProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`flex-1 relative overflow-hidden canvas-grid ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+      className={`flex-1 relative overflow-hidden canvas-grid ${
+        effectiveMode === 'dark' ? 'bg-stone-950' : 'bg-stone-50'
+      } ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseDown={handleMouseDown}
