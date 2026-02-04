@@ -640,6 +640,8 @@ async def check_node_readiness(
     agent: models.Host,
     lab_id: str,
     node_name: str,
+    kind: str | None = None,
+    provider_type: str | None = None,
 ) -> dict:
     """Check if a node has completed its boot sequence.
 
@@ -647,15 +649,24 @@ async def check_node_readiness(
         agent: The agent managing the node
         lab_id: Lab identifier
         node_name: Name of the node to check
+        kind: Device kind (e.g., "cisco_iosv") - required for VM readiness
+        provider_type: Provider type ("docker" or "libvirt") - auto-detected if None
 
     Returns:
         Dict with 'is_ready', 'message', and optionally 'progress_percent' keys
     """
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/ready"
 
+    # Add query parameters if provided
+    params = {}
+    if kind:
+        params["kind"] = kind
+    if provider_type:
+        params["provider_type"] = provider_type
+
     try:
         client = get_http_client()
-        response = await client.get(url, timeout=10.0)
+        response = await client.get(url, params=params, timeout=10.0)
         response.raise_for_status()
         result = response.json()
         return result

@@ -31,6 +31,8 @@ from agent.providers.base import (
     Provider,
     StatusResult,
 )
+from agent.readiness import ReadinessResult, get_libvirt_probe, get_readiness_timeout
+from agent.vendors import get_libvirt_config
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +147,44 @@ class LibvirtProvider(Provider):
 
         return None
 
+    def _translate_container_path_to_host(self, path: str) -> str:
+        """Translate container path to host-accessible path for libvirt.
+
+        When running in Docker, container mounts like /var/lib/archetype
+        may not exist on the host. Libvirt runs on the host and needs
+        the actual host path (typically the Docker volume mountpoint).
+
+        Args:
+            path: Path as seen from the container
+
+        Returns:
+            Path as accessible from the host
+        """
+        # Check if ARCHETYPE_HOST_IMAGE_PATH is set (explicit host path)
+        host_image_path = os.environ.get("ARCHETYPE_HOST_IMAGE_PATH")
+        if host_image_path:
+            # Replace /var/lib/archetype/images with the host path
+            if path.startswith("/var/lib/archetype/images/"):
+                return path.replace("/var/lib/archetype/images", host_image_path)
+            return path
+
+        # Try to detect Docker volume mount point
+        # Docker volumes are typically at /var/lib/docker/volumes/<name>/_data
+        if path.startswith("/var/lib/archetype/"):
+            # Try common Docker volume patterns
+            volume_bases = [
+                "/var/lib/docker/volumes/archetype-iac_archetype_workspaces/_data",
+                "/var/lib/docker/volumes/archetype_workspaces/_data",
+            ]
+            for volume_base in volume_bases:
+                test_path = path.replace("/var/lib/archetype", volume_base)
+                if os.path.exists(test_path):
+                    logger.debug(f"Translated path {path} -> {test_path}")
+                    return test_path
+
+        # Fallback: return original path
+        return path
+
     def _create_overlay_disk_sync(
         self,
         base_image: str,
@@ -163,11 +203,16 @@ class LibvirtProvider(Provider):
             logger.info(f"Overlay disk already exists: {overlay_path}")
             return True
 
+        # Translate the base image path to host-accessible path
+        host_base_image = self._translate_container_path_to_host(base_image)
+        if host_base_image != base_image:
+            logger.info(f"Translated base image path: {base_image} -> {host_base_image}")
+
         cmd = [
             "qemu-img", "create",
             "-F", "qcow2",
             "-f", "qcow2",
-            "-b", base_image,
+            "-b", host_base_image,
             str(overlay_path),
         ]
 
@@ -284,19 +329,24 @@ class LibvirtProvider(Provider):
     </disk>'''
 
         # Build network interface elements
+        # VMs connect to the OVS bridge (arch-ovs) for networking
+        # This integrates with the same networking as Docker containers
+        ovs_bridge = getattr(settings, 'ovs_bridge_name', 'arch-ovs')
         interfaces_xml = ""
         if bridge_interfaces:
             for i, bridge in enumerate(bridge_interfaces):
                 interfaces_xml += f'''
     <interface type='bridge'>
       <source bridge='{bridge}'/>
+      <virtualport type='openvswitch'/>
       <model type='{nic_driver}'/>
     </interface>'''
         else:
-            # Default management network
+            # Default: single interface connected to OVS bridge
             interfaces_xml = f'''
-    <interface type='network'>
-      <source network='default'/>
+    <interface type='bridge'>
+      <source bridge='{ovs_bridge}'/>
+      <virtualport type='openvswitch'/>
       <model type='{nic_driver}'/>
     </interface>'''
 
@@ -380,7 +430,11 @@ class LibvirtProvider(Provider):
     ) -> DeployResult:
         """Deploy a libvirt topology.
 
-        Note: LibvirtProvider JSON topology support is not yet implemented.
+        Steps:
+        1. Parse topology (JSON)
+        2. Validate images exist
+        3. Create overlay disks for each node
+        4. Define and start VMs
         """
         workspace.mkdir(parents=True, exist_ok=True)
         if topology is None:
@@ -389,9 +443,95 @@ class LibvirtProvider(Provider):
                 error="No topology provided (JSON required)",
             )
 
+        if not topology.nodes:
+            return DeployResult(
+                success=False,
+                error="No nodes found in topology",
+            )
+
+        # Filter to only nodes with libvirt-compatible images (qcow2, img)
+        libvirt_nodes = []
+        skipped_nodes = []
+        for node in topology.nodes:
+            image = node.image
+            if image and (image.endswith(".qcow2") or image.endswith(".img")):
+                libvirt_nodes.append(node)
+            else:
+                skipped_nodes.append(node.name)
+
+        if skipped_nodes:
+            logger.info(f"Skipping {len(skipped_nodes)} non-libvirt nodes: {skipped_nodes}")
+
+        if not libvirt_nodes:
+            logger.info(f"No libvirt-compatible nodes to deploy in lab {lab_id}")
+            return DeployResult(
+                success=True,
+                stdout="No libvirt-compatible nodes to deploy",
+            )
+
+        logger.info(f"Deploying lab {lab_id} with {len(libvirt_nodes)} VMs via libvirt")
+
+        disks_dir = self._disks_dir(workspace)
+        deployed_nodes: list[NodeInfo] = []
+        errors: list[str] = []
+
+        for node in libvirt_nodes:
+            node_name = node.name
+            display_name = node.display_name or node_name
+            log_name = f"{display_name}({node_name})" if display_name != node_name else node_name
+
+            # Look up libvirt config from vendor registry
+            libvirt_config = get_libvirt_config(node.kind)
+
+            # Build node config dict for helper methods
+            node_config = {
+                "image": node.image,
+                "memory": libvirt_config.memory_mb,
+                "cpu": libvirt_config.cpu_count,
+                "disk_driver": libvirt_config.disk_driver,
+                "nic_driver": libvirt_config.nic_driver,
+                "data_volume_gb": libvirt_config.data_volume_gb,
+                "readiness_probe": libvirt_config.readiness_probe,
+                "readiness_pattern": libvirt_config.readiness_pattern,
+                "readiness_timeout": libvirt_config.readiness_timeout,
+                "_display_name": display_name,
+            }
+            logger.info(
+                f"VM config for {log_name}: {libvirt_config.memory_mb}MB RAM, "
+                f"{libvirt_config.cpu_count} vCPU, disk={libvirt_config.disk_driver}, "
+                f"nic={libvirt_config.nic_driver}"
+            )
+
+            try:
+                node_info = await self._deploy_node(
+                    lab_id,
+                    node_name,
+                    node_config,
+                    disks_dir,
+                )
+                deployed_nodes.append(node_info)
+                logger.info(f"Deployed VM {log_name}")
+            except Exception as e:
+                error_msg = f"Failed to deploy {log_name}: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        if not deployed_nodes and errors:
+            return DeployResult(
+                success=False,
+                error=f"Failed to deploy any nodes: {errors[0]}",
+                stderr="\n".join(errors),
+            )
+
+        stdout_lines = [f"Deployed {len(deployed_nodes)} VMs"]
+        if errors:
+            stdout_lines.append(f"Errors: {len(errors)}")
+
         return DeployResult(
-            success=False,
-            error="LibvirtProvider does not support JSON topology yet",
+            success=True,
+            stdout="\n".join(stdout_lines),
+            stderr="\n".join(errors) if errors else "",
+            nodes=deployed_nodes,
         )
 
     async def _deploy_node(
@@ -684,3 +824,59 @@ class LibvirtProvider(Provider):
             return None
         except Exception:
             return None
+
+    async def check_readiness(
+        self,
+        lab_id: str,
+        node_name: str,
+        kind: str,
+    ) -> ReadinessResult:
+        """Check if a VM has finished booting and is ready.
+
+        This uses the serial console output to detect boot completion
+        patterns defined in the vendor config.
+
+        Args:
+            lab_id: Lab identifier
+            node_name: Node name within the lab
+            kind: Device kind for vendor config lookup
+
+        Returns:
+            ReadinessResult with ready status and progress
+        """
+        domain_name = self._domain_name(lab_id, node_name)
+
+        try:
+            domain = self.conn.lookupByName(domain_name)
+            state, _ = domain.state()
+
+            if state != libvirt.VIR_DOMAIN_RUNNING:
+                return ReadinessResult(
+                    is_ready=False,
+                    message=f"VM not running (state={state})",
+                    progress_percent=0,
+                )
+        except libvirt.libvirtError:
+            return ReadinessResult(
+                is_ready=False,
+                message="VM domain not found",
+                progress_percent=0,
+            )
+
+        # Get the appropriate probe for this device type
+        probe = get_libvirt_probe(kind, domain_name, self._uri)
+
+        # Run the probe
+        result = await probe.check(node_name)
+        return result
+
+    def get_readiness_timeout(self, kind: str) -> int:
+        """Get the readiness timeout for a device type.
+
+        Args:
+            kind: Device kind
+
+        Returns:
+            Timeout in seconds
+        """
+        return get_readiness_timeout(kind)

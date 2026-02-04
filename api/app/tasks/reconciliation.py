@@ -361,7 +361,7 @@ async def _check_readiness_for_nodes(session, nodes: list):
     This is separate from full state reconciliation because readiness checks
     are non-destructive and should happen even when jobs are running.
     """
-    from app.utils.lab import get_lab_provider
+    from app.utils.lab import get_lab_provider, get_node_provider
 
     # Group nodes by lab_id for efficient agent lookup
     nodes_by_lab: dict[str, list] = {}
@@ -384,14 +384,41 @@ async def _check_readiness_for_nodes(session, nodes: list):
                 logger.debug(f"No agent for lab {lab_id}, skipping readiness check")
                 continue
 
+            # Look up device kinds for all nodes in this lab
+            node_devices = {}
+            db_nodes = (
+                session.query(models.Node)
+                .filter(
+                    models.Node.lab_id == lab_id,
+                    models.Node.container_name.in_([ns.node_name for ns in lab_nodes]),
+                )
+                .all()
+            )
+            for db_node in db_nodes:
+                node_devices[db_node.container_name] = db_node.device
+
             for ns in lab_nodes:
                 # Set boot_started_at if not already set
                 if not ns.boot_started_at:
                     ns.boot_started_at = datetime.now(timezone.utc)
 
                 try:
+                    # Get the device kind and determine provider type for this node
+                    device_kind = node_devices.get(ns.node_name)
+                    provider_type = None
+                    if device_kind:
+                        # Look up the Node to determine provider from image
+                        db_node = next(
+                            (n for n in db_nodes if n.container_name == ns.node_name),
+                            None,
+                        )
+                        if db_node and db_node.image:
+                            provider_type = get_node_provider(db_node)
+
                     readiness = await agent_client.check_node_readiness(
-                        agent, lab_id, ns.node_name
+                        agent, lab_id, ns.node_name,
+                        kind=device_kind,
+                        provider_type=provider_type,
                     )
                     if readiness.get("is_ready", False):
                         ns.is_ready = True
@@ -502,6 +529,15 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         agent_ids = {p.host_id for p in placements}
         # Map node names to their expected agent for safer undeployed detection
         node_expected_agent: dict[str, str] = {p.node_name: p.host_id for p in placements}
+
+        # Look up device kinds for all nodes (needed for VM readiness checks)
+        db_nodes = (
+            session.query(models.Node)
+            .filter(models.Node.lab_id == lab_id)
+            .all()
+        )
+        node_devices: dict[str, str | None] = {n.container_name: n.device for n in db_nodes}
+        node_images: dict[str, str | None] = {n.container_name: n.image for n in db_nodes}
 
         # Also include the lab's default agent if set
         if lab.agent_id:
@@ -674,8 +710,21 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     if not ns.is_ready:
                         # Poll agent for readiness status
                         try:
+                            # Get device kind and determine provider type
+                            device_kind = node_devices.get(ns.node_name)
+                            node_image = node_images.get(ns.node_name)
+                            provider_type = None
+                            if node_image:
+                                # Determine provider from image extension
+                                if node_image.endswith((".qcow2", ".img")):
+                                    provider_type = "libvirt"
+                                else:
+                                    provider_type = "docker"
+
                             readiness = await agent_client.check_node_readiness(
-                                agent, lab_id, ns.node_name
+                                agent, lab_id, ns.node_name,
+                                kind=device_kind,
+                                provider_type=provider_type,
                             )
                             if readiness.get("is_ready", False):
                                 ns.is_ready = True

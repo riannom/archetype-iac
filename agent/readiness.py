@@ -25,8 +25,17 @@ from dataclasses import dataclass
 from typing import Optional
 
 import docker
+import subprocess
 
 from agent.vendors import get_vendor_config, is_ceos_kind
+
+# Try to import libvirt - it's optional
+try:
+    import libvirt
+    LIBVIRT_AVAILABLE = True
+except ImportError:
+    libvirt = None
+    LIBVIRT_AVAILABLE = False
 
 
 logger = logging.getLogger(__name__)
@@ -213,6 +222,145 @@ class CliProbe(ReadinessProbe):
         return await asyncio.to_thread(_sync_check)
 
 
+class LibvirtLogPatternProbe(ReadinessProbe):
+    """Check VM serial console output for boot completion patterns.
+
+    This probe reads from the libvirt VM's serial console log and searches
+    for vendor-specific patterns that indicate boot completion.
+    """
+
+    def __init__(
+        self,
+        pattern: str,
+        domain_name: str,
+        uri: str = "qemu:///system",
+        progress_patterns: Optional[dict[str, int]] = None,
+    ):
+        """Initialize libvirt log pattern probe.
+
+        Args:
+            pattern: Regex pattern to match for boot completion
+            domain_name: Libvirt domain name
+            uri: Libvirt connection URI
+            progress_patterns: Optional dict of pattern -> progress percent
+        """
+        self.pattern = re.compile(pattern, re.IGNORECASE)
+        self.domain_name = domain_name
+        self.uri = uri
+        self.progress_patterns = progress_patterns or {}
+        self._compiled_progress = {
+            re.compile(p, re.IGNORECASE): pct
+            for p, pct in self.progress_patterns.items()
+        }
+
+    async def check(self, container_name: str) -> ReadinessResult:
+        """Check VM console for readiness pattern.
+
+        Note: container_name is the node name, not directly used here.
+        We use self.domain_name for the actual libvirt lookup.
+        """
+        def _sync_check() -> ReadinessResult:
+            if not LIBVIRT_AVAILABLE:
+                return ReadinessResult(
+                    is_ready=False,
+                    message="Libvirt not available",
+                )
+
+            try:
+                conn = libvirt.open(self.uri)
+                if conn is None:
+                    return ReadinessResult(
+                        is_ready=False,
+                        message="Failed to connect to libvirt",
+                    )
+
+                try:
+                    domain = conn.lookupByName(self.domain_name)
+                except libvirt.libvirtError:
+                    conn.close()
+                    return ReadinessResult(
+                        is_ready=False,
+                        message="VM domain not found",
+                        progress_percent=0,
+                    )
+
+                state, _ = domain.state()
+                if state != libvirt.VIR_DOMAIN_RUNNING:
+                    conn.close()
+                    return ReadinessResult(
+                        is_ready=False,
+                        message="VM not running",
+                        progress_percent=0,
+                    )
+
+                # Try to get console output via virsh console with timeout
+                # This captures the serial console buffer
+                console_output = self._get_console_output()
+
+                conn.close()
+
+                if not console_output:
+                    return ReadinessResult(
+                        is_ready=False,
+                        message="No console output available",
+                        progress_percent=5,
+                    )
+
+                # Check for completion pattern
+                if self.pattern.search(console_output):
+                    return ReadinessResult(
+                        is_ready=True,
+                        message="Boot complete",
+                        progress_percent=100,
+                    )
+
+                # Check for progress patterns
+                max_progress = 10  # VM is running, some progress
+                for compiled_pattern, progress in self._compiled_progress.items():
+                    if compiled_pattern.search(console_output):
+                        max_progress = max(max_progress, progress)
+
+                return ReadinessResult(
+                    is_ready=False,
+                    message="Boot in progress",
+                    progress_percent=max_progress,
+                )
+
+            except Exception as e:
+                return ReadinessResult(
+                    is_ready=False,
+                    message=f"Probe error: {str(e)}",
+                )
+
+        return await asyncio.to_thread(_sync_check)
+
+    def _get_console_output(self) -> str:
+        """Get console output from VM serial port.
+
+        Uses expect/timeout to read available console buffer without blocking.
+        """
+        try:
+            # Use script + timeout to capture console output non-interactively
+            # This reads what's in the console buffer and exits
+            result = subprocess.run(
+                [
+                    "timeout", "2",
+                    "virsh", "-c", self.uri, "console", self.domain_name, "--force"
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
+            )
+            # Combine stdout and stderr (some output may go to stderr)
+            return result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            return ""
+        except Exception as e:
+            logger.debug(f"Error getting console output: {e}")
+            return ""
+
+
 # Progress patterns for cEOS boot sequence
 CEOS_PROGRESS_PATTERNS = {
     r"ZTP|zerotouch": 20,
@@ -220,6 +368,75 @@ CEOS_PROGRESS_PATTERNS = {
     r"management api|api http": 60,
     r"hostname": 80,
 }
+
+# Progress patterns for Cisco IOS/IOS-XE VM boot sequence
+CISCO_IOS_PROGRESS_PATTERNS = {
+    r"Loading|Initializing": 10,
+    r"Cisco IOS Software": 30,
+    r"nvram|startup-config": 50,
+    r"interface|GigabitEthernet": 70,
+    r"Ready|Press RETURN": 90,
+}
+
+# Progress patterns for Cisco ASA VM boot sequence
+CISCO_ASA_PROGRESS_PATTERNS = {
+    r"Loading|Booting": 10,
+    r"Cisco Adaptive Security": 30,
+    r"interface|GigabitEthernet": 50,
+    r"crypto": 70,
+}
+
+# Progress patterns for Juniper VM boot sequence
+JUNIPER_PROGRESS_PATTERNS = {
+    r"FreeBSD|Booting": 10,
+    r"Juniper|junos": 30,
+    r"kernel": 50,
+    r"mgd": 70,
+}
+
+
+def get_libvirt_probe(
+    kind: str,
+    domain_name: str,
+    uri: str = "qemu:///system",
+) -> ReadinessProbe:
+    """Get the appropriate readiness probe for a VM device.
+
+    Args:
+        kind: The device kind (e.g., "cisco_iosv", "cisco_csr1000v")
+        domain_name: Libvirt domain name for the VM
+        uri: Libvirt connection URI
+
+    Returns:
+        ReadinessProbe instance configured for this VM
+    """
+    config = get_vendor_config(kind)
+
+    if config is None or config.readiness_probe == "none":
+        return NoopProbe()
+
+    if config.readiness_probe == "log_pattern":
+        if config.readiness_pattern is None:
+            return NoopProbe()
+
+        # Select progress patterns based on device kind
+        progress_patterns: dict[str, int] = {}
+        kind_lower = kind.lower()
+        if "iosv" in kind_lower or "csr" in kind_lower or "c8000v" in kind_lower:
+            progress_patterns = CISCO_IOS_PROGRESS_PATTERNS
+        elif "asa" in kind_lower:
+            progress_patterns = CISCO_ASA_PROGRESS_PATTERNS
+        elif "juniper" in kind_lower or "vsrx" in kind_lower or "vqfx" in kind_lower:
+            progress_patterns = JUNIPER_PROGRESS_PATTERNS
+
+        return LibvirtLogPatternProbe(
+            pattern=config.readiness_pattern,
+            domain_name=domain_name,
+            uri=uri,
+            progress_patterns=progress_patterns,
+        )
+
+    return NoopProbe()
 
 
 def get_probe_for_vendor(kind: str) -> ReadinessProbe:
