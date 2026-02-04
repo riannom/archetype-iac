@@ -479,6 +479,7 @@ def create_image_entry(
     size_bytes: Optional[int] = None,
     notes: str = "",
     compatible_devices: Optional[list[str]] = None,
+    source: Optional[str] = None,
 ) -> dict:
     """Create a new image library entry with all metadata fields.
 
@@ -512,11 +513,12 @@ def create_image_entry(
         "version": version,
         # New fields
         "vendor": vendor,
-        "uploaded_at": datetime.now(timezone.utc).isoformat() + "Z",
+        "uploaded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "size_bytes": size_bytes,
         "is_default": False,
         "notes": notes,
         "compatible_devices": compatible_devices or ([device_id] if device_id else []),
+        "source": source,
     }
 
 

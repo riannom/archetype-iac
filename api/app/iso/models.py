@@ -100,7 +100,7 @@ class ParsedImage(BaseModel):
     size_bytes: int = Field(default=0, description="Image size in bytes")
 
     # Image type
-    image_type: str = Field(default="qcow2", description="Image type: qcow2, tar.gz, docker")
+    image_type: str = Field(default="qcow2", description="Image type: qcow2, docker, iol")
 
     # Original YAML content
     raw_yaml: dict = Field(default_factory=dict, description="Original YAML content")

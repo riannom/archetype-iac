@@ -863,6 +863,7 @@ async def _execute_import(session_id: str):
                     image_store,
                     manifest_data,
                     session.create_devices,
+                    iso_source=Path(session.iso_path).name,
                 )
                 completed_count += 1
 
@@ -907,6 +908,7 @@ async def _import_single_image(
     image_store: Path,
     manifest_data: dict,
     create_devices: bool,
+    iso_source: str = "",
 ):
     """Import a single image from the ISO."""
     image_id = image.id
@@ -923,8 +925,11 @@ async def _import_single_image(
             add_custom_device(new_device_config)
 
     # Extract the disk image
+    logger.warning(f"Importing image {image_id}: type={image.image_type}, path={image.disk_image_path}, filename={image.disk_image_filename}, node_def={image.node_definition_id}")
     if not image.disk_image_path:
-        raise ValueError(f"No disk image path for {image_id}")
+        raise ValueError(f"No disk image path for {image_id} (filename={image.disk_image_filename})")
+    if image.image_type == "unknown":
+        raise ValueError(f"Unknown image type for {image_id} (path={image.disk_image_path}, node_def={image.node_definition_id})")
 
     def progress_callback(p):
         _update_image_progress(
@@ -951,6 +956,7 @@ async def _import_single_image(
             device_id=device_id,
             version=image.version,
             size_bytes=dest_path.stat().st_size,
+            source=iso_source,
         )
 
     elif image.image_type == "docker":
@@ -1002,7 +1008,36 @@ async def _import_single_image(
                 device_id=device_id,
                 version=image.version,
                 size_bytes=temp_path.stat().st_size,
+                source=iso_source,
             )
+
+    elif image.image_type == "iol":
+        # Extract IOL binary (IOS-XE on Linux) to image store
+        dest_path = image_store / image.disk_image_filename
+
+        # Only extract if file doesn't exist (multiple images may share same file)
+        if not dest_path.exists():
+            await extractor.extract_file(
+                image.disk_image_path,
+                dest_path,
+                progress_callback=progress_callback,
+                timeout_seconds=settings.iso_extraction_timeout,
+            )
+        else:
+            logger.info(f"IOL file {image.disk_image_filename} already exists, reusing")
+            _update_image_progress(session_id, image_id, "extracting", 90)
+
+        # Create manifest entry - use image.id to allow multiple images sharing same file
+        entry = create_image_entry(
+            image_id=f"iol:{image.id}",
+            kind="iol",
+            reference=str(dest_path),
+            filename=image.disk_image_filename,
+            device_id=device_id,
+            version=image.version,
+            size_bytes=dest_path.stat().st_size,
+            source=iso_source,
+        )
 
     else:
         raise ValueError(f"Unsupported image type: {image.image_type}")
