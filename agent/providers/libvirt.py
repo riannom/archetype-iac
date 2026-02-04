@@ -1286,3 +1286,168 @@ class LibvirtProvider(Provider):
             logger.error(f"Error during VM config extraction for lab {lab_id}: {e}")
 
         return extracted
+
+    async def discover_labs(self) -> dict[str, list[NodeInfo]]:
+        """Discover all running labs managed by this provider.
+
+        Enumerates all libvirt domains with the 'arch-' prefix and groups
+        them by lab_id. Domain naming convention: arch-{lab_id}-{node_name}
+
+        Returns:
+            Dict mapping lab_id -> list of NodeInfo for each lab's VMs.
+        """
+        discovered: dict[str, list[NodeInfo]] = {}
+
+        try:
+            # Get all domains (running and defined/stopped)
+            all_domains = self.conn.listAllDomains(0)
+
+            for domain in all_domains:
+                name = domain.name()
+
+                # Only process Archetype-managed domains
+                if not name.startswith("arch-"):
+                    continue
+
+                # Parse domain name: arch-{lab_id}-{node_name}
+                # lab_id may contain hyphens, but we truncate to 20 chars in _lab_prefix
+                parts = name.split("-", 2)  # Split into at most 3 parts
+                if len(parts) < 3:
+                    logger.debug(f"Skipping malformed domain name: {name}")
+                    continue
+
+                # parts[0] = "arch", parts[1] = lab_id, parts[2] = node_name
+                lab_id = parts[1]
+                node_name = parts[2]
+
+                node = NodeInfo(
+                    name=node_name,
+                    status=self._get_domain_status(domain),
+                    container_id=domain.UUIDString()[:12],
+                )
+
+                if lab_id not in discovered:
+                    discovered[lab_id] = []
+                discovered[lab_id].append(node)
+
+            logger.info(f"Discovered {len(discovered)} labs with LibvirtProvider")
+
+        except Exception as e:
+            logger.error(f"Error discovering labs: {e}")
+
+        return discovered
+
+    async def cleanup_orphan_domains(
+        self,
+        valid_lab_ids: set[str],
+        workspace_base: Path | None = None,
+    ) -> dict[str, list[str]]:
+        """Remove VMs for labs that no longer exist.
+
+        Discovers all Archetype-managed domains and removes those belonging
+        to labs not in the valid_lab_ids set. Also cleans up associated
+        disk overlays and VLAN allocations.
+
+        Args:
+            valid_lab_ids: Set of lab IDs that are known to be valid.
+            workspace_base: Base workspace path for disk cleanup.
+                           If None, skips disk cleanup.
+
+        Returns:
+            Dict with keys 'domains', 'disks' listing removed items.
+        """
+        removed: dict[str, list[str]] = {"domains": [], "disks": []}
+
+        try:
+            # Discover all labs managed by this provider
+            discovered = await self.discover_labs()
+
+            for lab_id, nodes in discovered.items():
+                # Check if this lab_id is in the valid set
+                # Handle both exact matches and prefix matches (for truncated IDs)
+                is_orphan = lab_id not in valid_lab_ids
+                if is_orphan:
+                    # Also check for prefix matches (lab IDs may be truncated to 20 chars)
+                    is_orphan = not any(
+                        vid.startswith(lab_id) or lab_id.startswith(vid[:20])
+                        for vid in valid_lab_ids
+                    )
+
+                if not is_orphan:
+                    continue
+
+                logger.info(f"Cleaning up orphan lab: {lab_id} ({len(nodes)} VMs)")
+
+                for node in nodes:
+                    domain_name = self._domain_name(lab_id, node.name)
+
+                    try:
+                        domain = self.conn.lookupByName(domain_name)
+
+                        # Force stop if running
+                        state, _ = domain.state()
+                        if state == libvirt.VIR_DOMAIN_RUNNING:
+                            logger.info(f"Force stopping orphan domain: {domain_name}")
+                            domain.destroy()
+
+                        # Undefine domain (remove from libvirt)
+                        domain.undefine()
+                        removed["domains"].append(domain_name)
+                        logger.info(f"Removed orphan domain: {domain_name}")
+
+                    except libvirt.libvirtError as e:
+                        logger.warning(f"Error removing orphan domain {domain_name}: {e}")
+
+                # Clean up disk overlays if workspace provided
+                if workspace_base:
+                    lab_workspace = workspace_base / lab_id
+                    disks_dir = lab_workspace / "disks"
+                    if disks_dir.exists():
+                        for disk_file in disks_dir.iterdir():
+                            try:
+                                disk_file.unlink()
+                                removed["disks"].append(str(disk_file))
+                                logger.info(f"Removed orphan disk: {disk_file}")
+                            except Exception as e:
+                                logger.warning(f"Failed to remove disk {disk_file}: {e}")
+                        # Try to remove the disks directory
+                        try:
+                            disks_dir.rmdir()
+                        except Exception:
+                            pass  # Directory may not be empty
+
+                # Clean up VLAN allocations
+                if lab_id in self._vlan_allocations:
+                    del self._vlan_allocations[lab_id]
+                    logger.debug(f"Freed VLAN allocations for orphan lab: {lab_id}")
+                if lab_id in self._next_vlan:
+                    del self._next_vlan[lab_id]
+
+            if removed["domains"]:
+                logger.info(
+                    f"Orphan cleanup complete: removed {len(removed['domains'])} domains, "
+                    f"{len(removed['disks'])} disks"
+                )
+
+        except Exception as e:
+            logger.error(f"Error during orphan cleanup: {e}")
+
+        return removed
+
+    async def cleanup_orphan_containers(
+        self,
+        valid_lab_ids: set[str],
+    ) -> list[str]:
+        """Remove VMs for labs that no longer exist (API-compatible method).
+
+        This is an alias for cleanup_orphan_domains that returns just the
+        list of removed domain names, matching Docker provider's signature.
+
+        Args:
+            valid_lab_ids: Set of lab IDs that are known to be valid.
+
+        Returns:
+            List of removed domain names.
+        """
+        result = await self.cleanup_orphan_domains(valid_lab_ids)
+        return result.get("domains", [])
