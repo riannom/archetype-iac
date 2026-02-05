@@ -40,6 +40,20 @@ def test_console_websocket_libvirt_requested(test_client):
     mock_libvirt.assert_awaited_once()
 
 
+def test_console_websocket_libvirt_requested_skips_docker(test_client):
+    provider = MagicMock()
+    provider.get_container_name.return_value = "archetype-lab1-r1"
+
+    with patch("agent.main.get_provider", return_value=provider):
+        with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
+            mock_libvirt.side_effect = _libvirt_handler()
+            with test_client.websocket_connect("/console/lab1/r1?provider_type=libvirt") as ws:
+                msg = ws.receive_text()
+
+    assert msg == "libvirt"
+    mock_libvirt.assert_awaited_once()
+
+
 def test_console_websocket_docker_path(test_client):
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
