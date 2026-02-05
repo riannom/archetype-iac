@@ -232,8 +232,10 @@ async def _get_agent_for_node(
         if agent and agent_client.is_agent_online(agent):
             return agent
 
-    # No suitable agent found
-    return None
+    # 5. Fall back to any healthy agent with required provider
+    from app.utils.lab import get_lab_provider
+    provider = get_lab_provider(lab)
+    return await agent_client.get_healthy_agent(session, required_provider=provider)
 
 
 async def enforce_node_state(
@@ -266,8 +268,9 @@ async def enforce_node_state(
         NodeDesiredState(desired) if desired in [s.value for s in NodeDesiredState] else NodeDesiredState.STOPPED,
     )
 
-    # Handle special case: pending node waiting for agent
-    if desired == NodeDesiredState.RUNNING.value and actual == NodeActualState.PENDING.value and node_state.error_message == "Waiting for agent":
+    # Handle special case: pending node that needs to be started
+    # This handles nodes stuck in pending state (e.g., agent was unavailable when added)
+    if desired == NodeDesiredState.RUNNING.value and actual == NodeActualState.PENDING.value:
         action = "start"
 
     # Handle special case: auto-restart disabled for error state
