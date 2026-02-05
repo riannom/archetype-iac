@@ -1,6 +1,8 @@
 # Agent Network Module
 
 This module provides container networking for the Archetype agent using Open vSwitch (OVS).
+The networking stack is wrapped by a backend abstraction in `agent/network/backends/` to
+allow future backends without changing external APIs.
 
 ## Architecture
 

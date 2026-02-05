@@ -23,6 +23,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.config import settings
+from agent.network.backends.registry import get_network_backend
 from agent.providers import NodeStatus as ProviderNodeStatus, get_provider, list_providers
 from agent.providers.base import Provider
 from agent.schemas import (
@@ -163,8 +164,6 @@ _heartbeat_task: asyncio.Task | None = None
 _event_listener_task: asyncio.Task | None = None
 
 # Overlay network manager (lazy initialized)
-_overlay_manager = None
-
 # Deploy results cache for concurrent request deduplication
 _deploy_results: dict[str, asyncio.Future] = {}
 
@@ -175,8 +174,6 @@ _lock_manager = None
 _event_listener = None
 
 # Docker OVS plugin runner (initialized on startup if enabled)
-_docker_plugin_runner = None
-
 # Active job counter for heartbeat reporting
 _active_jobs = 0
 
@@ -200,24 +197,13 @@ def _decrement_active_jobs():
 
 def get_overlay_manager():
     """Lazy-initialize overlay manager."""
-    global _overlay_manager
-    if _overlay_manager is None:
-        from agent.network.overlay import OverlayManager
-        _overlay_manager = OverlayManager()
-    return _overlay_manager
+    return get_network_backend().overlay_manager
 
 
 # OVS network manager (lazy initialized)
-_ovs_manager = None
-
-
 def get_ovs_manager():
     """Lazy-initialize OVS network manager."""
-    global _ovs_manager
-    if _ovs_manager is None:
-        from agent.network.ovs import OVSNetworkManager
-        _ovs_manager = OVSNetworkManager()
-    return _ovs_manager
+    return get_network_backend().ovs_manager
 
 
 def get_event_listener():
@@ -252,9 +238,8 @@ async def forward_event_to_controller(event):
         container_name = event.attributes.get("container_name") if event.attributes else None
         if container_name:
             try:
-                ovs = get_ovs_manager()
-                if ovs._initialized:
-                    await ovs.handle_container_restart(container_name, event.lab_id)
+                backend = get_network_backend()
+                await backend.handle_container_restart(container_name, event.lab_id)
             except Exception as e:
                 logger.warning(f"Failed to reprovision interfaces for {container_name}: {e}")
 
@@ -675,6 +660,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Agent {AGENT_ID} starting...")
     logger.info(f"Controller URL: {settings.controller_url}")
     logger.info(f"Capabilities: {get_capabilities()}")
+    logger.info(f"Network backend: {get_network_backend().name}")
 
     # Initialize Redis lock manager
     from agent.locks import DeployLockManager, NoopDeployLockManager, set_lock_manager
@@ -702,18 +688,19 @@ async def lifespan(app: FastAPI):
 
     # Recover network allocations from system state (crash recovery)
     try:
-        if settings.enable_vxlan:
-            overlay_mgr = get_overlay_manager()
-            vnis_recovered = await overlay_mgr.recover_allocations()
-            if vnis_recovered > 0:
-                logger.info(f"Recovered {vnis_recovered} VNI allocations from system state")
-
-        if settings.enable_ovs:
-            ovs_mgr = get_ovs_manager()
-            await ovs_mgr.initialize()
-            vlans_recovered = await ovs_mgr.recover_allocations()
-            if vlans_recovered > 0:
-                logger.info(f"Recovered {vlans_recovered} VLAN allocations from OVS state")
+        backend = get_network_backend()
+        init_info = await backend.initialize()
+        if init_info.get("vnis_recovered", 0) > 0:
+            logger.info(
+                f"Recovered {init_info['vnis_recovered']} VNI allocations from system state"
+            )
+        if init_info.get("vlans_recovered", 0) > 0:
+            logger.info(
+                f"Recovered {init_info['vlans_recovered']} VLAN allocations from OVS state"
+            )
+        if init_info.get("ovs_plugin_started"):
+            logger.info("Docker OVS network plugin started")
+            asyncio.create_task(_fix_running_interfaces())
     except Exception as e:
         logger.warning(f"Failed to recover network allocations: {e}")
 
@@ -749,18 +736,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to start Docker event listener: {e}")
 
-    # Start Docker OVS network plugin if docker provider is enabled
-    global _docker_plugin_runner
-    if settings.enable_docker:
-        try:
-            from agent.network.docker_plugin import get_docker_ovs_plugin
-            plugin = get_docker_ovs_plugin()
-            _docker_plugin_runner = await plugin.start()
-            logger.info("Docker OVS network plugin started")
-            asyncio.create_task(_fix_running_interfaces())
-        except Exception as e:
-            logger.error(f"Failed to start Docker OVS plugin: {e}")
-
     yield
 
     # Cleanup
@@ -783,17 +758,12 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    # Close Docker OVS plugin
-    if _docker_plugin_runner:
-        try:
-            # Call shutdown first to save state
-            from agent.network.docker_plugin import get_docker_ovs_plugin
-            plugin = get_docker_ovs_plugin()
-            await plugin.shutdown()
-            await _docker_plugin_runner.cleanup()
-            logger.info("Docker OVS network plugin stopped")
-        except Exception as e:
-            logger.error(f"Error stopping Docker OVS plugin: {e}")
+    # Close network backend
+    try:
+        backend = get_network_backend()
+        await backend.shutdown()
+    except Exception as e:
+        logger.error(f"Error stopping network backend: {e}")
 
     # Stop periodic network cleanup
     try:
@@ -2088,10 +2058,9 @@ async def create_tunnel(request: CreateTunnelRequest) -> CreateTunnelResponse:
     logger.info(f"Creating tunnel: lab={request.lab_id}, link={request.link_id}, remote={request.remote_ip}")
 
     try:
-        overlay = get_overlay_manager()
-
         # Create VXLAN tunnel
-        tunnel = await overlay.create_tunnel(
+        backend = get_network_backend()
+        tunnel = await backend.overlay_create_tunnel(
             lab_id=request.lab_id,
             link_id=request.link_id,
             local_ip=request.local_ip,
@@ -2100,7 +2069,7 @@ async def create_tunnel(request: CreateTunnelRequest) -> CreateTunnelResponse:
         )
 
         # Create bridge and attach VXLAN
-        await overlay.create_bridge(tunnel)
+        await backend.overlay_create_bridge(tunnel)
 
         return CreateTunnelResponse(
             success=True,
@@ -2171,10 +2140,9 @@ async def attach_container(request: AttachContainerRequest) -> AttachContainerRe
     logger.info(f"Attaching container: {full_container_name} to bridge for {request.link_id}")
 
     try:
-        overlay = get_overlay_manager()
-
         # Get the bridge for this link
-        bridges = await overlay.get_bridges_for_lab(request.lab_id)
+        backend = get_network_backend()
+        bridges = await backend.overlay_get_bridges_for_lab(request.lab_id)
         bridge = None
         for b in bridges:
             if b.link_id == request.link_id:
@@ -2188,7 +2156,7 @@ async def attach_container(request: AttachContainerRequest) -> AttachContainerRe
             )
 
         # Attach container
-        success = await overlay.attach_container(
+        success = await backend.overlay_attach_container(
             bridge=bridge,
             container_name=full_container_name,
             interface_name=interface_name,
@@ -2220,8 +2188,8 @@ async def cleanup_overlay(request: CleanupOverlayRequest) -> CleanupOverlayRespo
     logger.info(f"Cleaning up overlay for lab: {request.lab_id}")
 
     try:
-        overlay = get_overlay_manager()
-        result = await overlay.cleanup_lab(request.lab_id)
+        backend = get_network_backend()
+        result = await backend.overlay_cleanup_lab(request.lab_id)
 
         return CleanupOverlayResponse(
             tunnels_deleted=result["tunnels_deleted"],
@@ -2241,8 +2209,8 @@ async def overlay_status() -> OverlayStatusResponse:
         return OverlayStatusResponse()
 
     try:
-        overlay = get_overlay_manager()
-        status = overlay.get_tunnel_status()
+        backend = get_network_backend()
+        status = backend.overlay_status()
 
         tunnels = [
             TunnelInfo(
@@ -2285,10 +2253,9 @@ async def ensure_vtep(request: EnsureVtepRequest) -> EnsureVtepResponse:
         )
 
     try:
-        overlay = get_overlay_manager()
-
         # Check if VTEP already exists
-        existing = overlay.get_vtep(request.remote_ip)
+        backend = get_network_backend()
+        existing = backend.overlay_get_vtep(request.remote_ip)
         if existing:
             return EnsureVtepResponse(
                 success=True,
@@ -2304,7 +2271,7 @@ async def ensure_vtep(request: EnsureVtepRequest) -> EnsureVtepResponse:
             )
 
         # Create new VTEP
-        vtep = await overlay.ensure_vtep(
+        vtep = await backend.overlay_ensure_vtep(
             local_ip=request.local_ip,
             remote_ip=request.remote_ip,
             remote_host_id=request.remote_host_id,
@@ -2345,9 +2312,8 @@ async def attach_overlay_interface(
         )
 
     try:
-        overlay = get_overlay_manager()
-
-        success = await overlay.attach_overlay_interface(
+        backend = get_network_backend()
+        success = await backend.overlay_attach_interface(
             lab_id=request.lab_id,
             container_name=request.container_name,
             interface_name=request.interface_name,
@@ -2431,9 +2397,8 @@ async def detach_overlay_interface(
             logger.warning(f"Interface isolation failed (continuing with VTEP cleanup): {e}")
 
         # Step 2: Handle VTEP reference counting
-        overlay = get_overlay_manager()
-
-        result = await overlay.detach_overlay_interface(
+        backend = get_network_backend()
+        result = await backend.overlay_detach_interface(
             link_id=request.link_id,
             remote_ip=request.remote_ip,
             delete_vtep_if_unused=request.delete_vtep_if_unused,
@@ -2820,15 +2785,15 @@ async def list_links(lab_id: str) -> LinkListResponse:
         return LinkListResponse(links=[])
 
     try:
-        ovs = get_ovs_manager()
-        if not ovs._initialized:
+        backend = get_network_backend()
+        if not backend.ovs_initialized():
             return LinkListResponse(links=[])
 
         # Get provider for container name resolution
         provider = get_provider_for_request()
 
         links = []
-        for ovs_link in ovs.get_links_for_lab(lab_id):
+        for ovs_link in backend.get_links_for_lab(lab_id):
             # Parse port keys to get node/interface names
             # Format: "container_name:interface_name"
             port_a_parts = ovs_link.port_a.rsplit(":", 1)
@@ -2875,8 +2840,8 @@ async def ovs_status() -> OVSStatusResponse:
         )
 
     try:
-        ovs = get_ovs_manager()
-        status = ovs.get_status()
+        backend = get_network_backend()
+        status = backend.get_ovs_status()
 
         ports = [
             OVSPortInfo(
@@ -3571,9 +3536,8 @@ async def connect_to_external(
     )
 
     try:
-        ovs = get_ovs_manager()
-        if not ovs._initialized:
-            await ovs.initialize()
+        backend = get_network_backend()
+        await backend.ensure_ovs_initialized()
 
         # Resolve container name
         if request.container_name:
@@ -3588,7 +3552,7 @@ async def connect_to_external(
             )
 
         # Connect to external network
-        vlan_tag = await ovs.connect_to_external(
+        vlan_tag = await backend.connect_to_external(
             container_name=container_name,
             interface_name=request.interface_name,
             external_interface=request.external_interface,
@@ -3630,11 +3594,10 @@ async def create_bridge_patch(request: BridgePatchRequest) -> BridgePatchRespons
     logger.info(f"Bridge patch request: target={request.target_bridge}")
 
     try:
-        ovs = get_ovs_manager()
-        if not ovs._initialized:
-            await ovs.initialize()
+        backend = get_network_backend()
+        await backend.ensure_ovs_initialized()
 
-        patch_port = await ovs.create_patch_to_bridge(
+        patch_port = await backend.create_patch_to_bridge(
             target_bridge=request.target_bridge,
             vlan_tag=request.vlan_tag,
         )
@@ -3673,14 +3636,14 @@ async def delete_bridge_patch(request: BridgeDeletePatchRequest) -> BridgeDelete
     logger.info(f"Bridge patch delete request: target={request.target_bridge}")
 
     try:
-        ovs = get_ovs_manager()
-        if not ovs._initialized:
+        backend = get_network_backend()
+        if not backend.ovs_initialized():
             return BridgeDeletePatchResponse(
                 success=False,
                 error="OVS not initialized",
             )
 
-        success = await ovs.delete_patch_to_bridge(request.target_bridge)
+        success = await backend.delete_patch_to_bridge(request.target_bridge)
         return BridgeDeletePatchResponse(success=success)
 
     except Exception as e:
@@ -3717,14 +3680,14 @@ async def disconnect_from_external(
     logger.info(f"External disconnect request: lab={lab_id}, interface={request.external_interface}")
 
     try:
-        ovs = get_ovs_manager()
-        if not ovs._initialized:
+        backend = get_network_backend()
+        if not backend.ovs_initialized():
             return ExternalDisconnectResponse(
                 success=False,
                 error="OVS not initialized",
             )
 
-        success = await ovs.detach_external_interface(request.external_interface)
+        success = await backend.detach_external_interface(request.external_interface)
         return ExternalDisconnectResponse(success=success)
 
     except Exception as e:
@@ -3752,11 +3715,11 @@ async def list_external_connections(lab_id: str) -> ExternalListResponse:
         return ExternalListResponse(connections=[])
 
     try:
-        ovs = get_ovs_manager()
-        if not ovs._initialized:
+        backend = get_network_backend()
+        if not backend.ovs_initialized():
             return ExternalListResponse(connections=[])
 
-        connections_data = await ovs.list_external_connections()
+        connections_data = await backend.list_external_connections()
 
         connections = [
             ExternalConnectionInfo(

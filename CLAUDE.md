@@ -119,6 +119,7 @@ alembic revision --autogenerate -m "description"
 - **Entry point**: `agent/main.py` - REST API for lab operations
 - **Providers**: `agent/providers/` - DockerProvider (containers), LibvirtProvider (VMs)
 - **Networking**: `agent/network/` - OVS-based networking (see Multi-Host Networking below)
+- **Network backends**: `agent/network/backends/` - Backend abstraction with an OVS adapter
 - **Vendors**: `agent/vendors.py` - Device-specific configurations (cEOS, SR Linux, etc.)
 
 ### Multi-Host Networking (`agent/network/`)
@@ -193,6 +194,7 @@ Copy `.env.example` to `.env`. Key settings:
 - `ARCHETYPE_AGENT_ENABLE_VXLAN`: Enable VXLAN overlay for multi-host (default: true)
 - `ARCHETYPE_AGENT_ENABLE_OVS`: Enable OVS-based networking (default: true)
 - `ARCHETYPE_AGENT_OVS_BRIDGE_NAME`: OVS bridge name (default: "arch-ovs")
+- `ARCHETYPE_AGENT_NETWORK_BACKEND`: Network backend (default: "ovs")
 
 ## Libvirt/VM Host Requirements
 
