@@ -78,3 +78,29 @@ def test_console_websocket_fallback_to_libvirt(test_client):
 
     assert msg == "libvirt"
     mock_libvirt.assert_awaited_once()
+
+
+def test_console_websocket_ssh_path(test_client):
+    provider = MagicMock()
+    provider.get_container_name.return_value = "archetype-lab1-r1"
+
+    with patch("agent.main.get_provider", return_value=provider):
+        with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_cfg:
+            mock_cfg.return_value = ("ssh", "/bin/sh", "admin", "admin")
+            with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock) as mock_ssh:
+                mock_ssh.side_effect = _docker_handler()
+                with test_client.websocket_connect("/console/lab1/r1") as ws:
+                    msg = ws.receive_text()
+
+    assert msg == "docker"
+    mock_ssh.assert_awaited_once()
+
+
+def test_console_websocket_libvirt_error(test_client):
+    with patch("agent.main.get_provider", return_value=None):
+        with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
+            mock_libvirt.side_effect = RuntimeError("libvirt failed")
+            with test_client.websocket_connect("/console/lab1/r1") as ws:
+                msg = ws.receive_text()
+
+    assert "Error" in msg
