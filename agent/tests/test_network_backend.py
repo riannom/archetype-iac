@@ -14,7 +14,15 @@ from agent.config import settings
 
 @pytest.fixture
 def test_client():
-    return TestClient(app)
+    original_enable_docker = settings.enable_docker
+    original_enable_ovs_plugin = settings.enable_ovs_plugin
+    settings.enable_docker = False
+    settings.enable_ovs_plugin = False
+    client = TestClient(app)
+    yield client
+    client.close()
+    settings.enable_docker = original_enable_docker
+    settings.enable_ovs_plugin = original_enable_ovs_plugin
 
 
 class StubBackend:
