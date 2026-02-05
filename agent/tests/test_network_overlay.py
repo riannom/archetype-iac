@@ -232,6 +232,59 @@ def test_overlay_attach_link(test_client):
         remote_ip="10.0.0.2",
     )
     backend.overlay_create_tunnel.assert_not_called()
+    backend.overlay_create_bridge.assert_not_called()
+
+
+def test_overlay_attach_link_multiple_vlans(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response_a = test_client.post(
+            "/overlay/attach-link",
+            json={
+                "lab_id": "lab1",
+                "container_name": "archetype-lab1-r1",
+                "interface_name": "eth1",
+                "vlan_tag": 3100,
+                "tenant_mtu": 1450,
+                "link_id": "r1:eth1-r2:eth1",
+                "remote_ip": "10.0.0.2",
+            },
+        )
+        response_b = test_client.post(
+            "/overlay/attach-link",
+            json={
+                "lab_id": "lab1",
+                "container_name": "archetype-lab1-r3",
+                "interface_name": "eth2",
+                "vlan_tag": 3101,
+                "tenant_mtu": 1450,
+                "link_id": "r3:eth2-r4:eth2",
+                "remote_ip": "10.0.0.2",
+            },
+        )
+
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
+    assert backend.overlay_attach_interface.await_count == 2
+    backend.overlay_attach_interface.assert_any_await(
+        lab_id="lab1",
+        container_name="archetype-lab1-r1",
+        interface_name="eth1",
+        vlan_tag=3100,
+        tenant_mtu=1450,
+        link_id="r1:eth1-r2:eth1",
+        remote_ip="10.0.0.2",
+    )
+    backend.overlay_attach_interface.assert_any_await(
+        lab_id="lab1",
+        container_name="archetype-lab1-r3",
+        interface_name="eth2",
+        vlan_tag=3101,
+        tenant_mtu=1450,
+        link_id="r3:eth2-r4:eth2",
+        remote_ip="10.0.0.2",
+    )
 
 
 def test_overlay_detach_link(test_client):
