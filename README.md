@@ -10,36 +10,48 @@ Archetype Network Studio is a lab orchestration stack for building, running, and
 
 We recommend Debian for installation and testing.
 
-1. Clone the repo and run the installer:
+### Install Overview
 
-```bash
-./install.sh
+- Run the controller install once on a single host. This host runs the Web UI + API + DB + Redis.
+- Install agents on one or more additional hosts. Agents connect back to the controller URL.
+
+```mermaid
+flowchart LR
+  controller[Controller Host] --> web[Web UI]
+  controller --> api[API Service]
+  controller --> db[Postgres]
+  controller --> redis[Redis]
+
+  agent1[Agent Host A] --> api
+  agent2[Agent Host B] --> api
+  agent3[Agent Host C] --> api
 ```
 
-The installer handles required dependencies and sets up the stack.
+### Install Commands
 
-2. Install a remote agent (optional, for multi-host labs):
-
-```bash
-sudo ./install.sh --agent --controller-url http://<controller-host>:8000
-```
-
-You can also set a name and VXLAN IP explicitly:
-
-```bash
-sudo ./install.sh --agent --controller-url http://<controller-host>:8000 --name <agent-name> --ip <agent-ip>
-```
-
-3. Install without cloning (curl installer):
+1. Install the controller (run once on a single host):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \
   sudo bash -s -- --controller
 ```
 
+This sets up the Web UI, API, database, and Redis on the controller host.
+
+2. Install agents on other hosts (repeat per agent host):
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \
   sudo bash -s -- --agent --controller-url http://<controller-host>:8000 --name <agent-name>
+```
+
+Use the controller host's reachable URL so each agent can register and report status.
+
+You can also set the VXLAN IP explicitly if needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \
+  sudo bash -s -- --agent --controller-url http://<controller-host>:8000 --name <agent-name> --ip <agent-ip>
 ```
 
 ## Architecture
