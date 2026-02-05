@@ -222,7 +222,16 @@ def test_overlay_attach_link(test_client):
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    backend.overlay_attach_interface.assert_awaited_once()
+    backend.overlay_attach_interface.assert_awaited_once_with(
+        lab_id="lab1",
+        container_name="archetype-lab1-r1",
+        interface_name="eth1",
+        vlan_tag=3100,
+        tenant_mtu=1450,
+        link_id="r1:eth1-r2:eth1",
+        remote_ip="10.0.0.2",
+    )
+    backend.overlay_create_tunnel.assert_not_called()
 
 
 def test_overlay_detach_link(test_client):
@@ -265,3 +274,32 @@ def test_overlay_detach_link(test_client):
     plugin.isolate_port.assert_awaited_once_with("lab1", "archetype-lab1-r1", "eth1")
     backend.overlay_detach_interface.assert_awaited_once()
     assert call_order == ["isolate_port", "overlay_detach"]
+
+
+def test_overlay_detach_link_preserves_vtep(test_client):
+    backend = _backend_with_overlay()
+    backend.overlay_detach_interface = AsyncMock(
+        return_value={\"success\": True, \"vtep_deleted\": False, \"remaining_links\": 1, \"error\": None}\n    )
+
+    with patch(\"agent.main.get_network_backend\", return_value=backend):
+        with patch(\"agent.main._get_docker_ovs_plugin\", return_value=None):
+            response = test_client.post(
+                \"/overlay/detach-link\",
+                json={
+                    \"lab_id\": \"lab1\",
+                    \"container_name\": \"archetype-lab1-r1\",
+                    \"interface_name\": \"eth1\",
+                    \"link_id\": \"r1:eth1-r2:eth1\",
+                    \"remote_ip\": \"10.0.0.2\",
+                    \"delete_vtep_if_unused\": False,
+                },
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[\"success\"] is True
+    backend.overlay_detach_interface.assert_awaited_once_with(
+        link_id=\"r1:eth1-r2:eth1\",
+        remote_ip=\"10.0.0.2\",
+        delete_vtep_if_unused=False,
+    )

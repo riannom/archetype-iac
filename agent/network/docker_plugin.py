@@ -153,6 +153,8 @@ class DockerOVSPlugin:
         self._cleanup_task: asyncio.Task | None = None
         self._next_mgmt_subnet_index = 1  # For allocating management subnets
         self._pending_endpoint_reconnects: list[tuple[str, str, str]] = []
+        self._allocated_vlans: set[int] = set()
+        self._global_next_vlan = VLAN_RANGE_START
 
         # State persistence
         workspace = Path(settings.workspace_path)
@@ -286,12 +288,28 @@ class DockerOVSPlugin:
         return host_veth, cont_veth
 
     def _allocate_vlan(self, lab_bridge: LabBridge) -> int:
-        """Allocate next available VLAN tag."""
-        vlan = lab_bridge.next_vlan
-        lab_bridge.next_vlan += 1
-        if lab_bridge.next_vlan > VLAN_RANGE_END:
-            lab_bridge.next_vlan = VLAN_RANGE_START
-        return vlan
+        """Allocate next available VLAN tag across all labs."""
+        max_attempts = VLAN_RANGE_END - VLAN_RANGE_START + 1
+        vlan = self._global_next_vlan
+
+        for _ in range(max_attempts):
+            if vlan not in self._allocated_vlans:
+                self._allocated_vlans.add(vlan)
+                vlan_next = vlan + 1
+                if vlan_next > VLAN_RANGE_END:
+                    vlan_next = VLAN_RANGE_START
+                self._global_next_vlan = vlan_next
+                return vlan
+
+            vlan += 1
+            if vlan > VLAN_RANGE_END:
+                vlan = VLAN_RANGE_START
+
+        raise RuntimeError("No available VLAN tags in configured range")
+
+    def _release_vlan(self, vlan_tag: int) -> None:
+        """Release a VLAN tag back to the pool."""
+        self._allocated_vlans.discard(vlan_tag)
 
     def _touch_lab(self, lab_id: str) -> None:
         """Update last_activity timestamp for TTL tracking."""
@@ -308,6 +326,7 @@ class DockerOVSPlugin:
             "version": 1,
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "next_mgmt_subnet_index": self._next_mgmt_subnet_index,
+            "global_next_vlan": self._global_next_vlan,
             "lab_bridges": {
                 lab_id: {
                     "lab_id": bridge.lab_id,
@@ -360,6 +379,7 @@ class DockerOVSPlugin:
             logger.warning(f"Unknown state file version {version}, attempting load anyway")
 
         self._next_mgmt_subnet_index = data.get("next_mgmt_subnet_index", 1)
+        self._global_next_vlan = data.get("global_next_vlan", VLAN_RANGE_START)
 
         # Load lab bridges
         for lab_id, bridge_data in data.get("lab_bridges", {}).items():
@@ -400,6 +420,15 @@ class DockerOVSPlugin:
                 vlan_tag=ep_data["vlan_tag"],
                 container_name=ep_data.get("container_name"),
             )
+
+        self._allocated_vlans = {ep.vlan_tag for ep in self.endpoints.values()}
+        if "global_next_vlan" not in data:
+            if self._allocated_vlans:
+                max_used = max(self._allocated_vlans)
+                next_vlan = max_used + 1
+                if next_vlan > VLAN_RANGE_END:
+                    next_vlan = VLAN_RANGE_START
+                self._global_next_vlan = next_vlan
 
         # Load management networks
         for lab_id, mgmt_data in data.get("management_networks", {}).items():
@@ -572,7 +601,9 @@ class DockerOVSPlugin:
                 endpoints_to_remove.append((ep_id, queued))
 
         for ep_id, _queued in endpoints_to_remove:
-            self.endpoints.pop(ep_id, None)
+            endpoint = self.endpoints.pop(ep_id, None)
+            if endpoint:
+                self._release_vlan(endpoint.vlan_tag)
 
         if any(v > 0 for v in stats.values()):
             await self._save_state()
@@ -1276,7 +1307,9 @@ class DockerOVSPlugin:
                     endpoints_to_remove.append(ep_id)
 
             for ep_id in endpoints_to_remove:
-                del self.endpoints[ep_id]
+                endpoint = self.endpoints.pop(ep_id, None)
+                if endpoint:
+                    self._release_vlan(endpoint.vlan_tag)
 
             # Clean up networks
             networks_to_remove = [
@@ -1791,6 +1824,17 @@ class DockerOVSPlugin:
             return {}
         return dict(lab_bridge.external_ports)
 
+    def get_lab_vlan_range(self, lab_id: str) -> tuple[int, int]:
+        """Get min/max VLAN tag used by a lab's endpoints."""
+        vlan_tags = []
+        for ep in self.endpoints.values():
+            network = self.networks.get(ep.network_id)
+            if network and network.lab_id == lab_id:
+                vlan_tags.append(ep.vlan_tag)
+        if not vlan_tags:
+            return (0, 0)
+        return (min(vlan_tags), max(vlan_tags))
+
     # =========================================================================
     # Status and Debug Methods
     # =========================================================================
@@ -1809,7 +1853,7 @@ class DockerOVSPlugin:
                 "lab_id": lab_id,
                 "bridge_name": bridge.bridge_name,
                 "port_count": endpoint_count,
-                "vlan_range_used": (VLAN_RANGE_START, bridge.next_vlan - 1),
+                "vlan_range_used": self.get_lab_vlan_range(lab_id),
                 "vxlan_tunnels": len(bridge.vxlan_tunnels),
                 "external_interfaces": list(bridge.external_ports.keys()),
                 "last_activity": bridge.last_activity.isoformat(),
@@ -2041,6 +2085,7 @@ class DockerOVSPlugin:
         async with self._lock:
             endpoint = self.endpoints.pop(endpoint_id, None)
             if endpoint:
+                self._release_vlan(endpoint.vlan_tag)
                 network = self.networks.get(network_id)
                 if network:
                     await self._delete_port(network.bridge_name, endpoint.host_veth)

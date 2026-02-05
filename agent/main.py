@@ -2982,11 +2982,12 @@ async def ovs_plugin_lab_status(lab_id: str) -> PluginBridgeInfo | dict:
         if not lab_bridge:
             return {"error": f"Lab bridge not found for {lab_id}"}
 
+        vlan_range_used = plugin.get_lab_vlan_range(lab_id)
         return PluginBridgeInfo(
             lab_id=lab_id,
             bridge_name=lab_bridge.bridge_name,
             port_count=len(status.get("endpoints", [])),
-            vlan_range_used=(100, lab_bridge.next_vlan - 1),
+            vlan_range_used=vlan_range_used,
             vxlan_tunnels=len(lab_bridge.vxlan_tunnels),
             external_interfaces=list(lab_bridge.external_ports.keys()),
             last_activity=lab_bridge.last_activity.isoformat(),
