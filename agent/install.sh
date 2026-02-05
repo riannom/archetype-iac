@@ -47,7 +47,7 @@ INSTALL_LIBVIRT=false
 INSTALL_LIBVIRT_PYTHON=false
 UNINSTALL=false
 UPDATE_ONLY=false
-TARGET_MTU="9000"  # Desired MTU for jumbo frames (0 = skip MTU config)
+TARGET_MTU="0"  # Desired MTU for jumbo frames (0 = skip, use --mtu 9000 to enable)
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
