@@ -223,6 +223,14 @@ class LibvirtProvider(Provider):
             True if the port exists, False otherwise
         """
         try:
+            from agent.network.backends.registry import get_network_backend
+
+            backend = get_network_backend()
+            return backend.check_port_exists(port_name)
+        except Exception:
+            pass
+
+        try:
             result = subprocess.run(
                 ["ovs-vsctl", "port-to-br", port_name],
                 capture_output=True,

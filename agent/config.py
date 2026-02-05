@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     ovs_vlan_start: int = 100  # Starting VLAN for port isolation
     ovs_vlan_end: int = 4000  # Ending VLAN for port isolation
 
+    # Network backend selection
+    network_backend: str = "ovs"  # Backend name (default: ovs)
+
     # Local link MTU (veth pairs on same host)
     # Default to jumbo frames since veth pairs are virtual and have no physical limits
     # Set to 0 to disable explicit MTU configuration (inherit system default of 1500)
