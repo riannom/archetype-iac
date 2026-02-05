@@ -98,6 +98,7 @@ def test_hot_connect_cross_lab_blocked(test_client):
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is False
+    assert body["error"]
 
 
 def test_hot_disconnect_error_returns_failure(test_client):
@@ -116,6 +117,17 @@ def test_hot_disconnect_error_returns_failure(test_client):
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is False
+
+
+def test_hot_disconnect_invalid_link_id(test_client):
+    response = test_client.delete(
+        "/labs/lab1/links/invalid-format",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]
 
 
 def test_isolate_interface_uses_plugin(test_client):
