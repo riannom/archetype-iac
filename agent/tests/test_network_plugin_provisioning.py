@@ -227,3 +227,39 @@ def test_vlan_release_only_after_endpoint_delete():
     # After deletion, VLAN A can be reused
     vlan_d = plugin._allocate_vlan(plugin.lab_bridges["lab-a"])
     assert vlan_d == vlan_a
+
+
+def test_vlan_allocator_stress_reuse_cycle():
+    plugin = DockerOVSPlugin()
+    plugin.lab_bridges["lab-a"] = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
+
+    allocated = []
+    for _ in range(50):
+        allocated.append(plugin._allocate_vlan(plugin.lab_bridges["lab-a"]))
+
+    # Simulate endpoints holding first 10 VLANs
+    plugin.networks["net-a"] = SimpleNamespace(
+        network_id="net-a",
+        lab_id="lab-a",
+        interface_name="eth1",
+        bridge_name="arch-ovs",
+    )
+    for i in range(10):
+        ep = SimpleNamespace(
+            endpoint_id=f"ep-{i}",
+            network_id="net-a",
+            interface_name="eth1",
+            host_veth=f"vh{i}",
+            cont_veth=f"vc{i}",
+            vlan_tag=allocated[i],
+            container_name=f"c{i}",
+        )
+        plugin.endpoints[ep.endpoint_id] = ep
+
+    # Release VLANs that are not held by endpoints
+    for vlan in allocated[10:]:
+        plugin._release_vlan(vlan)
+
+    # Next allocations should prefer released VLANs but never duplicate active ones
+    new_allocations = [plugin._allocate_vlan(plugin.lab_bridges["lab-a"]) for _ in range(10)]
+    assert not set(new_allocations) & set(allocated[:10])
