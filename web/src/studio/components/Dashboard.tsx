@@ -282,12 +282,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       </main>
 
       <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
-        <span>© 2024 Archetype Network Studio | Professional Edition</span>
-        <div className="flex gap-4">
-          <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">Documentation</a>
-          <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">API Status</a>
-          <a href="#" className="hover:text-stone-700 dark:hover:text-stone-400">Support</a>
-        </div>
+        <span>© 2026 Archetype Network Studio</span>
       </footer>
     </div>
 

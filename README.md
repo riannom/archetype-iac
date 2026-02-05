@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.
   sudo bash -s -- --agent --controller-url http://<controller-host>:8000 --name <agent-name>
 ```
 
-Use the controller host's reachable URL so each agent can register and report status.
+Replace `<controller-host>` with the reachable IP or DNS name of the host where you installed the controller, and set `--name` to the agent name you want to see in the controller UI.
 
 You can also set the VXLAN IP explicitly if needed:
 
@@ -166,25 +166,3 @@ System status and image management.
 
 Theme selection and styling options.
 ![Theme selection panel showing available UI themes](screenshots/themes.png)
-
-## Development
-
-There is no single unified dev command yet. Use the existing install and service scripts as appropriate for your environment.
-
-## Testing
-
-A coverage map script is available:
-
-```bash
-python3 scripts/coverage_map.py
-```
-
-This generates reports under `reports/`.
-
-## Notes
-
-- When UI or API changes affect running containers, rebuild and restart the Docker Compose stack using:
-
-```bash
-docker compose -f docker-compose.gui.yml up -d --build
-```
