@@ -18,6 +18,30 @@ We recommend Debian for installation and testing.
 
 The installer handles required dependencies and sets up the stack.
 
+2. Install a remote agent (optional, for multi-host labs):
+
+```bash
+sudo ./install.sh --agent --controller-url http://<controller-host>:8000
+```
+
+You can also set a name and VXLAN IP explicitly:
+
+```bash
+sudo ./install.sh --agent --controller-url http://<controller-host>:8000 --name <agent-name> --ip <agent-ip>
+```
+
+3. Install without cloning (curl installer):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \
+  sudo bash -s -- --controller
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \
+  sudo bash -s -- --agent --controller-url http://<controller-host>:8000 --name <agent-name>
+```
+
 ## Architecture
 
 Archetype IaC is composed of three main layers:
@@ -95,11 +119,6 @@ The supported device catalog is served dynamically from the API (`/vendors`) and
 | Palo Alto | `paloalto_vmseries` |
 | SONiC | `sonic-vs` |
 | VyOS | `vyos` |
-
-## Tested So Far
-
-- Primary install path: `./install.sh` on Debian (recommended).
-- Device image availability and licensing are vendor-specific and depend on user-provided images.
 
 ## Screenshots
 
