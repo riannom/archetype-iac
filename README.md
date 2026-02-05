@@ -1,4 +1,6 @@
-<img src="assets/archetype-logo.svg" alt="Archetype Network Studio logo" width="96">
+<p align="center">
+  <img src="assets/archetype-logo.svg" alt="Archetype Network Studio logo" width="96">
+</p>
 
 # Archetype Network Studio
 
