@@ -12,6 +12,7 @@
   - `make build` — produce production artifacts.
   - `make test` — run the full automated test suite.
   - `make dev` — start a local development server.
+  - `python3 scripts/coverage_map.py` — generate test-to-source coverage mapping and gaps report (outputs under `reports/`).
 
 ## Coding Style & Naming Conventions
 - Use consistent indentation (2 or 4 spaces) and enforce it with a formatter once a language is chosen.

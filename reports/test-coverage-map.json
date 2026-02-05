@@ -1,0 +1,1543 @@
+{
+  "api": {
+    "source_files": [
+      "api/app/__init__.py",
+      "api/app/agent_client.py",
+      "api/app/auth.py",
+      "api/app/catalog.py",
+      "api/app/config.py",
+      "api/app/db.py",
+      "api/app/errors.py",
+      "api/app/image_store.py",
+      "api/app/iso/__init__.py",
+      "api/app/iso/extractor.py",
+      "api/app/iso/mapper.py",
+      "api/app/iso/models.py",
+      "api/app/iso/parser.py",
+      "api/app/iso/virl2_parser.py",
+      "api/app/jobs.py",
+      "api/app/logging_config.py",
+      "api/app/main.py",
+      "api/app/metrics.py",
+      "api/app/middleware.py",
+      "api/app/models.py",
+      "api/app/netlab.py",
+      "api/app/providers.py",
+      "api/app/routers/__init__.py",
+      "api/app/routers/admin.py",
+      "api/app/routers/agents.py",
+      "api/app/routers/auth.py",
+      "api/app/routers/callbacks.py",
+      "api/app/routers/console.py",
+      "api/app/routers/events.py",
+      "api/app/routers/images.py",
+      "api/app/routers/infrastructure.py",
+      "api/app/routers/iso.py",
+      "api/app/routers/jobs.py",
+      "api/app/routers/labs.py",
+      "api/app/routers/permissions.py",
+      "api/app/routers/state_ws.py",
+      "api/app/routers/system.py",
+      "api/app/routers/v1/__init__.py",
+      "api/app/routers/vendors.py",
+      "api/app/routers/webhooks.py",
+      "api/app/schemas.py",
+      "api/app/services/__init__.py",
+      "api/app/services/broadcaster.py",
+      "api/app/services/device_service.py",
+      "api/app/services/interface_mapping.py",
+      "api/app/services/link_manager.py",
+      "api/app/services/link_validator.py",
+      "api/app/services/log_parser.py",
+      "api/app/services/metrics_service.py",
+      "api/app/services/state_machine.py",
+      "api/app/services/topology.py",
+      "api/app/state.py",
+      "api/app/storage.py",
+      "api/app/tasks/__init__.py",
+      "api/app/tasks/disk_cleanup.py",
+      "api/app/tasks/health.py",
+      "api/app/tasks/image_reconciliation.py",
+      "api/app/tasks/image_sync.py",
+      "api/app/tasks/job_health.py",
+      "api/app/tasks/jobs.py",
+      "api/app/tasks/link_orchestration.py",
+      "api/app/tasks/link_reconciliation.py",
+      "api/app/tasks/live_links.py",
+      "api/app/tasks/live_nodes.py",
+      "api/app/tasks/reconciliation.py",
+      "api/app/tasks/state_enforcement.py",
+      "api/app/tasks/vrnetlab_build.py",
+      "api/app/topology.py",
+      "api/app/utils/__init__.py",
+      "api/app/utils/async_tasks.py",
+      "api/app/utils/job.py",
+      "api/app/utils/lab.py",
+      "api/app/utils/link.py",
+      "api/app/utils/locks.py",
+      "api/app/webhooks.py"
+    ],
+    "test_files": [
+      "api/tests/conftest.py",
+      "api/tests/test_agent_client.py",
+      "api/tests/test_agent_selection.py",
+      "api/tests/test_api_init_modules.py",
+      "api/tests/test_api_module_imports.py",
+      "api/tests/test_async_tasks.py",
+      "api/tests/test_auth.py",
+      "api/tests/test_auto_sync.py",
+      "api/tests/test_broadcaster.py",
+      "api/tests/test_catalog.py",
+      "api/tests/test_config.py",
+      "api/tests/test_config_extraction.py",
+      "api/tests/test_dashboard.py",
+      "api/tests/test_db.py",
+      "api/tests/test_debouncing.py",
+      "api/tests/test_device_service.py",
+      "api/tests/test_image_reconciliation.py",
+      "api/tests/test_image_store.py",
+      "api/tests/test_interface_mapping.py",
+      "api/tests/test_iso_extractor.py",
+      "api/tests/test_iso_mapper.py",
+      "api/tests/test_iso_models.py",
+      "api/tests/test_iso_parser.py",
+      "api/tests/test_iso_virl2_parser.py",
+      "api/tests/test_job_broadcasting.py",
+      "api/tests/test_jobs_execution.py",
+      "api/tests/test_jobs_metrics_utils_extra.py",
+      "api/tests/test_labs_router.py",
+      "api/tests/test_link_manager.py",
+      "api/tests/test_link_normalization.py",
+      "api/tests/test_link_orchestration.py",
+      "api/tests/test_link_reconciliation_cleanup.py",
+      "api/tests/test_link_validator.py",
+      "api/tests/test_live_links.py",
+      "api/tests/test_live_nodes.py",
+      "api/tests/test_locks.py",
+      "api/tests/test_log_parser_metrics_service.py",
+      "api/tests/test_logging_config.py",
+      "api/tests/test_middleware.py",
+      "api/tests/test_models.py",
+      "api/tests/test_netlab.py",
+      "api/tests/test_providers.py",
+      "api/tests/test_routers_admin.py",
+      "api/tests/test_routers_admin_extra.py",
+      "api/tests/test_routers_agents.py",
+      "api/tests/test_routers_agents_console_extra.py",
+      "api/tests/test_routers_auth_extra.py",
+      "api/tests/test_routers_callbacks.py",
+      "api/tests/test_routers_console.py",
+      "api/tests/test_routers_console_extra.py",
+      "api/tests/test_routers_events.py",
+      "api/tests/test_routers_events_callbacks_extra.py",
+      "api/tests/test_routers_images.py",
+      "api/tests/test_routers_images_infra_extra.py",
+      "api/tests/test_routers_iso.py",
+      "api/tests/test_routers_iso_webhooks_extra.py",
+      "api/tests/test_routers_jobs.py",
+      "api/tests/test_routers_labs_permissions_extra.py",
+      "api/tests/test_routers_permissions.py",
+      "api/tests/test_routers_system_jobs_extra.py",
+      "api/tests/test_routers_vendors_extra.py",
+      "api/tests/test_schemas.py",
+      "api/tests/test_state_enforcement.py",
+      "api/tests/test_state_machine.py",
+      "api/tests/test_state_ws.py",
+      "api/tests/test_state_ws_integration.py",
+      "api/tests/test_state_ws_reconnection.py",
+      "api/tests/test_storage.py",
+      "api/tests/test_tasks_disk_cleanup.py",
+      "api/tests/test_tasks_health.py",
+      "api/tests/test_tasks_image_sync.py",
+      "api/tests/test_tasks_job_health.py",
+      "api/tests/test_tasks_reconciliation.py",
+      "api/tests/test_tasks_vrnetlab_build.py",
+      "api/tests/test_topology.py",
+      "api/tests/test_topology_service.py",
+      "api/tests/test_transitional_states.py",
+      "api/tests/test_utils_job.py",
+      "api/tests/test_utils_lab.py",
+      "api/tests/test_webhooks.py"
+    ],
+    "test_map": {
+      "api/tests/test_db.py": [
+        "api/app/config.py",
+        "api/app/db.py"
+      ],
+      "api/tests/test_transitional_states.py": [
+        "api/app/routers/__init__.py",
+        "api/app/tasks/__init__.py",
+        "api/app/tasks/jobs.py"
+      ],
+      "api/tests/test_webhooks.py": [
+        "api/app/webhooks.py"
+      ],
+      "api/tests/test_netlab.py": [
+        "api/app/netlab.py"
+      ],
+      "api/tests/test_api_module_imports.py": [
+        "api/app/__init__.py",
+        "api/app/errors.py",
+        "api/app/iso/__init__.py",
+        "api/app/models.py",
+        "api/app/routers/v1/__init__.py",
+        "api/app/services/__init__.py",
+        "api/app/utils/__init__.py"
+      ],
+      "api/tests/test_auto_sync.py": [
+        "api/app/tasks/jobs.py",
+        "api/app/tasks/live_nodes.py"
+      ],
+      "api/tests/test_topology_service.py": [
+        "api/app/schemas.py",
+        "api/app/services/topology.py"
+      ],
+      "api/tests/test_link_normalization.py": [
+        "api/app/services/topology.py",
+        "api/app/utils/link.py"
+      ],
+      "api/tests/test_auth.py": [
+        "api/app/auth.py",
+        "api/app/config.py"
+      ],
+      "api/tests/test_link_validator.py": [
+        "api/app/services/link_validator.py"
+      ],
+      "api/tests/test_routers_images_infra_extra.py": [
+        "api/app/routers/images.py",
+        "api/app/routers/infrastructure.py"
+      ],
+      "api/tests/test_tasks_reconciliation.py": [
+        "api/app/tasks/reconciliation.py"
+      ],
+      "api/tests/test_utils_lab.py": [
+        "api/app/utils/lab.py"
+      ],
+      "api/tests/test_state_ws.py": [
+        "api/app/routers/state_ws.py"
+      ],
+      "api/tests/test_routers_labs_permissions_extra.py": [
+        "api/app/routers/labs.py",
+        "api/app/routers/permissions.py"
+      ],
+      "api/tests/test_routers_agents_console_extra.py": [
+        "api/app/routers/agents.py"
+      ],
+      "api/tests/test_image_reconciliation.py": [
+        "api/app/tasks/image_reconciliation.py"
+      ],
+      "api/tests/test_logging_config.py": [
+        "api/app/logging_config.py"
+      ],
+      "api/tests/test_job_broadcasting.py": [
+        "api/app/tasks/jobs.py"
+      ],
+      "api/tests/test_jobs_metrics_utils_extra.py": [
+        "api/app/jobs.py",
+        "api/app/metrics.py"
+      ],
+      "api/tests/test_iso_mapper.py": [
+        "api/app/iso/mapper.py",
+        "api/app/iso/models.py"
+      ],
+      "api/tests/test_middleware.py": [
+        "api/app/auth.py",
+        "api/app/config.py",
+        "api/app/middleware.py"
+      ],
+      "api/tests/test_tasks_disk_cleanup.py": [
+        "api/app/tasks/disk_cleanup.py"
+      ],
+      "api/tests/test_locks.py": [
+        "api/app/utils/locks.py"
+      ],
+      "api/tests/test_iso_extractor.py": [
+        "api/app/iso/extractor.py"
+      ],
+      "api/tests/test_tasks_job_health.py": [
+        "api/app/config.py",
+        "api/app/tasks/job_health.py"
+      ],
+      "api/tests/test_link_orchestration.py": [
+        "api/app/services/link_manager.py",
+        "api/app/tasks/link_orchestration.py"
+      ],
+      "api/tests/test_routers_console_extra.py": [
+        "api/app/routers/console.py"
+      ],
+      "api/tests/test_routers_iso_webhooks_extra.py": [
+        "api/app/routers/iso.py",
+        "api/app/routers/webhooks.py"
+      ],
+      "api/tests/test_device_service.py": [
+        "api/app/services/device_service.py"
+      ],
+      "api/tests/test_async_tasks.py": [
+        "api/app/utils/async_tasks.py"
+      ],
+      "api/tests/test_config_extraction.py": [
+        "api/app/tasks/jobs.py"
+      ],
+      "api/tests/test_config.py": [
+        "api/app/config.py"
+      ],
+      "api/tests/test_live_nodes.py": [
+        "api/app/tasks/live_nodes.py"
+      ],
+      "api/tests/test_routers_system_jobs_extra.py": [
+        "api/app/routers/jobs.py",
+        "api/app/routers/system.py"
+      ],
+      "api/tests/test_agent_client.py": [
+        "api/app/agent_client.py"
+      ],
+      "api/tests/test_routers_auth_extra.py": [
+        "api/app/routers/auth.py"
+      ],
+      "api/tests/test_storage.py": [
+        "api/app/config.py",
+        "api/app/storage.py"
+      ],
+      "api/tests/test_interface_mapping.py": [
+        "api/app/services/interface_mapping.py"
+      ],
+      "api/tests/test_iso_parser.py": [
+        "api/app/iso/extractor.py",
+        "api/app/iso/models.py",
+        "api/app/iso/parser.py"
+      ],
+      "api/tests/test_catalog.py": [
+        "api/app/catalog.py"
+      ],
+      "api/tests/test_routers_vendors_extra.py": [
+        "api/app/routers/vendors.py"
+      ],
+      "api/tests/test_routers_iso.py": [
+        "api/app/config.py"
+      ],
+      "api/tests/test_state_ws_reconnection.py": [
+        "api/app/routers/state_ws.py"
+      ],
+      "api/tests/test_debouncing.py": [
+        "api/app/tasks/live_nodes.py"
+      ],
+      "api/tests/test_log_parser_metrics_service.py": [
+        "api/app/services/log_parser.py",
+        "api/app/services/metrics_service.py"
+      ],
+      "api/tests/test_state_machine.py": [
+        "api/app/services/state_machine.py",
+        "api/app/state.py"
+      ],
+      "api/tests/test_broadcaster.py": [
+        "api/app/services/broadcaster.py"
+      ],
+      "api/tests/test_utils_job.py": [
+        "api/app/config.py",
+        "api/app/utils/job.py"
+      ],
+      "api/tests/test_routers_admin_extra.py": [
+        "api/app/routers/admin.py"
+      ],
+      "api/tests/test_jobs_execution.py": [
+        "api/app/agent_client.py",
+        "api/app/config.py",
+        "api/app/tasks/jobs.py"
+      ],
+      "api/tests/test_routers_events_callbacks_extra.py": [
+        "api/app/routers/callbacks.py",
+        "api/app/routers/events.py"
+      ],
+      "api/tests/test_routers_permissions.py": [
+        "api/app/auth.py",
+        "api/app/config.py"
+      ],
+      "api/tests/test_tasks_health.py": [
+        "api/app/tasks/health.py"
+      ],
+      "api/tests/test_topology.py": [
+        "api/app/config.py",
+        "api/app/schemas.py",
+        "api/app/topology.py"
+      ],
+      "api/tests/test_tasks_image_sync.py": [
+        "api/app/config.py",
+        "api/app/tasks/image_sync.py"
+      ],
+      "api/tests/test_providers.py": [
+        "api/app/providers.py"
+      ],
+      "api/tests/test_state_enforcement.py": [
+        "api/app/state.py",
+        "api/app/tasks/state_enforcement.py"
+      ],
+      "api/tests/conftest.py": [
+        "api/app/auth.py",
+        "api/app/config.py",
+        "api/app/main.py",
+        "api/app/tasks/live_nodes.py"
+      ],
+      "api/tests/test_link_reconciliation_cleanup.py": [
+        "api/app/tasks/link_reconciliation.py"
+      ],
+      "api/tests/test_iso_virl2_parser.py": [
+        "api/app/iso/extractor.py",
+        "api/app/iso/models.py",
+        "api/app/iso/parser.py",
+        "api/app/iso/virl2_parser.py"
+      ],
+      "api/tests/test_tasks_vrnetlab_build.py": [
+        "api/app/config.py",
+        "api/app/tasks/vrnetlab_build.py"
+      ],
+      "api/tests/test_link_manager.py": [
+        "api/app/services/link_manager.py"
+      ],
+      "api/tests/test_routers_jobs.py": [
+        "api/app/config.py"
+      ],
+      "api/tests/test_live_links.py": [
+        "api/app/tasks/live_links.py"
+      ],
+      "api/tests/test_image_store.py": [
+        "api/app/image_store.py"
+      ],
+      "api/tests/test_iso_models.py": [
+        "api/app/iso/models.py"
+      ],
+      "api/tests/test_state_ws_integration.py": [
+        "api/app/routers/state_ws.py",
+        "api/app/services/broadcaster.py"
+      ]
+    },
+    "covered_sources": [
+      "api/app/__init__.py",
+      "api/app/agent_client.py",
+      "api/app/auth.py",
+      "api/app/catalog.py",
+      "api/app/config.py",
+      "api/app/db.py",
+      "api/app/errors.py",
+      "api/app/image_store.py",
+      "api/app/iso/__init__.py",
+      "api/app/iso/extractor.py",
+      "api/app/iso/mapper.py",
+      "api/app/iso/models.py",
+      "api/app/iso/parser.py",
+      "api/app/iso/virl2_parser.py",
+      "api/app/jobs.py",
+      "api/app/logging_config.py",
+      "api/app/main.py",
+      "api/app/metrics.py",
+      "api/app/middleware.py",
+      "api/app/models.py",
+      "api/app/netlab.py",
+      "api/app/providers.py",
+      "api/app/routers/__init__.py",
+      "api/app/routers/admin.py",
+      "api/app/routers/agents.py",
+      "api/app/routers/auth.py",
+      "api/app/routers/callbacks.py",
+      "api/app/routers/console.py",
+      "api/app/routers/events.py",
+      "api/app/routers/images.py",
+      "api/app/routers/infrastructure.py",
+      "api/app/routers/iso.py",
+      "api/app/routers/jobs.py",
+      "api/app/routers/labs.py",
+      "api/app/routers/permissions.py",
+      "api/app/routers/state_ws.py",
+      "api/app/routers/system.py",
+      "api/app/routers/v1/__init__.py",
+      "api/app/routers/vendors.py",
+      "api/app/routers/webhooks.py",
+      "api/app/schemas.py",
+      "api/app/services/__init__.py",
+      "api/app/services/broadcaster.py",
+      "api/app/services/device_service.py",
+      "api/app/services/interface_mapping.py",
+      "api/app/services/link_manager.py",
+      "api/app/services/link_validator.py",
+      "api/app/services/log_parser.py",
+      "api/app/services/metrics_service.py",
+      "api/app/services/state_machine.py",
+      "api/app/services/topology.py",
+      "api/app/state.py",
+      "api/app/storage.py",
+      "api/app/tasks/__init__.py",
+      "api/app/tasks/disk_cleanup.py",
+      "api/app/tasks/health.py",
+      "api/app/tasks/image_reconciliation.py",
+      "api/app/tasks/image_sync.py",
+      "api/app/tasks/job_health.py",
+      "api/app/tasks/jobs.py",
+      "api/app/tasks/link_orchestration.py",
+      "api/app/tasks/link_reconciliation.py",
+      "api/app/tasks/live_links.py",
+      "api/app/tasks/live_nodes.py",
+      "api/app/tasks/reconciliation.py",
+      "api/app/tasks/state_enforcement.py",
+      "api/app/tasks/vrnetlab_build.py",
+      "api/app/topology.py",
+      "api/app/utils/__init__.py",
+      "api/app/utils/async_tasks.py",
+      "api/app/utils/job.py",
+      "api/app/utils/lab.py",
+      "api/app/utils/link.py",
+      "api/app/utils/locks.py",
+      "api/app/webhooks.py"
+    ],
+    "uncovered_sources": [],
+    "counts": {
+      "source": 75,
+      "covered": 75,
+      "uncovered": 0
+    }
+  },
+  "agent": {
+    "source_files": [
+      "agent/__init__.py",
+      "agent/callbacks.py",
+      "agent/config.py",
+      "agent/console/__init__.py",
+      "agent/console/docker_exec.py",
+      "agent/console/ssh_console.py",
+      "agent/console_extractor.py",
+      "agent/events/__init__.py",
+      "agent/events/base.py",
+      "agent/events/docker_events.py",
+      "agent/locks.py",
+      "agent/logging_config.py",
+      "agent/main.py",
+      "agent/network/__init__.py",
+      "agent/network/backends/__init__.py",
+      "agent/network/backends/base.py",
+      "agent/network/backends/ovs_backend.py",
+      "agent/network/backends/registry.py",
+      "agent/network/cleanup.py",
+      "agent/network/docker_plugin.py",
+      "agent/network/interface_config.py",
+      "agent/network/local.py",
+      "agent/network/overlay.py",
+      "agent/network/ovs.py",
+      "agent/network/vlan.py",
+      "agent/plugins/__init__.py",
+      "agent/plugins/builtin/__init__.py",
+      "agent/plugins/builtin/arista.py",
+      "agent/plugins/loader.py",
+      "agent/providers/__init__.py",
+      "agent/providers/base.py",
+      "agent/providers/docker.py",
+      "agent/providers/docker_networks.py",
+      "agent/providers/libvirt.py",
+      "agent/providers/registry.py",
+      "agent/readiness.py",
+      "agent/schemas.py",
+      "agent/tests/__init__.py",
+      "agent/updater.py",
+      "agent/vendors.py",
+      "agent/version.py"
+    ],
+    "test_files": [
+      "agent/tests/test_ceos_integration.py",
+      "agent/tests/test_ceos_provider.py",
+      "agent/tests/test_console.py",
+      "agent/tests/test_console_e2e.py",
+      "agent/tests/test_console_routes.py",
+      "agent/tests/test_container_endpoints.py",
+      "agent/tests/test_container_endpoints_integration.py",
+      "agent/tests/test_deploy_reliability.py",
+      "agent/tests/test_docker_plugin_carrier.py",
+      "agent/tests/test_docker_plugin_discovery.py",
+      "agent/tests/test_docker_plugin_migrate.py",
+      "agent/tests/test_events_console_logging_version_batch2.py",
+      "agent/tests/test_network_backend.py",
+      "agent/tests/test_network_backend_registry.py",
+      "agent/tests/test_network_local_cleanup_interface.py",
+      "agent/tests/test_network_overlay.py",
+      "agent/tests/test_network_plugin_provisioning.py",
+      "agent/tests/test_network_provisioning.py",
+      "agent/tests/test_node_ready.py",
+      "agent/tests/test_ovs_interface_naming.py",
+      "agent/tests/test_plugin_loader.py",
+      "agent/tests/test_plugins_providers_batch1.py",
+      "agent/tests/test_provider_registry.py",
+      "agent/tests/test_provider_registry_unit.py",
+      "agent/tests/test_readiness.py",
+      "agent/tests/test_remaining_agent_gaps_batch3.py",
+      "agent/tests/test_vlan_allocator.py",
+      "agent/tests/test_vlan_manager.py",
+      "agent/tests/test_vni_allocator.py"
+    ],
+    "test_map": {
+      "agent/tests/test_docker_plugin_migrate.py": [
+        "agent/network/docker_plugin.py"
+      ],
+      "agent/tests/test_network_provisioning.py": [
+        "agent/config.py",
+        "agent/main.py"
+      ],
+      "agent/tests/test_network_plugin_provisioning.py": [
+        "agent/config.py",
+        "agent/main.py",
+        "agent/network/docker_plugin.py"
+      ],
+      "agent/tests/test_network_backend_registry.py": [
+        "agent/network/backends/registry.py"
+      ],
+      "agent/tests/test_ovs_interface_naming.py": [
+        "agent/providers/docker.py"
+      ],
+      "agent/tests/test_plugins_providers_batch1.py": [
+        "agent/plugins/builtin/__init__.py",
+        "agent/plugins/builtin/arista.py",
+        "agent/plugins/loader.py",
+        "agent/providers/base.py",
+        "agent/providers/docker_networks.py",
+        "agent/providers/libvirt.py"
+      ],
+      "agent/tests/test_provider_registry.py": [
+        "agent/providers/__init__.py"
+      ],
+      "agent/tests/test_vni_allocator.py": [
+        "agent/network/overlay.py"
+      ],
+      "agent/tests/test_node_ready.py": [
+        "agent/main.py"
+      ],
+      "agent/tests/test_events_console_logging_version_batch2.py": [
+        "agent/console/__init__.py",
+        "agent/console/ssh_console.py",
+        "agent/console_extractor.py",
+        "agent/events/__init__.py",
+        "agent/events/base.py",
+        "agent/events/docker_events.py",
+        "agent/logging_config.py",
+        "agent/version.py"
+      ],
+      "agent/tests/test_container_endpoints.py": [
+        "agent/main.py"
+      ],
+      "agent/tests/test_network_overlay.py": [
+        "agent/config.py",
+        "agent/main.py"
+      ],
+      "agent/tests/test_vlan_manager.py": [
+        "agent/network/vlan.py"
+      ],
+      "agent/tests/test_console_e2e.py": [
+        "agent/main.py"
+      ],
+      "agent/tests/test_ceos_provider.py": [
+        "agent/providers/docker.py",
+        "agent/schemas.py",
+        "agent/vendors.py"
+      ],
+      "agent/tests/test_remaining_agent_gaps_batch3.py": [
+        "agent/__init__.py",
+        "agent/callbacks.py",
+        "agent/network/__init__.py",
+        "agent/network/backends/ovs_backend.py",
+        "agent/tests/__init__.py",
+        "agent/updater.py"
+      ],
+      "agent/tests/test_console.py": [
+        "agent/console/docker_exec.py"
+      ],
+      "agent/tests/test_readiness.py": [
+        "agent/readiness.py",
+        "agent/vendors.py"
+      ],
+      "agent/tests/test_network_backend.py": [
+        "agent/config.py",
+        "agent/main.py",
+        "agent/network/backends/__init__.py"
+      ],
+      "agent/tests/test_network_local_cleanup_interface.py": [
+        "agent/network/backends/base.py",
+        "agent/network/cleanup.py",
+        "agent/network/interface_config.py",
+        "agent/network/local.py"
+      ],
+      "agent/tests/test_console_routes.py": [
+        "agent/main.py"
+      ],
+      "agent/tests/test_plugin_loader.py": [
+        "agent/plugins/__init__.py"
+      ],
+      "agent/tests/test_docker_plugin_discovery.py": [
+        "agent/network/docker_plugin.py"
+      ],
+      "agent/tests/test_container_endpoints_integration.py": [
+        "agent/config.py",
+        "agent/main.py"
+      ],
+      "agent/tests/test_vlan_allocator.py": [
+        "agent/network/ovs.py"
+      ],
+      "agent/tests/test_deploy_reliability.py": [
+        "agent/config.py",
+        "agent/locks.py",
+        "agent/main.py",
+        "agent/providers/base.py",
+        "agent/schemas.py"
+      ],
+      "agent/tests/test_provider_registry_unit.py": [
+        "agent/providers/registry.py"
+      ]
+    },
+    "covered_sources": [
+      "agent/__init__.py",
+      "agent/callbacks.py",
+      "agent/config.py",
+      "agent/console/__init__.py",
+      "agent/console/docker_exec.py",
+      "agent/console/ssh_console.py",
+      "agent/console_extractor.py",
+      "agent/events/__init__.py",
+      "agent/events/base.py",
+      "agent/events/docker_events.py",
+      "agent/locks.py",
+      "agent/logging_config.py",
+      "agent/main.py",
+      "agent/network/__init__.py",
+      "agent/network/backends/__init__.py",
+      "agent/network/backends/base.py",
+      "agent/network/backends/ovs_backend.py",
+      "agent/network/backends/registry.py",
+      "agent/network/cleanup.py",
+      "agent/network/docker_plugin.py",
+      "agent/network/interface_config.py",
+      "agent/network/local.py",
+      "agent/network/overlay.py",
+      "agent/network/ovs.py",
+      "agent/network/vlan.py",
+      "agent/plugins/__init__.py",
+      "agent/plugins/builtin/__init__.py",
+      "agent/plugins/builtin/arista.py",
+      "agent/plugins/loader.py",
+      "agent/providers/__init__.py",
+      "agent/providers/base.py",
+      "agent/providers/docker.py",
+      "agent/providers/docker_networks.py",
+      "agent/providers/libvirt.py",
+      "agent/providers/registry.py",
+      "agent/readiness.py",
+      "agent/schemas.py",
+      "agent/tests/__init__.py",
+      "agent/updater.py",
+      "agent/vendors.py",
+      "agent/version.py"
+    ],
+    "uncovered_sources": [],
+    "counts": {
+      "source": 41,
+      "covered": 41,
+      "uncovered": 0
+    }
+  },
+  "web": {
+    "source_files": [
+      "web/src/api.ts",
+      "web/src/components/ArchetypeLogo.tsx",
+      "web/src/components/ISOImportModal.tsx",
+      "web/src/components/ImageSyncProgress.tsx",
+      "web/src/components/NotificationCenter.tsx",
+      "web/src/components/NotificationSettingsPanel.tsx",
+      "web/src/components/VersionBadge.tsx",
+      "web/src/components/VersionModal.tsx",
+      "web/src/components/backgrounds/AnimatedBackground.tsx",
+      "web/src/components/backgrounds/animations/autumnWind.ts",
+      "web/src/components/backgrounds/animations/bambooSway.ts",
+      "web/src/components/backgrounds/animations/bioluminescentBeach.ts",
+      "web/src/components/backgrounds/animations/bitcoinParticles.ts",
+      "web/src/components/backgrounds/animations/breath.ts",
+      "web/src/components/backgrounds/animations/bunnyMeadow.ts",
+      "web/src/components/backgrounds/animations/butterflyGarden.ts",
+      "web/src/components/backgrounds/animations/constellation.ts",
+      "web/src/components/backgrounds/animations/dandelionWishes.ts",
+      "web/src/components/backgrounds/animations/desertDunes.ts",
+      "web/src/components/backgrounds/animations/digitalRain.ts",
+      "web/src/components/backgrounds/animations/ducklingParade.ts",
+      "web/src/components/backgrounds/animations/eclipse.ts",
+      "web/src/components/backgrounds/animations/embersRising.ts",
+      "web/src/components/backgrounds/animations/fallingLeaves.ts",
+      "web/src/components/backgrounds/animations/fireflies.ts",
+      "web/src/components/backgrounds/animations/fireworks.ts",
+      "web/src/components/backgrounds/animations/floatingLanterns.ts",
+      "web/src/components/backgrounds/animations/floatingShields.ts",
+      "web/src/components/backgrounds/animations/gentleRain.ts",
+      "web/src/components/backgrounds/animations/gentleWaves.ts",
+      "web/src/components/backgrounds/animations/hashStorm.ts",
+      "web/src/components/backgrounds/animations/iceCrystals.ts",
+      "web/src/components/backgrounds/animations/index.ts",
+      "web/src/components/backgrounds/animations/inkDrops.ts",
+      "web/src/components/backgrounds/animations/jellyfishDrift.ts",
+      "web/src/components/backgrounds/animations/koiShadows.ts",
+      "web/src/components/backgrounds/animations/lavenderFields.ts",
+      "web/src/components/backgrounds/animations/lotusBloom.ts",
+      "web/src/components/backgrounds/animations/mistyValley.ts",
+      "web/src/components/backgrounds/animations/moonlitClouds.ts",
+      "web/src/components/backgrounds/animations/mountainMist.ts",
+      "web/src/components/backgrounds/animations/myceliumNetwork.ts",
+      "web/src/components/backgrounds/animations/northernLights.ts",
+      "web/src/components/backgrounds/animations/oilSlick.ts",
+      "web/src/components/backgrounds/animations/paperAirplanes.ts",
+      "web/src/components/backgrounds/animations/paperBoats.ts",
+      "web/src/components/backgrounds/animations/raindropWindow.ts",
+      "web/src/components/backgrounds/animations/ripplingWater.ts",
+      "web/src/components/backgrounds/animations/sakuraPetals.ts",
+      "web/src/components/backgrounds/animations/sakuraRedux.ts",
+      "web/src/components/backgrounds/animations/satsSymbol.ts",
+      "web/src/components/backgrounds/animations/sereneMeadows.ts",
+      "web/src/components/backgrounds/animations/smokeCalligraphy.ts",
+      "web/src/components/backgrounds/animations/snowfall.ts",
+      "web/src/components/backgrounds/animations/stackingBlocks.ts",
+      "web/src/components/backgrounds/animations/stargazing.ts",
+      "web/src/components/backgrounds/animations/stillPonds.ts",
+      "web/src/components/backgrounds/animations/sunsetSailing.ts",
+      "web/src/components/backgrounds/animations/thunderstorm.ts",
+      "web/src/components/backgrounds/animations/tidalPatterns.ts",
+      "web/src/components/backgrounds/animations/tidePools.ts",
+      "web/src/components/backgrounds/animations/trainStation.ts",
+      "web/src/components/backgrounds/animations/types.ts",
+      "web/src/components/backgrounds/animations/volcanicIslands.ts",
+      "web/src/components/backgrounds/animations/windChimes.ts",
+      "web/src/components/backgrounds/animations/wisteria.ts",
+      "web/src/components/backgrounds/animations/zenSandGarden.ts",
+      "web/src/components/icons/ArchetypeIcon.tsx",
+      "web/src/components/icons/index.ts",
+      "web/src/components/layout/PageHeader.tsx",
+      "web/src/components/layout/PageLayout.tsx",
+      "web/src/components/layout/index.ts",
+      "web/src/components/ui/Badge.tsx",
+      "web/src/components/ui/Button.tsx",
+      "web/src/components/ui/Card.tsx",
+      "web/src/components/ui/Input.tsx",
+      "web/src/components/ui/Modal.tsx",
+      "web/src/components/ui/ProgressBar.tsx",
+      "web/src/components/ui/StatusIndicator.tsx",
+      "web/src/components/ui/Tabs.tsx",
+      "web/src/components/ui/Toast.tsx",
+      "web/src/components/ui/ToastContainer.tsx",
+      "web/src/components/ui/index.ts",
+      "web/src/config.ts",
+      "web/src/contexts/DeviceCatalogContext.tsx",
+      "web/src/contexts/ImageLibraryContext.tsx",
+      "web/src/contexts/NotificationContext.tsx",
+      "web/src/contexts/UserContext.tsx",
+      "web/src/main.tsx",
+      "web/src/pages/InfrastructurePage.tsx",
+      "web/src/pages/LoginPage.tsx",
+      "web/src/pages/NodesPage.tsx",
+      "web/src/pages/StudioConsolePage.tsx",
+      "web/src/setupTests.ts",
+      "web/src/studio/StudioPage.tsx",
+      "web/src/studio/components/AgentAlertBanner.tsx",
+      "web/src/studio/components/AgentsPopup.tsx",
+      "web/src/studio/components/Auth.tsx",
+      "web/src/studio/components/Canvas.tsx",
+      "web/src/studio/components/ConfigDiffViewer.tsx",
+      "web/src/studio/components/ConfigViewerModal.tsx",
+      "web/src/studio/components/ConfigsView.tsx",
+      "web/src/studio/components/ConsoleManager.tsx",
+      "web/src/studio/components/ContainersPopup.tsx",
+      "web/src/studio/components/Dashboard.tsx",
+      "web/src/studio/components/DetailPopup.tsx",
+      "web/src/studio/components/DeviceCard.tsx",
+      "web/src/studio/components/DeviceConfigCard.tsx",
+      "web/src/studio/components/DeviceConfigManager.tsx",
+      "web/src/studio/components/DeviceConfigPanel.tsx",
+      "web/src/studio/components/DeviceManager.tsx",
+      "web/src/studio/components/ExternalNetworkConfig.tsx",
+      "web/src/studio/components/FilterChip.tsx",
+      "web/src/studio/components/ImageCard.tsx",
+      "web/src/studio/components/ImageFilterBar.tsx",
+      "web/src/studio/components/InterfaceSelect.tsx",
+      "web/src/studio/components/JobLogModal.tsx",
+      "web/src/studio/components/LogsView.tsx",
+      "web/src/studio/components/PropertiesPanel.tsx",
+      "web/src/studio/components/ResourcesPopup.tsx",
+      "web/src/studio/components/RuntimeControl.tsx",
+      "web/src/studio/components/Sidebar.tsx",
+      "web/src/studio/components/SidebarFilters.tsx",
+      "web/src/studio/components/StatusBar.tsx",
+      "web/src/studio/components/StoragePopup.tsx",
+      "web/src/studio/components/SystemLogsModal.tsx",
+      "web/src/studio/components/SystemStatusStrip.tsx",
+      "web/src/studio/components/TaskLogPanel.tsx",
+      "web/src/studio/components/TerminalSession.tsx",
+      "web/src/studio/components/TopBar.tsx",
+      "web/src/studio/components/VendorOptionsPanel.tsx",
+      "web/src/studio/constants.tsx",
+      "web/src/studio/contexts/DragContext.tsx",
+      "web/src/studio/hooks/useLabStateWS.ts",
+      "web/src/studio/hooks/usePersistedState.ts",
+      "web/src/studio/hooks/usePortManager.ts",
+      "web/src/studio/store/canvasStore.ts",
+      "web/src/studio/types.ts",
+      "web/src/studio/utils/interfaceRegistry.ts",
+      "web/src/test-utils/factories.ts",
+      "web/src/test-utils/renderWithProviders.tsx",
+      "web/src/theme/ThemeProvider.tsx",
+      "web/src/theme/ThemeSelector.tsx",
+      "web/src/theme/backgroundPairs.ts",
+      "web/src/theme/backgrounds.ts",
+      "web/src/theme/index.ts",
+      "web/src/theme/presets.ts",
+      "web/src/theme/types.ts",
+      "web/src/types.ts",
+      "web/src/types/notifications.ts",
+      "web/src/utils/agentColors.ts",
+      "web/src/utils/deviceModels.ts",
+      "web/src/utils/format.ts",
+      "web/src/utils/index.ts",
+      "web/src/utils/status.ts",
+      "web/src/vite-env.d.ts"
+    ],
+    "test_files": [
+      "web/src/api.test.ts",
+      "web/src/components/ArchetypeLogo.test.tsx",
+      "web/src/components/ISOImportModal.test.tsx",
+      "web/src/components/ImageSyncProgress.test.tsx",
+      "web/src/components/NotificationCenter.test.tsx",
+      "web/src/components/NotificationSettingsPanel.test.tsx",
+      "web/src/components/VersionBadge.test.tsx",
+      "web/src/components/VersionModal.test.tsx",
+      "web/src/components/backgrounds/AnimatedBackground.test.tsx",
+      "web/src/components/backgrounds/animations/allAnimations.test.ts",
+      "web/src/components/icons/ArchetypeIcon.test.tsx",
+      "web/src/components/icons/index.test.tsx",
+      "web/src/components/layout/PageHeader.test.tsx",
+      "web/src/components/layout/PageLayout.test.tsx",
+      "web/src/components/layout/index.test.tsx",
+      "web/src/components/ui/Badge.test.tsx",
+      "web/src/components/ui/Button.test.tsx",
+      "web/src/components/ui/Card.test.tsx",
+      "web/src/components/ui/Input.test.tsx",
+      "web/src/components/ui/Modal.test.tsx",
+      "web/src/components/ui/ProgressBar.test.tsx",
+      "web/src/components/ui/StatusIndicator.test.tsx",
+      "web/src/components/ui/Tabs.test.tsx",
+      "web/src/components/ui/Toast.test.tsx",
+      "web/src/components/ui/ToastContainer.test.tsx",
+      "web/src/components/ui/index.test.tsx",
+      "web/src/config.test.ts",
+      "web/src/contexts/DeviceCatalogContext.test.tsx",
+      "web/src/contexts/ImageLibraryContext.test.tsx",
+      "web/src/contexts/NotificationContext.test.tsx",
+      "web/src/contexts/UserContext.test.tsx",
+      "web/src/main.test.tsx",
+      "web/src/pages/InfrastructurePage.test.tsx",
+      "web/src/pages/LoginPage.test.tsx",
+      "web/src/pages/NodesPage.test.tsx",
+      "web/src/pages/StudioConsolePage.test.tsx",
+      "web/src/setupTests.test.ts",
+      "web/src/studio/StudioPage.test.tsx",
+      "web/src/studio/components/AgentAlertBanner.test.tsx",
+      "web/src/studio/components/AgentsPopup.test.tsx",
+      "web/src/studio/components/Auth.test.tsx",
+      "web/src/studio/components/Canvas.test.tsx",
+      "web/src/studio/components/ConfigDiffViewer.test.tsx",
+      "web/src/studio/components/ConfigViewerModal.test.tsx",
+      "web/src/studio/components/ConfigsView.test.tsx",
+      "web/src/studio/components/ConsoleManager.test.tsx",
+      "web/src/studio/components/ContainersPopup.test.tsx",
+      "web/src/studio/components/Dashboard.test.tsx",
+      "web/src/studio/components/DetailPopup.test.tsx",
+      "web/src/studio/components/DeviceCard.test.tsx",
+      "web/src/studio/components/DeviceConfigCard.test.tsx",
+      "web/src/studio/components/DeviceConfigManager.test.tsx",
+      "web/src/studio/components/DeviceConfigPanel.test.tsx",
+      "web/src/studio/components/DeviceManager.test.tsx",
+      "web/src/studio/components/ExternalNetworkConfig.test.tsx",
+      "web/src/studio/components/FilterChip.test.tsx",
+      "web/src/studio/components/ImageCard.test.tsx",
+      "web/src/studio/components/ImageFilterBar.test.tsx",
+      "web/src/studio/components/InterfaceSelect.test.tsx",
+      "web/src/studio/components/JobLogModal.test.tsx",
+      "web/src/studio/components/LogsView.test.tsx",
+      "web/src/studio/components/PropertiesPanel.test.tsx",
+      "web/src/studio/components/ResourcesPopup.test.tsx",
+      "web/src/studio/components/RuntimeControl.test.tsx",
+      "web/src/studio/components/Sidebar.test.tsx",
+      "web/src/studio/components/SidebarFilters.test.tsx",
+      "web/src/studio/components/StatusBar.test.tsx",
+      "web/src/studio/components/StoragePopup.test.tsx",
+      "web/src/studio/components/SystemLogsModal.test.tsx",
+      "web/src/studio/components/SystemStatusStrip.test.tsx",
+      "web/src/studio/components/TaskLogPanel.test.tsx",
+      "web/src/studio/components/TerminalSession.test.tsx",
+      "web/src/studio/components/TopBar.test.tsx",
+      "web/src/studio/components/VendorOptionsPanel.test.tsx",
+      "web/src/studio/constants.test.tsx",
+      "web/src/studio/hooks/useLabStateWS.test.ts",
+      "web/src/studio/hooks/usePersistedState.test.tsx",
+      "web/src/studio/hooks/usePortManager.test.ts",
+      "web/src/studio/store/canvasStore.test.ts",
+      "web/src/test-utils/renderWithProviders.test.tsx",
+      "web/src/theme/ThemeProvider.test.tsx",
+      "web/src/theme/ThemeSelector.test.tsx",
+      "web/src/theme/backgroundPairs.test.ts",
+      "web/src/theme/backgrounds.test.ts",
+      "web/src/theme/index.test.ts",
+      "web/src/theme/presets.test.ts",
+      "web/src/theme/types.test.ts",
+      "web/src/types.test.ts",
+      "web/src/utils/agentColors.test.ts",
+      "web/src/utils/deviceModels.test.ts",
+      "web/src/utils/format.test.ts",
+      "web/src/utils/index.test.ts",
+      "web/src/utils/status.test.ts",
+      "web/src/vite-env.test.ts"
+    ],
+    "test_map": {
+      "web/src/api.test.ts": [
+        "web/src/api.ts"
+      ],
+      "web/src/types.test.ts": [
+        "web/src/types.ts"
+      ],
+      "web/src/main.test.tsx": [
+        "web/src/main.tsx"
+      ],
+      "web/src/setupTests.test.ts": [
+        "web/src/setupTests.ts"
+      ],
+      "web/src/config.test.ts": [
+        "web/src/config.ts"
+      ],
+      "web/src/vite-env.test.ts": [
+        "web/src/vite-env.d.ts"
+      ],
+      "web/src/pages/InfrastructurePage.test.tsx": [
+        "web/src/pages/InfrastructurePage.tsx"
+      ],
+      "web/src/pages/LoginPage.test.tsx": [
+        "web/src/pages/LoginPage.tsx"
+      ],
+      "web/src/pages/NodesPage.test.tsx": [
+        "web/src/pages/NodesPage.tsx",
+        "web/src/test-utils/factories.ts",
+        "web/src/theme/ThemeProvider.tsx"
+      ],
+      "web/src/pages/StudioConsolePage.test.tsx": [
+        "web/src/pages/StudioConsolePage.tsx"
+      ],
+      "web/src/studio/StudioPage.test.tsx": [
+        "web/src/contexts/UserContext.tsx",
+        "web/src/studio/StudioPage.tsx",
+        "web/src/theme/ThemeProvider.tsx"
+      ],
+      "web/src/studio/constants.test.tsx": [
+        "web/src/studio/constants.tsx"
+      ],
+      "web/src/studio/hooks/useLabStateWS.test.ts": [
+        "web/src/studio/hooks/useLabStateWS.ts"
+      ],
+      "web/src/studio/hooks/usePortManager.test.ts": [
+        "web/src/studio/hooks/usePortManager.ts",
+        "web/src/studio/types.ts",
+        "web/src/studio/utils/interfaceRegistry.ts"
+      ],
+      "web/src/studio/hooks/usePersistedState.test.tsx": [
+        "web/src/studio/hooks/usePersistedState.ts"
+      ],
+      "web/src/studio/store/canvasStore.test.ts": [
+        "web/src/studio/store/canvasStore.ts",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/ImageCard.test.tsx": [
+        "web/src/api.ts",
+        "web/src/studio/components/ImageCard.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/ConfigsView.test.tsx": [
+        "web/src/studio/components/ConfigsView.tsx",
+        "web/src/studio/components/RuntimeControl.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/DeviceConfigCard.test.tsx": [
+        "web/src/studio/components/DeviceConfigCard.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/TaskLogPanel.test.tsx": [
+        "web/src/studio/components/TaskLogPanel.tsx"
+      ],
+      "web/src/studio/components/Auth.test.tsx": [
+        "web/src/studio/components/Auth.tsx"
+      ],
+      "web/src/studio/components/AgentAlertBanner.test.tsx": [
+        "web/src/studio/components/AgentAlertBanner.tsx"
+      ],
+      "web/src/studio/components/DeviceConfigManager.test.tsx": [
+        "web/src/studio/components/DeviceConfigManager.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/SystemStatusStrip.test.tsx": [
+        "web/src/studio/components/SystemStatusStrip.tsx",
+        "web/src/types/notifications.ts"
+      ],
+      "web/src/studio/components/PropertiesPanel.test.tsx": [
+        "web/src/studio/components/PropertiesPanel.tsx",
+        "web/src/studio/components/RuntimeControl.tsx",
+        "web/src/studio/hooks/usePortManager.ts",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/ImageFilterBar.test.tsx": [
+        "web/src/studio/components/ImageFilterBar.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/ConsoleManager.test.tsx": [
+        "web/src/studio/components/ConsoleManager.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/DeviceConfigPanel.test.tsx": [
+        "web/src/api.ts",
+        "web/src/studio/components/DeviceConfigPanel.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/JobLogModal.test.tsx": [
+        "web/src/studio/components/JobLogModal.tsx"
+      ],
+      "web/src/studio/components/FilterChip.test.tsx": [
+        "web/src/studio/components/FilterChip.tsx"
+      ],
+      "web/src/studio/components/ResourcesPopup.test.tsx": [
+        "web/src/studio/components/ResourcesPopup.tsx"
+      ],
+      "web/src/studio/components/DeviceCard.test.tsx": [
+        "web/src/studio/components/DeviceCard.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/InterfaceSelect.test.tsx": [
+        "web/src/studio/components/InterfaceSelect.tsx"
+      ],
+      "web/src/studio/components/StoragePopup.test.tsx": [
+        "web/src/studio/components/StoragePopup.tsx"
+      ],
+      "web/src/studio/components/ConfigViewerModal.test.tsx": [
+        "web/src/studio/components/ConfigViewerModal.tsx"
+      ],
+      "web/src/studio/components/Canvas.test.tsx": [
+        "web/src/studio/components/Canvas.tsx",
+        "web/src/studio/components/RuntimeControl.tsx",
+        "web/src/studio/types.ts",
+        "web/src/theme/ThemeProvider.tsx"
+      ],
+      "web/src/studio/components/SystemLogsModal.test.tsx": [
+        "web/src/api.ts",
+        "web/src/studio/components/SystemLogsModal.tsx"
+      ],
+      "web/src/studio/components/DeviceManager.test.tsx": [
+        "web/src/studio/components/DeviceManager.tsx",
+        "web/src/studio/contexts/DragContext.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/RuntimeControl.test.tsx": [
+        "web/src/studio/components/RuntimeControl.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/ExternalNetworkConfig.test.tsx": [
+        "web/src/api.ts",
+        "web/src/studio/components/ExternalNetworkConfig.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/StatusBar.test.tsx": [
+        "web/src/studio/components/StatusBar.tsx"
+      ],
+      "web/src/studio/components/SidebarFilters.test.tsx": [
+        "web/src/studio/components/SidebarFilters.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/TerminalSession.test.tsx": [
+        "web/src/studio/components/TerminalSession.tsx"
+      ],
+      "web/src/studio/components/TopBar.test.tsx": [
+        "web/src/studio/components/TopBar.tsx"
+      ],
+      "web/src/studio/components/LogsView.test.tsx": [
+        "web/src/studio/components/LogsView.tsx"
+      ],
+      "web/src/studio/components/Sidebar.test.tsx": [
+        "web/src/studio/components/Sidebar.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/ContainersPopup.test.tsx": [
+        "web/src/studio/components/ContainersPopup.tsx"
+      ],
+      "web/src/studio/components/VendorOptionsPanel.test.tsx": [
+        "web/src/studio/components/VendorOptionsPanel.tsx"
+      ],
+      "web/src/studio/components/ConfigDiffViewer.test.tsx": [
+        "web/src/studio/components/ConfigDiffViewer.tsx"
+      ],
+      "web/src/studio/components/Dashboard.test.tsx": [
+        "web/src/contexts/UserContext.tsx",
+        "web/src/studio/components/Dashboard.tsx",
+        "web/src/theme/ThemeProvider.tsx"
+      ],
+      "web/src/studio/components/AgentsPopup.test.tsx": [
+        "web/src/studio/components/AgentsPopup.tsx"
+      ],
+      "web/src/studio/components/DetailPopup.test.tsx": [
+        "web/src/studio/components/DetailPopup.tsx"
+      ],
+      "web/src/contexts/DeviceCatalogContext.test.tsx": [
+        "web/src/contexts/DeviceCatalogContext.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/contexts/UserContext.test.tsx": [
+        "web/src/contexts/UserContext.tsx"
+      ],
+      "web/src/contexts/NotificationContext.test.tsx": [
+        "web/src/contexts/NotificationContext.tsx",
+        "web/src/types/notifications.ts"
+      ],
+      "web/src/contexts/ImageLibraryContext.test.tsx": [
+        "web/src/contexts/ImageLibraryContext.tsx"
+      ],
+      "web/src/utils/format.test.ts": [
+        "web/src/utils/format.ts"
+      ],
+      "web/src/utils/index.test.ts": [
+        "web/src/utils/index.ts"
+      ],
+      "web/src/utils/agentColors.test.ts": [
+        "web/src/utils/agentColors.ts"
+      ],
+      "web/src/utils/status.test.ts": [
+        "web/src/utils/status.ts"
+      ],
+      "web/src/utils/deviceModels.test.ts": [
+        "web/src/studio/types.ts",
+        "web/src/utils/deviceModels.ts"
+      ],
+      "web/src/theme/types.test.ts": [
+        "web/src/theme/types.ts"
+      ],
+      "web/src/theme/backgroundPairs.test.ts": [
+        "web/src/theme/backgroundPairs.ts"
+      ],
+      "web/src/theme/backgrounds.test.ts": [
+        "web/src/theme/backgrounds.ts"
+      ],
+      "web/src/theme/index.test.ts": [
+        "web/src/theme/index.ts"
+      ],
+      "web/src/theme/presets.test.ts": [
+        "web/src/theme/presets.ts"
+      ],
+      "web/src/theme/ThemeProvider.test.tsx": [
+        "web/src/theme/ThemeProvider.tsx",
+        "web/src/theme/presets.ts"
+      ],
+      "web/src/theme/ThemeSelector.test.tsx": [
+        "web/src/theme/ThemeProvider.tsx",
+        "web/src/theme/ThemeSelector.tsx"
+      ],
+      "web/src/test-utils/renderWithProviders.test.tsx": [
+        "web/src/test-utils/renderWithProviders.tsx"
+      ],
+      "web/src/components/NotificationCenter.test.tsx": [
+        "web/src/components/NotificationCenter.tsx"
+      ],
+      "web/src/components/ISOImportModal.test.tsx": [
+        "web/src/components/ISOImportModal.tsx"
+      ],
+      "web/src/components/VersionBadge.test.tsx": [
+        "web/src/components/VersionBadge.tsx"
+      ],
+      "web/src/components/ImageSyncProgress.test.tsx": [
+        "web/src/api.ts",
+        "web/src/components/ImageSyncProgress.tsx"
+      ],
+      "web/src/components/VersionModal.test.tsx": [
+        "web/src/components/VersionModal.tsx"
+      ],
+      "web/src/components/ArchetypeLogo.test.tsx": [
+        "web/src/components/ArchetypeLogo.tsx"
+      ],
+      "web/src/components/NotificationSettingsPanel.test.tsx": [
+        "web/src/components/NotificationSettingsPanel.tsx",
+        "web/src/types/notifications.ts"
+      ],
+      "web/src/components/ui/Tabs.test.tsx": [
+        "web/src/components/ui/Tabs.tsx"
+      ],
+      "web/src/components/ui/ProgressBar.test.tsx": [
+        "web/src/components/ui/ProgressBar.tsx"
+      ],
+      "web/src/components/ui/StatusIndicator.test.tsx": [
+        "web/src/components/ui/StatusIndicator.tsx"
+      ],
+      "web/src/components/ui/Input.test.tsx": [
+        "web/src/components/ui/Input.tsx"
+      ],
+      "web/src/components/ui/Modal.test.tsx": [
+        "web/src/components/ui/Modal.tsx"
+      ],
+      "web/src/components/ui/Badge.test.tsx": [
+        "web/src/components/ui/Badge.tsx"
+      ],
+      "web/src/components/ui/Button.test.tsx": [
+        "web/src/components/ui/Button.tsx"
+      ],
+      "web/src/components/ui/Card.test.tsx": [
+        "web/src/components/ui/Card.tsx"
+      ],
+      "web/src/components/ui/index.test.tsx": [
+        "web/src/components/ui/index.ts"
+      ],
+      "web/src/components/ui/Toast.test.tsx": [
+        "web/src/components/ui/Toast.tsx"
+      ],
+      "web/src/components/ui/ToastContainer.test.tsx": [
+        "web/src/components/ui/ToastContainer.tsx",
+        "web/src/types/notifications.ts"
+      ],
+      "web/src/components/icons/ArchetypeIcon.test.tsx": [
+        "web/src/components/icons/ArchetypeIcon.tsx"
+      ],
+      "web/src/components/icons/index.test.tsx": [
+        "web/src/components/icons/index.ts"
+      ],
+      "web/src/components/backgrounds/AnimatedBackground.test.tsx": [
+        "web/src/components/backgrounds/AnimatedBackground.tsx"
+      ],
+      "web/src/components/backgrounds/animations/allAnimations.test.ts": [
+        "web/src/components/backgrounds/animations/autumnWind.ts",
+        "web/src/components/backgrounds/animations/bambooSway.ts",
+        "web/src/components/backgrounds/animations/bioluminescentBeach.ts",
+        "web/src/components/backgrounds/animations/bitcoinParticles.ts",
+        "web/src/components/backgrounds/animations/breath.ts",
+        "web/src/components/backgrounds/animations/bunnyMeadow.ts",
+        "web/src/components/backgrounds/animations/butterflyGarden.ts",
+        "web/src/components/backgrounds/animations/constellation.ts",
+        "web/src/components/backgrounds/animations/dandelionWishes.ts",
+        "web/src/components/backgrounds/animations/desertDunes.ts",
+        "web/src/components/backgrounds/animations/digitalRain.ts",
+        "web/src/components/backgrounds/animations/ducklingParade.ts",
+        "web/src/components/backgrounds/animations/eclipse.ts",
+        "web/src/components/backgrounds/animations/embersRising.ts",
+        "web/src/components/backgrounds/animations/fallingLeaves.ts",
+        "web/src/components/backgrounds/animations/fireflies.ts",
+        "web/src/components/backgrounds/animations/fireworks.ts",
+        "web/src/components/backgrounds/animations/floatingLanterns.ts",
+        "web/src/components/backgrounds/animations/floatingShields.ts",
+        "web/src/components/backgrounds/animations/gentleRain.ts",
+        "web/src/components/backgrounds/animations/gentleWaves.ts",
+        "web/src/components/backgrounds/animations/hashStorm.ts",
+        "web/src/components/backgrounds/animations/iceCrystals.ts",
+        "web/src/components/backgrounds/animations/index.ts",
+        "web/src/components/backgrounds/animations/inkDrops.ts",
+        "web/src/components/backgrounds/animations/jellyfishDrift.ts",
+        "web/src/components/backgrounds/animations/koiShadows.ts",
+        "web/src/components/backgrounds/animations/lavenderFields.ts",
+        "web/src/components/backgrounds/animations/lotusBloom.ts",
+        "web/src/components/backgrounds/animations/mistyValley.ts",
+        "web/src/components/backgrounds/animations/moonlitClouds.ts",
+        "web/src/components/backgrounds/animations/mountainMist.ts",
+        "web/src/components/backgrounds/animations/myceliumNetwork.ts",
+        "web/src/components/backgrounds/animations/northernLights.ts",
+        "web/src/components/backgrounds/animations/oilSlick.ts",
+        "web/src/components/backgrounds/animations/paperAirplanes.ts",
+        "web/src/components/backgrounds/animations/paperBoats.ts",
+        "web/src/components/backgrounds/animations/raindropWindow.ts",
+        "web/src/components/backgrounds/animations/ripplingWater.ts",
+        "web/src/components/backgrounds/animations/sakuraPetals.ts",
+        "web/src/components/backgrounds/animations/sakuraRedux.ts",
+        "web/src/components/backgrounds/animations/satsSymbol.ts",
+        "web/src/components/backgrounds/animations/sereneMeadows.ts",
+        "web/src/components/backgrounds/animations/smokeCalligraphy.ts",
+        "web/src/components/backgrounds/animations/snowfall.ts",
+        "web/src/components/backgrounds/animations/stackingBlocks.ts",
+        "web/src/components/backgrounds/animations/stargazing.ts",
+        "web/src/components/backgrounds/animations/stillPonds.ts",
+        "web/src/components/backgrounds/animations/sunsetSailing.ts",
+        "web/src/components/backgrounds/animations/thunderstorm.ts",
+        "web/src/components/backgrounds/animations/tidalPatterns.ts",
+        "web/src/components/backgrounds/animations/tidePools.ts",
+        "web/src/components/backgrounds/animations/trainStation.ts",
+        "web/src/components/backgrounds/animations/types.ts",
+        "web/src/components/backgrounds/animations/volcanicIslands.ts",
+        "web/src/components/backgrounds/animations/windChimes.ts",
+        "web/src/components/backgrounds/animations/wisteria.ts",
+        "web/src/components/backgrounds/animations/zenSandGarden.ts"
+      ],
+      "web/src/components/layout/PageHeader.test.tsx": [
+        "web/src/components/layout/PageHeader.tsx"
+      ],
+      "web/src/components/layout/PageLayout.test.tsx": [
+        "web/src/components/layout/PageLayout.tsx"
+      ],
+      "web/src/components/layout/index.test.tsx": [
+        "web/src/components/layout/index.ts"
+      ]
+    },
+    "covered_sources": [
+      "web/src/api.ts",
+      "web/src/components/ArchetypeLogo.tsx",
+      "web/src/components/ISOImportModal.tsx",
+      "web/src/components/ImageSyncProgress.tsx",
+      "web/src/components/NotificationCenter.tsx",
+      "web/src/components/NotificationSettingsPanel.tsx",
+      "web/src/components/VersionBadge.tsx",
+      "web/src/components/VersionModal.tsx",
+      "web/src/components/backgrounds/AnimatedBackground.tsx",
+      "web/src/components/backgrounds/animations/autumnWind.ts",
+      "web/src/components/backgrounds/animations/bambooSway.ts",
+      "web/src/components/backgrounds/animations/bioluminescentBeach.ts",
+      "web/src/components/backgrounds/animations/bitcoinParticles.ts",
+      "web/src/components/backgrounds/animations/breath.ts",
+      "web/src/components/backgrounds/animations/bunnyMeadow.ts",
+      "web/src/components/backgrounds/animations/butterflyGarden.ts",
+      "web/src/components/backgrounds/animations/constellation.ts",
+      "web/src/components/backgrounds/animations/dandelionWishes.ts",
+      "web/src/components/backgrounds/animations/desertDunes.ts",
+      "web/src/components/backgrounds/animations/digitalRain.ts",
+      "web/src/components/backgrounds/animations/ducklingParade.ts",
+      "web/src/components/backgrounds/animations/eclipse.ts",
+      "web/src/components/backgrounds/animations/embersRising.ts",
+      "web/src/components/backgrounds/animations/fallingLeaves.ts",
+      "web/src/components/backgrounds/animations/fireflies.ts",
+      "web/src/components/backgrounds/animations/fireworks.ts",
+      "web/src/components/backgrounds/animations/floatingLanterns.ts",
+      "web/src/components/backgrounds/animations/floatingShields.ts",
+      "web/src/components/backgrounds/animations/gentleRain.ts",
+      "web/src/components/backgrounds/animations/gentleWaves.ts",
+      "web/src/components/backgrounds/animations/hashStorm.ts",
+      "web/src/components/backgrounds/animations/iceCrystals.ts",
+      "web/src/components/backgrounds/animations/index.ts",
+      "web/src/components/backgrounds/animations/inkDrops.ts",
+      "web/src/components/backgrounds/animations/jellyfishDrift.ts",
+      "web/src/components/backgrounds/animations/koiShadows.ts",
+      "web/src/components/backgrounds/animations/lavenderFields.ts",
+      "web/src/components/backgrounds/animations/lotusBloom.ts",
+      "web/src/components/backgrounds/animations/mistyValley.ts",
+      "web/src/components/backgrounds/animations/moonlitClouds.ts",
+      "web/src/components/backgrounds/animations/mountainMist.ts",
+      "web/src/components/backgrounds/animations/myceliumNetwork.ts",
+      "web/src/components/backgrounds/animations/northernLights.ts",
+      "web/src/components/backgrounds/animations/oilSlick.ts",
+      "web/src/components/backgrounds/animations/paperAirplanes.ts",
+      "web/src/components/backgrounds/animations/paperBoats.ts",
+      "web/src/components/backgrounds/animations/raindropWindow.ts",
+      "web/src/components/backgrounds/animations/ripplingWater.ts",
+      "web/src/components/backgrounds/animations/sakuraPetals.ts",
+      "web/src/components/backgrounds/animations/sakuraRedux.ts",
+      "web/src/components/backgrounds/animations/satsSymbol.ts",
+      "web/src/components/backgrounds/animations/sereneMeadows.ts",
+      "web/src/components/backgrounds/animations/smokeCalligraphy.ts",
+      "web/src/components/backgrounds/animations/snowfall.ts",
+      "web/src/components/backgrounds/animations/stackingBlocks.ts",
+      "web/src/components/backgrounds/animations/stargazing.ts",
+      "web/src/components/backgrounds/animations/stillPonds.ts",
+      "web/src/components/backgrounds/animations/sunsetSailing.ts",
+      "web/src/components/backgrounds/animations/thunderstorm.ts",
+      "web/src/components/backgrounds/animations/tidalPatterns.ts",
+      "web/src/components/backgrounds/animations/tidePools.ts",
+      "web/src/components/backgrounds/animations/trainStation.ts",
+      "web/src/components/backgrounds/animations/types.ts",
+      "web/src/components/backgrounds/animations/volcanicIslands.ts",
+      "web/src/components/backgrounds/animations/windChimes.ts",
+      "web/src/components/backgrounds/animations/wisteria.ts",
+      "web/src/components/backgrounds/animations/zenSandGarden.ts",
+      "web/src/components/icons/ArchetypeIcon.tsx",
+      "web/src/components/icons/index.ts",
+      "web/src/components/layout/PageHeader.tsx",
+      "web/src/components/layout/PageLayout.tsx",
+      "web/src/components/layout/index.ts",
+      "web/src/components/ui/Badge.tsx",
+      "web/src/components/ui/Button.tsx",
+      "web/src/components/ui/Card.tsx",
+      "web/src/components/ui/Input.tsx",
+      "web/src/components/ui/Modal.tsx",
+      "web/src/components/ui/ProgressBar.tsx",
+      "web/src/components/ui/StatusIndicator.tsx",
+      "web/src/components/ui/Tabs.tsx",
+      "web/src/components/ui/Toast.tsx",
+      "web/src/components/ui/ToastContainer.tsx",
+      "web/src/components/ui/index.ts",
+      "web/src/config.ts",
+      "web/src/contexts/DeviceCatalogContext.tsx",
+      "web/src/contexts/ImageLibraryContext.tsx",
+      "web/src/contexts/NotificationContext.tsx",
+      "web/src/contexts/UserContext.tsx",
+      "web/src/main.tsx",
+      "web/src/pages/InfrastructurePage.tsx",
+      "web/src/pages/LoginPage.tsx",
+      "web/src/pages/NodesPage.tsx",
+      "web/src/pages/StudioConsolePage.tsx",
+      "web/src/setupTests.ts",
+      "web/src/studio/StudioPage.tsx",
+      "web/src/studio/components/AgentAlertBanner.tsx",
+      "web/src/studio/components/AgentsPopup.tsx",
+      "web/src/studio/components/Auth.tsx",
+      "web/src/studio/components/Canvas.tsx",
+      "web/src/studio/components/ConfigDiffViewer.tsx",
+      "web/src/studio/components/ConfigViewerModal.tsx",
+      "web/src/studio/components/ConfigsView.tsx",
+      "web/src/studio/components/ConsoleManager.tsx",
+      "web/src/studio/components/ContainersPopup.tsx",
+      "web/src/studio/components/Dashboard.tsx",
+      "web/src/studio/components/DetailPopup.tsx",
+      "web/src/studio/components/DeviceCard.tsx",
+      "web/src/studio/components/DeviceConfigCard.tsx",
+      "web/src/studio/components/DeviceConfigManager.tsx",
+      "web/src/studio/components/DeviceConfigPanel.tsx",
+      "web/src/studio/components/DeviceManager.tsx",
+      "web/src/studio/components/ExternalNetworkConfig.tsx",
+      "web/src/studio/components/FilterChip.tsx",
+      "web/src/studio/components/ImageCard.tsx",
+      "web/src/studio/components/ImageFilterBar.tsx",
+      "web/src/studio/components/InterfaceSelect.tsx",
+      "web/src/studio/components/JobLogModal.tsx",
+      "web/src/studio/components/LogsView.tsx",
+      "web/src/studio/components/PropertiesPanel.tsx",
+      "web/src/studio/components/ResourcesPopup.tsx",
+      "web/src/studio/components/RuntimeControl.tsx",
+      "web/src/studio/components/Sidebar.tsx",
+      "web/src/studio/components/SidebarFilters.tsx",
+      "web/src/studio/components/StatusBar.tsx",
+      "web/src/studio/components/StoragePopup.tsx",
+      "web/src/studio/components/SystemLogsModal.tsx",
+      "web/src/studio/components/SystemStatusStrip.tsx",
+      "web/src/studio/components/TaskLogPanel.tsx",
+      "web/src/studio/components/TerminalSession.tsx",
+      "web/src/studio/components/TopBar.tsx",
+      "web/src/studio/components/VendorOptionsPanel.tsx",
+      "web/src/studio/constants.tsx",
+      "web/src/studio/contexts/DragContext.tsx",
+      "web/src/studio/hooks/useLabStateWS.ts",
+      "web/src/studio/hooks/usePersistedState.ts",
+      "web/src/studio/hooks/usePortManager.ts",
+      "web/src/studio/store/canvasStore.ts",
+      "web/src/studio/types.ts",
+      "web/src/studio/utils/interfaceRegistry.ts",
+      "web/src/test-utils/factories.ts",
+      "web/src/test-utils/renderWithProviders.tsx",
+      "web/src/theme/ThemeProvider.tsx",
+      "web/src/theme/ThemeSelector.tsx",
+      "web/src/theme/backgroundPairs.ts",
+      "web/src/theme/backgrounds.ts",
+      "web/src/theme/index.ts",
+      "web/src/theme/presets.ts",
+      "web/src/theme/types.ts",
+      "web/src/types.ts",
+      "web/src/types/notifications.ts",
+      "web/src/utils/agentColors.ts",
+      "web/src/utils/deviceModels.ts",
+      "web/src/utils/format.ts",
+      "web/src/utils/index.ts",
+      "web/src/utils/status.ts",
+      "web/src/vite-env.d.ts"
+    ],
+    "uncovered_sources": [],
+    "counts": {
+      "source": 156,
+      "covered": 156,
+      "uncovered": 0
+    }
+  }
+}

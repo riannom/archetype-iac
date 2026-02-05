@@ -8,6 +8,7 @@ __pycache__/
 venv/
 .pytest_cache/
 CLAUDE.md
+AGENTS.md
 
 # Build artifacts
 web/dist/

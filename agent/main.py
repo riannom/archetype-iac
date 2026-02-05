@@ -15,6 +15,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -2630,13 +2631,129 @@ async def list_node_linux_interfaces(lab_id: str, node_name: str) -> dict:
 
 # --- OVS Hot-Connect Link Management ---
 
+
+@dataclass
+class OVSPortInfo:
+    """Resolved OVS port for a node interface."""
+    port_name: str   # OVS port name (e.g., "vh3a4b5" for Docker, "vnet3" for libvirt)
+    vlan_tag: int     # Current VLAN tag on this port
+    provider: str     # "docker" or "libvirt"
+
+
+def _interface_name_to_index(interface_name: str) -> int:
+    """Convert an interface name to a 0-based index for libvirt VM lookup.
+
+    Examples:
+        eth0 -> 0, eth1 -> 1
+        GigabitEthernet1 -> 0, GigabitEthernet2 -> 1
+        Ethernet1 -> 0, Ethernet2 -> 1
+    """
+    import re
+    match = re.search(r"(\d+)$", interface_name)
+    if not match:
+        raise ValueError(f"Cannot extract interface index from '{interface_name}'")
+    number = int(match.group(1))
+    # eth* interfaces are 0-indexed; everything else (GigabitEthernet, Ethernet, etc.) is 1-indexed
+    if interface_name.lower().startswith("eth"):
+        return number
+    return max(0, number - 1)
+
+
+async def _resolve_ovs_port(
+    lab_id: str,
+    node_name: str,
+    interface_name: str,
+) -> OVSPortInfo | None:
+    """Find the OVS port for a node interface, trying Docker then libvirt.
+
+    Both Docker containers and libvirt VMs connect to the same arch-ovs
+    bridge. This function finds the correct OVS port regardless of provider.
+
+    Returns:
+        OVSPortInfo with port name, current VLAN, and provider type.
+        None if the port cannot be found via any provider.
+    """
+    # --- Try Docker first (fast, in-memory lookup) ---
+    docker_provider = get_provider("docker")
+    if docker_provider is not None:
+        try:
+            container_name = docker_provider.get_container_name(lab_id, node_name)
+            plugin = _get_docker_ovs_plugin()
+            # Try in-memory lookup first, then on-demand discovery
+            ep = None
+            for endpoint in plugin.endpoints.values():
+                if endpoint.container_name == container_name and endpoint.interface_name == interface_name:
+                    ep = endpoint
+                    break
+            if not ep:
+                ep = await plugin._discover_endpoint(lab_id, container_name, interface_name)
+            if ep:
+                return OVSPortInfo(
+                    port_name=ep.host_veth,
+                    vlan_tag=ep.vlan_tag,
+                    provider="docker",
+                )
+        except Exception:
+            pass  # Not a Docker node, fall through to libvirt
+
+    # --- Try libvirt (OVS/MAC introspection) ---
+    libvirt_provider = get_provider("libvirt")
+    if libvirt_provider is not None:
+        try:
+            intf_index = _interface_name_to_index(interface_name)
+            port_name = await libvirt_provider.get_vm_interface_port(
+                lab_id, node_name, intf_index,
+            )
+            if port_name:
+                # Get current VLAN tag from OVS
+                vlans = libvirt_provider.get_node_vlans(lab_id, node_name)
+                vlan_tag = vlans[intf_index] if intf_index < len(vlans) else 0
+                return OVSPortInfo(
+                    port_name=port_name,
+                    vlan_tag=vlan_tag,
+                    provider="libvirt",
+                )
+        except Exception as e:
+            logger.debug(f"Libvirt lookup failed for {node_name}:{interface_name}: {e}")
+
+    return None
+
+
+async def _ovs_set_port_vlan(port_name: str, vlan_tag: int) -> bool:
+    """Set VLAN tag on an OVS port."""
+    proc = await asyncio.create_subprocess_exec(
+        "ovs-vsctl", "set", "port", port_name, f"tag={vlan_tag}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        logger.error(f"Failed to set VLAN {vlan_tag} on port {port_name}: {stderr.decode().strip()}")
+        return False
+    return True
+
+
+async def _ovs_allocate_unique_vlan(port_name: str) -> int | None:
+    """Allocate a fresh unique VLAN for a port to isolate it.
+
+    Reads the current max VLAN from OVS and picks one above it,
+    staying in the 2-4094 range.
+    """
+    import random
+    # Use a random VLAN in high range to avoid collisions
+    new_vlan = random.randint(3500, 4090)
+    if await _ovs_set_port_vlan(port_name, new_vlan):
+        return new_vlan
+    return None
+
+
 @app.post("/labs/{lab_id}/links")
 async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
     """Hot-connect two interfaces in a running lab.
 
-    This creates a Layer 2 link between two container interfaces by
-    assigning them the same VLAN tag on the OVS bridge. Uses the Docker
-    OVS plugin which manages the shared OVS bridge.
+    Creates a Layer 2 link between two node interfaces by assigning them
+    the same VLAN tag on the shared OVS bridge. Works across providers:
+    Docker↔Docker, Libvirt↔Libvirt, and Docker↔Libvirt.
 
     Args:
         lab_id: Lab identifier
@@ -2658,28 +2775,46 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
     )
 
     try:
-        # Get container names from provider
-        provider = get_provider_for_request()
-        container_a = provider.get_container_name(lab_id, link.source_node)
-        container_b = provider.get_container_name(lab_id, link.target_node)
+        # Resolve OVS ports for both endpoints (provider-agnostic)
+        port_a = await _resolve_ovs_port(lab_id, link.source_node, link.source_interface)
+        port_b = await _resolve_ovs_port(lab_id, link.target_node, link.target_interface)
 
-        # Hot-connect via Docker OVS plugin (uses shared OVS bridge)
-        plugin = _get_docker_ovs_plugin()
-        vlan_tag = await plugin.hot_connect(
-            lab_id=lab_id,
-            container_a=container_a,
-            iface_a=link.source_interface,
-            container_b=container_b,
-            iface_b=link.target_interface,
-        )
-
-        if vlan_tag is None:
+        if not port_a:
             return LinkCreateResponse(
                 success=False,
-                error="hot_connect failed - endpoints not found",
+                error=f"Cannot find OVS port for {link.source_node}:{link.source_interface}",
+            )
+        if not port_b:
+            return LinkCreateResponse(
+                success=False,
+                error=f"Cannot find OVS port for {link.target_node}:{link.target_interface}",
             )
 
+        # Use VLAN from source port; set target port to match
+        shared_vlan = port_a.vlan_tag
+
+        if not await _ovs_set_port_vlan(port_b.port_name, shared_vlan):
+            return LinkCreateResponse(
+                success=False,
+                error=f"Failed to set VLAN on {port_b.port_name}",
+            )
+
+        # Update Docker plugin tracking if either endpoint is Docker
+        plugin = _get_docker_ovs_plugin() if settings.enable_ovs_plugin else None
+        if plugin and port_b.provider == "docker":
+            for ep in plugin.endpoints.values():
+                if ep.host_veth == port_b.port_name:
+                    ep.vlan_tag = shared_vlan
+                    await plugin._mark_dirty_and_save()
+                    break
+
         link_id = f"{link.source_node}:{link.source_interface}-{link.target_node}:{link.target_interface}"
+
+        logger.info(
+            f"Connected {link.source_node}:{link.source_interface} ({port_a.provider}:{port_a.port_name}) "
+            f"<-> {link.target_node}:{link.target_interface} ({port_b.provider}:{port_b.port_name}) "
+            f"via VLAN {shared_vlan}"
+        )
 
         return LinkCreateResponse(
             success=True,
@@ -2691,7 +2826,7 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
                 target_node=link.target_node,
                 target_interface=link.target_interface,
                 state=LinkState.CONNECTED,
-                vlan_tag=vlan_tag,
+                vlan_tag=shared_vlan,
             ),
         )
 
@@ -2707,8 +2842,8 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
 async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
     """Hot-disconnect a link in a running lab.
 
-    This breaks a Layer 2 link between two container interfaces by
-    assigning them separate VLAN tags. Uses the Docker OVS plugin.
+    Breaks a Layer 2 link by assigning each endpoint a unique VLAN tag.
+    Works across providers: Docker↔Docker, Libvirt↔Libvirt, Docker↔Libvirt.
 
     Args:
         lab_id: Lab identifier
@@ -2747,16 +2882,38 @@ async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
         node_a, iface_a = ep_a
         node_b, iface_b = ep_b
 
-        # Get container names from provider
-        provider = get_provider_for_request()
-        container_a = provider.get_container_name(lab_id, node_a)
-        container_b = provider.get_container_name(lab_id, node_b)
+        # Resolve OVS ports for both endpoints (provider-agnostic)
+        port_a = await _resolve_ovs_port(lab_id, node_a, iface_a)
+        port_b = await _resolve_ovs_port(lab_id, node_b, iface_b)
 
-        # Hot-disconnect via Docker OVS plugin
-        # Disconnect both endpoints by giving each a unique VLAN
-        plugin = _get_docker_ovs_plugin()
-        await plugin.hot_disconnect(lab_id, container_a, iface_a)
-        await plugin.hot_disconnect(lab_id, container_b, iface_b)
+        errors = []
+
+        # Disconnect each endpoint by giving it a unique VLAN
+        for port, node, iface in [(port_a, node_a, iface_a), (port_b, node_b, iface_b)]:
+            if not port:
+                logger.warning(f"Port not found for {node}:{iface}, skipping disconnect")
+                continue
+
+            if port.provider == "docker":
+                # Use Docker plugin for proper tracking state updates
+                plugin = _get_docker_ovs_plugin()
+                try:
+                    docker_provider = get_provider("docker")
+                    container_name = docker_provider.get_container_name(lab_id, node)
+                    result = await plugin.hot_disconnect(lab_id, container_name, iface)
+                    if result is not None:
+                        continue
+                except Exception:
+                    pass
+                # Fall through to direct OVS if plugin disconnect fails
+
+            # Direct OVS disconnect (for libvirt or Docker plugin fallback)
+            new_vlan = await _ovs_allocate_unique_vlan(port.port_name)
+            if new_vlan is None:
+                errors.append(f"Failed to disconnect {node}:{iface}")
+
+        if errors:
+            return LinkDeleteResponse(success=False, error="; ".join(errors))
 
         return LinkDeleteResponse(success=True)
 
