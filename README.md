@@ -49,12 +49,21 @@ The supported device catalog is served dynamically from the API (`/vendors`) and
 - Primary install path: `./install.sh` on Debian (recommended).
 - Device image availability and licensing are vendor-specific and depend on user-provided images.
 
-## Screenshots (Coming Soon)
+## Screenshots
 
-1. Studio canvas overview
-2. Device palette and configuration
-3. Logs and task activity panel
-4. System status and alerts
+Below are a few snapshots of the Studio UI and system views to give a sense of the workflow and available panels.
+
+Studio canvas overview.
+![Studio canvas overview showing the lab canvas with nodes and connections](screenshots/workspace-view.png)
+
+Device palette and configuration.
+![Device palette and configuration panel with device details](screenshots/config-snapshot.png)
+
+Logs and task activity panel.
+![Logs and task activity panel with recent events](screenshots/console.png)
+
+System status and image management.
+![System status overview with image management list](screenshots/image-management.png)
 
 ## Development
 
