@@ -74,6 +74,8 @@ class StateBroadcaster:
         error_message: str | None = None,
         host_id: str | None = None,
         host_name: str | None = None,
+        image_sync_status: str | None = None,
+        image_sync_message: str | None = None,
     ) -> int:
         """Publish a node state change event.
 
@@ -87,6 +89,8 @@ class StateBroadcaster:
             error_message: Error message if any
             host_id: Agent host ID
             host_name: Agent host name
+            image_sync_status: Image sync status (checking/syncing/synced/failed)
+            image_sync_message: Image sync progress or error message
 
         Returns:
             Number of subscribers that received the message
@@ -105,6 +109,8 @@ class StateBroadcaster:
                     "error_message": error_message,
                     "host_id": host_id,
                     "host_name": host_name,
+                    "image_sync_status": image_sync_status,
+                    "image_sync_message": image_sync_message,
                 },
             }
             channel = self._channel_name(lab_id)
@@ -311,6 +317,8 @@ async def broadcast_node_state_change(
     error_message: str | None = None,
     host_id: str | None = None,
     host_name: str | None = None,
+    image_sync_status: str | None = None,
+    image_sync_message: str | None = None,
 ) -> None:
     """Convenience function to broadcast a node state change.
 
@@ -327,6 +335,8 @@ async def broadcast_node_state_change(
         error_message=error_message,
         host_id=host_id,
         host_name=host_name,
+        image_sync_status=image_sync_status,
+        image_sync_message=image_sync_message,
     )
 
 

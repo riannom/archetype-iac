@@ -28,6 +28,8 @@ export interface NodeStateData {
   error_message?: string | null;
   host_id?: string | null;
   host_name?: string | null;
+  image_sync_status?: string | null;
+  image_sync_message?: string | null;
 }
 
 export interface LinkStateData {
