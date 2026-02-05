@@ -22,7 +22,6 @@ from agent.config import settings
 
 # --- Integration Test Markers ---
 
-# Skip integration tests if Docker is not available
 try:
     import docker
     docker.from_env().ping()
@@ -30,7 +29,10 @@ try:
 except Exception:
     DOCKER_AVAILABLE = False
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not DOCKER_AVAILABLE, reason="Docker not available"),
+]
 
 
 # --- Fixtures ---
