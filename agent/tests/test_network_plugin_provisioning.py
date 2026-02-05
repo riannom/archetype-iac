@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from agent.main import app
 from agent.config import settings
+from agent.network.docker_plugin import DockerOVSPlugin, LabBridge
 
 
 @pytest.fixture
@@ -84,3 +85,14 @@ def test_plugin_external_attach_detach_list(test_client):
         body = response.json()
         assert body["success"] is True
         plugin.detach_external_interface.assert_awaited_once_with("lab1", "eth0")
+
+
+def test_plugin_vlan_allocation_unique_across_labs():
+    plugin = DockerOVSPlugin()
+    lab_a = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
+    lab_b = LabBridge(lab_id="lab-b", bridge_name="arch-ovs")
+
+    vlan_a = plugin._allocate_vlan(lab_a)
+    vlan_b = plugin._allocate_vlan(lab_b)
+
+    assert vlan_a != vlan_b
