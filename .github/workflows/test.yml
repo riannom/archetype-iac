@@ -57,6 +57,18 @@ jobs:
           pytest tests/ -v --tb=short
         continue-on-error: true
 
+      - name: Run Agent unit tests (non-integration)
+        run: |
+          cd agent
+          pytest tests/ -m "not integration" -v --tb=short
+        continue-on-error: true
+
+      - name: Run Agent provisioning coverage
+        run: |
+          cd agent
+          pytest tests/test_network_provisioning.py tests/test_network_overlay.py --cov=agent/main.py --cov-fail-under=50 -v --tb=short
+        continue-on-error: true
+
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
