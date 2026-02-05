@@ -66,6 +66,20 @@ def _backend_with_overlay():
 
 def test_overlay_create_tunnel(test_client):
     backend = _backend_with_overlay()
+    tunnel = SimpleNamespace(
+        vni=100,
+        interface_name="vxlan100",
+        local_ip="10.0.0.1",
+        remote_ip="10.0.0.2",
+        lab_id="lab1",
+        link_id="r1:eth1-r2:eth1",
+        vlan_tag=3100,
+    )
+    call_order: list[str] = []
+    backend.overlay_create_tunnel = AsyncMock(
+        side_effect=lambda **_: call_order.append("create_tunnel") or tunnel
+    )
+    backend.overlay_create_bridge = AsyncMock(side_effect=lambda *_: call_order.append("create_bridge"))
 
     with patch("agent.main.get_network_backend", return_value=backend):
         response = test_client.post(
@@ -85,6 +99,7 @@ def test_overlay_create_tunnel(test_client):
     assert body["tunnel"]["vni"] == 100
     backend.overlay_create_tunnel.assert_awaited_once()
     backend.overlay_create_bridge.assert_awaited_once()
+    assert call_order == ["create_tunnel", "create_bridge"]
 
 
 def test_overlay_attach_container_selects_bridge(test_client):
@@ -212,15 +227,24 @@ def test_overlay_attach_link(test_client):
 
 def test_overlay_detach_link(test_client):
     backend = _backend_with_overlay()
+    call_order: list[str] = []
 
     with patch("agent.main.get_network_backend", return_value=backend):
         plugin = MagicMock()
-        plugin.isolate_port = AsyncMock(return_value=4242)
+        plugin.isolate_port = AsyncMock(side_effect=lambda *_: call_order.append("isolate_port") or 4242)
         provider = MagicMock()
         provider.get_container_name.return_value = "archetype-lab1-r1"
 
         with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
             with patch("agent.main.get_provider_for_request", return_value=provider):
+                backend.overlay_detach_interface = AsyncMock(
+                    side_effect=lambda **_: call_order.append("overlay_detach") or {
+                        "success": True,
+                        "vtep_deleted": False,
+                        "remaining_links": 0,
+                        "error": None,
+                    }
+                )
                 response = test_client.post(
                     "/overlay/detach-link",
                     json={
@@ -240,3 +264,4 @@ def test_overlay_detach_link(test_client):
     assert body["new_vlan"] == 4242
     plugin.isolate_port.assert_awaited_once_with("lab1", "archetype-lab1-r1", "eth1")
     backend.overlay_detach_interface.assert_awaited_once()
+    assert call_order == ["isolate_port", "overlay_detach"]
