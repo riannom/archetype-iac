@@ -197,6 +197,40 @@ def test_bridge_patch_create_error(test_client):
     assert body["error"]
 
 
+def test_bridge_patch_delete_error(test_client):
+    backend = StubBackend()
+    backend._ovs_initialized = True
+    backend.delete_patch_to_bridge = AsyncMock(side_effect=RuntimeError("delete failed"))
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.delete(
+            "/ovs/patch",
+            json={"target_bridge": "br-test"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]
+
+
+def test_external_disconnect_error(test_client):
+    backend = StubBackend()
+    backend._ovs_initialized = True
+    backend.detach_external_interface = AsyncMock(side_effect=RuntimeError("detach failed"))
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/labs/lab1/external/disconnect",
+            json={"external_interface": "eth0"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]
+
+
 def test_overlay_create_tunnel_uses_backend(test_client):
     backend = StubBackend()
 

@@ -100,6 +100,24 @@ def test_hot_connect_cross_lab_blocked(test_client):
     assert body["success"] is False
 
 
+def test_hot_disconnect_error_returns_failure(test_client):
+    plugin = MagicMock()
+    plugin.hot_disconnect = AsyncMock(side_effect=RuntimeError("boom"))
+
+    provider = MagicMock()
+    provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab1-r2"]
+
+    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+        with patch("agent.main.get_provider_for_request", return_value=provider):
+            response = test_client.delete(
+                "/labs/lab1/links/r1:eth1-r2:eth1",
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+
+
 def test_isolate_interface_uses_plugin(test_client):
     plugin = MagicMock()
     call_order: list[str] = []
