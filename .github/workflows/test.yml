@@ -66,7 +66,7 @@ jobs:
       - name: Run Agent provisioning coverage
         run: |
           cd agent
-          pytest tests/test_network_provisioning.py tests/test_network_overlay.py --cov=agent/main.py --cov-fail-under=60 -v --tb=short
+          pytest tests/test_network_provisioning.py tests/test_network_overlay.py tests/test_network_plugin_provisioning.py --cov=agent/main.py --cov-fail-under=60 -v --tb=short
         continue-on-error: true
 
   frontend-tests:

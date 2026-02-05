@@ -87,6 +87,35 @@ def test_overlay_create_tunnel(test_client):
     backend.overlay_create_bridge.assert_awaited_once()
 
 
+def test_overlay_attach_container_selects_bridge(test_client):
+    backend = _backend_with_overlay()
+    bridge = SimpleNamespace(link_id="r1:eth1-r2:eth1")
+    backend.overlay_get_bridges_for_lab = AsyncMock(return_value=[bridge])
+    backend.overlay_attach_container = AsyncMock(return_value=True)
+
+    provider = MagicMock()
+    provider.get_container_name.return_value = "archetype-lab1-r1"
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        with patch("agent.main.get_provider", return_value=provider):
+            response = test_client.post(
+                "/overlay/attach",
+                json={
+                    "lab_id": "lab1",
+                    "link_id": "r1:eth1-r2:eth1",
+                    "container_name": "r1",
+                    "interface_name": "eth1",
+                    "ip_address": None,
+                },
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    backend.overlay_get_bridges_for_lab.assert_awaited_once_with("lab1")
+    backend.overlay_attach_container.assert_awaited_once()
+
+
 def test_overlay_status(test_client):
     backend = _backend_with_overlay()
 
@@ -128,6 +157,34 @@ def test_overlay_vtep(test_client):
     body = response.json()
     assert body["success"] is True
     backend.overlay_ensure_vtep.assert_awaited_once()
+
+def test_overlay_vtep_existing_returns_cached(test_client):
+    backend = _backend_with_overlay()
+    existing = SimpleNamespace(
+        interface_name="vtep-10.0.0.2",
+        vni=200000,
+        local_ip="10.0.0.1",
+        remote_ip="10.0.0.2",
+        remote_host_id=None,
+        tenant_mtu=1450,
+    )
+    backend.overlay_get_vtep = MagicMock(return_value=existing)
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/vtep",
+            json={
+                "local_ip": "10.0.0.1",
+                "remote_ip": "10.0.0.2",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["created"] is False
+    backend.overlay_get_vtep.assert_called_once_with("10.0.0.2")
+    backend.overlay_ensure_vtep.assert_not_called()
 
 
 def test_overlay_attach_link(test_client):
