@@ -45,13 +45,15 @@ def test_console_websocket_libvirt_requested_skips_docker(test_client):
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
     with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
-            mock_libvirt.side_effect = _libvirt_handler()
-            with test_client.websocket_connect("/console/lab1/r1?provider_type=libvirt") as ws:
-                msg = ws.receive_text()
+        with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_cfg:
+            with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
+                mock_libvirt.side_effect = _libvirt_handler()
+                with test_client.websocket_connect("/console/lab1/r1?provider_type=libvirt") as ws:
+                    msg = ws.receive_text()
 
     assert msg == "libvirt"
     mock_libvirt.assert_awaited_once()
+    mock_cfg.assert_not_awaited()
 
 
 def test_console_websocket_docker_path(test_client):
