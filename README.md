@@ -33,12 +33,12 @@ The UI talks to the API, and the API coordinates with agents to perform lab acti
 ```mermaid
 flowchart LR
   subgraph Stack[Archetype Network Studio Stack]
-    web[Web UI<br/>(Nginx + Studio)] --> api[API Service]
-    worker[Worker<br/>(RQ)] --> redis[(Redis)]
+    web[Web UI - Nginx Studio] --> api[API Service]
+    worker[Worker - RQ] --> redis[(Redis)]
     worker --> postgres[(Postgres)]
     api --> postgres
     api --> redis
-    api <--> agent[Agent<br/>(local or remote)]
+    api <--> agent[Agent - local or remote]
   end
 
   subgraph Observability[Logging & Metrics]
@@ -56,10 +56,10 @@ Each agent host runs a single OVS bridge (`arch-ovs`). Containers and VMs connec
 ```mermaid
 flowchart TB
   subgraph Host[Agent Host]
-    ovs[arch-ovs<br/>(OVS bridge)]
-    c1[Device/Node A<br/>(container or VM)]
-    c2[Device/Node B<br/>(container or VM)]
-    c3[Device/Node C<br/>(container or VM)]
+    ovs[arch-ovs - OVS bridge]
+    c1[Device/Node A - container or VM]
+    c2[Device/Node B - container or VM]
+    c3[Device/Node C - container or VM]
     c1 -- veth/VLAN --> ovs
     c2 -- veth/VLAN --> ovs
     c3 -- veth/VLAN --> ovs
