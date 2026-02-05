@@ -142,6 +142,25 @@ def test_external_connect_uses_backend(test_client):
     assert call_order == ["ensure_init", "connect_external"]
 
 
+def test_bridge_patch_create_order(test_client):
+    backend = StubBackend()
+    call_order: list[str] = []
+    backend.ensure_ovs_initialized = AsyncMock(side_effect=lambda: call_order.append("ensure_init"))
+    backend.create_patch_to_bridge = AsyncMock(side_effect=lambda **_: call_order.append("create_patch") or "patch0")
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/ovs/patch",
+            json={"target_bridge": "br-test", "vlan_tag": 123},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["patch_port"] == "patch0"
+    assert call_order == ["ensure_init", "create_patch"]
+
+
 def test_overlay_create_tunnel_uses_backend(test_client):
     backend = StubBackend()
 

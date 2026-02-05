@@ -281,6 +281,10 @@ def test_overlay_vtep_trunk_per_remote(test_client):
 
 def test_overlay_attach_link(test_client):
     backend = _backend_with_overlay()
+    call_order: list[str] = []
+    backend.overlay_attach_interface = AsyncMock(
+        side_effect=lambda **_: call_order.append("attach_interface") or True
+    )
 
     with patch("agent.main.get_network_backend", return_value=backend):
         response = test_client.post(
@@ -310,10 +314,15 @@ def test_overlay_attach_link(test_client):
     )
     backend.overlay_create_tunnel.assert_not_called()
     backend.overlay_create_bridge.assert_not_called()
+    assert call_order == ["attach_interface"]
 
 
 def test_overlay_attach_link_multiple_vlans(test_client):
     backend = _backend_with_overlay()
+    call_order: list[str] = []
+    backend.overlay_attach_interface = AsyncMock(
+        side_effect=lambda **_: call_order.append("attach_interface") or True
+    )
 
     with patch("agent.main.get_network_backend", return_value=backend):
         response_a = test_client.post(
@@ -362,6 +371,7 @@ def test_overlay_attach_link_multiple_vlans(test_client):
         link_id="r3:eth2-r4:eth2",
         remote_ip="10.0.0.2",
     )
+    assert call_order == ["attach_interface", "attach_interface"]
 
 
 def test_overlay_attach_link_rejects_invalid_vlan(test_client):
