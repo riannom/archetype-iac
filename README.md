@@ -1,0 +1,79 @@
+# Archetype IaC
+
+Archetype IaC is a lab orchestration stack for building, running, and managing virtual network topologies with a web-based studio, API, and agents.
+
+## Quick Start (Recommended)
+
+We recommend Debian for installation and testing.
+
+1. Clone the repo and run the installer:
+
+```bash
+./install.sh
+```
+
+The installer handles required dependencies and sets up the stack.
+
+## Architecture
+
+Archetype IaC is composed of three main layers:
+
+- **Web UI (Studio)**: The user-facing interface for building and managing labs.
+- **API Service**: Central controller that exposes endpoints for lab management, vendors, images, and operations.
+- **Agents**: Host-side workers that execute lab operations, manage containers/VMs, and report status.
+
+The UI talks to the API, and the API coordinates with agents to perform lab actions. This separation keeps the UI and backend loosely coupled and enables multi-host deployments.
+
+## Supported Vendors and Device Kinds
+
+The supported device catalog is served dynamically from the API (`/vendors`) and sourced from `agent/vendors.py`. Current vendor coverage includes:
+
+| Vendor | Device Kinds |
+| --- | --- |
+| Arista | `ceos` |
+| Cisco | `cat-sdwan-controller`, `cat-sdwan-manager`, `cat-sdwan-validator`, `cat-sdwan-vedge`, `cisco_asav`, `cisco_c8000v`, `cisco_cat9kv`, `cisco_csr1000v`, `cisco_ftdv`, `cisco_iosv`, `cisco_iosxr`, `cisco_n9kv`, `cisco_xrd`, `fmcv` |
+| Citrix | `citrix_adc` |
+| F5 | `f5_bigip` |
+| Fortinet | `fortinet_fortigate` |
+| Juniper | `juniper_crpd`, `juniper_vjunosswitch`, `juniper_vqfx`, `juniper_vsrx3` |
+| Microsoft | `windows` |
+| NVIDIA | `cvx` |
+| Nokia | `nokia_srlinux` |
+| Open Source | `linux` |
+| Palo Alto | `paloalto_vmseries` |
+| SONiC | `sonic-vs` |
+| VyOS | `vyos` |
+
+## Tested So Far
+
+- Primary install path: `./install.sh` on Debian (recommended).
+- Device image availability and licensing are vendor-specific and depend on user-provided images.
+
+## Screenshots (Coming Soon)
+
+1. Studio canvas overview
+2. Device palette and configuration
+3. Logs and task activity panel
+4. System status and alerts
+
+## Development
+
+There is no single unified dev command yet. Use the existing install and service scripts as appropriate for your environment.
+
+## Testing
+
+A coverage map script is available:
+
+```bash
+python3 scripts/coverage_map.py
+```
+
+This generates reports under `reports/`.
+
+## Notes
+
+- When UI or API changes affect running containers, rebuild and restart the Docker Compose stack using:
+
+```bash
+docker compose -f docker-compose.gui.yml up -d --build
+```
