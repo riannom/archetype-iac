@@ -157,20 +157,29 @@ def test_overlay_detach_link(test_client):
     backend = _backend_with_overlay()
 
     with patch("agent.main.get_network_backend", return_value=backend):
-        with patch("agent.main._get_docker_ovs_plugin", return_value=None):
-            response = test_client.post(
-                "/overlay/detach-link",
-                json={
-                    "lab_id": "lab1",
-                    "container_name": "archetype-lab1-r1",
-                    "interface_name": "eth1",
-                    "link_id": "r1:eth1-r2:eth1",
-                    "remote_ip": "10.0.0.2",
-                    "delete_vtep_if_unused": True,
-                },
-            )
+        plugin = MagicMock()
+        plugin.isolate_port = AsyncMock(return_value=4242)
+        provider = MagicMock()
+        provider.get_container_name.return_value = "archetype-lab1-r1"
+
+        with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+            with patch("agent.main.get_provider_for_request", return_value=provider):
+                response = test_client.post(
+                    "/overlay/detach-link",
+                    json={
+                        "lab_id": "lab1",
+                        "container_name": "archetype-lab1-r1",
+                        "interface_name": "eth1",
+                        "link_id": "r1:eth1-r2:eth1",
+                        "remote_ip": "10.0.0.2",
+                        "delete_vtep_if_unused": True,
+                    },
+                )
 
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
+    assert body["interface_isolated"] is True
+    assert body["new_vlan"] == 4242
+    plugin.isolate_port.assert_awaited_once_with("lab1", "archetype-lab1-r1", "eth1")
     backend.overlay_detach_interface.assert_awaited_once()
