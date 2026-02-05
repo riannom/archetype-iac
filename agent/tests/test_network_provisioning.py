@@ -76,9 +76,34 @@ def test_hot_disconnect_uses_plugin(test_client):
     assert call_order == ["hot_disconnect", "hot_disconnect"]
 
 
+def test_hot_connect_cross_lab_blocked(test_client):
+    plugin = MagicMock()
+    plugin.hot_connect = AsyncMock(return_value=None)
+
+    provider = MagicMock()
+    provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab2-r2"]
+
+    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+        with patch("agent.main.get_provider_for_request", return_value=provider):
+            response = test_client.post(
+                "/labs/lab1/links",
+                json={
+                    "source_node": "r1",
+                    "source_interface": "eth1",
+                    "target_node": "r2",
+                    "target_interface": "eth1",
+                },
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+
+
 def test_isolate_interface_uses_plugin(test_client):
     plugin = MagicMock()
-    plugin.isolate_port = AsyncMock(return_value=2001)
+    call_order: list[str] = []
+    plugin.isolate_port = AsyncMock(side_effect=lambda *_: call_order.append("isolate") or 2001)
 
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
@@ -94,11 +119,13 @@ def test_isolate_interface_uses_plugin(test_client):
     assert body["success"] is True
     assert body["vlan_tag"] == 2001
     plugin.isolate_port.assert_awaited_once_with("lab1", "archetype-lab1-r1", "eth1")
+    assert call_order == ["isolate"]
 
 
 def test_restore_interface_uses_plugin(test_client):
     plugin = MagicMock()
-    plugin.restore_port = AsyncMock(return_value=True)
+    call_order: list[str] = []
+    plugin.restore_port = AsyncMock(side_effect=lambda *_: call_order.append("restore") or True)
 
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
@@ -115,6 +142,7 @@ def test_restore_interface_uses_plugin(test_client):
     assert body["success"] is True
     assert body["vlan_tag"] == 2222
     plugin.restore_port.assert_awaited_once_with("lab1", "archetype-lab1-r1", "eth1", 2222)
+    assert call_order == ["restore"]
 
 
 def test_get_interface_vlan_uses_plugin(test_client):
@@ -135,4 +163,25 @@ def test_get_interface_vlan_uses_plugin(test_client):
     assert body["vlan_tag"] == 777
     plugin.get_endpoint_vlan.assert_awaited_once_with(
         "lab1", "archetype-lab1-r1", "eth1", read_from_ovs=False
+    )
+
+
+def test_get_interface_vlan_reads_from_ovs(test_client):
+    plugin = MagicMock()
+    plugin.get_endpoint_vlan = AsyncMock(return_value=888)
+
+    provider = MagicMock()
+    provider.get_container_name.return_value = "archetype-lab1-r1"
+
+    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+        with patch("agent.main.get_provider_for_request", return_value=provider):
+            response = test_client.get(
+                "/labs/lab1/interfaces/r1/eth1/vlan?read_from_ovs=true",
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vlan_tag"] == 888
+    plugin.get_endpoint_vlan.assert_awaited_once_with(
+        "lab1", "archetype-lab1-r1", "eth1", read_from_ovs=True
     )
