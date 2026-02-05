@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -263,3 +264,23 @@ def test_vlan_allocator_stress_reuse_cycle():
     # Next allocations should prefer released VLANs but never duplicate active ones
     new_allocations = [plugin._allocate_vlan(plugin.lab_bridges["lab-a"]) for _ in range(10)]
     assert not set(new_allocations) & set(allocated[:10])
+
+
+def test_vlan_allocator_randomized_sequence():
+    plugin = DockerOVSPlugin()
+    plugin.lab_bridges["lab-a"] = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
+
+    rng = random.Random(1337)
+    active = set()
+
+    for i in range(200):
+        if active and rng.random() < 0.4:
+            vlan = active.pop()
+            plugin._release_vlan(vlan)
+        else:
+            vlan = plugin._allocate_vlan(plugin.lab_bridges["lab-a"])
+            assert vlan not in active
+            active.add(vlan)
+
+    # Final allocations should still be unique
+    assert len(active) == len(set(active))
