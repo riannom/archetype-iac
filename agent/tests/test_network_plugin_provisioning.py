@@ -127,6 +127,20 @@ def test_plugin_vlan_allocation_no_duplicates_across_many():
             allocated.add(vlan)
 
 
+def test_plugin_vlan_allocation_interleaved_no_collisions():
+    plugin = DockerOVSPlugin()
+    lab_a = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
+    lab_b = LabBridge(lab_id="lab-b", bridge_name="arch-ovs")
+    lab_c = LabBridge(lab_id="lab-c", bridge_name="arch-ovs")
+
+    sequence = [lab_a, lab_b, lab_c, lab_a, lab_c, lab_b, lab_b, lab_a]
+    allocated = []
+    for lab in sequence:
+        allocated.append(plugin._allocate_vlan(lab))
+
+    assert len(allocated) == len(set(allocated))
+
+
 def test_hot_connect_rejects_cross_lab_endpoints():
     plugin = DockerOVSPlugin()
     plugin.lab_bridges["lab-a"] = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
@@ -141,6 +155,25 @@ def test_hot_connect_rejects_cross_lab_endpoints():
 
     plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))  # should not be called
     plugin._mark_dirty_and_save = AsyncMock()
+
+    result = asyncio.run(
+        plugin.hot_connect("lab-a", "a", "eth1", "b", "eth1")
+    )
+
+    assert result is None
+    plugin._ovs_vsctl.assert_not_called()
+
+
+def test_hot_connect_rejects_missing_networks():
+    plugin = DockerOVSPlugin()
+    plugin.lab_bridges["lab-a"] = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
+
+    ep_a = SimpleNamespace(endpoint_id="ep-a", network_id="net-a", interface_name="eth1", host_veth="vh1", cont_veth="vc1", vlan_tag=100, container_name="a")
+    ep_b = SimpleNamespace(endpoint_id="ep-b", network_id="net-b", interface_name="eth1", host_veth="vh2", cont_veth="vc2", vlan_tag=200, container_name="b")
+    plugin.endpoints["ep-a"] = ep_a
+    plugin.endpoints["ep-b"] = ep_b
+
+    plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))  # should not be called
 
     result = asyncio.run(
         plugin.hot_connect("lab-a", "a", "eth1", "b", "eth1")
