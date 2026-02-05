@@ -101,6 +101,20 @@ def test_hot_connect_cross_lab_blocked(test_client):
     assert body["error"]
 
 
+def test_hot_connect_invalid_payload(test_client):
+    response = test_client.post(
+        "/labs/lab1/links",
+        json={
+            "source_node": "r1",
+            # missing source_interface
+            "target_node": "r2",
+            "target_interface": "eth1",
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_hot_disconnect_error_returns_failure(test_client):
     plugin = MagicMock()
     plugin.hot_disconnect = AsyncMock(side_effect=RuntimeError("boom"))
