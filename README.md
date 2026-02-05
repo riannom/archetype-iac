@@ -28,6 +28,49 @@ Archetype IaC is composed of three main layers:
 
 The UI talks to the API, and the API coordinates with agents to perform lab actions. This separation keeps the UI and backend loosely coupled and enables multi-host deployments.
 
+### Container Layout (docker-compose.gui.yml)
+
+```mermaid
+flowchart LR
+  subgraph Stack["Archetype Network Studio Stack"]
+    web[Web UI\n(Nginx + Studio)] --> api[API Service]
+    worker[Worker\n(RQ)] --> redis[(Redis)]
+    worker --> postgres[(Postgres)]
+    api --> postgres
+    api --> redis
+    api <--> agent[Agent\n(local or remote)]
+  end
+
+  subgraph Observability["Logging & Metrics"]
+    promtail[Promtail] --> loki[(Loki)]
+    grafana[Grafana] --> loki
+    prometheus[Prometheus] --> api
+    grafana --> prometheus
+  end
+```
+
+### Agent Networking (per host)
+
+Each agent host runs a single OVS bridge (`arch-ovs`). Containers and VMs connect to that bridge via veth pairs, and VLAN tags provide per-link isolation. Cross-host links use VXLAN on the same shared bridge.
+
+```mermaid
+flowchart TB
+  subgraph Host["Agent Host"]
+    ovs[arch-ovs\n(OVS bridge)]
+    c1[Device/Node A\n(container or VM)]
+    c2[Device/Node B\n(container or VM)]
+    c3[Device/Node C\n(container or VM)]
+    c1 -- veth/VLAN --> ovs
+    c2 -- veth/VLAN --> ovs
+    c3 -- veth/VLAN --> ovs
+    ovs -- VXLAN/VLAN --> remote[Remote Agent Host]
+  end
+```
+
+### Mapping & State
+
+The API maintains lab state in Postgres and uses Redis for job coordination and eventing. Interface mappings include OVS port and bridge metadata so the API can validate and reconcile links with the agent’s reported OVS state.
+
 ## Supported Vendors and Device Kinds
 
 The supported device catalog is served dynamically from the API (`/vendors`) and sourced from `agent/vendors.py`. Current vendor coverage includes:
