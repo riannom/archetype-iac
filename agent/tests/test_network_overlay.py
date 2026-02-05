@@ -395,6 +395,59 @@ def test_overlay_attach_link_rejects_invalid_vlan(test_client):
     backend.overlay_attach_interface.assert_not_called()
 
 
+def test_overlay_attach_link_missing_remote_ip(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/attach-link",
+            json={
+                "lab_id": "lab1",
+                "container_name": "archetype-lab1-r1",
+                "interface_name": "eth1",
+                "vlan_tag": 3100,
+                "tenant_mtu": 1450,
+                "link_id": "r1:eth1-r2:eth1",
+            },
+        )
+
+    assert response.status_code == 422
+    backend.overlay_attach_interface.assert_not_called()
+
+
+def test_overlay_vtep_missing_remote_ip(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/vtep",
+            json={
+                "local_ip": "10.0.0.1",
+            },
+        )
+
+    assert response.status_code == 422
+    backend.overlay_ensure_vtep.assert_not_called()
+
+
+def test_overlay_tunnel_missing_local_ip(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/tunnel",
+            json={
+                "lab_id": "lab1",
+                "link_id": "r1:eth1-r2:eth1",
+                "remote_ip": "10.0.0.2",
+                "vni": 100,
+            },
+        )
+
+    assert response.status_code == 422
+    backend.overlay_create_tunnel.assert_not_called()
+
+
 def test_overlay_attach_link_backend_error(test_client):
     backend = _backend_with_overlay()
     backend.overlay_attach_interface = AsyncMock(side_effect=RuntimeError("attach failed"))
