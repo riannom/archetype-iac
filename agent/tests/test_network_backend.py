@@ -161,6 +161,42 @@ def test_bridge_patch_create_order(test_client):
     assert call_order == ["ensure_init", "create_patch"]
 
 
+def test_bridge_patch_delete_order(test_client):
+    backend = StubBackend()
+    call_order: list[str] = []
+    backend.ensure_ovs_initialized = AsyncMock(side_effect=lambda: call_order.append("ensure_init"))
+    backend.delete_patch_to_bridge = AsyncMock(side_effect=lambda *_: call_order.append("delete_patch") or True)
+    backend._ovs_initialized = True
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.delete(
+            "/ovs/patch",
+            json={"target_bridge": "br-test"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert call_order == ["delete_patch"]
+
+
+def test_bridge_patch_create_error(test_client):
+    backend = StubBackend()
+    backend.ensure_ovs_initialized = AsyncMock()
+    backend.create_patch_to_bridge = AsyncMock(side_effect=RuntimeError("boom"))
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/ovs/patch",
+            json={"target_bridge": "br-test", "vlan_tag": 123},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]
+
+
 def test_overlay_create_tunnel_uses_backend(test_client):
     backend = StubBackend()
 
