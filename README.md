@@ -32,16 +32,16 @@ The UI talks to the API, and the API coordinates with agents to perform lab acti
 
 ```mermaid
 flowchart LR
-  subgraph Stack["Archetype Network Studio Stack"]
-    web[Web UI\n(Nginx + Studio)] --> api[API Service]
-    worker[Worker\n(RQ)] --> redis[(Redis)]
+  subgraph Stack[Archetype Network Studio Stack]
+    web[Web UI<br/>(Nginx + Studio)] --> api[API Service]
+    worker[Worker<br/>(RQ)] --> redis[(Redis)]
     worker --> postgres[(Postgres)]
     api --> postgres
     api --> redis
-    api <--> agent[Agent\n(local or remote)]
+    api <--> agent[Agent<br/>(local or remote)]
   end
 
-  subgraph Observability["Logging & Metrics"]
+  subgraph Observability[Logging & Metrics]
     promtail[Promtail] --> loki[(Loki)]
     grafana[Grafana] --> loki
     prometheus[Prometheus] --> api
@@ -55,11 +55,11 @@ Each agent host runs a single OVS bridge (`arch-ovs`). Containers and VMs connec
 
 ```mermaid
 flowchart TB
-  subgraph Host["Agent Host"]
-    ovs[arch-ovs\n(OVS bridge)]
-    c1[Device/Node A\n(container or VM)]
-    c2[Device/Node B\n(container or VM)]
-    c3[Device/Node C\n(container or VM)]
+  subgraph Host[Agent Host]
+    ovs[arch-ovs<br/>(OVS bridge)]
+    c1[Device/Node A<br/>(container or VM)]
+    c2[Device/Node B<br/>(container or VM)]
+    c3[Device/Node C<br/>(container or VM)]
     c1 -- veth/VLAN --> ovs
     c2 -- veth/VLAN --> ovs
     c3 -- veth/VLAN --> ovs
