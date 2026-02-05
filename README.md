@@ -1,6 +1,8 @@
-# Archetype IaC
+![Archetype Network Studio logo](assets/archetype-logo.svg)
 
-Archetype IaC is a lab orchestration stack for building, running, and managing virtual network topologies with a web-based studio, API, and agents.
+# Archetype Network Studio
+
+Archetype Network Studio is a lab orchestration stack for building, running, and managing virtual network topologies with a web-based studio, API, and agents.
 
 ## Quick Start (Recommended)
 
@@ -64,6 +66,9 @@ Logs and task activity panel.
 
 System status and image management.
 ![System status overview with image management list](screenshots/image-management.png)
+
+Theme selection and styling options.
+![Theme selection panel showing available UI themes](screenshots/themes.png)
 
 ## Development
 
