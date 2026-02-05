@@ -115,6 +115,9 @@ def test_ovs_status_uses_backend(test_client):
 
 def test_external_connect_uses_backend(test_client):
     backend = StubBackend()
+    call_order: list[str] = []
+    backend.ensure_ovs_initialized = AsyncMock(side_effect=lambda: call_order.append("ensure_init"))
+    backend.connect_to_external = AsyncMock(side_effect=lambda **_: call_order.append("connect_external") or 123)
 
     with patch("agent.main.get_network_backend", return_value=backend):
         provider = MagicMock()
@@ -136,6 +139,7 @@ def test_external_connect_uses_backend(test_client):
     assert body["vlan_tag"] == 123
     backend.ensure_ovs_initialized.assert_awaited()
     backend.connect_to_external.assert_awaited()
+    assert call_order == ["ensure_init", "connect_external"]
 
 
 def test_overlay_create_tunnel_uses_backend(test_client):
