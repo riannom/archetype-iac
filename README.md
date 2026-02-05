@@ -55,7 +55,7 @@ Each agent host runs a single OVS bridge (`arch-ovs`). Containers and VMs connec
 
 ```mermaid
 flowchart TB
-  subgraph Host[Agent Host]
+  subgraph LocalAgent[Local Agent Host]
     ovs[arch-ovs - OVS bridge]
     c1[Device/Node A - container or VM]
     c2[Device/Node B - container or VM]
@@ -63,8 +63,13 @@ flowchart TB
     c1 -- veth/VLAN --> ovs
     c2 -- veth/VLAN --> ovs
     c3 -- veth/VLAN --> ovs
-    ovs -- VXLAN/VLAN --> remote[Remote Agent Host]
   end
+
+  subgraph RemoteAgent[Remote Agent Host]
+    rovs[arch-ovs - OVS bridge]
+  end
+
+  ovs -- VXLAN/VLAN --> rovs
 ```
 
 ### Mapping & State
