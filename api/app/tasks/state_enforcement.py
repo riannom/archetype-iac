@@ -233,8 +233,12 @@ async def _get_agent_for_node(
             return agent
 
     # 5. Fall back to any healthy agent with required provider
-    from app.utils.lab import get_lab_provider
-    provider = get_lab_provider(lab)
+    # Use node-specific provider for mixed labs (docker vs libvirt)
+    from app.utils.lab import get_lab_provider, get_node_provider
+    if node_def:
+        provider = get_node_provider(node_def, session)
+    else:
+        provider = get_lab_provider(lab)
     return await agent_client.get_healthy_agent(session, required_provider=provider)
 
 
