@@ -124,8 +124,8 @@ describe("ContainersPopup", () => {
     render(<ContainersPopup isOpen={true} onClose={mockOnClose} />);
 
     await waitFor(() => {
-      expect(screen.getByText("5 running")).toBeInTheDocument();
-      expect(screen.getByText("1 stopped")).toBeInTheDocument();
+      expect(screen.getByText("5 containers running")).toBeInTheDocument();
+      expect(screen.getByText("(1 stopped)")).toBeInTheDocument();
     });
   });
 
@@ -142,8 +142,8 @@ describe("ContainersPopup", () => {
     render(<ContainersPopup isOpen={true} onClose={mockOnClose} />);
 
     await waitFor(() => {
-      expect(screen.getByText("3 containers")).toBeInTheDocument();
-      expect(screen.getByText("1 container")).toBeInTheDocument();
+      expect(screen.getByText("3 nodes")).toBeInTheDocument();
+      expect(screen.getByText("1 node")).toBeInTheDocument();
     });
   });
 
@@ -270,7 +270,7 @@ describe("ContainersPopup", () => {
     render(<ContainersPopup isOpen={true} onClose={mockOnClose} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Containers")).toBeInTheDocument();
+      expect(screen.getByText("Nodes")).toBeInTheDocument();
     });
 
     // Find the close button (the one with the xmark icon in the header)
@@ -283,11 +283,11 @@ describe("ContainersPopup", () => {
     expect(mockOnClose).toHaveBeenCalledTimes(1);
   });
 
-  it("displays popup title as 'Containers'", async () => {
+  it("displays popup title as 'Nodes'", async () => {
     render(<ContainersPopup isOpen={true} onClose={mockOnClose} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Containers")).toBeInTheDocument();
+      expect(screen.getByText("Nodes")).toBeInTheDocument();
     });
   });
 
@@ -298,7 +298,7 @@ describe("ContainersPopup", () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText("Containers on agent-1")).toBeInTheDocument();
+        expect(screen.getByText("Nodes on agent-1")).toBeInTheDocument();
       });
     });
 
@@ -311,7 +311,7 @@ describe("ContainersPopup", () => {
         // agent-1 has 2 running in lab-1, 2 system containers = 4 total
         // Lab-1 has 2 containers from agent-1 (router1, router2 running)
         // agent-1 should NOT show host1 (agent-2) or lab-2's spine1 (agent-2)
-        expect(screen.getByText("4 running")).toBeInTheDocument();
+        expect(screen.getByText("4 containers running")).toBeInTheDocument();
       });
     });
 
