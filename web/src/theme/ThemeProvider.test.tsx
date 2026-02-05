@@ -90,7 +90,7 @@ describe("ThemeProvider", () => {
         </ThemeProvider>
       );
 
-      expect(screen.getByTestId("theme-count")).toHaveTextContent("16");
+      expect(screen.getByTestId("theme-count")).toHaveTextContent("15");
     });
 
     it("loads stored preferences", () => {
