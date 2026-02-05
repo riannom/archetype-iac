@@ -173,6 +173,7 @@ def test_overlay_vtep(test_client):
     assert body["success"] is True
     backend.overlay_ensure_vtep.assert_awaited_once()
 
+
 def test_overlay_vtep_existing_returns_cached(test_client):
     backend = _backend_with_overlay()
     existing = SimpleNamespace(
@@ -287,6 +288,27 @@ def test_overlay_attach_link_multiple_vlans(test_client):
     )
 
 
+def test_overlay_attach_link_rejects_invalid_vlan(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/attach-link",
+            json={
+                "lab_id": "lab1",
+                "container_name": "archetype-lab1-r1",
+                "interface_name": "eth1",
+                "vlan_tag": None,
+                "tenant_mtu": 1450,
+                "link_id": "r1:eth1-r2:eth1",
+                "remote_ip": "10.0.0.2",
+            },
+        )
+
+    assert response.status_code in (400, 422)
+    backend.overlay_attach_interface.assert_not_called()
+
+
 def test_overlay_detach_link(test_client):
     backend = _backend_with_overlay()
     call_order: list[str] = []
@@ -332,27 +354,77 @@ def test_overlay_detach_link(test_client):
 def test_overlay_detach_link_preserves_vtep(test_client):
     backend = _backend_with_overlay()
     backend.overlay_detach_interface = AsyncMock(
-        return_value={\"success\": True, \"vtep_deleted\": False, \"remaining_links\": 1, \"error\": None}\n    )
+        return_value={"success": True, "vtep_deleted": False, "remaining_links": 1, "error": None}
+    )
 
-    with patch(\"agent.main.get_network_backend\", return_value=backend):
-        with patch(\"agent.main._get_docker_ovs_plugin\", return_value=None):
+    with patch("agent.main.get_network_backend", return_value=backend):
+        with patch("agent.main._get_docker_ovs_plugin", return_value=None):
             response = test_client.post(
-                \"/overlay/detach-link\",
+                "/overlay/detach-link",
                 json={
-                    \"lab_id\": \"lab1\",
-                    \"container_name\": \"archetype-lab1-r1\",
-                    \"interface_name\": \"eth1\",
-                    \"link_id\": \"r1:eth1-r2:eth1\",
-                    \"remote_ip\": \"10.0.0.2\",
-                    \"delete_vtep_if_unused\": False,
+                    "lab_id": "lab1",
+                    "container_name": "archetype-lab1-r1",
+                    "interface_name": "eth1",
+                    "link_id": "r1:eth1-r2:eth1",
+                    "remote_ip": "10.0.0.2",
+                    "delete_vtep_if_unused": False,
                 },
             )
 
     assert response.status_code == 200
     body = response.json()
-    assert body[\"success\"] is True
+    assert body["success"] is True
     backend.overlay_detach_interface.assert_awaited_once_with(
-        link_id=\"r1:eth1-r2:eth1\",
-        remote_ip=\"10.0.0.2\",
+        link_id="r1:eth1-r2:eth1",
+        remote_ip="10.0.0.2",
         delete_vtep_if_unused=False,
     )
+
+
+def test_overlay_detach_multiple_links_ordering(test_client):
+    backend = _backend_with_overlay()
+    call_order: list[str] = []
+
+    plugin = MagicMock()
+    plugin.isolate_port = AsyncMock(side_effect=lambda *_: call_order.append("isolate_port") or 5000)
+    provider = MagicMock()
+    provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab1-r3"]
+
+    backend.overlay_detach_interface = AsyncMock(
+        side_effect=lambda **_: call_order.append("overlay_detach") or {
+            "success": True,
+            "vtep_deleted": False,
+            "remaining_links": 1,
+            "error": None,
+        }
+    )
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+            with patch("agent.main.get_provider_for_request", return_value=provider):
+                response_a = test_client.post(
+                    "/overlay/detach-link",
+                    json={
+                        "lab_id": "lab1",
+                        "container_name": "archetype-lab1-r1",
+                        "interface_name": "eth1",
+                        "link_id": "r1:eth1-r2:eth1",
+                        "remote_ip": "10.0.0.2",
+                        "delete_vtep_if_unused": True,
+                    },
+                )
+                response_b = test_client.post(
+                    "/overlay/detach-link",
+                    json={
+                        "lab_id": "lab1",
+                        "container_name": "archetype-lab1-r3",
+                        "interface_name": "eth2",
+                        "link_id": "r3:eth2-r4:eth2",
+                        "remote_ip": "10.0.0.2",
+                        "delete_vtep_if_unused": True,
+                    },
+                )
+
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
+    assert call_order == ["isolate_port", "overlay_detach", "isolate_port", "overlay_detach"]
