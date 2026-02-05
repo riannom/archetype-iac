@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -111,3 +113,38 @@ def test_plugin_vlan_release_does_not_collide_with_active():
     vlan_c = plugin._allocate_vlan(lab_a)
 
     assert vlan_c != vlan_b
+
+
+def test_plugin_vlan_allocation_no_duplicates_across_many():
+    plugin = DockerOVSPlugin()
+    labs = [LabBridge(lab_id=f"lab-{i}", bridge_name="arch-ovs") for i in range(5)]
+
+    allocated = set()
+    for idx, lab in enumerate(labs):
+        for _ in range(10):
+            vlan = plugin._allocate_vlan(lab)
+            assert vlan not in allocated
+            allocated.add(vlan)
+
+
+def test_hot_connect_rejects_cross_lab_endpoints():
+    plugin = DockerOVSPlugin()
+    plugin.lab_bridges["lab-a"] = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
+
+    plugin.networks["net-a"] = SimpleNamespace(lab_id="lab-a", interface_name="eth1", bridge_name="arch-ovs", network_id="net-a")
+    plugin.networks["net-b"] = SimpleNamespace(lab_id="lab-b", interface_name="eth1", bridge_name="arch-ovs", network_id="net-b")
+
+    ep_a = SimpleNamespace(endpoint_id="ep-a", network_id="net-a", interface_name="eth1", host_veth="vh1", cont_veth="vc1", vlan_tag=100, container_name="a")
+    ep_b = SimpleNamespace(endpoint_id="ep-b", network_id="net-b", interface_name="eth1", host_veth="vh2", cont_veth="vc2", vlan_tag=200, container_name="b")
+    plugin.endpoints["ep-a"] = ep_a
+    plugin.endpoints["ep-b"] = ep_b
+
+    plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))  # should not be called
+    plugin._mark_dirty_and_save = AsyncMock()
+
+    result = asyncio.run(
+        plugin.hot_connect("lab-a", "a", "eth1", "b", "eth1")
+    )
+
+    assert result is None
+    plugin._ovs_vsctl.assert_not_called()

@@ -2199,6 +2199,9 @@ class DockerOVSPlugin:
                 # Best match: EndpointID from Docker
                 if target_endpoint_id and target_endpoint_id in self.endpoints:
                     ep = self.endpoints[target_endpoint_id]
+                    network = self.networks.get(ep.network_id)
+                    if network and network.lab_id != lab_id:
+                        continue
                     if ep.interface_name == interface_name:
                         ep.container_name = container_name
                         logger.info(
@@ -2210,6 +2213,9 @@ class DockerOVSPlugin:
                 if target_network_id:
                     for ep in self.endpoints.values():
                         if ep.network_id == target_network_id and ep.interface_name == interface_name:
+                            network = self.networks.get(ep.network_id)
+                            if network and network.lab_id != lab_id:
+                                continue
                             ep.container_name = container_name
                             logger.info(
                                 f"Matched endpoint via NetworkID: {container_name}:{interface_name} -> {ep.host_veth}"
@@ -2229,7 +2235,7 @@ class DockerOVSPlugin:
                     continue
 
                 network = self.networks.get(target_network_id)
-                if not network or network.interface_name != interface_name:
+                if not network or network.interface_name != interface_name or network.lab_id != lab_id:
                     continue
 
                 port_prefix = f"vh{target_endpoint_id[:5]}"
@@ -2324,6 +2330,16 @@ class DockerOVSPlugin:
 
             if not ep_a or not ep_b:
                 logger.error(f"Endpoints not found for {container_a}:{iface_a} or {container_b}:{iface_b}")
+                return None
+
+            net_a = self.networks.get(ep_a.network_id)
+            net_b = self.networks.get(ep_b.network_id)
+            if not net_a or not net_b or net_a.lab_id != lab_id or net_b.lab_id != lab_id:
+                logger.error(
+                    f"Endpoint lab mismatch for hot-connect in lab {lab_id}: "
+                    f"{container_a}:{iface_a}={net_a.lab_id if net_a else 'unknown'}, "
+                    f"{container_b}:{iface_b}={net_b.lab_id if net_b else 'unknown'}"
+                )
                 return None
 
             # Use VLAN from endpoint A
