@@ -29,7 +29,8 @@ def test_client():
 
 def test_hot_connect_uses_plugin(test_client):
     plugin = MagicMock()
-    plugin.hot_connect = AsyncMock(return_value=1234)
+    call_order: list[str] = []
+    plugin.hot_connect = AsyncMock(side_effect=lambda *_: call_order.append("hot_connect") or 1234)
 
     provider = MagicMock()
     provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab1-r2"]
@@ -51,11 +52,13 @@ def test_hot_connect_uses_plugin(test_client):
     assert body["success"] is True
     assert body["link"]["vlan_tag"] == 1234
     plugin.hot_connect.assert_awaited_once()
+    assert call_order == ["hot_connect"]
 
 
 def test_hot_disconnect_uses_plugin(test_client):
     plugin = MagicMock()
-    plugin.hot_disconnect = AsyncMock(return_value=True)
+    call_order: list[str] = []
+    plugin.hot_disconnect = AsyncMock(side_effect=lambda *_: call_order.append("hot_disconnect") or True)
 
     provider = MagicMock()
     provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab1-r2"]
@@ -70,6 +73,7 @@ def test_hot_disconnect_uses_plugin(test_client):
     body = response.json()
     assert body["success"] is True
     assert plugin.hot_disconnect.await_count == 2
+    assert call_order == ["hot_disconnect", "hot_disconnect"]
 
 
 def test_isolate_interface_uses_plugin(test_client):
