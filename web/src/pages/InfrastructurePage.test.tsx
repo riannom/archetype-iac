@@ -35,7 +35,12 @@ describe('InfrastructurePage', () => {
         return {
           agents: [],
           links: [],
-          settings: { overlay_mtu: 1450, mtu_verification_enabled: true },
+          settings: {
+            overlay_mtu: 1450,
+            mtu_verification_enabled: true,
+            overlay_preserve_container_mtu: false,
+            overlay_clamp_host_mtu: true,
+          },
         };
       }
       if (path === '/agents/detailed') {

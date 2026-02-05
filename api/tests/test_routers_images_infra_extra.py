@@ -98,11 +98,18 @@ def test_infrastructure_settings_and_mesh(test_client, test_db, admin_user, admi
 
     patch = test_client.patch(
         "/infrastructure/settings",
-        json={"overlay_mtu": 1400, "mtu_verification_enabled": False},
+        json={
+            "overlay_mtu": 1400,
+            "mtu_verification_enabled": False,
+            "overlay_preserve_container_mtu": True,
+            "overlay_clamp_host_mtu": True,
+        },
         headers=admin_auth_headers,
     )
     assert patch.status_code == 200
     assert patch.json()["overlay_mtu"] == 1400
+    assert patch.json()["overlay_preserve_container_mtu"] is True
+    assert patch.json()["overlay_clamp_host_mtu"] is True
 
     host = models.Host(
         id="h1",
@@ -117,3 +124,5 @@ def test_infrastructure_settings_and_mesh(test_client, test_db, admin_user, admi
     mesh = test_client.get("/infrastructure/mesh", headers=admin_auth_headers)
     assert mesh.status_code == 200
     assert mesh.json()["settings"]["overlay_mtu"] == 1400
+    assert mesh.json()["settings"]["overlay_preserve_container_mtu"] is True
+    assert mesh.json()["settings"]["overlay_clamp_host_mtu"] is True

@@ -675,6 +675,10 @@ class InfraSettings(Base):
     overlay_mtu: Mapped[int] = mapped_column(default=1450)
     # Whether to enable automatic MTU verification between agents
     mtu_verification_enabled: Mapped[bool] = mapped_column(default=True)
+    # Preserve container MTU for overlay links (avoid clamping inside containers)
+    overlay_preserve_container_mtu: Mapped[bool] = mapped_column(default=False)
+    # Clamp host-side veth MTU for overlay links
+    overlay_clamp_host_mtu: Mapped[bool] = mapped_column(default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     updated_by_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
 

@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     # If discovery fails, this fallback value is used.
     # Set to 0 to disable explicit MTU configuration (inherit from system)
     overlay_mtu: int = 1450  # Fallback MTU for tenant interfaces on overlay links
+    overlay_preserve_container_mtu: bool = False  # Keep container MTU unchanged for overlay links
+    overlay_clamp_host_mtu: bool = True  # Clamp host-side veth MTU to tenant MTU
 
     # OVS networking (hot-plug support)
     enable_ovs: bool = True  # Enable OVS-based networking for hot-plug

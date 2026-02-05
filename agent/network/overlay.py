@@ -766,16 +766,18 @@ class OverlayManager:
             if code != 0:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
 
-            # Set MTU on veth pair using discovered tenant MTU
+            # Set MTU for overlay link (optionally preserve container MTU)
             mtu_to_use = bridge.tenant_mtu if bridge.tenant_mtu > 0 else settings.overlay_mtu
-            if mtu_to_use > 0:
+            if mtu_to_use > 0 and settings.overlay_clamp_host_mtu:
                 await self._run_cmd([
                     "ip", "link", "set", veth_host, "mtu", str(mtu_to_use)
                 ])
+                logger.debug(f"Set host veth MTU to {mtu_to_use} for overlay link")
+            if mtu_to_use > 0 and not settings.overlay_preserve_container_mtu:
                 await self._run_cmd([
                     "ip", "link", "set", veth_cont, "mtu", str(mtu_to_use)
                 ])
-                logger.debug(f"Set veth MTU to {mtu_to_use} for overlay link")
+                logger.debug(f"Set container veth MTU to {mtu_to_use} for overlay link")
 
             # Add host end to OVS with VLAN tag
             code, _, stderr = await self._ovs_vsctl(
