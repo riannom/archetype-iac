@@ -149,7 +149,7 @@ async def deploy_node_immediately(
     Returns:
         True if deployment was triggered successfully, False otherwise
     """
-    from app.utils.lab import get_lab_provider
+    from app.utils.lab import get_lab_provider, get_node_provider
 
     # Set node to pending state immediately
     node_state.desired_state = "running"
@@ -167,8 +167,20 @@ async def deploy_node_immediately(
         is_ready=False,
     )
 
-    # Get provider for the lab
-    provider = get_lab_provider(lab)
+    # Get provider for this specific node (supports mixed docker/libvirt labs)
+    node_def = None
+    if node_state.node_definition_id:
+        node_def = session.get(models.Node, node_state.node_definition_id)
+    if not node_def:
+        node_def = session.query(models.Node).filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name == node_state.node_name,
+        ).first()
+
+    if node_def:
+        provider = get_node_provider(node_def, session)
+    else:
+        provider = get_lab_provider(lab)
 
     # Check if agent is available
     agent = await agent_client.get_agent_for_lab(session, lab, required_provider=provider)
