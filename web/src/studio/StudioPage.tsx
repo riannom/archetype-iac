@@ -305,6 +305,8 @@ const StudioPage: React.FC = () => {
         is_ready: wsState.is_ready,
         host_id: wsState.host_id,
         host_name: wsState.host_name,
+        image_sync_status: wsState.image_sync_status,
+        image_sync_message: wsState.image_sync_message,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } as NodeStateEntry,

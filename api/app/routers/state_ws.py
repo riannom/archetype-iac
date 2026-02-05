@@ -177,6 +177,8 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str, database: Sessi
                 "error_message": ns.error_message,
                 "host_id": host_id,
                 "host_name": hosts.get(host_id) if host_id else None,
+                "image_sync_status": ns.image_sync_status,
+                "image_sync_message": ns.image_sync_message,
             })
 
         await websocket.send_json({

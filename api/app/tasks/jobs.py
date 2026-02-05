@@ -1726,6 +1726,82 @@ async def run_node_reconcile(
                     session, lab_id, agent.id, node_names_for_placement, status="starting"
                 )
 
+            # Pre-deploy image sync: ensure required images exist on the target agent
+            if settings.image_sync_enabled and settings.image_sync_pre_deploy_check and nodes_to_start_or_deploy:
+                from app.tasks.image_sync import ensure_images_for_deployment
+
+                # Build image-to-nodes mapping for the nodes we're deploying/starting
+                deploy_node_names = {ns.node_name for ns in nodes_to_start_or_deploy}
+                full_image_map = topo_service.get_image_to_nodes_map(lab_id)
+                # Filter to only nodes being deployed/started on this agent
+                image_to_nodes: dict[str, list[str]] = {}
+                image_refs: list[str] = []
+                for img_ref, node_names in full_image_map.items():
+                    filtered = [n for n in node_names if n in deploy_node_names]
+                    if filtered:
+                        image_to_nodes[img_ref] = filtered
+                        if img_ref not in image_refs:
+                            image_refs.append(img_ref)
+
+                if image_refs:
+                    log_parts.append(f"=== Image Sync Check ===")
+                    log_parts.append(f"Checking {len(image_refs)} image(s) on {agent.name}...")
+
+                    await _broadcast_job_progress(
+                        lab_id, job_id, job.action, "running",
+                        progress_message=f"Checking images on {agent.name}..."
+                    )
+
+                    all_ready, missing, sync_log = await ensure_images_for_deployment(
+                        host_id=agent.id,
+                        image_references=image_refs,
+                        timeout=settings.image_sync_timeout,
+                        database=session,
+                        lab_id=lab_id,
+                        image_to_nodes=image_to_nodes,
+                    )
+                    log_parts.extend(sync_log)
+                    log_parts.append("")
+
+                    if not all_ready and missing:
+                        # Find which nodes use the missing images and mark them as error
+                        failed_nodes = set()
+                        for img_ref in missing:
+                            for node_name in image_to_nodes.get(img_ref, []):
+                                failed_nodes.add(node_name)
+
+                        for ns in nodes_to_start_or_deploy:
+                            if ns.node_name in failed_nodes:
+                                ns.actual_state = NodeActualState.ERROR.value
+                                ns.error_message = "Required image not available on agent"
+                                safe_create_task(
+                                    broadcast_node_state_change(
+                                        lab_id=lab_id,
+                                        node_id=ns.node_id,
+                                        node_name=ns.node_name,
+                                        desired_state=ns.desired_state,
+                                        actual_state=ns.actual_state,
+                                        is_ready=ns.is_ready,
+                                        error_message=ns.error_message,
+                                        image_sync_status="failed",
+                                        image_sync_message="Image not available",
+                                    ),
+                                    name=f"broadcast:imgsync:{lab_id}:{ns.node_id}"
+                                )
+
+                        # Remove failed nodes from deploy/start lists
+                        nodes_need_deploy = [ns for ns in nodes_need_deploy if ns.node_name not in failed_nodes]
+                        nodes_need_start = [ns for ns in nodes_need_start if ns.node_name not in failed_nodes]
+                        session.commit()
+
+                        if not nodes_need_deploy and not nodes_need_start and not nodes_need_stop:
+                            # All nodes failed image sync
+                            job.status = JobStatus.FAILED.value
+                            job.completed_at = datetime.now(timezone.utc)
+                            job.log_path = "\n".join(log_parts)
+                            session.commit()
+                            return
+
             # Phase 1: If any nodes need deploy, we need to deploy the full topology
             # Containerlab doesn't support per-node deploy, so we deploy all and then stop unwanted
             if nodes_need_deploy:
