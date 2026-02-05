@@ -17,14 +17,30 @@ We recommend Debian for installation and testing.
 
 ```mermaid
 flowchart LR
-  controller[Controller Host] --> web[Web UI]
-  controller --> api[API Service]
-  controller --> db[Postgres]
-  controller --> redis[Redis]
+  subgraph ControllerHost[Controller Host]
+    web[Web UI]
+    api[API Service]
+    db[Postgres]
+    redis[Redis]
+    localagent[Agent]
+  end
 
-  agent1[Agent Host A] --> api
-  agent2[Agent Host B] --> api
-  agent3[Agent Host C] --> api
+  subgraph AgentHostA[Agent Host A]
+    agentA[Agent]
+  end
+
+  subgraph AgentHostB[Agent Host B]
+    agentB[Agent]
+  end
+
+  subgraph AgentHostC[Agent Host C]
+    agentC[Agent]
+  end
+
+  localagent --> api
+  agentA --> api
+  agentB --> api
+  agentC --> api
 ```
 
 ### Install Commands
