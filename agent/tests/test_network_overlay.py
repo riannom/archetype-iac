@@ -415,6 +415,46 @@ def test_overlay_attach_link_missing_remote_ip(test_client):
     backend.overlay_attach_interface.assert_not_called()
 
 
+def test_overlay_attach_link_missing_container(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/attach-link",
+            json={
+                "lab_id": "lab1",
+                "interface_name": "eth1",
+                "vlan_tag": 3100,
+                "tenant_mtu": 1450,
+                "link_id": "r1:eth1-r2:eth1",
+                "remote_ip": "10.0.0.2",
+            },
+        )
+
+    assert response.status_code == 422
+    backend.overlay_attach_interface.assert_not_called()
+
+
+def test_overlay_attach_link_missing_link_id(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/attach-link",
+            json={
+                "lab_id": "lab1",
+                "container_name": "archetype-lab1-r1",
+                "interface_name": "eth1",
+                "vlan_tag": 3100,
+                "tenant_mtu": 1450,
+                "remote_ip": "10.0.0.2",
+            },
+        )
+
+    assert response.status_code == 422
+    backend.overlay_attach_interface.assert_not_called()
+
+
 def test_overlay_vtep_missing_remote_ip(test_client):
     backend = _backend_with_overlay()
 
@@ -427,6 +467,22 @@ def test_overlay_vtep_missing_remote_ip(test_client):
         )
 
     assert response.status_code == 422
+    backend.overlay_ensure_vtep.assert_not_called()
+
+
+def test_overlay_vtep_invalid_ip_format(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/vtep",
+            json={
+                "local_ip": "not-an-ip",
+                "remote_ip": "10.0.0.2",
+            },
+        )
+
+    assert response.status_code in (400, 422)
     backend.overlay_ensure_vtep.assert_not_called()
 
 
@@ -445,6 +501,25 @@ def test_overlay_tunnel_missing_local_ip(test_client):
         )
 
     assert response.status_code == 422
+    backend.overlay_create_tunnel.assert_not_called()
+
+
+def test_overlay_tunnel_invalid_ip_format(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/tunnel",
+            json={
+                "lab_id": "lab1",
+                "link_id": "r1:eth1-r2:eth1",
+                "local_ip": "nope",
+                "remote_ip": "10.0.0.2",
+                "vni": 100,
+            },
+        )
+
+    assert response.status_code in (400, 422)
     backend.overlay_create_tunnel.assert_not_called()
 
 
