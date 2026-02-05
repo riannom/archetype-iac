@@ -1,4 +1,4 @@
-![Archetype Network Studio logo](assets/archetype-logo.svg)
+<img src="assets/archetype-logo.svg" alt="Archetype Network Studio logo" width="96">
 
 # Archetype Network Studio
 
