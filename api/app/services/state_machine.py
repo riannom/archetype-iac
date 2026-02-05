@@ -56,10 +56,12 @@ class NodeStateMachine:
     }
 
     # States that should be treated as "stopped" for enforcement purposes
+    # (i.e., states from which a "start" action should be triggered when desired=running)
     STOPPED_EQUIVALENT_STATES: set[NodeActualState] = {
         NodeActualState.STOPPED,
         NodeActualState.EXITED,
         NodeActualState.UNDEPLOYED,
+        NodeActualState.PENDING,  # Node awaiting deployment
     }
 
     @classmethod
@@ -81,9 +83,11 @@ class NodeStateMachine:
         """
         if desired == NodeDesiredState.RUNNING:
             if current in cls.STOPPED_EQUIVALENT_STATES:
-                # Need to start - use pending for undeployed, starting for stopped
+                # Need to start - use pending for undeployed, starting for stopped/pending
                 if current == NodeActualState.UNDEPLOYED:
                     return NodeActualState.PENDING
+                if current == NodeActualState.PENDING:
+                    return NodeActualState.STARTING  # Retry deploy
                 return NodeActualState.STARTING
             if current == NodeActualState.ERROR:
                 return NodeActualState.PENDING
