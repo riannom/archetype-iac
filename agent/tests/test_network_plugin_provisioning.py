@@ -96,3 +96,18 @@ def test_plugin_vlan_allocation_unique_across_labs():
     vlan_b = plugin._allocate_vlan(lab_b)
 
     assert vlan_a != vlan_b
+
+
+def test_plugin_vlan_release_does_not_collide_with_active():
+    plugin = DockerOVSPlugin()
+    lab_a = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
+    lab_b = LabBridge(lab_id="lab-b", bridge_name="arch-ovs")
+
+    vlan_a = plugin._allocate_vlan(lab_a)
+    vlan_b = plugin._allocate_vlan(lab_b)
+
+    # Release VLAN A and ensure next allocation doesn't reuse VLAN B.
+    plugin._release_vlan(vlan_a)
+    vlan_c = plugin._allocate_vlan(lab_a)
+
+    assert vlan_c != vlan_b
