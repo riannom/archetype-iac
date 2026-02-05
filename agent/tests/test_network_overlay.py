@@ -1,0 +1,176 @@
+"""CI-friendly tests for VXLAN overlay endpoints."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from agent.main import app
+from agent.config import settings
+
+
+@pytest.fixture
+def test_client():
+    original_enable_docker = settings.enable_docker
+    original_enable_ovs_plugin = settings.enable_ovs_plugin
+    original_enable_vxlan = settings.enable_vxlan
+    settings.enable_docker = False
+    settings.enable_ovs_plugin = False
+    settings.enable_vxlan = True
+    client = TestClient(app)
+    yield client
+    client.close()
+    settings.enable_docker = original_enable_docker
+    settings.enable_ovs_plugin = original_enable_ovs_plugin
+    settings.enable_vxlan = original_enable_vxlan
+
+
+def _backend_with_overlay():
+    backend = MagicMock()
+    backend.overlay_create_tunnel = AsyncMock(
+        return_value=SimpleNamespace(
+            vni=100,
+            interface_name="vxlan100",
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+            lab_id="lab1",
+            link_id="r1:eth1-r2:eth1",
+            vlan_tag=3100,
+        )
+    )
+    backend.overlay_create_bridge = AsyncMock()
+    backend.overlay_cleanup_lab = AsyncMock(return_value={"tunnels_deleted": 1, "bridges_deleted": 1, "errors": []})
+    backend.overlay_status = MagicMock(return_value={"tunnels": [], "bridges": [], "vteps": []})
+    backend.overlay_get_vtep = MagicMock(return_value=None)
+    backend.overlay_ensure_vtep = AsyncMock(
+        return_value=SimpleNamespace(
+            interface_name="vtep-10.0.0.2",
+            vni=200000,
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+            remote_host_id=None,
+            tenant_mtu=1450,
+        )
+    )
+    backend.overlay_attach_interface = AsyncMock(return_value=True)
+    backend.overlay_detach_interface = AsyncMock(
+        return_value={"success": True, "vtep_deleted": False, "remaining_links": 0, "error": None}
+    )
+    backend.overlay_get_bridges_for_lab = AsyncMock(return_value=[])
+    backend.overlay_attach_container = AsyncMock(return_value=True)
+    return backend
+
+
+def test_overlay_create_tunnel(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/tunnel",
+            json={
+                "lab_id": "lab1",
+                "link_id": "r1:eth1-r2:eth1",
+                "local_ip": "10.0.0.1",
+                "remote_ip": "10.0.0.2",
+                "vni": 100,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["tunnel"]["vni"] == 100
+    backend.overlay_create_tunnel.assert_awaited_once()
+    backend.overlay_create_bridge.assert_awaited_once()
+
+
+def test_overlay_status(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.get("/overlay/status")
+
+    assert response.status_code == 200
+    backend.overlay_status.assert_called_once()
+
+
+def test_overlay_cleanup(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/cleanup",
+            json={"lab_id": "lab1"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tunnels_deleted"] == 1
+    backend.overlay_cleanup_lab.assert_awaited_once()
+
+
+def test_overlay_vtep(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/vtep",
+            json={
+                "local_ip": "10.0.0.1",
+                "remote_ip": "10.0.0.2",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    backend.overlay_ensure_vtep.assert_awaited_once()
+
+
+def test_overlay_attach_link(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        response = test_client.post(
+            "/overlay/attach-link",
+            json={
+                "lab_id": "lab1",
+                "container_name": "archetype-lab1-r1",
+                "interface_name": "eth1",
+                "vlan_tag": 3100,
+                "tenant_mtu": 1450,
+                "link_id": "r1:eth1-r2:eth1",
+                "remote_ip": "10.0.0.2",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    backend.overlay_attach_interface.assert_awaited_once()
+
+
+def test_overlay_detach_link(test_client):
+    backend = _backend_with_overlay()
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        with patch("agent.main._get_docker_ovs_plugin", return_value=None):
+            response = test_client.post(
+                "/overlay/detach-link",
+                json={
+                    "lab_id": "lab1",
+                    "container_name": "archetype-lab1-r1",
+                    "interface_name": "eth1",
+                    "link_id": "r1:eth1-r2:eth1",
+                    "remote_ip": "10.0.0.2",
+                    "delete_vtep_if_unused": True,
+                },
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    backend.overlay_detach_interface.assert_awaited_once()
