@@ -28,46 +28,24 @@ jobs:
           cd api
           pip install -r requirements.txt
 
-      - name: Run API tests
+      - name: Install coverage tooling
         run: |
-          cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/test_auth.py tests/test_dashboard.py tests/test_agent_client.py -v --tb=short
-        continue-on-error: true
+          pip install pytest-cov
 
-      - name: Run labs router tests
+      - name: Run API tests with coverage
         run: |
           cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/test_labs_router.py -v --tb=short -x
-        continue-on-error: true
-
-      - name: Run topology tests
-        run: |
-          cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/test_topology.py -v --tb=short
-        continue-on-error: true
+          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=65
 
       - name: Install Agent dependencies
         run: |
           cd agent
           pip install -r requirements.txt
 
-      - name: Run Agent tests
+      - name: Run Agent tests with coverage
         run: |
           cd agent
-          pytest tests/ -v --tb=short
-        continue-on-error: true
-
-      - name: Run Agent unit tests (non-integration)
-        run: |
-          cd agent
-          pytest tests/ -m "not integration" -v --tb=short
-        continue-on-error: true
-
-      - name: Run Agent provisioning coverage
-        run: |
-          cd agent
-          pytest tests/test_network_provisioning.py tests/test_network_overlay.py tests/test_network_plugin_provisioning.py --cov=agent/main.py --cov-fail-under=60 -v --tb=short
-        continue-on-error: true
+          pytest tests/ -v --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=60
 
   frontend-tests:
     name: Frontend Tests
@@ -88,16 +66,10 @@ jobs:
           cd web
           npm ci
 
-      - name: Run tests
+      - name: Run tests with coverage
         run: |
           cd web
-          npm test -- --run
-
-      - name: Run coverage
-        run: |
-          cd web
-          npm run test:coverage -- --run
-        continue-on-error: true
+          npm run test:coverage -- --run --coverage.thresholds.lines=60 --coverage.thresholds.functions=50 --coverage.thresholds.statements=60 --coverage.thresholds.branches=50
 
   lint:
     name: Lint
