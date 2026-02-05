@@ -24,6 +24,7 @@ from agent.readiness import (
     _post_boot_completed,
     CEOS_PROGRESS_PATTERNS,
 )
+from agent.vendors import get_vendor_config
 
 
 # --- NoopProbe Tests ---
@@ -221,6 +222,24 @@ class TestGetProbeForVendor:
         probe = get_probe_for_vendor("ceos")
         assert isinstance(probe, LogPatternProbe)
 
+    @pytest.mark.asyncio
+    async def test_ceos_progress_patterns_applied(self):
+        """cEOS probe should report progress when log patterns match."""
+        probe = get_probe_for_vendor("ceos")
+
+        mock_container = MagicMock()
+        mock_container.status = "running"
+        mock_container.logs.return_value = b"ZTP starting..."
+
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
+
+        with patch("agent.readiness.docker.from_env", return_value=mock_client):
+            result = await probe.check("test-ceos")
+
+        assert result.is_ready is False
+        assert result.progress_percent == CEOS_PROGRESS_PATTERNS[r\"ZTP|zerotouch\"]
+
     def test_ceos_alias_not_resolved_by_get_vendor_config(self):
         """get_vendor_config doesn't resolve aliases - use get_config_by_device for that."""
         # get_vendor_config does direct lookup only, not alias resolution
@@ -340,6 +359,25 @@ class TestPostBootCommands:
             assert result is True
             # Should not call exec_run since linux has no post_boot_commands
             assert not mock_container.exec_run.called
+
+    @pytest.mark.asyncio
+    async def test_ceos_iptables_commands_executed(self):
+        """cEOS post-boot commands should include iptables cleanup."""
+        mock_container = MagicMock()
+        mock_container.status = "running"
+        mock_container.exec_run.return_value = (0, b"OK")
+
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
+
+        config = get_vendor_config("ceos")
+        assert config and config.post_boot_commands
+
+        with patch("agent.readiness.docker.from_env", return_value=mock_client):
+            result = await run_post_boot_commands("test-ceos", "ceos")
+            assert result is True
+
+        mock_container.exec_run.assert_any_call(config.post_boot_commands[0])
 
     @pytest.mark.asyncio
     async def test_container_not_running(self):

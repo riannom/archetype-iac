@@ -241,6 +241,28 @@ class TestCeosContainerConfig:
         parsed = provider._topology_from_json(topology)
         assert parsed.nodes["eos_1"].interface_count == config.max_ports
 
+    def test_required_interfaces_uses_vendor_defaults(self, provider):
+        """Ensure required interface count is based on vendor defaults + buffer."""
+        config = get_config_by_device("ceos")
+        assert config and config.max_ports > 0
+
+        topology = DeployTopology(
+            nodes=[
+                DeployNode(
+                    name="eos_1",
+                    display_name="EOS-1",
+                    kind="ceos",
+                    image="ceos:latest",
+                    interface_count=None,
+                ),
+            ],
+            links=[],
+        )
+
+        parsed = provider._topology_from_json(topology)
+        required = provider._calculate_required_interfaces(parsed)
+        assert required == config.max_ports + 4
+
 
 
 # --- Tests for startup-config hostname ---
