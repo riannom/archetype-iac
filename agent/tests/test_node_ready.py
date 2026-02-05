@@ -87,3 +87,33 @@ def test_node_ready_docker_missing_falls_back_to_libvirt():
     mock_libvirt.assert_awaited_once()
 
     client.close()
+
+
+def test_node_ready_docker_not_ready_skips_post_boot():
+    client = TestClient(app)
+
+    provider = MagicMock()
+    provider.get_container_name.return_value = "archetype-lab1-r1"
+
+    mock_container = MagicMock()
+    mock_container.labels = {"archetype.node_kind": "ceos"}
+
+    mock_docker = MagicMock()
+    mock_docker.containers.get.return_value = mock_container
+
+    probe = MagicMock()
+    probe.check = AsyncMock(return_value=MagicMock(is_ready=False, message="booting", progress_percent=10))
+
+    with patch("agent.main.get_provider", return_value=provider):
+        with patch("agent.main.docker.from_env", return_value=mock_docker):
+            with patch("agent.main.get_probe_for_vendor", return_value=probe):
+                with patch("agent.main.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
+                    response = client.get("/labs/lab1/nodes/r1/ready")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_ready"] is False
+    assert body["provider"] == "docker"
+    mock_post.assert_not_awaited()
+
+    client.close()
