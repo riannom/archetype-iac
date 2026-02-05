@@ -188,6 +188,40 @@ def test_overlay_attach_container_ceos_interface_mapping(test_client):
     assert kwargs["interface_name"] == "eth1"
 
 
+def test_overlay_attach_container_no_mapping_without_intftype(test_client):
+    backend = _backend_with_overlay()
+    bridge = SimpleNamespace(link_id="r1:Ethernet1-r2:Ethernet1")
+    backend.overlay_get_bridges_for_lab = AsyncMock(return_value=[bridge])
+    backend.overlay_attach_container = AsyncMock(return_value=True)
+
+    provider = MagicMock()
+    provider.get_container_name.return_value = "archetype-lab1-r1"
+
+    mock_container = MagicMock()
+    mock_container.attrs = {"Config": {"Env": []}}
+    provider.docker.containers.get.return_value = mock_container
+
+    with patch("agent.main.get_network_backend", return_value=backend):
+        with patch("agent.main.get_provider", return_value=provider):
+            response = test_client.post(
+                "/overlay/attach",
+                json={
+                    "lab_id": "lab1",
+                    "link_id": "r1:Ethernet1-r2:Ethernet1",
+                    "container_name": "r1",
+                    "interface_name": "Ethernet1",
+                    "ip_address": None,
+                },
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    backend.overlay_attach_container.assert_awaited_once()
+    _, kwargs = backend.overlay_attach_container.call_args
+    assert kwargs["interface_name"] == "Ethernet1"
+
+
 def test_overlay_status(test_client):
     backend = _backend_with_overlay()
 
