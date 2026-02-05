@@ -762,6 +762,8 @@ class InfraSettingsOut(BaseModel):
 
     overlay_mtu: int = 1450
     mtu_verification_enabled: bool = True
+    overlay_preserve_container_mtu: bool = False
+    overlay_clamp_host_mtu: bool = True
     updated_at: datetime | None = None
     updated_by_id: str | None = None
 
@@ -774,6 +776,8 @@ class InfraSettingsUpdate(BaseModel):
 
     overlay_mtu: int | None = Field(None, ge=68, le=9000, description="Overlay MTU (68-9000)")
     mtu_verification_enabled: bool | None = None
+    overlay_preserve_container_mtu: bool | None = None
+    overlay_clamp_host_mtu: bool | None = None
 
 
 # =============================================================================

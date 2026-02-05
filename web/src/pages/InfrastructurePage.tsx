@@ -24,6 +24,8 @@ import {
 interface InfraSettings {
   overlay_mtu: number;
   mtu_verification_enabled: boolean;
+  overlay_preserve_container_mtu: boolean;
+  overlay_clamp_host_mtu: boolean;
   updated_at: string | null;
   updated_by_id: string | null;
 }
@@ -186,6 +188,8 @@ const InfrastructurePage: React.FC = () => {
   // Settings form state
   const [mtuValue, setMtuValue] = useState<number>(1450);
   const [verificationEnabled, setVerificationEnabled] = useState<boolean>(true);
+  const [preserveContainerMtu, setPreserveContainerMtu] = useState<boolean>(false);
+  const [clampHostMtu, setClampHostMtu] = useState<boolean>(true);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
 
@@ -228,6 +232,8 @@ const InfrastructurePage: React.FC = () => {
       setMesh(data);
       setMtuValue(data.settings.overlay_mtu);
       setVerificationEnabled(data.settings.mtu_verification_enabled);
+      setPreserveContainerMtu(data.settings.overlay_preserve_container_mtu);
+      setClampHostMtu(data.settings.overlay_clamp_host_mtu);
       setSettingsDirty(false);
       setMeshError(null);
     } catch (err) {
@@ -352,12 +358,42 @@ const InfrastructurePage: React.FC = () => {
 
   const handleMtuChange = (value: number) => {
     setMtuValue(value);
-    setSettingsDirty(value !== mesh?.settings.overlay_mtu || verificationEnabled !== mesh?.settings.mtu_verification_enabled);
+    setSettingsDirty(
+      value !== mesh?.settings.overlay_mtu ||
+      verificationEnabled !== mesh?.settings.mtu_verification_enabled ||
+      preserveContainerMtu !== mesh?.settings.overlay_preserve_container_mtu ||
+      clampHostMtu !== mesh?.settings.overlay_clamp_host_mtu
+    );
   };
 
   const handleVerificationChange = (value: boolean) => {
     setVerificationEnabled(value);
-    setSettingsDirty(mtuValue !== mesh?.settings.overlay_mtu || value !== mesh?.settings.mtu_verification_enabled);
+    setSettingsDirty(
+      mtuValue !== mesh?.settings.overlay_mtu ||
+      value !== mesh?.settings.mtu_verification_enabled ||
+      preserveContainerMtu !== mesh?.settings.overlay_preserve_container_mtu ||
+      clampHostMtu !== mesh?.settings.overlay_clamp_host_mtu
+    );
+  };
+
+  const handlePreserveContainerMtuChange = (value: boolean) => {
+    setPreserveContainerMtu(value);
+    setSettingsDirty(
+      mtuValue !== mesh?.settings.overlay_mtu ||
+      verificationEnabled !== mesh?.settings.mtu_verification_enabled ||
+      value !== mesh?.settings.overlay_preserve_container_mtu ||
+      clampHostMtu !== mesh?.settings.overlay_clamp_host_mtu
+    );
+  };
+
+  const handleClampHostMtuChange = (value: boolean) => {
+    setClampHostMtu(value);
+    setSettingsDirty(
+      mtuValue !== mesh?.settings.overlay_mtu ||
+      verificationEnabled !== mesh?.settings.mtu_verification_enabled ||
+      preserveContainerMtu !== mesh?.settings.overlay_preserve_container_mtu ||
+      value !== mesh?.settings.overlay_clamp_host_mtu
+    );
   };
 
   const saveSettings = async () => {
@@ -368,6 +404,8 @@ const InfrastructurePage: React.FC = () => {
         body: JSON.stringify({
           overlay_mtu: mtuValue,
           mtu_verification_enabled: verificationEnabled,
+          overlay_preserve_container_mtu: preserveContainerMtu,
+          overlay_clamp_host_mtu: clampHostMtu,
         }),
       });
       setSettingsDirty(false);
@@ -1132,6 +1170,46 @@ const InfrastructurePage: React.FC = () => {
                             Enable automatic MTU verification between agents
                           </span>
                         </label>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                          Preserve Container MTU
+                        </label>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={preserveContainerMtu}
+                            onChange={(e) => handlePreserveContainerMtuChange(e.target.checked)}
+                            className="w-5 h-5 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                          />
+                          <span className="text-sm text-stone-600 dark:text-stone-400">
+                            Keep container MTU unchanged on overlay links
+                          </span>
+                        </label>
+                        <p className="text-xs text-stone-400 mt-1">
+                          When enabled, containers keep their configured MTU and oversized packets may fragment.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                          Clamp Host MTU
+                        </label>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={clampHostMtu}
+                            onChange={(e) => handleClampHostMtuChange(e.target.checked)}
+                            className="w-5 h-5 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                          />
+                          <span className="text-sm text-stone-600 dark:text-stone-400">
+                            Clamp host-side veth MTU to overlay MTU
+                          </span>
+                        </label>
+                        <p className="text-xs text-stone-400 mt-1">
+                          Recommended when preserving container MTU to avoid oversize frames on the host bridge.
+                        </p>
                       </div>
                     </div>
 

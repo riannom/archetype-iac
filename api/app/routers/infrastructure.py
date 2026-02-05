@@ -76,6 +76,10 @@ async def update_infrastructure_settings(
         settings.overlay_mtu = update.overlay_mtu
     if update.mtu_verification_enabled is not None:
         settings.mtu_verification_enabled = update.mtu_verification_enabled
+    if update.overlay_preserve_container_mtu is not None:
+        settings.overlay_preserve_container_mtu = update.overlay_preserve_container_mtu
+    if update.overlay_clamp_host_mtu is not None:
+        settings.overlay_clamp_host_mtu = update.overlay_clamp_host_mtu
 
     settings.updated_by_id = current_user.id
     settings.updated_at = datetime.now(timezone.utc)
@@ -86,7 +90,9 @@ async def update_infrastructure_settings(
     logger.info(
         f"Infrastructure settings updated by {current_user.email}: "
         f"overlay_mtu={settings.overlay_mtu}, "
-        f"mtu_verification_enabled={settings.mtu_verification_enabled}"
+        f"mtu_verification_enabled={settings.mtu_verification_enabled}, "
+        f"overlay_preserve_container_mtu={settings.overlay_preserve_container_mtu}, "
+        f"overlay_clamp_host_mtu={settings.overlay_clamp_host_mtu}"
     )
 
     return InfraSettingsOut.model_validate(settings)
