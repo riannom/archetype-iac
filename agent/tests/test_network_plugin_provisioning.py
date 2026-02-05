@@ -181,3 +181,49 @@ def test_hot_connect_rejects_missing_networks():
 
     assert result is None
     plugin._ovs_vsctl.assert_not_called()
+
+
+def test_vlan_release_only_after_endpoint_delete():
+    plugin = DockerOVSPlugin()
+    plugin.lab_bridges["lab-a"] = LabBridge(lab_id="lab-a", bridge_name="arch-ovs")
+
+    vlan_a = plugin._allocate_vlan(plugin.lab_bridges["lab-a"])
+    plugin._allocate_vlan(plugin.lab_bridges["lab-a"])
+
+    # Simulate active endpoint holding VLAN A (no release should occur yet)
+    ep = SimpleNamespace(
+        endpoint_id="ep-a",
+        network_id="net-a",
+        interface_name="eth1",
+        host_veth="vh1",
+        cont_veth="vc1",
+        vlan_tag=vlan_a,
+        container_name="a",
+    )
+    plugin.endpoints["ep-a"] = ep
+    plugin.networks["net-a"] = SimpleNamespace(
+        network_id="net-a",
+        lab_id="lab-a",
+        interface_name="eth1",
+        bridge_name="arch-ovs",
+    )
+
+    # Next allocation should not reuse VLAN A while endpoint exists
+    vlan_c = plugin._allocate_vlan(plugin.lab_bridges["lab-a"])
+    assert vlan_c != vlan_a
+
+    # Delete endpoint path should release VLAN A
+    plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
+    plugin._run_cmd = AsyncMock(return_value=(0, "", ""))
+    plugin._mark_dirty_and_save = AsyncMock()
+
+    asyncio.run(
+        plugin.handle_delete_endpoint(
+            SimpleNamespace(json=AsyncMock(return_value={"NetworkID": "net-a", "EndpointID": "ep-a"}))
+        )
+    )
+    assert vlan_a not in plugin._allocated_vlans
+
+    # After deletion, VLAN A can be reused
+    vlan_d = plugin._allocate_vlan(plugin.lab_bridges["lab-a"])
+    assert vlan_d == vlan_a
