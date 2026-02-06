@@ -86,14 +86,6 @@ const StatusBar: React.FC<StatusBarProps> = ({ nodeStates, wsConnected, reconnec
                 {reconnectAttempts > 0 ? 'RECONNECTING' : 'LIVE'}
               </span>
             </div>
-            {!wsConnected && reconnectAttempts === 0 && (
-              <span
-                className="text-stone-400 dark:text-stone-500 uppercase animate-pulse"
-                title="Using polling fallback"
-              >
-                POLLING
-              </span>
-            )}
           </div>
         )}
       </div>
