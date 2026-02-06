@@ -56,38 +56,44 @@ const StatusBar: React.FC<StatusBarProps> = ({ nodeStates, wsConnected, reconnec
   }, [nodeStates]);
 
   return (
-    <div className="h-8 bg-white/90 dark:bg-stone-900/90 backdrop-blur-md border-t border-stone-200 dark:border-stone-700 flex items-center justify-between px-4 z-50 shrink-0 text-[10px] font-bold tracking-tight">
+    <div className="h-8 bg-white/90 dark:bg-stone-900/90 backdrop-blur-md border-t border-stone-200 dark:border-stone-700 flex items-center justify-between px-4 z-10 shrink-0 text-[10px] font-bold tracking-tight">
       <div className="flex items-center gap-6">
         {/* WebSocket connection indicator */}
         {wsConnected !== undefined && (
-          <div
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded border ${
-              wsConnected
-                ? 'bg-sage-100 dark:bg-sage-900 border-sage-300 dark:border-sage-700 text-sage-700 dark:text-sage-300'
-                : reconnectAttempts > 0
+          <div className="flex items-center gap-2">
+            <div
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded border ${
+                reconnectAttempts > 0
                   ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400'
-                  : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-500 dark:text-stone-500'
-            } transition-colors`}
-            title={
-              wsConnected
-                ? 'Connected - Receiving real-time updates'
-                : reconnectAttempts > 0
-                  ? `Reconnecting... (attempt ${reconnectAttempts})`
-                  : 'Disconnected - Using polling fallback'
-            }
-          >
-            <i
-              className={`fa-solid ${
+                  : 'bg-sage-100 dark:bg-sage-900 border-sage-300 dark:border-sage-700 text-sage-700 dark:text-sage-300'
+              } transition-colors`}
+              title={
                 wsConnected
-                  ? 'fa-signal'
+                  ? 'Connected - Receiving real-time updates'
                   : reconnectAttempts > 0
+                    ? `Reconnecting... (attempt ${reconnectAttempts})`
+                    : 'Disconnected - Using polling fallback'
+              }
+            >
+              <i
+                className={`fa-solid ${
+                  reconnectAttempts > 0
                     ? 'fa-rotate fa-spin'
-                    : 'fa-signal text-stone-400 dark:text-stone-600'
-              } text-[8px]`}
-            ></i>
-            <span className="uppercase">
-              {wsConnected ? 'LIVE' : reconnectAttempts > 0 ? 'RECONNECTING' : 'POLLING'}
-            </span>
+                    : 'fa-signal'
+                } text-[8px]`}
+              ></i>
+              <span className="uppercase">
+                {reconnectAttempts > 0 ? 'RECONNECTING' : 'LIVE'}
+              </span>
+            </div>
+            {!wsConnected && reconnectAttempts === 0 && (
+              <span
+                className="text-stone-400 dark:text-stone-500 uppercase animate-pulse"
+                title="Using polling fallback"
+              >
+                POLLING
+              </span>
+            )}
           </div>
         )}
       </div>
