@@ -3615,12 +3615,16 @@ async def get_interface_vlan(
     interface: str,
     read_from_ovs: bool = False,
 ) -> PortVlanResponse:
-    """Get the current VLAN tag for a container interface.
+    """Get the current VLAN tag for a node interface.
+
+    Supports both Docker containers and libvirt VMs. Tries the Docker
+    OVS plugin first (fast in-memory lookup), then falls back to the
+    provider-agnostic _resolve_ovs_port() which also handles libvirt.
 
     Args:
         lab_id: Lab identifier
         node: Node name (container name or node name)
-        interface: Interface name in the container
+        interface: Interface name in the node
         read_from_ovs: If True, read directly from OVS instead of in-memory state.
                        Use this for verification to get ground truth.
 
@@ -3637,19 +3641,46 @@ async def get_interface_vlan(
     try:
         plugin = _get_docker_ovs_plugin()
 
-        # Resolve container name
-        provider = get_provider_for_request()
-        container_name = provider.get_container_name(lab_id, node)
+        # Try Docker provider first (fast path)
+        docker_provider = get_provider("docker")
+        if docker_provider is not None:
+            container_name = docker_provider.get_container_name(lab_id, node)
+            vlan_tag = await plugin.get_endpoint_vlan(
+                lab_id, container_name, interface, read_from_ovs=read_from_ovs
+            )
+            if vlan_tag is not None:
+                return PortVlanResponse(
+                    container=container_name,
+                    interface=interface,
+                    vlan_tag=vlan_tag,
+                )
 
-        vlan_tag = await plugin.get_endpoint_vlan(
-            lab_id, container_name, interface, read_from_ovs=read_from_ovs
-        )
+        # Fall back to provider-agnostic resolution (handles libvirt VMs)
+        port_info = await _resolve_ovs_port(lab_id, node, interface)
+        if port_info is not None:
+            vlan_tag = port_info.vlan_tag
+            # If read_from_ovs requested, read the actual tag from OVS
+            if read_from_ovs:
+                import subprocess as _sp
+                result = _sp.run(
+                    ["ovs-vsctl", "get", "port", port_info.port_name, "tag"],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    tag_str = result.stdout.strip().strip("[]")
+                    if tag_str.isdigit():
+                        vlan_tag = int(tag_str)
+            return PortVlanResponse(
+                container=node,
+                interface=interface,
+                vlan_tag=vlan_tag,
+            )
 
         return PortVlanResponse(
-            container=container_name,
+            container=node,
             interface=interface,
-            vlan_tag=vlan_tag,
-            error=None if vlan_tag is not None else "Endpoint not found",
+            error="Endpoint not found",
         )
 
     except Exception as e:
