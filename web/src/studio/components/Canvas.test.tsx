@@ -783,6 +783,7 @@ describe("Canvas", () => {
 
       const canvas = document.querySelector(".flex-1.relative")!;
       fireEvent.mouseDown(canvas, { button: 0 });
+      fireEvent.mouseUp(canvas);
 
       expect(mockOnSelect).toHaveBeenCalledWith(null);
     });
