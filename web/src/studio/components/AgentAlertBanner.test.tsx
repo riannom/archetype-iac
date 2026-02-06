@@ -18,12 +18,6 @@ describe('AgentAlertBanner', () => {
   beforeEach(() => {
     apiRequest.mockReset();
     navigate.mockReset();
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.runOnlyPendingTimers();
-    vi.useRealTimers();
   });
 
   it('renders alerts and allows dismiss/navigation', async () => {
