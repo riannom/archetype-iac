@@ -75,6 +75,8 @@ const Canvas: React.FC<CanvasProps> = ({
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [resizing, setResizing] = useState<ResizeState | null>(null);
+  const panStartRef = useRef<{ x: number; y: number } | null>(null);
+  const didPanRef = useRef(false);
 
   // Memoized node map for O(1) lookups instead of O(n) .find() calls
   const nodeMap = useMemo(() => {
@@ -111,6 +113,13 @@ const Canvas: React.FC<CanvasProps> = ({
 
     if (isPanning) {
       setOffset(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY }));
+      if (!didPanRef.current && panStartRef.current) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+          didPanRef.current = true;
+        }
+      }
       return;
     }
 
@@ -179,21 +188,27 @@ const Canvas: React.FC<CanvasProps> = ({
   }, [zoom, offset]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button === 1 || (e.button === 0 && (e as any).spaceKey)) {
+    if (e.button === 1 || e.button === 0) {
       setIsPanning(true);
+      panStartRef.current = { x: e.clientX, y: e.clientY };
+      didPanRef.current = false;
+      setContextMenu(null);
       return;
     }
-    onSelect(null);
     setContextMenu(null);
-  }, [onSelect]);
+  }, []);
 
   const handleMouseUp = useCallback(() => {
+    if (isPanning && !didPanRef.current) {
+      onSelect(null);
+    }
     setDraggingNode(null);
     setDraggingAnnotation(null);
     setIsPanning(false);
+    panStartRef.current = null;
     setLinkingNode(null);
     setResizing(null);
-  }, []);
+  }, [isPanning, onSelect]);
 
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
     if (e.button === 2) return;
