@@ -5170,6 +5170,24 @@ async def _console_websocket_libvirt(
         await websocket.close(code=1011)
         return
 
+    # Determine if this is a virsh console (vs SSH) and get domain name for locking
+    _is_virsh = "virsh" in console_cmd and "console" in console_cmd
+    _virsh_domain = console_cmd[-1] if _is_virsh else None
+    _lock_ctx = None
+
+    if _virsh_domain:
+        from agent.virsh_console_lock import console_lock
+        try:
+            _lock_ctx = console_lock(_virsh_domain, timeout=10, kill_orphans=True)
+            await asyncio.to_thread(_lock_ctx.__enter__)
+        except TimeoutError:
+            await websocket.send_text(
+                "\r\nError: Another session is using this console. "
+                "Please try again shortly.\r\n"
+            )
+            await websocket.close(code=1011)
+            return
+
     await websocket.send_text(f"\r\n\x1b[90m--- Connecting to VM console ---\x1b[0m\r\n")
     await websocket.send_text(f"\x1b[90mPress Ctrl+] to disconnect\x1b[0m\r\n\r\n")
 
@@ -5197,6 +5215,20 @@ async def _console_websocket_libvirt(
 
         # Brief delay to let virsh connect
         await asyncio.sleep(0.5)
+
+        # Register session for piggyback config extraction
+        _active_session = None
+        if _virsh_domain:
+            from agent.console_session_registry import (
+                ActiveConsoleSession, register_session, unregister_session,
+            )
+            _active_session = ActiveConsoleSession(
+                domain_name=_virsh_domain,
+                master_fd=master_fd,
+                loop=asyncio.get_event_loop(),
+                websocket=websocket,
+            )
+            register_session(_virsh_domain, _active_session)
 
         # Check if process exited immediately (indicates error)
         if process.returncode is not None:
@@ -5258,12 +5290,22 @@ async def _console_websocket_libvirt(
                 loop.add_reader(master_fd, on_readable)
 
                 while process.returncode is None:
+                    # Pause gate: injector owns reads during extraction
+                    if _active_session and not _active_session.pty_read_paused.is_set():
+                        await asyncio.sleep(0.1)
+                        data_available.clear()
+                        continue
+
                     try:
                         await asyncio.wait_for(data_available.wait(), timeout=1.0)
                     except asyncio.TimeoutError:
                         continue
 
                     data_available.clear()
+
+                    # Re-check pause after waking (extraction may have started)
+                    if _active_session and not _active_session.pty_read_paused.is_set():
+                        continue
 
                     try:
                         data = os.read(master_fd, 4096)
@@ -5289,6 +5331,9 @@ async def _console_websocket_libvirt(
                         data = await asyncio.wait_for(input_queue.get(), timeout=1.0)
                         if data is None:
                             break
+                        # Pause gate: drop keystrokes during extraction
+                        if _active_session and not _active_session.input_paused.is_set():
+                            continue
                         if data:
                             os.write(master_fd, data)
                     except asyncio.TimeoutError:
@@ -5324,6 +5369,20 @@ async def _console_websocket_libvirt(
             pass
 
     finally:
+        # Wait for any in-progress piggyback extraction to finish,
+        # then unregister the session before closing the fd
+        if _active_session is not None:
+            if _active_session._lock.acquire(timeout=5):
+                try:
+                    from agent.console_session_registry import unregister_session
+                    unregister_session(_virsh_domain)
+                finally:
+                    _active_session._lock.release()
+            else:
+                # Timed out waiting — unregister anyway
+                from agent.console_session_registry import unregister_session
+                unregister_session(_virsh_domain)
+
         # Cleanup
         if process and process.returncode is None:
             process.terminate()
@@ -5340,6 +5399,13 @@ async def _console_websocket_libvirt(
         if slave_fd is not None:
             try:
                 os.close(slave_fd)
+            except Exception:
+                pass
+
+        # Release console lock if held
+        if _lock_ctx is not None:
+            try:
+                _lock_ctx.__exit__(None, None, None)
             except Exception:
                 pass
 
