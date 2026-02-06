@@ -182,7 +182,7 @@ export const useCanvasStore = create<CanvasState>()(
           set((state) => {
             const node = state.nodes.get(id);
             if (node) {
-              state.nodes.set(id, { ...node, ...updates });
+              state.nodes.set(id, { ...node, ...updates } as Node);
               state.isDirty = true;
             }
           }),
