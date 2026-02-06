@@ -727,7 +727,6 @@ class TopologyService:
                             node_state.enforcement_failed_at = None
                             node_state.last_enforcement_at = None
                             node_state.error_message = None
-                            node_state.actual_state = "stopped"
                     node.host_id = host_id
                 node.connection_type = graph_node.connection_type
                 node.parent_interface = graph_node.parent_interface

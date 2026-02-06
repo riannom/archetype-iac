@@ -1774,6 +1774,25 @@ async def run_node_reconcile(
                         nodes_need_deploy = [ns for ns in nodes_need_deploy if ns.node_name not in excluded]
                         nodes_need_start = [ns for ns in nodes_need_start if ns.node_name not in excluded]
 
+                        # Mark syncing nodes as "starting" so UI shows booting
+                        for ns in nodes_to_start_or_deploy:
+                            if ns.node_name in syncing_nodes:
+                                ns.actual_state = NodeActualState.STARTING.value
+                                ns.error_message = None
+                                safe_create_task(
+                                    broadcast_node_state_change(
+                                        lab_id=lab_id,
+                                        node_id=ns.node_id,
+                                        node_name=ns.node_name,
+                                        desired_state=ns.desired_state,
+                                        actual_state=ns.actual_state,
+                                        is_ready=ns.is_ready,
+                                        image_sync_status="syncing",
+                                        image_sync_message=ns.image_sync_message,
+                                    ),
+                                    name=f"broadcast:starting:{lab_id}:{ns.node_id}"
+                                )
+
                         # Mark failed nodes as error
                         for ns in nodes_to_start_or_deploy:
                             if ns.node_name in failed_nodes:

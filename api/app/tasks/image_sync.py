@@ -764,6 +764,21 @@ async def check_and_start_image_sync(
                     ),
                     name=f"imgsync:{sync_job_id[:8]}"
                 )
+            else:
+                # Sync already in progress from another reconcile pass.
+                # Wait for it to finish, then re-reconcile OUR node_ids.
+                safe_create_task(
+                    _wait_for_sync_and_callback(
+                        sync_job_id=sync_job_id,
+                        image=lib_image,
+                        host=host,
+                        lab_id=lab_id,
+                        node_ids=node_ids,
+                        image_to_nodes=image_to_nodes,
+                        provider=provider,
+                    ),
+                    name=f"imgsync:wait:{sync_job_id[:8]}"
+                )
 
         # Mark nodes with no library image as failed
         if failed_nodes:
@@ -814,6 +829,58 @@ async def _run_sync_and_callback(
             error_msg = sync_job.error_message if sync_job else "Sync job not found"
             logger.warning(f"Image sync failed for {reference} on {host.name}: {error_msg}")
             _mark_nodes_sync_failed(session, lab_id, affected_nodes, error_msg)
+
+
+async def _wait_for_sync_and_callback(
+    sync_job_id: str,
+    image: dict,
+    host: models.Host,
+    lab_id: str,
+    node_ids: list[str],
+    image_to_nodes: dict[str, list[str]],
+    provider: str,
+    poll_interval: float = 5.0,
+    max_wait: float = 600.0,
+) -> None:
+    """Wait for an existing sync job to finish, then re-trigger reconciliation.
+
+    Used when a second reconcile pass detects a sync already in progress
+    from a different node's reconcile. Polls the sync job status and
+    triggers re-reconcile for our node_ids when it completes.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    reference = image.get("reference", "")
+    affected_nodes = image_to_nodes.get(reference, [])
+    elapsed = 0.0
+
+    while elapsed < max_wait:
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+
+        with get_session() as session:
+            sync_job = session.get(models.ImageSyncJob, sync_job_id)
+            if not sync_job:
+                logger.warning(f"Sync job {sync_job_id} disappeared while waiting")
+                _mark_nodes_sync_failed(session, lab_id, affected_nodes, "Sync job not found")
+                return
+
+            if sync_job.status in ("completed", "failed", "error"):
+                if sync_job.status == "completed":
+                    logger.info(f"Waited sync completed for {reference}, re-triggering reconcile for {node_ids}")
+                    _broadcast_nodes_sync_cleared(session, lab_id, affected_nodes)
+                    _trigger_re_reconcile(session, lab_id, node_ids, provider)
+                else:
+                    error_msg = sync_job.error_message or "Sync failed"
+                    logger.warning(f"Waited sync failed for {reference}: {error_msg}")
+                    _mark_nodes_sync_failed(session, lab_id, affected_nodes, error_msg)
+                return
+
+    # Timed out waiting
+    logger.error(f"Timed out waiting for sync job {sync_job_id} after {max_wait}s")
+    with get_session() as session:
+        _mark_nodes_sync_failed(session, lab_id, affected_nodes, f"Sync timed out after {int(max_wait)}s")
 
 
 def _trigger_re_reconcile(
