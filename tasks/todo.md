@@ -17,9 +17,8 @@
 - Frontend: 11/11 passing (existing overlay/WS infrastructure works)
 - Backend: syntax-verified (need venv with pytest for full execution)
 
-### Next: Implementation
-See plan at `.claude/plans/quirky-orbiting-wadler.md` for implementation steps.
-Key files to modify:
-- `api/app/tasks/jobs.py:1729-1803` — Make image sync non-blocking
-- `api/app/tasks/image_sync.py` — Add sync completion callback
-- `api/app/routers/images.py:1450-1468` — Trigger node start on completion
+### Implementation: COMPLETE
+- [x] `api/app/tasks/jobs.py:1729-1809` — Replaced blocking `ensure_images_for_deployment` with non-blocking `check_and_start_image_sync`
+- [x] `api/app/tasks/image_sync.py:575-931` — Added `check_and_start_image_sync`, `_run_sync_and_callback`, `_trigger_re_reconcile`, `_mark_nodes_sync_failed`, `_broadcast_nodes_sync_cleared`
+- [x] Python syntax verified: both files pass `ast.parse`
+- [x] Frontend tests: 11/11 passing (no regressions)
