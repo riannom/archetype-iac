@@ -5,7 +5,9 @@ extracting running configurations from network devices.
 """
 
 import logging
+import os
 import re
+import signal
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -62,8 +64,12 @@ class SerialConsoleExtractor:
         enable_password: str = "",
         prompt_pattern: str = r"[>#]\s*$",
         paging_disable: str = "terminal length 0",
+        retries: int = 2,
     ) -> ExtractionResult:
         """Extract configuration from the VM.
+
+        Acquires a per-domain console lock to prevent concurrent access,
+        and retries on transient failures with exponential backoff.
 
         Args:
             command: Command to execute (e.g., "show running-config")
@@ -72,10 +78,66 @@ class SerialConsoleExtractor:
             enable_password: Enable mode password (empty = skip enable)
             prompt_pattern: Regex pattern to detect CLI prompt
             paging_disable: Command to disable paging (empty = skip)
+            retries: Number of retry attempts on failure
 
         Returns:
             ExtractionResult with config content or error
         """
+        # Try piggybacking on an active web console session first
+        from agent.console_session_registry import piggyback_extract
+        piggyback_result = piggyback_extract(
+            domain_name=self.domain_name,
+            command=command,
+            username=username,
+            password=password,
+            enable_password=enable_password,
+            prompt_pattern=prompt_pattern,
+            paging_disable=paging_disable,
+            timeout=self.timeout,
+        )
+        if piggyback_result is not None:
+            return piggyback_result
+
+        # No active web console — use normal virsh console with lock + retries
+        from agent.virsh_console_lock import console_lock
+
+        last_result = ExtractionResult(success=False, error="No attempts made")
+        for attempt in range(1 + retries):
+            if attempt > 0:
+                delay = 2 ** attempt  # 2s, 4s
+                logger.info(
+                    f"Retrying config extraction for {self.domain_name} "
+                    f"(attempt {attempt + 1}/{1 + retries}) after {delay}s"
+                )
+                time.sleep(delay)
+
+            try:
+                with console_lock(self.domain_name, timeout=60):
+                    last_result = self._extract_config_inner(
+                        command, username, password,
+                        enable_password, prompt_pattern, paging_disable,
+                    )
+            except TimeoutError:
+                last_result = ExtractionResult(
+                    success=False,
+                    error="Console is locked by another session"
+                )
+
+            if last_result.success:
+                return last_result
+
+        return last_result
+
+    def _extract_config_inner(
+        self,
+        command: str,
+        username: str,
+        password: str,
+        enable_password: str,
+        prompt_pattern: str,
+        paging_disable: str,
+    ) -> ExtractionResult:
+        """Core extraction logic (called with lock held)."""
         try:
             # Start virsh console
             cmd = f"virsh -c {self.libvirt_uri} console --force {self.domain_name}"
@@ -273,15 +335,29 @@ class SerialConsoleExtractor:
         return '\n'.join(lines)
 
     def _cleanup(self) -> None:
-        """Clean up pexpect session."""
+        """Clean up pexpect session.
+
+        Uses force=True to ensure the virsh process is terminated,
+        with a fallback SIGKILL if it refuses to die.
+        """
         if self.child:
             try:
                 # Send escape sequence to exit console (Ctrl+])
                 self.child.sendcontrol(']')
                 time.sleep(0.2)
-                self.child.close()
-            except Exception as e:
-                logger.debug(f"Cleanup error (non-fatal): {e}")
+            except Exception:
+                pass
+            try:
+                self.child.close(force=True)
+            except Exception:
+                # Last resort: kill the process directly
+                try:
+                    pid = self.child.pid
+                    if pid:
+                        os.kill(pid, signal.SIGKILL)
+                        logger.debug(f"Force-killed virsh console pid {pid}")
+                except (ProcessLookupError, OSError):
+                    pass
             self.child = None
 
     def run_commands(
@@ -291,11 +367,12 @@ class SerialConsoleExtractor:
         password: str = "",
         enable_password: str = "",
         prompt_pattern: str = r"[>#]\s*$",
+        retries: int = 2,
     ) -> CommandResult:
         """Run a list of commands on the VM via serial console.
 
-        This is used for post-boot commands like disabling paging or
-        DNS lookups that need to be executed after the VM is ready.
+        Acquires a per-domain console lock to prevent concurrent access,
+        and retries on transient failures with exponential backoff.
 
         Args:
             commands: List of commands to execute
@@ -303,6 +380,7 @@ class SerialConsoleExtractor:
             password: Login password
             enable_password: Enable mode password (empty = skip enable)
             prompt_pattern: Regex pattern to detect CLI prompt
+            retries: Number of retry attempts on failure
 
         Returns:
             CommandResult with success status and commands run count
@@ -310,6 +388,44 @@ class SerialConsoleExtractor:
         if not commands:
             return CommandResult(success=True, commands_run=0)
 
+        from agent.virsh_console_lock import console_lock
+
+        last_result = CommandResult(success=False, error="No attempts made")
+        for attempt in range(1 + retries):
+            if attempt > 0:
+                delay = 2 ** attempt
+                logger.info(
+                    f"Retrying post-boot commands for {self.domain_name} "
+                    f"(attempt {attempt + 1}/{1 + retries}) after {delay}s"
+                )
+                time.sleep(delay)
+
+            try:
+                with console_lock(self.domain_name, timeout=60):
+                    last_result = self._run_commands_inner(
+                        commands, username, password,
+                        enable_password, prompt_pattern,
+                    )
+            except TimeoutError:
+                last_result = CommandResult(
+                    success=False,
+                    error="Console is locked by another session"
+                )
+
+            if last_result.success:
+                return last_result
+
+        return last_result
+
+    def _run_commands_inner(
+        self,
+        commands: list[str],
+        username: str,
+        password: str,
+        enable_password: str,
+        prompt_pattern: str,
+    ) -> CommandResult:
+        """Core command execution logic (called with lock held)."""
         try:
             # Start virsh console
             cmd = f"virsh -c {self.libvirt_uri} console --force {self.domain_name}"

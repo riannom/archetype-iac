@@ -1,0 +1,328 @@
+"""Registry of active web console sessions for piggyback config extraction.
+
+When a user has a web console open to a VM, config extraction can
+"piggyback" on that session's PTY instead of opening a competing
+virsh console. This avoids lock contention and keeps the user connected.
+
+I/O flow during piggybacking:
+  1. write_pty() paused (user keystrokes dropped)
+  2. read_pty() paused (injector owns all reads from master_fd)
+  3. PtyInjector writes commands to master_fd
+  4. PtyInjector reads output from master_fd, forwards to WS so user sees it
+  5. After extraction: both resume, user continues normally
+"""
+
+import asyncio
+import logging
+import os
+import re
+import select
+import threading
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+from agent.console_extractor import ExtractionResult
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# ActiveConsoleSession dataclass
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ActiveConsoleSession:
+    """Represents an active web console PTY session."""
+    domain_name: str
+    master_fd: int
+    loop: asyncio.AbstractEventLoop
+    websocket: object  # WebSocket instance
+    input_paused: threading.Event = field(default_factory=threading.Event)
+    pty_read_paused: threading.Event = field(default_factory=threading.Event)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def __post_init__(self):
+        # Events start *set* = flowing (not paused)
+        self.input_paused.set()
+        self.pty_read_paused.set()
+
+
+# ---------------------------------------------------------------------------
+# Session registry (module-level, thread-safe)
+# ---------------------------------------------------------------------------
+
+_registry: dict[str, ActiveConsoleSession] = {}
+_registry_lock = threading.Lock()
+
+
+def register_session(domain_name: str, session: ActiveConsoleSession) -> None:
+    with _registry_lock:
+        _registry[domain_name] = session
+    logger.debug(f"Registered console session for {domain_name}")
+
+
+def unregister_session(domain_name: str) -> None:
+    with _registry_lock:
+        _registry.pop(domain_name, None)
+    logger.debug(f"Unregistered console session for {domain_name}")
+
+
+def get_session(domain_name: str) -> Optional[ActiveConsoleSession]:
+    with _registry_lock:
+        return _registry.get(domain_name)
+
+
+# ---------------------------------------------------------------------------
+# PtyInjector — minimal pexpect replacement for raw PTY I/O
+# ---------------------------------------------------------------------------
+
+class PtyInjector:
+    """Send commands and read output on a raw PTY fd.
+
+    Unlike pexpect, this operates on an existing master_fd rather than
+    spawning a new process. Output is optionally forwarded to the user's
+    browser via *ws_forward*.
+    """
+
+    def __init__(
+        self,
+        fd: int,
+        ws_forward: Optional[Callable[[bytes], None]] = None,
+        default_timeout: float = 30,
+    ):
+        self.fd = fd
+        self.ws_forward = ws_forward
+        self.default_timeout = default_timeout
+        self._buffer = b""
+
+    def send(self, text: str) -> None:
+        os.write(self.fd, text.encode())
+
+    def sendline(self, text: str) -> None:
+        os.write(self.fd, (text + "\r").encode())
+
+    def drain(self, duration: float = 0.5) -> bytes:
+        """Flush pending output for *duration* seconds."""
+        collected = b""
+        deadline = _monotonic() + duration
+        while True:
+            remaining = deadline - _monotonic()
+            if remaining <= 0:
+                break
+            r, _, _ = select.select([self.fd], [], [], max(remaining, 0.01))
+            if r:
+                try:
+                    chunk = os.read(self.fd, 4096)
+                    if chunk:
+                        collected += chunk
+                        if self.ws_forward:
+                            self.ws_forward(chunk)
+                except (BlockingIOError, OSError):
+                    break
+            else:
+                break
+        return collected
+
+    def expect(
+        self,
+        pattern: str,
+        timeout: Optional[float] = None,
+    ) -> str:
+        """Read until *pattern* matches accumulated output.
+
+        Returns the text *before* the match. Raises TimeoutError if
+        the pattern isn't seen within *timeout* seconds, or OSError
+        if the fd goes bad.
+        """
+        timeout = timeout or self.default_timeout
+        regex = re.compile(pattern.encode() if isinstance(pattern, str) else pattern)
+        deadline = _monotonic() + timeout
+
+        while True:
+            m = regex.search(self._buffer)
+            if m:
+                before = self._buffer[:m.start()]
+                self._buffer = self._buffer[m.end():]
+                return before.decode("utf-8", errors="replace")
+
+            remaining = deadline - _monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Timed out waiting for pattern {pattern!r} "
+                    f"(buffer tail: {self._buffer[-200:]!r})"
+                )
+
+            r, _, _ = select.select([self.fd], [], [], min(remaining, 0.5))
+            if r:
+                try:
+                    chunk = os.read(self.fd, 4096)
+                except OSError as e:
+                    raise OSError(f"PTY read error: {e}") from e
+                if not chunk:
+                    raise OSError("PTY fd returned empty read (closed)")
+                self._buffer += chunk
+                if self.ws_forward:
+                    self.ws_forward(chunk)
+
+
+def _monotonic() -> float:
+    """Wrapper for time.monotonic (makes testing easier)."""
+    import time
+    return time.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# _clean_config — reuses logic from console_extractor
+# ---------------------------------------------------------------------------
+
+def _clean_config(raw_output: str, command: str) -> str:
+    """Clean up config output (mirrors SerialConsoleExtractor._clean_config)."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    output = ansi_escape.sub('', raw_output)
+    output = output.replace('\r', '')
+    lines = output.split('\n')
+    if lines and command in lines[0]:
+        lines = lines[1:]
+    lines = [l for l in lines if not l.strip().startswith("Building configuration")]
+    while lines and not lines[0].strip():
+        lines = lines[1:]
+    while lines and not lines[-1].strip():
+        lines = lines[:-1]
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
+# piggyback_extract — orchestrator
+# ---------------------------------------------------------------------------
+
+def piggyback_extract(
+    domain_name: str,
+    command: str = "show running-config",
+    username: str = "",
+    password: str = "",
+    enable_password: str = "",
+    prompt_pattern: str = r"[>#]\s*$",
+    paging_disable: str = "terminal length 0",
+    timeout: float = 30,
+) -> Optional[ExtractionResult]:
+    """Attempt to extract config via an active web console session.
+
+    Returns:
+        ExtractionResult on success or failure if a session was found.
+        None if no active session exists (caller should fall back to
+        the normal virsh console extraction path).
+    """
+    session = get_session(domain_name)
+    if session is None:
+        return None
+
+    # Try to acquire the session lock (prevents concurrent piggybacks)
+    if not session._lock.acquire(timeout=5):
+        logger.debug(f"Piggyback lock busy for {domain_name}, falling back")
+        return None
+
+    try:
+        # Re-check session is still registered (may have been torn down)
+        if get_session(domain_name) is None:
+            return None
+
+        logger.info(f"Piggybacking config extraction on web console for {domain_name}")
+
+        # --- Pause user I/O ---
+        session.input_paused.clear()
+        session.pty_read_paused.clear()
+
+        # Small delay to let in-flight reads drain
+        import time
+        time.sleep(0.2)
+
+        def ws_forward(data: bytes) -> None:
+            """Forward PTY output to user's browser (best-effort)."""
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    session.websocket.send_bytes(data),
+                    session.loop,
+                ).result(timeout=2)
+            except Exception:
+                pass
+
+        injector = PtyInjector(
+            fd=session.master_fd,
+            ws_forward=ws_forward,
+            default_timeout=timeout,
+        )
+
+        # Notify user
+        ws_forward(b"\r\n\x1b[93m--- Config extraction in progress ---\x1b[0m\r\n")
+
+        # Clear user's current line and get to a clean prompt
+        injector.send("\x15")  # Ctrl+U — clear line
+        time.sleep(0.1)
+        injector.sendline("")  # Press Enter to get a fresh prompt
+
+        try:
+            # Wait for a prompt (user may be at login, enable, or exec)
+            prompt_text = injector.expect(prompt_pattern, timeout=10)
+
+            # Check if we're in config mode — exit it
+            if "(config" in prompt_text:
+                injector.sendline("end")
+                injector.expect(prompt_pattern, timeout=5)
+
+            # Handle login if needed (Username: prompt in buffer)
+            # This is unlikely during an active web console but handle it
+            if username and ("Username:" in prompt_text or "Login:" in prompt_text):
+                injector.sendline(username)
+                injector.expect(r"[Pp]assword:", timeout=10)
+                injector.sendline(password)
+                injector.expect(prompt_pattern, timeout=10)
+
+            # Enter enable mode if needed (prompt ends with >)
+            if enable_password and prompt_text.rstrip().endswith(">"):
+                injector.sendline("enable")
+                try:
+                    injector.expect(r"[Pp]assword:", timeout=5)
+                    injector.sendline(enable_password)
+                    injector.expect(prompt_pattern, timeout=10)
+                except TimeoutError:
+                    # Maybe already in enable mode
+                    pass
+
+            # Disable paging
+            if paging_disable:
+                injector.sendline(paging_disable)
+                injector.drain(1.0)
+
+            # Execute extraction command
+            injector.sendline(command)
+            raw_output = injector.expect(prompt_pattern, timeout=timeout)
+
+            config = _clean_config(raw_output, command)
+
+            ws_forward(b"\r\n\x1b[93m--- Config extraction complete ---\x1b[0m\r\n")
+
+            logger.info(
+                f"Piggyback extraction succeeded for {domain_name} "
+                f"({len(config)} bytes)"
+            )
+            return ExtractionResult(success=True, config=config)
+
+        except TimeoutError as e:
+            ws_forward(b"\r\n\x1b[91m--- Config extraction timed out ---\x1b[0m\r\n")
+            logger.warning(f"Piggyback extraction timed out for {domain_name}: {e}")
+            return ExtractionResult(success=False, error=f"Piggyback timeout: {e}")
+
+        except OSError as e:
+            ws_forward(b"\r\n\x1b[91m--- Config extraction failed ---\x1b[0m\r\n")
+            logger.warning(f"Piggyback extraction PTY error for {domain_name}: {e}")
+            return ExtractionResult(success=False, error=f"PTY error: {e}")
+
+    except Exception as e:
+        logger.exception(f"Unexpected error in piggyback extraction for {domain_name}")
+        return ExtractionResult(success=False, error=f"Unexpected error: {e}")
+
+    finally:
+        # --- Resume user I/O ---
+        session.input_paused.set()
+        session.pty_read_paused.set()
+        session._lock.release()

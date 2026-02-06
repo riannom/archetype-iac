@@ -337,28 +337,38 @@ class LibvirtLogPatternProbe(ReadinessProbe):
     def _get_console_output(self) -> str:
         """Get console output from VM serial port.
 
-        Uses expect/timeout to read available console buffer without blocking.
+        Uses a non-blocking lock to skip gracefully if another session
+        (config extraction or web console) is using the serial console.
+        This prevents readiness probes from force-disconnecting active sessions.
         """
-        try:
-            # Use script + timeout to capture console output non-interactively
-            # This reads what's in the console buffer and exits
-            result = subprocess.run(
-                [
-                    "timeout", "2",
-                    "virsh", "-c", self.uri, "console", self.domain_name, "--force"
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                stdin=subprocess.DEVNULL,
-            )
-            # Combine stdout and stderr (some output may go to stderr)
-            return result.stdout + result.stderr
-        except subprocess.TimeoutExpired:
-            return ""
-        except Exception as e:
-            logger.debug(f"Error getting console output: {e}")
-            return ""
+        from agent.virsh_console_lock import try_console_lock
+
+        with try_console_lock(self.domain_name) as acquired:
+            if not acquired:
+                logger.debug(
+                    f"Console locked for {self.domain_name}, "
+                    "skipping readiness probe this cycle"
+                )
+                return ""
+
+            try:
+                result = subprocess.run(
+                    [
+                        "timeout", "2",
+                        "virsh", "-c", self.uri, "console", self.domain_name, "--force"
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    stdin=subprocess.DEVNULL,
+                )
+                # Combine stdout and stderr (some output may go to stderr)
+                return result.stdout + result.stderr
+            except subprocess.TimeoutExpired:
+                return ""
+            except Exception as e:
+                logger.debug(f"Error getting console output: {e}")
+                return ""
 
 
 # Progress patterns for cEOS boot sequence
