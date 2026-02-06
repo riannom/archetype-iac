@@ -772,6 +772,47 @@ async def set_node_desired_state(
                     name=f"sync:node:{job.id}"
                 )
 
+    elif (
+        state.desired_state == payload.state
+        and payload.state == "running"
+        and state.actual_state == "error"
+    ):
+        # Retry: node is stuck in error but user wants it running again.
+        # Reset enforcement state so the system will attempt reconciliation.
+        state.enforcement_attempts = 0
+        state.enforcement_failed_at = None
+        state.last_enforcement_at = None
+        state.error_message = None
+        database.commit()
+        database.refresh(state)
+
+        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        if not has_conflict:
+            from app.utils.lab import get_node_provider
+            db_node = database.query(models.Node).filter(
+                models.Node.lab_id == lab.id,
+                models.Node.gui_id == node_id
+            ).first()
+            if db_node:
+                provider = get_node_provider(db_node, database)
+            else:
+                provider = get_lab_provider(lab)
+
+            job = models.Job(
+                lab_id=lab.id,
+                user_id=current_user.id,
+                action=f"sync:node:{node_id}",
+                status="queued",
+            )
+            database.add(job)
+            database.commit()
+            database.refresh(job)
+
+            safe_create_task(
+                run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
+                name=f"sync:node:{job.id}"
+            )
+
     return _enrich_node_state(state)
 
 

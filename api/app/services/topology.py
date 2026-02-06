@@ -711,6 +711,23 @@ class TopologyService:
                 # assignment when user has "Auto" selected to avoid clearing
                 # host placement after deployment
                 if host_id is not None:
+                    if node.host_id != host_id:
+                        # Host changed — reset enforcement state so the node
+                        # isn't permanently stuck from failures on the old host
+                        node_state = (
+                            self.db.query(models.NodeState)
+                            .filter_by(lab_id=lab_id, gui_id=graph_node.id)
+                            .first()
+                        )
+                        if node_state and (
+                            node_state.enforcement_failed_at is not None
+                            or node_state.actual_state == "error"
+                        ):
+                            node_state.enforcement_attempts = 0
+                            node_state.enforcement_failed_at = None
+                            node_state.last_enforcement_at = None
+                            node_state.error_message = None
+                            node_state.actual_state = "stopped"
                     node.host_id = host_id
                 node.connection_type = graph_node.connection_type
                 node.parent_interface = graph_node.parent_interface
