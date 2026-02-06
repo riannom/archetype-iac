@@ -1,12 +1,12 @@
 import React from 'react';
 import { vi } from 'vitest';
 
-const renderSpy = vi.fn();
-const createRootSpy = vi.fn(() => ({ render: renderSpy }));
-const createBrowserRouterSpy = vi.fn(() => ({ routes: 'router' }));
-
-vi.hoisted(() => {
+const { renderSpy, createRootSpy, createBrowserRouterSpy } = vi.hoisted(() => {
+  const renderSpy = vi.fn();
+  const createRootSpy = vi.fn(() => ({ render: renderSpy }));
+  const createBrowserRouterSpy = vi.fn(() => ({ routes: 'router' }));
   document.body.innerHTML = '<div id="root"></div>';
+  return { renderSpy, createRootSpy, createBrowserRouterSpy };
 });
 
 vi.mock('react-dom/client', () => ({

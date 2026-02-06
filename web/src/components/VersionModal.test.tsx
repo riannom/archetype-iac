@@ -24,7 +24,7 @@ describe('VersionModal', () => {
     );
 
     expect(screen.getByText('Update Available')).toBeInTheDocument();
-    expect(screen.getByText('Version 1.1.0 is available')).toBeInTheDocument();
+    expect(screen.getByText(/Version 1\.1\.0 is available/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Upgrade Instructions'));
     expect(screen.getByText('./scripts/upgrade.sh')).toBeInTheDocument();
