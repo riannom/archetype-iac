@@ -1727,8 +1727,11 @@ async def run_node_reconcile(
                 )
 
             # Pre-deploy image sync: ensure required images exist on the target agent
+            # Uses non-blocking sync: fires off sync tasks and returns immediately.
+            # If images are missing and sync starts, those nodes are excluded from this
+            # reconcile pass. A callback re-triggers reconciliation when sync completes.
             if settings.image_sync_enabled and settings.image_sync_pre_deploy_check and nodes_to_start_or_deploy:
-                from app.tasks.image_sync import ensure_images_for_deployment
+                from app.tasks.image_sync import check_and_start_image_sync
 
                 # Build image-to-nodes mapping for the nodes we're deploying/starting
                 deploy_node_names = {ns.node_name for ns in nodes_to_start_or_deploy}
@@ -1752,24 +1755,26 @@ async def run_node_reconcile(
                         progress_message=f"Checking images on {agent.name}..."
                     )
 
-                    all_ready, missing, sync_log = await ensure_images_for_deployment(
+                    syncing_nodes, failed_nodes, sync_log = await check_and_start_image_sync(
                         host_id=agent.id,
                         image_references=image_refs,
-                        timeout=settings.image_sync_timeout,
                         database=session,
                         lab_id=lab_id,
+                        job_id=job_id,
+                        node_ids=node_ids,
                         image_to_nodes=image_to_nodes,
+                        provider=provider,
                     )
                     log_parts.extend(sync_log)
                     log_parts.append("")
 
-                    if not all_ready and missing:
-                        # Find which nodes use the missing images and mark them as error
-                        failed_nodes = set()
-                        for img_ref in missing:
-                            for node_name in image_to_nodes.get(img_ref, []):
-                                failed_nodes.add(node_name)
+                    # Remove syncing and failed nodes from deploy/start lists
+                    excluded = syncing_nodes | failed_nodes
+                    if excluded:
+                        nodes_need_deploy = [ns for ns in nodes_need_deploy if ns.node_name not in excluded]
+                        nodes_need_start = [ns for ns in nodes_need_start if ns.node_name not in excluded]
 
+                        # Mark failed nodes as error
                         for ns in nodes_to_start_or_deploy:
                             if ns.node_name in failed_nodes:
                                 ns.actual_state = NodeActualState.ERROR.value
@@ -1788,15 +1793,16 @@ async def run_node_reconcile(
                                     ),
                                     name=f"broadcast:imgsync:{lab_id}:{ns.node_id}"
                                 )
-
-                        # Remove failed nodes from deploy/start lists
-                        nodes_need_deploy = [ns for ns in nodes_need_deploy if ns.node_name not in failed_nodes]
-                        nodes_need_start = [ns for ns in nodes_need_start if ns.node_name not in failed_nodes]
                         session.commit()
 
                         if not nodes_need_deploy and not nodes_need_start and not nodes_need_stop:
-                            # All nodes failed image sync
-                            job.status = JobStatus.FAILED.value
+                            # All nodes either syncing or failed — nothing left to do this pass
+                            if syncing_nodes:
+                                # Syncing nodes will trigger a callback re-reconcile on completion
+                                job.status = JobStatus.COMPLETED.value
+                                log_parts.append(f"Waiting for image sync to complete for {len(syncing_nodes)} node(s)")
+                            else:
+                                job.status = JobStatus.FAILED.value
                             job.completed_at = datetime.now(timezone.utc)
                             job.log_path = "\n".join(log_parts)
                             session.commit()

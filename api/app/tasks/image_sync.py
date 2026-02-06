@@ -572,6 +572,365 @@ async def _ensure_images_for_deployment_impl(
         return False, image_references, log_entries
 
 
+async def check_and_start_image_sync(
+    host_id: str,
+    image_references: list[str],
+    database: Session,
+    lab_id: str,
+    job_id: str,
+    node_ids: list[str],
+    image_to_nodes: dict[str, list[str]],
+    provider: str = "docker",
+) -> tuple[set[str], set[str], list[str]]:
+    """Non-blocking image sync check. Returns immediately after firing off sync tasks.
+
+    1. Checks which images are missing on the agent
+    2. For missing images: sets node state to "syncing", fires async sync with callback
+    3. Returns immediately -- does NOT wait for sync to complete
+
+    Args:
+        host_id: Target agent's host ID
+        image_references: List of Docker image references to check
+        database: Database session
+        lab_id: Lab ID for node state updates
+        job_id: Current job ID (for logging)
+        node_ids: Node IDs being reconciled (passed to callback for re-reconcile)
+        image_to_nodes: Mapping from image refs to node names
+        provider: Provider type (passed to callback for re-reconcile)
+
+    Returns:
+        Tuple of (syncing_node_names, failed_node_names, log_entries)
+    """
+    from app.services.broadcaster import broadcast_node_state_change
+    from app.utils.async_tasks import safe_create_task
+
+    log_entries: list[str] = []
+    syncing_nodes: set[str] = set()
+    failed_nodes: set[str] = set()
+
+    try:
+        host = database.get(models.Host, host_id)
+        if not host or host.status != "online":
+            log_entries.append(f"Agent not available for image sync")
+            # All nodes fail
+            for ref in image_references:
+                for node_name in image_to_nodes.get(ref, []):
+                    failed_nodes.add(node_name)
+            return syncing_nodes, failed_nodes, log_entries
+
+        # Check which images are missing
+        log_entries.append(f"Checking {len(image_references)} image(s) on agent {host.name}...")
+        all_node_names = []
+        for ref in image_references:
+            all_node_names.extend(image_to_nodes.get(ref, []))
+        if all_node_names:
+            update_node_image_sync_status(database, lab_id, all_node_names, "checking", "Checking image availability...")
+
+        missing = []
+        for reference in image_references:
+            exists = await check_agent_has_image(host, reference)
+            if not exists:
+                missing.append(reference)
+
+        if not missing:
+            log_entries.append("All images already present on agent")
+            if all_node_names:
+                update_node_image_sync_status(database, lab_id, all_node_names, None, None)
+            return syncing_nodes, failed_nodes, log_entries
+
+        log_entries.append(
+            f"Agent {host.name} missing {len(missing)} image(s): "
+            + ", ".join(missing[:3])
+            + (f" (+{len(missing) - 3} more)" if len(missing) > 3 else "")
+        )
+
+        # Check if sync is enabled
+        strategy = host.image_sync_strategy or settings.image_sync_fallback_strategy
+        if strategy == "disabled":
+            log_entries.append("Image sync is disabled for this agent")
+            for ref in missing:
+                for node_name in image_to_nodes.get(ref, []):
+                    failed_nodes.add(node_name)
+            update_node_image_sync_status(
+                database, lab_id, list(failed_nodes), "failed", "Image sync disabled"
+            )
+            return syncing_nodes, failed_nodes, log_entries
+
+        # Find image IDs in library for missing references
+        manifest = load_manifest()
+        lib_images_by_ref: dict[str, dict] = {}
+        for lib_image in manifest.get("images", []):
+            ref = lib_image.get("reference", "")
+            if ref in missing:
+                lib_images_by_ref[ref] = lib_image
+
+        # Fire off non-blocking sync for each missing image
+        for reference in missing:
+            lib_image = lib_images_by_ref.get(reference)
+            affected_nodes = image_to_nodes.get(reference, [])
+
+            if not lib_image:
+                log_entries.append(f"  {reference}: not found in library - cannot sync")
+                for node_name in affected_nodes:
+                    failed_nodes.add(node_name)
+                continue
+
+            image_id = lib_image.get("id")
+
+            # Dedup: check for existing active sync job
+            existing_job = database.query(models.ImageSyncJob).filter(
+                models.ImageSyncJob.image_id == image_id,
+                models.ImageSyncJob.host_id == host_id,
+                models.ImageSyncJob.status.in_(["pending", "transferring"]),
+            ).first()
+
+            if existing_job:
+                log_entries.append(f"  {reference}: sync already in progress (job {existing_job.id[:8]})")
+                sync_job_id = existing_job.id
+            else:
+                # Create ImageHost record
+                image_host = database.query(models.ImageHost).filter(
+                    models.ImageHost.image_id == image_id,
+                    models.ImageHost.host_id == host_id,
+                ).first()
+                if not image_host:
+                    image_host = models.ImageHost(
+                        id=str(uuid4()),
+                        image_id=image_id,
+                        host_id=host_id,
+                        reference=reference,
+                        status="syncing",
+                    )
+                    database.add(image_host)
+                else:
+                    image_host.status = "syncing"
+                    image_host.error_message = None
+
+                # Create sync job
+                sync_job = models.ImageSyncJob(
+                    id=str(uuid4()),
+                    image_id=image_id,
+                    host_id=host_id,
+                    status="pending",
+                )
+                database.add(sync_job)
+                database.commit()
+                sync_job_id = sync_job.id
+                log_entries.append(f"  {reference}: started sync (job {sync_job_id[:8]})")
+
+            # Mark affected nodes as syncing
+            for node_name in affected_nodes:
+                syncing_nodes.add(node_name)
+
+            # Update node states to syncing
+            if affected_nodes:
+                update_node_image_sync_status(
+                    database, lab_id, affected_nodes, "syncing", f"Pushing image to {host.name}..."
+                )
+
+            # Broadcast syncing state for each node
+            for node_name in affected_nodes:
+                ns = database.query(models.NodeState).filter(
+                    models.NodeState.lab_id == lab_id,
+                    models.NodeState.node_name == node_name,
+                ).first()
+                if ns:
+                    safe_create_task(
+                        broadcast_node_state_change(
+                            lab_id=lab_id,
+                            node_id=ns.node_id,
+                            node_name=ns.node_name,
+                            desired_state=ns.desired_state,
+                            actual_state=ns.actual_state,
+                            is_ready=ns.is_ready,
+                            image_sync_status="syncing",
+                            image_sync_message=f"Pushing image to {host.name}...",
+                        ),
+                        name=f"broadcast:imgsync:{lab_id}:{ns.node_id}"
+                    )
+
+            # Fire-and-forget: run sync with completion callback
+            if not existing_job:
+                safe_create_task(
+                    _run_sync_and_callback(
+                        sync_job_id=sync_job_id,
+                        image_id=image_id,
+                        image=lib_image,
+                        host=host,
+                        lab_id=lab_id,
+                        node_ids=node_ids,
+                        image_to_nodes=image_to_nodes,
+                        provider=provider,
+                    ),
+                    name=f"imgsync:{sync_job_id[:8]}"
+                )
+
+        # Mark nodes with no library image as failed
+        if failed_nodes:
+            update_node_image_sync_status(
+                database, lab_id, list(failed_nodes), "failed", "Image not in library"
+            )
+
+        return syncing_nodes, failed_nodes, log_entries
+
+    except Exception as e:
+        log_entries.append(f"Error during image sync check: {e}")
+        return syncing_nodes, failed_nodes, log_entries
+
+
+async def _run_sync_and_callback(
+    sync_job_id: str,
+    image_id: str,
+    image: dict,
+    host: models.Host,
+    lab_id: str,
+    node_ids: list[str],
+    image_to_nodes: dict[str, list[str]],
+    provider: str,
+) -> None:
+    """Execute sync job, then re-trigger reconciliation on completion."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    from app.routers.images import _execute_sync_job
+
+    try:
+        await _execute_sync_job(sync_job_id, image_id, image, host)
+    except Exception as e:
+        logger.error(f"Image sync job {sync_job_id} raised exception: {e}")
+
+    # Check result and trigger callback
+    with get_session() as session:
+        sync_job = session.get(models.ImageSyncJob, sync_job_id)
+        reference = image.get("reference", "")
+        affected_nodes = image_to_nodes.get(reference, [])
+
+        if sync_job and sync_job.status == "completed":
+            logger.info(f"Image sync completed for {reference} on {host.name}, re-triggering reconcile")
+            _broadcast_nodes_sync_cleared(session, lab_id, affected_nodes)
+            _trigger_re_reconcile(session, lab_id, node_ids, provider)
+        else:
+            error_msg = sync_job.error_message if sync_job else "Sync job not found"
+            logger.warning(f"Image sync failed for {reference} on {host.name}: {error_msg}")
+            _mark_nodes_sync_failed(session, lab_id, affected_nodes, error_msg)
+
+
+def _trigger_re_reconcile(
+    session: Session,
+    lab_id: str,
+    node_ids: list[str],
+    provider: str,
+) -> None:
+    """Re-trigger node reconciliation after image sync completes."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    from app.tasks.jobs import run_node_reconcile
+    from app.utils.async_tasks import safe_create_task
+
+    lab = session.get(models.Lab, lab_id)
+    if not lab:
+        logger.warning(f"Cannot re-reconcile: lab {lab_id} not found")
+        return
+
+    job = models.Job(
+        lab_id=lab_id,
+        user_id=lab.owner_id,
+        action="sync:image-callback",
+        status="queued",
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+
+    logger.info(f"Created image-callback job {job.id} for lab {lab_id}")
+    safe_create_task(
+        run_node_reconcile(job.id, lab_id, node_ids, provider=provider),
+        name=f"imgsync:callback:{job.id}"
+    )
+
+
+def _mark_nodes_sync_failed(
+    session: Session,
+    lab_id: str,
+    node_names: list[str],
+    error_msg: str,
+) -> None:
+    """Mark nodes as failed after image sync failure."""
+    from app.services.broadcaster import broadcast_node_state_change
+    from app.utils.async_tasks import safe_create_task
+
+    if not node_names:
+        return
+
+    # Update node states
+    node_states = session.query(models.NodeState).filter(
+        models.NodeState.lab_id == lab_id,
+        models.NodeState.node_name.in_(node_names),
+    ).all()
+
+    for ns in node_states:
+        ns.actual_state = "error"
+        ns.error_message = f"Image sync failed: {error_msg}"
+        ns.image_sync_status = "failed"
+        ns.image_sync_message = error_msg
+        safe_create_task(
+            broadcast_node_state_change(
+                lab_id=lab_id,
+                node_id=ns.node_id,
+                node_name=ns.node_name,
+                desired_state=ns.desired_state,
+                actual_state=ns.actual_state,
+                is_ready=False,
+                error_message=ns.error_message,
+                image_sync_status="failed",
+                image_sync_message=error_msg,
+            ),
+            name=f"broadcast:imgsync:fail:{lab_id}:{ns.node_id}"
+        )
+
+    session.commit()
+
+
+def _broadcast_nodes_sync_cleared(
+    session: Session,
+    lab_id: str,
+    node_names: list[str],
+) -> None:
+    """Broadcast cleared image sync status for nodes."""
+    from app.services.broadcaster import broadcast_node_state_change
+    from app.utils.async_tasks import safe_create_task
+
+    if not node_names:
+        return
+
+    # Clear sync status in DB
+    update_node_image_sync_status(session, lab_id, node_names, None, None)
+
+    # Broadcast cleared status
+    node_states = session.query(models.NodeState).filter(
+        models.NodeState.lab_id == lab_id,
+        models.NodeState.node_name.in_(node_names),
+    ).all()
+
+    for ns in node_states:
+        safe_create_task(
+            broadcast_node_state_change(
+                lab_id=lab_id,
+                node_id=ns.node_id,
+                node_name=ns.node_name,
+                desired_state=ns.desired_state,
+                actual_state=ns.actual_state,
+                is_ready=ns.is_ready,
+                image_sync_status=None,
+                image_sync_message=None,
+            ),
+            name=f"broadcast:imgsync:clear:{lab_id}:{ns.node_id}"
+        )
+
+
 def get_images_from_topology(topology_yaml: str) -> list[str]:
     """Extract Docker image references from a topology YAML.
 
