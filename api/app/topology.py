@@ -50,13 +50,18 @@ def _resolve_device_kind(device: str | None) -> str:
 def _normalize_interface_name(iface_name: str) -> str:
     """Normalize interface name to deployment format.
 
-    Converts vendor-specific names like 'Ethernet1' to 'eth1' for deployment.
-    This ensures cEOS and other platforms properly map the interfaces.
+    Converts vendor-specific names like 'Ethernet1' or 'GigabitEthernet1'
+    to 'eth1' / 'eth0' for deployment.
     """
     # Convert Ethernet1 -> eth1, Ethernet2 -> eth2, etc.
     match = re.match(r'^[Ee]thernet(\d+)$', iface_name)
     if match:
         return f"eth{match.group(1)}"
+    # Convert GigabitEthernet1 -> eth0, GigabitEthernet2 -> eth1, etc.
+    # GigabitEthernet is 1-indexed; eth is 0-indexed for libvirt VMs.
+    match = re.match(r'^GigabitEthernet(\d+)$', iface_name, re.IGNORECASE)
+    if match:
+        return f"eth{int(match.group(1)) - 1}"
     # Already in eth format or other format, return as-is
     return iface_name
 

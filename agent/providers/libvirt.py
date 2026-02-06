@@ -1341,7 +1341,13 @@ class LibvirtProvider(Provider):
             OVS port name, or None if not found
         """
         domain_name = self._domain_name(lab_id, node_name)
-        expected_mac = self._generate_mac_address(domain_name, interface_index)
+        guest_mac = self._generate_mac_address(domain_name, interface_index)
+
+        # Libvirt modifies the first byte of the MAC on host-side tap devices:
+        # guest sees 52:54:00:XX:XX:XX but the tap device (and OVS mac_in_use)
+        # reports fe:54:00:XX:XX:XX.  Match against both forms.
+        tap_mac = "fe" + guest_mac[2:]   # fe:54:00:XX:XX:XX
+        expected_macs = {guest_mac.lower(), tap_mac.lower()}
 
         try:
             # Get OVS ports and find the one with matching MAC
@@ -1365,7 +1371,7 @@ class LibvirtProvider(Provider):
                 )
                 if mac_result.returncode == 0:
                     port_mac = mac_result.stdout.strip().strip('"')
-                    if port_mac.lower() == expected_mac.lower():
+                    if port_mac.lower() in expected_macs:
                         return port
 
             return None
