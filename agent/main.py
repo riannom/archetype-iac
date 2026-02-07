@@ -2237,6 +2237,29 @@ async def overlay_status() -> OverlayStatusResponse:
         return OverlayStatusResponse()
 
 
+@app.post("/debug/exec")
+async def debug_exec(request: dict):
+    """Debug: execute a command in a container or on the host."""
+    import asyncio
+
+    container = request.get("container")
+    command = request.get("command", "echo ok")
+    if container:
+        cmd = f"docker exec {container} {command}"
+    else:
+        cmd = command
+
+    proc = await asyncio.create_subprocess_shell(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    return {
+        "returncode": proc.returncode,
+        "stdout": stdout.decode()[:4000],
+        "stderr": stderr.decode()[:2000],
+    }
+
+
 @app.delete("/overlay/bridge-ports/{port_name}")
 async def delete_bridge_port(port_name: str):
     """Delete an OVS port by name (for cleanup of orphaned ports)."""
