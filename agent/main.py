@@ -136,6 +136,9 @@ from agent.schemas import (
     InterfaceDetailsResponse,
     SetMtuRequest,
     SetMtuResponse,
+    # Endpoint repair
+    RepairEndpointsRequest,
+    RepairEndpointsResponse,
 )
 from agent.version import __version__, get_commit
 from agent.updater import (
@@ -2782,6 +2785,91 @@ async def fix_node_interfaces(lab_id: str, node_name: str) -> FixInterfacesRespo
         )
 
 
+@app.post("/labs/{lab_id}/repair-endpoints")
+async def repair_lab_endpoints(
+    lab_id: str,
+    request: RepairEndpointsRequest,
+) -> RepairEndpointsResponse:
+    """Repair missing veth pairs and OVS ports for lab containers.
+
+    After agent/container restarts, the Docker OVS plugin may retain stale
+    endpoint records where the physical veth pairs no longer exist. This
+    endpoint recreates the veth pairs, attaches them to OVS, and moves
+    the container side into the correct namespace.
+
+    Args:
+        lab_id: Lab identifier
+        request: Optional list of node names to repair (all if empty)
+    """
+    plugin = _get_docker_ovs_plugin()
+    provider = get_provider_for_request()
+
+    # Determine which nodes to repair
+    if request.nodes:
+        node_names = request.nodes
+    else:
+        # Discover all nodes in this lab from plugin state
+        lab_containers: set[str] = set()
+        for ep in plugin.endpoints.values():
+            net = plugin.networks.get(ep.network_id)
+            if net and net.lab_id == lab_id and ep.container_name:
+                lab_containers.add(ep.container_name)
+        # Convert container names back to node names
+        node_names = []
+        for cname in lab_containers:
+            # Container names are typically "{lab_id}_{node_name}" via provider
+            try:
+                # Try reverse-mapping through provider
+                if cname.startswith(f"{lab_id}_"):
+                    node_names.append(cname[len(f"{lab_id}_"):])
+                else:
+                    node_names.append(cname)
+            except Exception:
+                node_names.append(cname)
+
+    all_results: dict[str, list] = {}
+    total_repaired = 0
+    nodes_with_repairs = 0
+
+    for node_name in node_names:
+        try:
+            container_name = provider.get_container_name(lab_id, node_name)
+        except Exception:
+            container_name = f"{lab_id}_{node_name}"
+
+        logger.info(f"Repairing endpoints for {container_name}")
+        try:
+            node_results = await plugin.repair_endpoints(lab_id, container_name)
+            all_results[node_name] = [
+                {
+                    "interface": r["interface"],
+                    "status": r["status"],
+                    "host_veth": r.get("host_veth"),
+                    "vlan_tag": r.get("vlan_tag"),
+                    "message": r.get("message"),
+                }
+                for r in node_results
+            ]
+            repaired = sum(1 for r in node_results if r["status"] == "repaired")
+            total_repaired += repaired
+            if repaired > 0:
+                nodes_with_repairs += 1
+        except Exception as e:
+            logger.error(f"Failed to repair endpoints for {node_name}: {e}")
+            all_results[node_name] = [{
+                "interface": "*",
+                "status": "error",
+                "message": str(e),
+            }]
+
+    return RepairEndpointsResponse(
+        success=True,
+        nodes_repaired=nodes_with_repairs,
+        total_endpoints_repaired=total_repaired,
+        results=all_results,
+    )
+
+
 @app.get("/labs/{lab_id}/nodes/{node_name}/linux-interfaces")
 async def list_node_linux_interfaces(lab_id: str, node_name: str) -> dict:
     """List Linux interface names inside a container network namespace."""
@@ -2878,6 +2966,13 @@ async def _resolve_ovs_port(
             if not ep:
                 ep = await plugin._discover_endpoint(lab_id, container_name, interface_name)
             if ep:
+                # Validate the port actually exists on OVS
+                if not await plugin._validate_endpoint_exists(ep):
+                    logger.warning(
+                        f"Endpoint for {container_name}:{interface_name} stale "
+                        f"— OVS port {ep.host_veth} missing"
+                    )
+                    return None
                 return OVSPortInfo(
                     port_name=ep.host_veth,
                     vlan_tag=ep.vlan_tag,

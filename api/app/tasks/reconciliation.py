@@ -43,6 +43,10 @@ from app.services.state_machine import LabStateMachine, LinkStateMachine, NodeSt
 
 logger = logging.getLogger(__name__)
 
+# Rate-limit endpoint repairs: lab_id -> last repair attempt time
+_last_endpoint_repair: dict[str, datetime] = {}
+ENDPOINT_REPAIR_COOLDOWN = timedelta(minutes=2)
+
 
 def _set_agent_error(agent: models.Host, error_message: str) -> None:
     """Set or update an agent's error state.
@@ -1242,6 +1246,40 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 )
             else:
                 try:
+                    # Repair stale endpoints before attempting link creation.
+                    # Rate-limited to avoid spamming repair on every cycle.
+                    error_links = [
+                        ls for ls in links_to_connect
+                        if ls.actual_state == LinkActualState.ERROR.value
+                    ]
+                    if error_links:
+                        now = datetime.now(timezone.utc)
+                        last_repair = _last_endpoint_repair.get(lab_id)
+                        if last_repair is None or (now - last_repair) >= ENDPOINT_REPAIR_COOLDOWN:
+                            _last_endpoint_repair[lab_id] = now
+                            # Collect unique agents that need repair
+                            repair_agents: dict[str, list[str]] = {}
+                            for ls in error_links:
+                                for node_name in (ls.source_node, ls.target_node):
+                                    host_id = node_expected_agent.get(node_name)
+                                    if host_id and host_id in host_to_agent:
+                                        repair_agents.setdefault(host_id, []).append(node_name)
+                            for host_id, nodes in repair_agents.items():
+                                agent = host_to_agent[host_id]
+                                unique_nodes = list(set(nodes))
+                                try:
+                                    result = await agent_client.repair_endpoints_on_agent(
+                                        agent, lab_id, unique_nodes,
+                                    )
+                                    repaired = result.get("total_endpoints_repaired", 0)
+                                    if repaired > 0:
+                                        logger.info(
+                                            f"Repaired {repaired} endpoint(s) on {agent.name} "
+                                            f"before auto-connect"
+                                        )
+                                except Exception as e:
+                                    logger.warning(f"Endpoint repair on {agent.name} failed: {e}")
+
                     for ls in links_to_connect:
                         logger.info(f"Auto-connecting pending link {ls.link_name}")
                         try:
