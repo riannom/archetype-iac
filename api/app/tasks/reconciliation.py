@@ -488,6 +488,27 @@ async def refresh_states_from_agents():
             for lab in inconsistent_labs:
                 labs_to_reconcile.add(lab.id)
 
+            # Periodic full sweep: verify all deployed labs match agent reality.
+            # Catches state drift where DB says "running" but container is stopped.
+            _sweep_counter = getattr(refresh_states_from_agents, '_sweep_counter', 0) + 1
+            refresh_states_from_agents._sweep_counter = _sweep_counter
+
+            if _sweep_counter % 10 == 0:
+                deployed_labs = (
+                    session.query(models.Lab)
+                    .filter(models.Lab.state.in_([
+                        LabState.RUNNING.value, LabState.ERROR.value,
+                    ]))
+                    .all()
+                )
+                sweep_count = 0
+                for lab in deployed_labs:
+                    if lab.id not in labs_to_reconcile:
+                        labs_to_reconcile.add(lab.id)
+                        sweep_count += 1
+                if sweep_count:
+                    logger.info(f"Full sweep: adding {sweep_count} deployed lab(s) to reconciliation")
+
             # FIRST: Always check readiness for running nodes (this doesn't interfere with jobs)
             # This is separate because readiness checks should happen even when jobs are running
             if unready_running_nodes:
@@ -1204,6 +1225,12 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             )
             if should_auto_connect:
                 links_to_connect.append(ls)
+
+        if links_to_connect:
+            logger.info(
+                f"Auto-connecting {len(links_to_connect)} link(s) in lab {lab_id}: "
+                f"{[ls.link_name for ls in links_to_connect]}"
+            )
 
         # Process auto-connect with lock to prevent conflicts with live_links
         if links_to_connect:
