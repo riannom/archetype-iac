@@ -2229,6 +2229,7 @@ async def overlay_status() -> OverlayStatusResponse:
             vteps=status.get("vteps", []),
             tunnels=tunnels,
             bridges=status["bridges"],
+            link_tunnels=status.get("link_tunnels", []),
         )
 
     except Exception as e:
