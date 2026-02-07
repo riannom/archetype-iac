@@ -323,21 +323,20 @@ async def refresh_states_from_agents():
                 .all()
             )
 
-            # Find labs with orphan placements (placement exists but node definition was deleted)
-            # This detects cases where VMs/containers still exist but nodes were removed from topology
-            node_def_exists_subquery = (
+            # Find labs with orphan placements (placement exists but node was deleted from topology)
+            # NodePlacement.node_definition_id has ondelete=SET NULL, so it becomes NULL when the
+            # Node is deleted — we must check by name against the nodes table instead of using the FK.
+            node_exists_by_name = (
                 select(models.Node.id)
                 .where(
-                    models.Node.id == models.NodePlacement.node_definition_id,
+                    models.Node.lab_id == models.NodePlacement.lab_id,
+                    models.Node.container_name == models.NodePlacement.node_name,
                 )
                 .exists()
             )
             orphan_placements = (
                 session.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.node_definition_id.isnot(None),
-                    ~node_def_exists_subquery,
-                )
+                .filter(~node_exists_by_name)
                 .all()
             )
 
@@ -677,25 +676,29 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         # Build set of valid node names from database definitions
         valid_node_names = {n.container_name for n in db_nodes}
 
-        # Find orphan containers: exist on agents but not in database
-        orphan_node_names = set(container_status_map.keys()) - valid_node_names
-        if orphan_node_names:
-            logger.warning(
-                f"Lab {lab_id} has {len(orphan_node_names)} orphan container(s)/VM(s) "
-                f"not in topology: {list(orphan_node_names)}"
+        # Only run cleanup if no active job (don't interfere with deploy/destroy)
+        check_active_job = (
+            session.query(models.Job)
+            .filter(
+                models.Job.lab_id == lab_id,
+                models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
             )
-
-            # Clean up orphans on each agent
-            # Only run cleanup if no active job (don't interfere with deploy/destroy)
-            check_active_job = (
-                session.query(models.Job)
-                .filter(
-                    models.Job.lab_id == lab_id,
-                    models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+            .first()
+        )
+        if check_active_job:
+            logger.debug(
+                f"Skipping orphan cleanup for lab {lab_id} - active job {check_active_job.id} in progress"
+            )
+        else:
+            # Find orphan containers: exist on agents but not in database
+            orphan_node_names = set(container_status_map.keys()) - valid_node_names
+            if orphan_node_names:
+                logger.warning(
+                    f"Lab {lab_id} has {len(orphan_node_names)} orphan container(s)/VM(s) "
+                    f"not in topology: {list(orphan_node_names)}"
                 )
-                .first()
-            )
-            if not check_active_job:
+
+                # Clean up orphan containers on each agent
                 for agent_id in agents_successfully_queried:
                     agent = host_to_agent.get(agent_id)
                     if not agent:
@@ -717,22 +720,19 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     except Exception as e:
                         logger.warning(f"Failed to cleanup orphans on agent {agent.name}: {e}")
 
-                # Also cleanup orphan NodePlacement records in database
-                orphan_placements_to_delete = (
-                    session.query(models.NodePlacement)
-                    .filter(
-                        models.NodePlacement.lab_id == lab_id,
-                        ~models.NodePlacement.node_name.in_(valid_node_names),
-                    )
-                    .all()
+            # Cleanup orphan NodePlacement records in database
+            # This runs even if containers are already gone (e.g. manually removed)
+            orphan_placements_to_delete = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    ~models.NodePlacement.node_name.in_(valid_node_names),
                 )
-                for placement in orphan_placements_to_delete:
-                    logger.info(f"Removing orphan placement for node {placement.node_name} in lab {lab_id}")
-                    session.delete(placement)
-            else:
-                logger.debug(
-                    f"Skipping orphan cleanup for lab {lab_id} - active job {check_active_job.id} in progress"
-                )
+                .all()
+            )
+            for placement in orphan_placements_to_delete:
+                logger.info(f"Removing orphan placement for node {placement.node_name} in lab {lab_id}")
+                session.delete(placement)
 
         # Update NodeState records based on actual container status
         node_states = (
