@@ -11,6 +11,9 @@ from app import models
 def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch) -> None:
     monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
 
+    # Use naive datetime string (no timezone suffix) to avoid SQLite
+    # timezone-stripping causing offset-naive vs offset-aware comparison errors
+    started_at = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")
     payload = {
         "agent": {
             "agent_id": "agent-1",
@@ -18,7 +21,7 @@ def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch) -
             "address": "localhost:1",
             "capabilities": {"providers": ["docker"], "max_concurrent_jobs": 4, "features": []},
             "version": "1.0.0",
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": started_at,
             "is_local": False,
         }
     }
@@ -26,7 +29,7 @@ def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch) -
     resp = test_client.post("/agents/register", json=payload)
     assert resp.status_code == 200
 
-    # Re-register same agent ID
+    # Re-register same agent ID with same started_at (no restart detection)
     payload["agent"]["version"] = "1.0.1"
     resp = test_client.post("/agents/register", json=payload)
     assert resp.status_code == 200
@@ -38,16 +41,24 @@ def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch) -
 def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypatch) -> None:
     monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
 
-    started_at = datetime.now(timezone.utc) - timedelta(minutes=5)
-    host = models.Host(
-        id="agent-2",
-        name="Agent Two",
-        address="localhost:2",
-        status="online",
-        capabilities="{}",
-        version="1.0.0",
-        started_at=started_at,
-    )
+    # Use naive datetime strings (no timezone suffix) to avoid SQLite
+    # timezone-stripping causing offset-naive vs offset-aware comparison errors
+    old_started_at = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    initial_payload = {
+        "agent": {
+            "agent_id": "agent-2",
+            "name": "Agent Two",
+            "address": "localhost:2",
+            "capabilities": {"providers": ["docker"], "max_concurrent_jobs": 4, "features": []},
+            "version": "1.0.0",
+            "started_at": old_started_at,
+            "is_local": False,
+        }
+    }
+    resp = test_client.post("/agents/register", json=initial_payload)
+    assert resp.status_code == 200
+
+    # Create lab and running job associated with this agent
     lab = models.Lab(
         name="Lab",
         owner_id="user",
@@ -55,29 +66,33 @@ def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypat
         state="running",
         workspace_path="/tmp/lab",
     )
+    test_db.add(lab)
+    test_db.flush()
     job = models.Job(
         lab_id=lab.id,
         user_id=None,
         action="up",
         status="running",
-        agent_id=host.id,
+        agent_id="agent-2",
     )
-    test_db.add_all([host, lab, job])
+    test_db.add(job)
     test_db.commit()
 
-    payload = {
+    # Re-register with a newer started_at (simulating agent restart)
+    new_started_at = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")
+    restart_payload = {
         "agent": {
             "agent_id": "agent-2",
             "name": "Agent Two",
             "address": "localhost:2",
             "capabilities": {"providers": ["docker"], "max_concurrent_jobs": 4, "features": []},
             "version": "1.0.0",
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": new_started_at,
             "is_local": False,
         }
     }
 
-    resp = test_client.post("/agents/register", json=payload)
+    resp = test_client.post("/agents/register", json=restart_payload)
     assert resp.status_code == 200
 
     test_db.refresh(job)

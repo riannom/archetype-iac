@@ -341,8 +341,9 @@ class TestJobCompletionCallback:
         assert response.status_code == 200
 
         test_db.refresh(job)
-        assert job.started_at == started_at
-        assert job.completed_at == completed_at
+        # SQLite may strip timezone info; compare the date/time values
+        assert job.started_at.replace(tzinfo=None) == started_at.replace(tzinfo=None)
+        assert job.completed_at.replace(tzinfo=None) == completed_at.replace(tzinfo=None)
 
 
 class TestDeadLetterCallback:
@@ -446,7 +447,8 @@ class TestUpdateProgressCallback:
         update_job = models.AgentUpdateJob(
             id="update-job-1",
             host_id=sample_host.id,
-            target_version="2.0.0",
+            from_version="1.0.0",
+            to_version="2.0.0",
             status="pending",
         )
         test_db.add(update_job)
@@ -480,7 +482,8 @@ class TestUpdateProgressCallback:
         update_job = models.AgentUpdateJob(
             id="update-job-2",
             host_id=sample_host.id,
-            target_version="2.0.0",
+            from_version="1.0.0",
+            to_version="2.0.0",
             status="installing",
         )
         test_db.add(update_job)
@@ -511,7 +514,8 @@ class TestUpdateProgressCallback:
         update_job = models.AgentUpdateJob(
             id="update-job-3",
             host_id=sample_host.id,
-            target_version="2.0.0",
+            from_version="1.0.0",
+            to_version="2.0.0",
             status="downloading",
         )
         test_db.add(update_job)

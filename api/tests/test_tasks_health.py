@@ -14,11 +14,16 @@ class TestAgentHealthMonitor:
     async def test_marks_stale_agents_offline(self):
         """Should mark stale agents as offline periodically."""
         from app.tasks.health import agent_health_monitor
+        from contextlib import contextmanager
 
         mock_session = MagicMock()
         marked_offline = ["agent-1", "agent-2"]
 
-        with patch("app.tasks.health.SessionLocal", return_value=mock_session):
+        @contextmanager
+        def fake_get_session():
+            yield mock_session
+
+        with patch("app.tasks.health.get_session", fake_get_session):
             with patch("app.tasks.health.agent_client.update_stale_agents", new_callable=AsyncMock) as mock_update:
                 mock_update.return_value = marked_offline
 
@@ -105,12 +110,24 @@ class TestAgentHealthMonitor:
 
     @pytest.mark.asyncio
     async def test_closes_session_after_each_iteration(self):
-        """Should close the database session after each iteration."""
+        """Should properly manage session lifecycle via get_session context manager."""
         from app.tasks.health import agent_health_monitor
+        from contextlib import contextmanager
 
-        mock_session = MagicMock()
+        session_entered = False
+        session_exited = False
 
-        with patch("app.tasks.health.SessionLocal", return_value=mock_session):
+        @contextmanager
+        def tracking_get_session():
+            nonlocal session_entered, session_exited
+            session_entered = True
+            mock_session = MagicMock()
+            try:
+                yield mock_session
+            finally:
+                session_exited = True
+
+        with patch("app.tasks.health.get_session", tracking_get_session):
             with patch("app.tasks.health.agent_client.update_stale_agents", new_callable=AsyncMock) as mock_update:
                 mock_update.return_value = []
 
@@ -125,4 +142,5 @@ class TestAgentHealthMonitor:
 
                     await agent_health_monitor()
 
-                    mock_session.close.assert_called()
+                    assert session_entered, "get_session context manager was never entered"
+                    assert session_exited, "get_session context manager was never exited (session not cleaned up)"

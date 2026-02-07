@@ -58,10 +58,10 @@ class TestListImageLibrary:
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text(json.dumps({"version": 1, "images": []}))
 
-        from app import image_store
+        from app.routers import images as images_router
 
         monkeypatch.setattr(
-            image_store, "load_manifest", lambda: {"version": 1, "images": []}
+            images_router, "load_manifest", lambda: {"version": 1, "images": []}
         )
 
         response = test_client.get("/images/library", headers=auth_headers)
@@ -80,9 +80,9 @@ class TestListImageLibrary:
         """Test listing library with images."""
         _, manifest = mock_manifest
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
 
         response = test_client.get("/images/library", headers=auth_headers)
         assert response.status_code == 200
@@ -108,10 +108,10 @@ class TestUpdateImageLibrary:
         """Test updating image metadata."""
         manifest_path, manifest = mock_manifest
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest.copy())
-        monkeypatch.setattr(image_store, "save_manifest", lambda m: None)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest.copy())
+        monkeypatch.setattr(images_router, "save_manifest", lambda m: None)
 
         def mock_update(m, image_id, updates):
             for img in m["images"]:
@@ -120,7 +120,7 @@ class TestUpdateImageLibrary:
                     return img
             return None
 
-        monkeypatch.setattr(image_store, "update_image_entry", mock_update)
+        monkeypatch.setattr(images_router, "update_image_entry", mock_update)
 
         response = test_client.post(
             "/images/library/docker:ceos:4.28.0",
@@ -139,11 +139,11 @@ class TestUpdateImageLibrary:
         """Test updating non-existent image."""
         _, manifest = mock_manifest
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest.copy())
-        monkeypatch.setattr(image_store, "save_manifest", lambda m: None)
-        monkeypatch.setattr(image_store, "update_image_entry", lambda m, id, u: None)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest.copy())
+        monkeypatch.setattr(images_router, "save_manifest", lambda m: None)
+        monkeypatch.setattr(images_router, "update_image_entry", lambda m, id, u: None)
 
         response = test_client.post(
             "/images/library/nonexistent-image",
@@ -166,16 +166,16 @@ class TestDeleteImage:
         """Test deleting a Docker image."""
         _, manifest = mock_manifest
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest.copy())
-        monkeypatch.setattr(image_store, "save_manifest", lambda m: None)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest.copy())
+        monkeypatch.setattr(images_router, "save_manifest", lambda m: None)
         monkeypatch.setattr(
-            image_store,
+            images_router,
             "find_image_by_id",
             lambda m, id: {"id": id, "kind": "docker", "reference": "ceos:4.28.0"},
         )
-        monkeypatch.setattr(image_store, "delete_image_entry", lambda m, id: True)
+        monkeypatch.setattr(images_router, "delete_image_entry", lambda m, id: True)
 
         response = test_client.delete(
             "/images/library/docker:ceos:4.28.0", headers=auth_headers
@@ -204,12 +204,12 @@ class TestDeleteImage:
             ]
         }
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest.copy())
-        monkeypatch.setattr(image_store, "save_manifest", lambda m: None)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest.copy())
+        monkeypatch.setattr(images_router, "save_manifest", lambda m: None)
         monkeypatch.setattr(
-            image_store,
+            images_router,
             "find_image_by_id",
             lambda m, id: {
                 "id": id,
@@ -217,7 +217,7 @@ class TestDeleteImage:
                 "reference": str(qcow2_file),
             },
         )
-        monkeypatch.setattr(image_store, "delete_image_entry", lambda m, id: True)
+        monkeypatch.setattr(images_router, "delete_image_entry", lambda m, id: True)
 
         response = test_client.delete(
             "/images/library/qcow2:test.qcow2", headers=auth_headers
@@ -232,10 +232,10 @@ class TestDeleteImage:
         monkeypatch,
     ):
         """Test deleting non-existent image."""
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: {"images": []})
-        monkeypatch.setattr(image_store, "find_image_by_id", lambda m, id: None)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: {"images": []})
+        monkeypatch.setattr(images_router, "find_image_by_id", lambda m, id: None)
 
         response = test_client.delete(
             "/images/library/nonexistent", headers=auth_headers
@@ -256,10 +256,10 @@ class TestAssignImage:
         """Test assigning an image to a device type."""
         _, manifest = mock_manifest
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest.copy())
-        monkeypatch.setattr(image_store, "save_manifest", lambda m: None)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest.copy())
+        monkeypatch.setattr(images_router, "save_manifest", lambda m: None)
 
         def mock_update(m, image_id, updates):
             for img in m["images"]:
@@ -268,7 +268,7 @@ class TestAssignImage:
                     return img
             return None
 
-        monkeypatch.setattr(image_store, "update_image_entry", mock_update)
+        monkeypatch.setattr(images_router, "update_image_entry", mock_update)
 
         response = test_client.post(
             "/images/library/docker:ceos:4.28.0/assign",
@@ -281,8 +281,13 @@ class TestAssignImage:
         self,
         test_client: TestClient,
         auth_headers: dict,
+        monkeypatch,
     ):
         """Test assign endpoint requires device_id."""
+        from app.routers import images as images_router
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: {"images": []})
+
         response = test_client.post(
             "/images/library/docker:ceos:4.28.0/assign",
             json={},
@@ -305,10 +310,10 @@ class TestUnassignImage:
         """Test unassigning an image from device type."""
         _, manifest = mock_manifest
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest.copy())
-        monkeypatch.setattr(image_store, "save_manifest", lambda m: None)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest.copy())
+        monkeypatch.setattr(images_router, "save_manifest", lambda m: None)
 
         def mock_update(m, image_id, updates):
             for img in m["images"]:
@@ -317,7 +322,7 @@ class TestUnassignImage:
                     return img
             return None
 
-        monkeypatch.setattr(image_store, "update_image_entry", mock_update)
+        monkeypatch.setattr(images_router, "update_image_entry", mock_update)
 
         response = test_client.post(
             "/images/library/docker:ceos:4.28.0/unassign", headers=auth_headers
@@ -338,9 +343,9 @@ class TestGetImagesForDevice:
         """Test getting images for a specific device type."""
         _, manifest = mock_manifest
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
 
         response = test_client.get("/images/devices/eos/images", headers=auth_headers)
         assert response.status_code == 200
@@ -359,9 +364,9 @@ class TestGetImagesForDevice:
         """Test device ID normalization (ceos -> eos)."""
         _, manifest = mock_manifest
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
 
         # ceos should normalize to eos
         response = test_client.get("/images/devices/ceos/images", headers=auth_headers)
@@ -381,9 +386,9 @@ class TestListQcow2:
         monkeypatch,
     ):
         """Test listing qcow2 when none exist."""
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
+        monkeypatch.setattr(images_router, "ensure_image_store", lambda: tmp_path)
 
         response = test_client.get("/images/qcow2", headers=auth_headers)
         assert response.status_code == 200
@@ -404,9 +409,9 @@ class TestListQcow2:
         (tmp_path / "test2.qcow2").write_bytes(b"fake")
         (tmp_path / "other.txt").write_bytes(b"not a qcow2")
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
+        monkeypatch.setattr(images_router, "ensure_image_store", lambda: tmp_path)
 
         response = test_client.get("/images/qcow2", headers=auth_headers)
         assert response.status_code == 200
@@ -448,11 +453,11 @@ class TestImageHostsAndSync:
             ]
         }
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
         monkeypatch.setattr(
-            image_store,
+            images_router,
             "find_image_by_id",
             lambda m, id: {"id": id, "kind": "docker"},
         )
@@ -472,10 +477,10 @@ class TestImageHostsAndSync:
         monkeypatch,
     ):
         """Test getting hosts for non-existent image."""
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: {"images": []})
-        monkeypatch.setattr(image_store, "find_image_by_id", lambda m, id: None)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: {"images": []})
+        monkeypatch.setattr(images_router, "find_image_by_id", lambda m, id: None)
 
         response = test_client.get(
             "/images/library/nonexistent/hosts", headers=auth_headers
@@ -495,11 +500,11 @@ class TestImageHostsAndSync:
             ]
         }
 
-        from app import image_store
+        from app.routers import images as images_router
 
-        monkeypatch.setattr(image_store, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
         monkeypatch.setattr(
-            image_store,
+            images_router,
             "find_image_by_id",
             lambda m, id: {"id": id, "kind": "qcow2"},
         )

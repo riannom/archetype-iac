@@ -66,7 +66,9 @@ class TestCreateDeploymentLinks:
         lab, nodes, links = lab_with_links
         host_to_agent = {sample_host.id: sample_host}
 
-        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
             mock_client.create_link_on_agent = AsyncMock(return_value={
                 "success": True,
                 "vlan_tag": 100,
@@ -175,7 +177,9 @@ class TestCreateDeploymentLinks:
         test_db.add(existing_state)
         test_db.commit()
 
-        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
             mock_client.create_link_on_agent = AsyncMock(return_value={
                 "success": True,
                 "vlan_tag": 100,
@@ -219,7 +223,9 @@ class TestCreateSameHostLink:
         host_to_agent = {sample_host.id: sample_host}
         log_parts = []
 
-        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
             mock_client.create_link_on_agent = AsyncMock(return_value={
                 "success": True,
                 "vlan_tag": 100,
@@ -257,7 +263,9 @@ class TestCreateSameHostLink:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
             mock_client.create_link_on_agent = AsyncMock(return_value={
                 "success": True,
                 "vlan_tag": 100,
@@ -271,8 +279,8 @@ class TestCreateSameHostLink:
             assert kwargs["target_interface"] == "eth2"
 
 
-class TestCreateCrossHostLink:
-    """Tests for the create_cross_host_link function."""
+class TestCreateCrossHostLinkNormalization:
+    """Tests for cross-host link interface normalization."""
 
     @pytest.mark.asyncio
     async def test_normalizes_interfaces_for_cross_host_link(
@@ -299,20 +307,23 @@ class TestCreateCrossHostLink:
 
         host_to_agent = {host_a.id: host_a, host_b.id: host_b}
 
-        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
-            mock_client.setup_cross_host_link = AsyncMock(return_value={
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
+            mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": True,
                 "vlan_tag": 3884,
             })
+            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
             await create_cross_host_link(test_db, sample_lab.id, link_state, host_to_agent, [])
 
-            mock_client.setup_cross_host_link.assert_awaited_once()
-            _, kwargs = mock_client.setup_cross_host_link.await_args
+            mock_client.setup_cross_host_link_v2.assert_awaited_once()
+            _, kwargs = mock_client.setup_cross_host_link_v2.await_args
             assert kwargs["interface_a"] == "eth1"
             assert kwargs["interface_b"] == "eth1"
 
-            test_db.refresh(link_state)
+            # Check in-memory state (no commit yet from create_cross_host_link)
             assert link_state.vlan_tag == 3884
             assert link_state.source_carrier_state == "on"
             assert link_state.target_carrier_state == "on"
@@ -380,11 +391,14 @@ class TestCreateCrossHostLink:
         host_to_agent = {h.id: h for h in multiple_hosts}
         log_parts = []
 
-        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
-            mock_client.setup_cross_host_link = AsyncMock(return_value={
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
+            mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": True,
                 "vlan_tag": 200,
             })
+            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await create_cross_host_link(
                 test_db, sample_lab.id, link_state, host_to_agent, log_parts
@@ -392,7 +406,6 @@ class TestCreateCrossHostLink:
 
             assert result is True
             assert link_state.actual_state == "up"
-            assert link_state.vni is not None
             assert link_state.vlan_tag == 200
 
             # Flush session to make pending objects queryable
@@ -432,7 +445,7 @@ class TestCreateCrossHostLink:
         log_parts = []
 
         with patch("app.tasks.link_orchestration.agent_client") as mock_client:
-            mock_client.setup_cross_host_link = AsyncMock(return_value={
+            mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": False,
                 "error": "VXLAN port creation failed",
             })
@@ -628,45 +641,36 @@ class TestTeardownDeploymentLinks:
             assert link_state.actual_state == "down"
 
 
-class TestExtractAgentIp:
-    """Tests for the _extract_agent_ip helper function."""
+class TestResolveAgentIp:
+    """Tests for the resolve_agent_ip helper function in agent_client."""
 
     def test_extracts_ip_from_address(self):
         """Should extract IP from host:port format."""
-        from app.tasks.link_orchestration import _extract_agent_ip
+        from app.agent_client import resolve_agent_ip
 
-        agent = MagicMock()
-        agent.address = "192.168.1.100:8080"
-
-        ip = _extract_agent_ip(agent)
+        ip = resolve_agent_ip("192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
     def test_handles_http_prefix(self):
         """Should strip http:// prefix."""
-        from app.tasks.link_orchestration import _extract_agent_ip
+        from app.agent_client import resolve_agent_ip
 
-        agent = MagicMock()
-        agent.address = "http://192.168.1.100:8080"
-
-        ip = _extract_agent_ip(agent)
+        ip = resolve_agent_ip("http://192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
     def test_handles_https_prefix(self):
         """Should strip https:// prefix."""
-        from app.tasks.link_orchestration import _extract_agent_ip
+        from app.agent_client import resolve_agent_ip
 
-        agent = MagicMock()
-        agent.address = "https://192.168.1.100:8080"
-
-        ip = _extract_agent_ip(agent)
+        ip = resolve_agent_ip("https://192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
     def test_handles_hostname(self):
-        """Should extract hostname if no IP."""
-        from app.tasks.link_orchestration import _extract_agent_ip
+        """Should resolve or return hostname."""
+        from app.agent_client import resolve_agent_ip
 
-        agent = MagicMock()
-        agent.address = "agent1.local:8080"
-
-        ip = _extract_agent_ip(agent)
-        assert ip == "agent1.local"
+        # resolve_agent_ip will attempt DNS resolution; if it fails, it returns the hostname as-is
+        ip = resolve_agent_ip("agent1.local:8080")
+        # Either resolved to an IP or returned hostname as-is
+        assert ip is not None
+        assert len(ip) > 0

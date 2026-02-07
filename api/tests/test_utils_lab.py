@@ -256,12 +256,16 @@ class TestUpdateLabState:
 
     def test_updates_state_updated_at(self, test_db: Session, sample_lab: models.Lab):
         """Updates state_updated_at timestamp."""
-        before = datetime.now(timezone.utc)
+        before = datetime.now(timezone.utc).replace(tzinfo=None)
         update_lab_state(test_db, sample_lab.id, "running")
 
         test_db.refresh(sample_lab)
         assert sample_lab.state_updated_at is not None
-        assert sample_lab.state_updated_at >= before
+        # SQLite returns naive datetimes, so compare without timezone
+        updated_at = sample_lab.state_updated_at
+        if updated_at.tzinfo is not None:
+            updated_at = updated_at.replace(tzinfo=None)
+        assert updated_at >= before
 
     def test_updates_agent_id(self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host):
         """Updates agent_id when provided."""
@@ -549,7 +553,7 @@ class TestUpdateLabProviderFromNodes:
 
     def test_sets_docker_when_no_nodes(self, test_db: Session, sample_lab: models.Lab):
         """Sets provider to docker when lab has no nodes."""
-        sample_lab.provider = None
+        sample_lab.provider = ""
         test_db.commit()
 
         result = update_lab_provider_from_nodes(test_db, sample_lab)
@@ -567,12 +571,12 @@ class TestUpdateLabProviderFromNodes:
             lab_id=sample_lab.id,
             gui_id="node-1",
             device="ceos",
-            name="R1",
+            display_name="R1",
             container_name="r1",
             image="ceos:4.28.0F",  # Docker image reference
         )
         test_db.add(node)
-        sample_lab.provider = None
+        sample_lab.provider = ""
         test_db.commit()
 
         result = update_lab_provider_from_nodes(test_db, sample_lab)
@@ -590,7 +594,7 @@ class TestUpdateLabProviderFromNodes:
             lab_id=sample_lab.id,
             gui_id="node-1",
             device="cisco_iosv",
-            name="R1",
+            display_name="R1",
             container_name="r1",
             image="/var/lib/archetype/images/iosv-15.9.qcow2",
         )
@@ -613,7 +617,7 @@ class TestUpdateLabProviderFromNodes:
             lab_id=sample_lab.id,
             gui_id="node-1",
             device="ceos",
-            name="R1",
+            display_name="R1",
             container_name="r1",
             image="ceos:4.28.0F",
         )
@@ -622,7 +626,7 @@ class TestUpdateLabProviderFromNodes:
             lab_id=sample_lab.id,
             gui_id="node-2",
             device="cisco_iosv",
-            name="R2",
+            display_name="R2",
             container_name="r2",
             image="/var/lib/archetype/images/iosv.qcow2",
         )
@@ -645,7 +649,7 @@ class TestUpdateLabProviderFromNodes:
             lab_id=sample_lab.id,
             gui_id="node-1",
             device="ceos",
-            name="R1",
+            display_name="R1",
             container_name="r1",
             image="ceos:4.28.0F",
         )
@@ -666,7 +670,7 @@ class TestUpdateLabProviderFromNodes:
             lab_id=sample_lab.id,
             gui_id="node-1",
             device="cisco_iosv",
-            name="R1",
+            display_name="R1",
             container_name="r1",
             image="/var/lib/archetype/images/iosv.img",
         )

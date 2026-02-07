@@ -242,7 +242,8 @@ class TestExtractConfigsEndpoint:
             ],
         }
 
-        with patch("app.routers.labs.agent_client") as mock_agent_client:
+        with patch("app.routers.labs.agent_client") as mock_agent_client, \
+             patch("app.routers.labs._save_config_to_workspace"):
             mock_agent_client.is_agent_online.return_value = True
             mock_agent_client.extract_configs_on_agent = AsyncMock(return_value=mock_result)
 
@@ -300,7 +301,8 @@ class TestExtractConfigsEndpoint:
             else:
                 return agent2_result
 
-        with patch("app.routers.labs.agent_client") as mock_agent_client:
+        with patch("app.routers.labs.agent_client") as mock_agent_client, \
+             patch("app.routers.labs._save_config_to_workspace"):
             mock_agent_client.is_agent_online.return_value = True
             mock_agent_client.extract_configs_on_agent = AsyncMock(side_effect=mock_extract)
 
@@ -353,7 +355,8 @@ class TestExtractConfigsEndpoint:
                 # Second agent fails
                 return {"success": False, "error": "Agent unreachable"}
 
-        with patch("app.routers.labs.agent_client") as mock_agent_client:
+        with patch("app.routers.labs.agent_client") as mock_agent_client, \
+             patch("app.routers.labs._save_config_to_workspace"):
             mock_agent_client.is_agent_online.return_value = True
             mock_agent_client.extract_configs_on_agent = AsyncMock(side_effect=mock_extract)
 
@@ -432,7 +435,8 @@ class TestExtractConfigsEndpoint:
             ],
         }
 
-        with patch("app.routers.labs.agent_client") as mock_agent_client:
+        with patch("app.routers.labs.agent_client") as mock_agent_client, \
+             patch("app.routers.labs._save_config_to_workspace"):
             mock_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
             mock_agent_client.is_agent_online.return_value = True
             mock_agent_client.extract_configs_on_agent = AsyncMock(return_value=mock_result)
@@ -470,7 +474,8 @@ class TestExtractConfigsEndpoint:
             ],
         }
 
-        with patch("app.routers.labs.agent_client") as mock_agent_client:
+        with patch("app.routers.labs.agent_client") as mock_agent_client, \
+             patch("app.routers.labs._save_config_to_workspace"):
             mock_agent_client.is_agent_online.return_value = True
             mock_agent_client.extract_configs_on_agent = AsyncMock(return_value=mock_result)
 
@@ -523,7 +528,8 @@ class TestExtractConfigsEndpoint:
             else:
                 raise Exception("Connection timeout")
 
-        with patch("app.routers.labs.agent_client") as mock_agent_client:
+        with patch("app.routers.labs.agent_client") as mock_agent_client, \
+             patch("app.routers.labs._save_config_to_workspace"):
             mock_agent_client.is_agent_online.return_value = True
             mock_agent_client.extract_configs_on_agent = AsyncMock(side_effect=mock_extract)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import app.services.log_parser as log_parser
 import app.services.metrics_service as metrics_service
@@ -11,7 +12,7 @@ def test_log_parser_extracts_hosts_and_levels() -> None:
     log = """
 === Host: agent-a (host-1) ===
 2024-01-01T10:00:00 INFO started
-Agent: host-2 (agent-b)
+Agent: a0b1c2d3-e4f5-0000-0000-000000000002 (agent-b)
 2024-01-01 10:00:01 ERROR failed
 """.strip()
 
@@ -58,6 +59,7 @@ def test_metrics_service_dashboard_metrics(test_db) -> None:
         status="online",
         capabilities="{}",
         version="1.0.0",
+        last_heartbeat=datetime.now(timezone.utc),
         resource_usage="{\"cpu_percent\": 10, \"memory_percent\": 20, \"disk_used_gb\": 5, \"disk_total_gb\": 10, \"containers_running\": 1, \"containers_total\": 2}",
     )
     lab = models.Lab(
@@ -71,7 +73,10 @@ def test_metrics_service_dashboard_metrics(test_db) -> None:
     test_db.commit()
 
     service = metrics_service.MetricsService(test_db)
-    metrics = service.get_dashboard_metrics()
+    # Mock is_agent_online because SQLite strips timezone from last_heartbeat,
+    # causing naive vs aware datetime comparison in the real function
+    with patch("app.agent_client.is_agent_online", return_value=True):
+        metrics = service.get_dashboard_metrics()
     assert metrics["agents"]["online"] == 1
     assert metrics["labs"]["running"] == 1
 

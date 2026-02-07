@@ -155,17 +155,17 @@ class TestLinkManagerConnectLink:
         agents = {h.id: h for h in multiple_hosts}
 
         with patch("app.services.link_manager.agent_client") as mock_client:
-            mock_client.setup_cross_host_link = AsyncMock(return_value={
+            mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": True,
                 "vlan_tag": 200,
             })
+            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await link_manager.connect_link(cross_host_link_state, agents)
 
             assert result is True
             assert cross_host_link_state.actual_state == "up"
             assert cross_host_link_state.is_cross_host is True
-            assert cross_host_link_state.vni is not None
 
 
 class TestLinkManagerDisconnectLink:
@@ -453,17 +453,17 @@ class TestLinkManagerCreateCrossHostLink:
         agent_b = multiple_hosts[1]
 
         with patch("app.services.link_manager.agent_client") as mock_client:
-            mock_client.setup_cross_host_link = AsyncMock(return_value={
+            mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": True,
                 "vlan_tag": 200,
             })
+            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await link_manager.create_cross_host_link(
                 cross_host_link_state, agent_a, agent_b
             )
 
             assert result is True
-            assert cross_host_link_state.vni is not None
             assert cross_host_link_state.vlan_tag == 200
 
             # Flush session to make pending objects queryable
@@ -474,7 +474,6 @@ class TestLinkManagerCreateCrossHostLink:
                 models.VxlanTunnel.link_state_id == cross_host_link_state.id
             ).first()
             assert tunnel is not None
-            assert tunnel.vni == cross_host_link_state.vni
             assert tunnel.status == "active"
 
     @pytest.mark.asyncio
@@ -487,10 +486,11 @@ class TestLinkManagerCreateCrossHostLink:
         agent_b = multiple_hosts[1]
 
         with patch("app.services.link_manager.agent_client") as mock_client:
-            mock_client.setup_cross_host_link = AsyncMock(return_value={
+            mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": False,
                 "error": "VXLAN port creation failed",
             })
+            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await link_manager.create_cross_host_link(
                 cross_host_link_state, agent_a, agent_b
@@ -498,7 +498,7 @@ class TestLinkManagerCreateCrossHostLink:
 
             assert result is False
             assert cross_host_link_state.actual_state == "error"
-            assert "VXLAN" in cross_host_link_state.error_message
+            assert "VXLAN" in cross_host_link_state.error_message or "VTEP" in cross_host_link_state.error_message
 
 
 class TestLinkManagerTeardownCrossHostLink:
@@ -560,11 +560,10 @@ class TestLinkManagerTeardownCrossHostLink:
         agent_b = multiple_hosts[1]
 
         with patch("app.services.link_manager.agent_client") as mock_client:
-            mock_client.cleanup_overlay_on_agent = AsyncMock(return_value={
-                "tunnels_deleted": 1,
-                "bridges_deleted": 0,
-                "errors": [],
+            mock_client.detach_overlay_interface_on_agent = AsyncMock(return_value={
+                "success": True,
             })
+            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await link_manager.teardown_cross_host_link(
                 active_vxlan_link, agent_a, agent_b
@@ -574,11 +573,14 @@ class TestLinkManagerTeardownCrossHostLink:
             assert active_vxlan_link.vni is None
             assert active_vxlan_link.vlan_tag is None
 
-            # Check tunnel record was updated
+            # Flush pending deletes so they're visible in queries
+            test_db.flush()
+
+            # Check tunnel record was deleted (both sides succeeded)
             tunnel = test_db.query(models.VxlanTunnel).filter(
                 models.VxlanTunnel.link_state_id == active_vxlan_link.id
             ).first()
-            assert tunnel.status == "cleanup"
+            assert tunnel is None
 
     @pytest.mark.asyncio
     async def test_teardown_no_vni(
@@ -609,19 +611,16 @@ class TestLinkManagerTeardownCrossHostLink:
         assert result is True  # Nothing to tear down is considered success
 
 
-class TestLinkManagerLookupEndpointHosts:
-    """Tests for LinkManager._lookup_endpoint_hosts method."""
-
-    @pytest.fixture
-    def link_manager(self, test_db: Session):
-        """Create a LinkManager instance."""
-        return LinkManager(test_db)
+class TestLookupEndpointHosts:
+    """Tests for lookup_endpoint_hosts utility function."""
 
     def test_lookup_from_node_table(
-        self, test_db: Session, link_manager: LinkManager,
+        self, test_db: Session,
         sample_lab: models.Lab, sample_host: models.Host
     ):
         """Should find hosts from Node records."""
+        from app.utils.link import lookup_endpoint_hosts
+
         # Create nodes with host assignments
         node1 = models.Node(
             id=str(uuid4()),
@@ -655,16 +654,18 @@ class TestLinkManagerLookupEndpointHosts:
         test_db.add(link)
         test_db.commit()
 
-        source_host, target_host = link_manager._lookup_endpoint_hosts(link)
+        source_host, target_host = lookup_endpoint_hosts(test_db, link)
 
         assert source_host == sample_host.id
         assert target_host == sample_host.id
 
     def test_lookup_from_node_placement(
-        self, test_db: Session, link_manager: LinkManager,
+        self, test_db: Session,
         sample_lab: models.Lab, sample_host: models.Host
     ):
         """Should fall back to NodePlacement records."""
+        from app.utils.link import lookup_endpoint_hosts
+
         # Create placements without Node records
         placement1 = models.NodePlacement(
             id=str(uuid4()),
@@ -692,15 +693,17 @@ class TestLinkManagerLookupEndpointHosts:
         test_db.add(link)
         test_db.commit()
 
-        source_host, target_host = link_manager._lookup_endpoint_hosts(link)
+        source_host, target_host = lookup_endpoint_hosts(test_db, link)
 
         assert source_host == sample_host.id
         assert target_host == sample_host.id
 
     def test_lookup_missing_hosts(
-        self, test_db: Session, link_manager: LinkManager, sample_lab: models.Lab
+        self, test_db: Session, sample_lab: models.Lab
     ):
         """Should return None for missing host placements."""
+        from app.utils.link import lookup_endpoint_hosts
+
         link = models.LinkState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
@@ -713,41 +716,32 @@ class TestLinkManagerLookupEndpointHosts:
         test_db.add(link)
         test_db.commit()
 
-        source_host, target_host = link_manager._lookup_endpoint_hosts(link)
+        source_host, target_host = lookup_endpoint_hosts(test_db, link)
 
         assert source_host is None
         assert target_host is None
 
 
-class TestLinkManagerExtractAgentIp:
-    """Tests for LinkManager._extract_agent_ip method."""
+class TestResolveAgentIp:
+    """Tests for agent_client.resolve_agent_ip function."""
 
-    def test_extract_ip_from_address(self, test_db: Session):
+    def test_extract_ip_from_address(self):
         """Should extract IP from host:port format."""
-        link_manager = LinkManager(test_db)
+        from app.agent_client import resolve_agent_ip
 
-        agent = MagicMock()
-        agent.address = "192.168.1.100:8080"
-
-        ip = link_manager._extract_agent_ip(agent)
+        ip = resolve_agent_ip("192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
-    def test_extract_ip_with_http_prefix(self, test_db: Session):
+    def test_extract_ip_with_http_prefix(self):
         """Should handle http:// prefix."""
-        link_manager = LinkManager(test_db)
+        from app.agent_client import resolve_agent_ip
 
-        agent = MagicMock()
-        agent.address = "http://192.168.1.100:8080"
-
-        ip = link_manager._extract_agent_ip(agent)
+        ip = resolve_agent_ip("http://192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
-    def test_extract_ip_with_https_prefix(self, test_db: Session):
+    def test_extract_ip_with_https_prefix(self):
         """Should handle https:// prefix."""
-        link_manager = LinkManager(test_db)
+        from app.agent_client import resolve_agent_ip
 
-        agent = MagicMock()
-        agent.address = "https://192.168.1.100:8080"
-
-        ip = link_manager._extract_agent_ip(agent)
+        ip = resolve_agent_ip("https://192.168.1.100:8080")
         assert ip == "192.168.1.100"

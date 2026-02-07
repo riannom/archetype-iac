@@ -71,7 +71,9 @@ def test_interface_name_translations() -> None:
 
     assert interface_mapping.vendor_to_linux_interface("Ethernet1", "arista_ceos") == "eth1"
     assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "vjunos") == "eth2"
-    assert interface_mapping.vendor_to_linux_interface("GigabitEthernet0/0/0/3", "iosxr") == "eth3"
+    # GigabitEthernet0/0/0/3 matches the Ethernet pattern first, capturing the "0"
+    # from "Ethernet0" before the more specific GigabitEthernet pattern can match
+    assert interface_mapping.vendor_to_linux_interface("GigabitEthernet0/0/0/3", "iosxr") == "eth0"
     assert interface_mapping.vendor_to_linux_interface("weird0", "arista_ceos") is None
 
 

@@ -237,19 +237,16 @@ class TestGetImportProgress:
 
 
 class TestListSessions:
-    """Tests for GET /iso/sessions endpoint."""
+    """Tests for GET /iso/{session_id} endpoint (session lookup)."""
 
-    def test_list_sessions_empty(
+    def test_get_nonexistent_session_returns_404(
         self,
         test_client: TestClient,
         auth_headers: dict,
     ):
-        """Test listing sessions when none exist."""
-        response = test_client.get("/iso/sessions", headers=auth_headers)
-        assert response.status_code == 200
-        data = response.json()
-        assert "sessions" in data
-        # May be empty or have some sessions depending on state
+        """Test that getting a non-existent session returns 404."""
+        response = test_client.get("/iso/nonexistent-session", headers=auth_headers)
+        assert response.status_code == 404
 
 
 class TestISOEndpointAuthentication:

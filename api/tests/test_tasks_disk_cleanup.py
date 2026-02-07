@@ -55,12 +55,10 @@ class TestCleanupOrphanedUploadFiles:
             os.utime(old_file, (old_time, old_time))
 
             # Mock the upload sessions to have no active uploads
-            with patch("app.tasks.disk_cleanup._upload_sessions", {}), \
-                 patch("app.tasks.disk_cleanup._upload_lock", MagicMock()):
-                # Need to patch the import path
-                with patch("app.routers.iso._upload_sessions", {}), \
-                     patch("app.routers.iso._upload_lock", MagicMock()):
-                    result = await cleanup_orphaned_upload_files()
+            # The function imports from app.routers.iso inside
+            with patch("app.routers.iso._upload_sessions", {}), \
+                 patch("app.routers.iso._upload_lock", MagicMock()):
+                result = await cleanup_orphaned_upload_files()
 
             assert result["deleted_count"] == 1
             assert not old_file.exists()
@@ -247,6 +245,8 @@ class TestCleanupOldJobRecords:
     @pytest.mark.asyncio
     async def test_deletes_old_completed_jobs(self):
         """Test that old completed jobs are deleted."""
+        from contextlib import contextmanager
+
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_job_retention_days = 30
 
@@ -261,7 +261,11 @@ class TestCleanupOldJobRecords:
             mock_session = MagicMock()
             mock_session.query.return_value = mock_query
 
-            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session):
+            @contextmanager
+            def fake_get_session():
+                yield mock_session
+
+            with patch("app.tasks.disk_cleanup.get_session", fake_get_session):
                 result = await cleanup_old_job_records()
 
             assert result["deleted_count"] == 1
@@ -275,6 +279,8 @@ class TestCleanupOldWebhookDeliveries:
     @pytest.mark.asyncio
     async def test_deletes_old_deliveries(self):
         """Test that old webhook deliveries are deleted."""
+        from contextlib import contextmanager
+
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_webhook_retention_days = 7
 
@@ -285,7 +291,11 @@ class TestCleanupOldWebhookDeliveries:
             mock_session = MagicMock()
             mock_session.query.return_value = mock_query
 
-            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session):
+            @contextmanager
+            def fake_get_session():
+                yield mock_session
+
+            with patch("app.tasks.disk_cleanup.get_session", fake_get_session):
                 result = await cleanup_old_webhook_deliveries()
 
             assert result["deleted_count"] == 5
@@ -309,6 +319,8 @@ class TestCleanupDockerOnAgents:
     @pytest.mark.asyncio
     async def test_calls_prune_on_online_agents(self):
         """Test that prune is called on all online agents."""
+        from contextlib import contextmanager
+
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_docker_enabled = True
             mock_settings.cleanup_docker_dangling_images = True
@@ -348,7 +360,11 @@ class TestCleanupDockerOnAgents:
                 "space_reclaimed": 1000000,
             })
 
-            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session), \
+            @contextmanager
+            def fake_get_session():
+                yield mock_session
+
+            with patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
                  patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune):
                 result = await cleanup_docker_on_agents()
 
@@ -363,6 +379,8 @@ class TestCleanupOldConfigSnapshots:
     @pytest.mark.asyncio
     async def test_deletes_orphaned_snapshots(self):
         """Test that snapshots for deleted labs are removed."""
+        from contextlib import contextmanager
+
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_config_snapshot_retention_days = 90
 
@@ -389,7 +407,11 @@ class TestCleanupOldConfigSnapshots:
 
             mock_session.query.side_effect = query_side_effect
 
-            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session):
+            @contextmanager
+            def fake_get_session():
+                yield mock_session
+
+            with patch("app.tasks.disk_cleanup.get_session", fake_get_session):
                 result = await cleanup_old_config_snapshots()
 
             assert result["orphaned_count"] == 1
@@ -402,6 +424,8 @@ class TestCleanupOldImageSyncJobs:
     @pytest.mark.asyncio
     async def test_deletes_orphaned_and_old_jobs(self):
         """Test that orphaned and old jobs are deleted."""
+        from contextlib import contextmanager
+
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_image_sync_job_retention_days = 30
 
@@ -426,7 +450,11 @@ class TestCleanupOldImageSyncJobs:
 
             mock_session.query.side_effect = query_side_effect
 
-            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session):
+            @contextmanager
+            def fake_get_session():
+                yield mock_session
+
+            with patch("app.tasks.disk_cleanup.get_session", fake_get_session):
                 result = await cleanup_old_image_sync_jobs()
 
             assert result["orphaned_count"] == 1
@@ -447,6 +475,8 @@ class TestCleanupOrphanedLabWorkspaces:
     @pytest.mark.asyncio
     async def test_deletes_orphaned_workspace(self, temp_workspace):
         """Test that workspace for deleted lab is removed."""
+        from contextlib import contextmanager
+
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_orphaned_workspaces = True
 
@@ -462,7 +492,11 @@ class TestCleanupOrphanedLabWorkspaces:
             mock_session = MagicMock()
             mock_session.query.return_value = mock_lab_query
 
-            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session), \
+            @contextmanager
+            def fake_get_session():
+                yield mock_session
+
+            with patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
                  patch("app.storage.workspace_root", return_value=temp_workspace):
                 result = await cleanup_orphaned_lab_workspaces()
 
@@ -472,6 +506,8 @@ class TestCleanupOrphanedLabWorkspaces:
     @pytest.mark.asyncio
     async def test_keeps_valid_workspaces(self, temp_workspace):
         """Test that workspace for existing lab is kept."""
+        from contextlib import contextmanager
+
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_orphaned_workspaces = True
 
@@ -491,7 +527,11 @@ class TestCleanupOrphanedLabWorkspaces:
             mock_session = MagicMock()
             mock_session.query.return_value = mock_lab_query
 
-            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session), \
+            @contextmanager
+            def fake_get_session():
+                yield mock_session
+
+            with patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
                  patch("app.storage.workspace_root", return_value=temp_workspace):
                 result = await cleanup_orphaned_lab_workspaces()
 
@@ -501,6 +541,8 @@ class TestCleanupOrphanedLabWorkspaces:
     @pytest.mark.asyncio
     async def test_skips_special_directories(self, temp_workspace):
         """Test that special directories (images, uploads) are not deleted."""
+        from contextlib import contextmanager
+
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_orphaned_workspaces = True
 
@@ -514,7 +556,11 @@ class TestCleanupOrphanedLabWorkspaces:
             mock_session = MagicMock()
             mock_session.query.return_value = mock_lab_query
 
-            with patch("app.tasks.disk_cleanup.SessionLocal", return_value=mock_session), \
+            @contextmanager
+            def fake_get_session():
+                yield mock_session
+
+            with patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
                  patch("app.storage.workspace_root", return_value=temp_workspace):
                 result = await cleanup_orphaned_lab_workspaces()
 

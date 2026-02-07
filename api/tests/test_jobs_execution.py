@@ -9,6 +9,7 @@ This module tests the core job execution functions including:
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,6 +24,14 @@ from app.tasks.jobs import (
     run_multihost_destroy,
     run_node_reconcile,
 )
+
+
+def _mock_get_session(test_db: Session):
+    """Create a mock get_session context manager that yields the test database session."""
+    @contextmanager
+    def mock_session():
+        yield test_db
+    return mock_session
 
 
 class TestGetContainerName:
@@ -87,7 +96,7 @@ class TestRunAgentJob:
     @pytest.mark.asyncio
     async def test_job_not_found(self, test_db: Session):
         """Job that doesn't exist should log error and return early."""
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             await run_agent_job("nonexistent-job", "lab-id", "up")
             # Should not raise, just log error and return
 
@@ -104,7 +113,7 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             await run_agent_job(job.id, "nonexistent-lab", "up")
 
         test_db.refresh(job)
@@ -134,7 +143,7 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = None
                 await run_agent_job(job.id, lab.id, "up")
@@ -166,7 +175,7 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -202,7 +211,7 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -243,7 +252,7 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
                 with patch("app.tasks.jobs.agent_client.destroy_on_agent", new_callable=AsyncMock) as mock_destroy:
@@ -256,8 +265,8 @@ class TestRunAgentJob:
         assert lab.state == "stopped"
 
     @pytest.mark.asyncio
-    async def test_node_action_start(self, test_db: Session, test_user: models.User, sample_host: models.Host):
-        """Node start action should call node_action_on_agent."""
+    async def test_node_action_start_deprecated(self, test_db: Session, test_user: models.User, sample_host: models.Host):
+        """Node start action is deprecated and should return Unknown action."""
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
@@ -279,16 +288,16 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
-            with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
-                mock_get_agent.return_value = sample_host
-                with patch("app.tasks.jobs.agent_client.node_action_on_agent", new_callable=AsyncMock) as mock_node:
-                    mock_node.return_value = {"status": "completed"}
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs.agent_client.get_agent_for_node", new_callable=AsyncMock) as mock_get_node_agent:
+                mock_get_node_agent.return_value = sample_host
+                with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
+                    mock_get_agent.return_value = sample_host
                     await run_agent_job(job.id, lab.id, "node:start:router1")
 
-        mock_node.assert_called_once_with(sample_host, job.id, lab.id, "router1", "start")
         test_db.refresh(job)
-        assert job.status == "completed"
+        assert job.status == "failed"
+        assert "Unknown action" in job.log_path
 
     @pytest.mark.asyncio
     async def test_unknown_action(self, test_db: Session, test_user: models.User, sample_host: models.Host):
@@ -313,7 +322,7 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
                 await run_agent_job(job.id, lab.id, "invalid_action")
@@ -347,7 +356,7 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -387,7 +396,7 @@ class TestRunAgentJob:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -452,7 +461,7 @@ class TestRunMultihostDeploy:
         test_db.add_all([node1, node2])
         test_db.commit()
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             await run_multihost_deploy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -498,7 +507,7 @@ class TestRunMultihostDestroy:
         test_db.add(node1)
         test_db.commit()
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             await run_multihost_destroy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -532,7 +541,7 @@ class TestRunNodeReconcile:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             await run_node_reconcile(job.id, lab.id, ["nonexistent-node"])
 
         test_db.refresh(job)
@@ -540,18 +549,29 @@ class TestRunNodeReconcile:
         assert "No nodes to sync" in job.log_path
 
     @pytest.mark.asyncio
-    async def test_sync_nodes_need_deploy(self, test_db: Session, test_user: models.User, sample_host: models.Host, tmp_path):
-        """Nodes in undeployed state should trigger full deploy."""
+    async def test_sync_nodes_need_deploy(self, test_db: Session, test_user: models.User, sample_host: models.Host):
+        """Nodes in undeployed state should trigger deploy via TopologyService."""
         lab = models.Lab(
             name="Test Lab",
             owner_id=test_user.id,
             provider="docker",
             state="stopped",
-            workspace_path=str(tmp_path),
         )
         test_db.add(lab)
         test_db.commit()
         test_db.refresh(lab)
+
+        # Create a Node definition in the database (used by TopologyService)
+        node_def = models.Node(
+            lab_id=lab.id,
+            gui_id="node-1",
+            display_name="router1",
+            container_name="router1",
+            device="linux",
+            host_id=sample_host.id,
+        )
+        test_db.add(node_def)
+        test_db.commit()
 
         # Create node state that needs deploy
         node_state = models.NodeState(
@@ -575,22 +595,13 @@ class TestRunNodeReconcile:
         test_db.commit()
         test_db.refresh(job)
 
-        # Create topology file
-        from app.config import settings
-        with patch.object(settings, "netlab_workspace", str(tmp_path)):
-            topo_dir = tmp_path / lab.id
-            topo_dir.mkdir(parents=True, exist_ok=True)
-            topo_file = topo_dir / "topology.yml"
-            topo_file.write_text("name: test\ntopology:\n  nodes:\n    router1:\n      kind: linux\n")
-
-            with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
-                with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
-                    mock_get_agent.return_value = sample_host
-                    with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
-                        mock_deploy.return_value = {"status": "completed"}
-                        with patch("app.tasks.jobs.topology_path") as mock_topo_path:
-                            mock_topo_path.return_value = topo_file
-                            await run_node_reconcile(job.id, lab.id, ["node-1"])
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
+                mock_get_agent.return_value = sample_host
+                with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
+                    mock_deploy.return_value = {"status": "completed"}
+                    with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+                        await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(job)
         assert job.status == "completed" or job.status == "failed"  # May fail due to test setup
@@ -816,7 +827,7 @@ class TestJobErrorHandling:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:

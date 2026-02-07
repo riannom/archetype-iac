@@ -1,6 +1,8 @@
 """Shared pytest fixtures for API tests."""
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -39,11 +41,22 @@ def test_db(test_engine):
 
 
 @pytest.fixture(scope="function")
-def test_client(test_db: Session, monkeypatch):
+def test_client(test_db: Session, monkeypatch, tmp_path):
     """Create a FastAPI test client with database override."""
-    # Ensure JWT secret is set for testing
-    monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret-key-for-testing")
-    monkeypatch.setattr(settings, "local_auth_enabled", True)
+    # Save originals for manual cleanup (object.__setattr__ bypasses pydantic)
+    _originals = {
+        "jwt_secret": settings.jwt_secret,
+        "local_auth_enabled": settings.local_auth_enabled,
+        "workspace": settings.workspace,
+        "iso_upload_dir": settings.iso_upload_dir,
+    }
+
+    # Use object.__setattr__ to bypass pydantic model validation/interception
+    # which can fail silently after many monkeypatch cycles in the full suite
+    object.__setattr__(settings, "jwt_secret", "test-jwt-secret-key-for-testing")
+    object.__setattr__(settings, "local_auth_enabled", True)
+    object.__setattr__(settings, "workspace", str(tmp_path / "workspace"))
+    object.__setattr__(settings, "iso_upload_dir", str(tmp_path / "uploads"))
 
     def override_get_db():
         try:
@@ -51,10 +64,23 @@ def test_client(test_db: Session, monkeypatch):
         finally:
             pass  # Session cleanup handled by test_db fixture
 
+    # Override db.get_session so WebSocket handlers (which use get_session()
+    # instead of the FastAPI get_db dependency) also use the test database.
+    @contextmanager
+    def override_get_session():
+        yield test_db
+
+    monkeypatch.setattr(db, "get_session", override_get_session)
+
     app.dependency_overrides[db.get_db] = override_get_db
-    with TestClient(app) as client:
-        yield client
-    app.dependency_overrides.clear()
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+        # Restore settings
+        for key, val in _originals.items():
+            object.__setattr__(settings, key, val)
 
 
 @pytest.fixture(scope="function")

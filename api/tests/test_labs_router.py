@@ -97,9 +97,20 @@ class TestLabsCRUD:
         assert response.status_code == 401
 
     def test_create_lab(
-        self, test_client: TestClient, test_user: models.User, auth_headers: dict
+        self,
+        test_client: TestClient,
+        test_user: models.User,
+        auth_headers: dict,
+        tmp_path,
+        monkeypatch,
     ):
         """Test creating a new lab."""
+        from app.routers import labs as labs_router
+
+        monkeypatch.setattr(
+            labs_router, "lab_workspace", lambda lab_id: tmp_path / lab_id
+        )
+
         response = test_client.post(
             "/labs",
             json={"name": "New Lab", "provider": "docker"},
@@ -113,9 +124,15 @@ class TestLabsCRUD:
         assert data["state"] == "stopped"
 
     def test_create_lab_default_provider(
-        self, test_client: TestClient, auth_headers: dict
+        self, test_client: TestClient, auth_headers: dict, tmp_path, monkeypatch
     ):
         """Test creating lab uses default provider."""
+        from app.routers import labs as labs_router
+
+        monkeypatch.setattr(
+            labs_router, "lab_workspace", lambda lab_id: tmp_path / lab_id
+        )
+
         response = test_client.post(
             "/labs", json={"name": "Default Provider Lab"}, headers=auth_headers
         )
@@ -155,7 +172,7 @@ class TestLabsCRUD:
         test_db.commit()
 
         response = test_client.get(f"/labs/{lab.id}", headers=auth_headers)
-        assert response.status_code == 404  # Appears as not found to unauthorized users
+        assert response.status_code == 403  # Access denied for unauthorized users
 
     def test_update_lab(
         self,
@@ -224,8 +241,16 @@ class TestLabsCRUD:
         test_db: Session,
         sample_lab: models.Lab,
         auth_headers: dict,
+        tmp_path,
+        monkeypatch,
     ):
         """Test cloning a lab."""
+        from app.routers import labs as labs_router
+
+        monkeypatch.setattr(
+            labs_router, "lab_workspace", lambda lab_id: tmp_path / lab_id
+        )
+
         response = test_client.post(
             f"/labs/{sample_lab.id}/clone", headers=auth_headers
         )
@@ -243,8 +268,16 @@ class TestTopologyImportExport:
         test_client: TestClient,
         sample_lab: models.Lab,
         auth_headers: dict,
+        tmp_path,
+        monkeypatch,
     ):
         """Test updating topology from YAML."""
+        from app.routers import labs as labs_router
+
+        monkeypatch.setattr(
+            labs_router, "lab_workspace", lambda lab_id: tmp_path / lab_id
+        )
+
         yaml_content = """
 nodes:
   r1:
@@ -268,23 +301,18 @@ links:
         test_db: Session,
         sample_lab: models.Lab,
         auth_headers: dict,
-        tmp_path,
-        monkeypatch,
     ):
         """Test exporting YAML topology."""
-        from pathlib import Path
-
-        # Setup workspace with topology file
-        workspace = tmp_path / sample_lab.id
-        workspace.mkdir(parents=True)
-        topo_file = workspace / "topology.yml"
-        topo_file.write_text("nodes:\n  r1:\n    device: linux\n")
-
-        # Patch storage functions to use test path
-        from app import storage
-
-        monkeypatch.setattr(storage, "lab_workspace", lambda lab_id: workspace)
-        monkeypatch.setattr(storage, "topology_path", lambda lab_id: topo_file)
+        # Populate topology in database (source of truth)
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="r1",
+            container_name="r1",
+            device="linux",
+        )
+        test_db.add(node)
+        test_db.commit()
 
         response = test_client.get(
             f"/labs/{sample_lab.id}/export-yaml", headers=auth_headers
@@ -299,21 +327,9 @@ links:
         test_client: TestClient,
         sample_lab: models.Lab,
         auth_headers: dict,
-        tmp_path,
-        monkeypatch,
     ):
         """Test exporting YAML when topology doesn't exist."""
-        from pathlib import Path
-
-        workspace = tmp_path / sample_lab.id
-        workspace.mkdir(parents=True)
-        topo_file = workspace / "topology.yml"  # File doesn't exist
-
-        from app import storage
-
-        monkeypatch.setattr(storage, "lab_workspace", lambda lab_id: workspace)
-        monkeypatch.setattr(storage, "topology_path", lambda lab_id: topo_file)
-
+        # No nodes in database means no topology to export
         response = test_client.get(
             f"/labs/{sample_lab.id}/export-yaml", headers=auth_headers
         )
@@ -329,16 +345,11 @@ links:
         monkeypatch,
     ):
         """Test syncing topology creates node states."""
-        from pathlib import Path
+        from app.routers import labs as labs_router
 
-        workspace = tmp_path / sample_lab.id
-        workspace.mkdir(parents=True)
-        topo_file = workspace / "topology.yml"
-
-        from app import storage
-
-        monkeypatch.setattr(storage, "lab_workspace", lambda lab_id: workspace)
-        monkeypatch.setattr(storage, "topology_path", lambda lab_id: topo_file)
+        monkeypatch.setattr(
+            labs_router, "lab_workspace", lambda lab_id: tmp_path / lab_id
+        )
 
         graph = {
             "nodes": [
@@ -388,16 +399,11 @@ links:
         monkeypatch,
     ):
         """Test that update-topology uses container_name when available."""
-        from pathlib import Path
+        from app.routers import labs as labs_router
 
-        workspace = tmp_path / sample_lab.id
-        workspace.mkdir(parents=True)
-        topo_file = workspace / "topology.yml"
-
-        from app import storage
-
-        monkeypatch.setattr(storage, "lab_workspace", lambda lab_id: workspace)
-        monkeypatch.setattr(storage, "topology_path", lambda lab_id: topo_file)
+        monkeypatch.setattr(
+            labs_router, "lab_workspace", lambda lab_id: tmp_path / lab_id
+        )
 
         graph = {
             "nodes": [
@@ -433,30 +439,28 @@ links:
     def test_export_graph(
         self,
         test_client: TestClient,
+        test_db: Session,
         sample_lab: models.Lab,
         auth_headers: dict,
-        tmp_path,
-        monkeypatch,
     ):
         """Test exporting graph topology."""
-        workspace = tmp_path / sample_lab.id
-        workspace.mkdir(parents=True)
-        topo_file = workspace / "topology.yml"
-        topo_file.write_text("""
-nodes:
-  r1:
-    device: linux
-  r2:
-    device: linux
-links:
-  - r1: {}
-    r2: {}
-""")
-
-        from app import storage
-
-        monkeypatch.setattr(storage, "lab_workspace", lambda lab_id: workspace)
-        monkeypatch.setattr(storage, "topology_path", lambda lab_id: topo_file)
+        # Populate topology in database (source of truth)
+        node1 = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="r1",
+            container_name="r1",
+            device="linux",
+        )
+        node2 = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n2",
+            display_name="r2",
+            container_name="r2",
+            device="linux",
+        )
+        test_db.add_all([node1, node2])
+        test_db.commit()
 
         response = test_client.get(
             f"/labs/{sample_lab.id}/export-graph", headers=auth_headers
@@ -510,8 +514,13 @@ class TestNodeStates:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         auth_headers: dict,
+        monkeypatch,
     ):
         """Test setting a node's desired state."""
+        from app.routers import labs as labs_router
+
+        monkeypatch.setattr(labs_router, "has_conflicting_job", lambda *a, **kw: (False, None))
+
         lab, nodes = sample_lab_with_nodes
         node = nodes[0]
         response = test_client.put(
@@ -533,8 +542,13 @@ class TestNodeStates:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         auth_headers: dict,
+        monkeypatch,
     ):
         """Test setting all nodes' desired state."""
+        from app.routers import labs as labs_router
+
+        monkeypatch.setattr(labs_router, "has_conflicting_job", lambda *a, **kw: (False, None))
+
         lab, nodes = sample_lab_with_nodes
         response = test_client.put(
             f"/labs/{lab.id}/nodes/desired-state",

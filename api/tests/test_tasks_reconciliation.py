@@ -17,18 +17,18 @@ class TestGenerateLinkName:
 
     def test_generates_consistent_name(self):
         """Should generate consistent name regardless of endpoint order."""
-        from app.tasks.reconciliation import _generate_link_name
+        from app.utils.link import generate_link_name
 
-        name1 = _generate_link_name("R1", "eth1", "R2", "eth2")
-        name2 = _generate_link_name("R2", "eth2", "R1", "eth1")
+        name1 = generate_link_name("R1", "eth1", "R2", "eth2")
+        name2 = generate_link_name("R2", "eth2", "R1", "eth1")
 
         assert name1 == name2
 
     def test_generates_expected_format(self):
         """Should generate name in expected format."""
-        from app.tasks.reconciliation import _generate_link_name
+        from app.utils.link import generate_link_name
 
-        name = _generate_link_name("Router1", "eth0", "Switch1", "ge-0/0/1")
+        name = generate_link_name("Router1", "eth0", "Switch1", "ge-0/0/1")
 
         # Should be sorted alphabetically
         assert ":" in name
@@ -36,9 +36,9 @@ class TestGenerateLinkName:
 
     def test_handles_same_node_different_interfaces(self):
         """Should handle links between different interfaces on same node."""
-        from app.tasks.reconciliation import _generate_link_name
+        from app.utils.link import generate_link_name
 
-        name = _generate_link_name("R1", "eth1", "R1", "eth2")
+        name = generate_link_name("R1", "eth1", "R1", "eth2")
         assert "R1:eth1" in name
         assert "R1:eth2" in name
 
@@ -83,6 +83,8 @@ class TestEnsureLinkStatesForLab:
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
         assert created >= 1
 
+        # Flush added records so query can find them (autoflush=False)
+        test_db.flush()
         links = test_db.query(models.LinkState).filter(
             models.LinkState.lab_id == sample_lab.id
         ).all()
@@ -296,9 +298,13 @@ class TestLinkStateReconciliation:
     """Tests for link state reconciliation within _reconcile_single_lab."""
 
     @pytest.mark.asyncio
-    async def test_link_state_up_when_both_nodes_running(self, test_db: Session, sample_lab: models.Lab):
+    async def test_link_state_up_when_both_nodes_running(self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host):
         """Link should be 'up' when both endpoint nodes are running."""
         from app.tasks.reconciliation import _reconcile_single_lab
+
+        # Point lab at real host so reconciliation can find it
+        sample_lab.agent_id = sample_host.id
+        test_db.commit()
 
         # Create node states
         node1 = models.NodeState(
@@ -306,6 +312,7 @@ class TestLinkStateReconciliation:
             lab_id=sample_lab.id,
             node_id="n1",
             node_name="R1",
+            desired_state="running",
             actual_state="running",
         )
         node2 = models.NodeState(
@@ -313,6 +320,7 @@ class TestLinkStateReconciliation:
             lab_id=sample_lab.id,
             node_id="n2",
             node_name="R2",
+            desired_state="running",
             actual_state="running",
         )
         test_db.add_all([node1, node2])
@@ -331,10 +339,7 @@ class TestLinkStateReconciliation:
         test_db.add(link)
         test_db.commit()
 
-        mock_agent = MagicMock()
-
-        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
-            mock_get_agent.return_value = mock_agent
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
                 mock_status.return_value = {
                     "nodes": [
@@ -351,16 +356,21 @@ class TestLinkStateReconciliation:
                     assert link.actual_state == "up"
 
     @pytest.mark.asyncio
-    async def test_link_state_down_when_node_stopped(self, test_db: Session, sample_lab: models.Lab):
+    async def test_link_state_down_when_node_stopped(self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host):
         """Link should be 'down' when one endpoint node is stopped."""
         from app.tasks.reconciliation import _reconcile_single_lab
 
-        # Create node states
+        sample_lab.agent_id = sample_host.id
+        test_db.commit()
+
+        # Create node states - desired_state must match actual_state to avoid
+        # triggering enforcement (which would rollback link state changes)
         node1 = models.NodeState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
             node_id="n1",
             node_name="R1",
+            desired_state="running",
             actual_state="running",
         )
         node2 = models.NodeState(
@@ -368,6 +378,7 @@ class TestLinkStateReconciliation:
             lab_id=sample_lab.id,
             node_id="n2",
             node_name="R2",
+            desired_state="stopped",
             actual_state="stopped",
         )
         test_db.add_all([node1, node2])
@@ -386,10 +397,7 @@ class TestLinkStateReconciliation:
         test_db.add(link)
         test_db.commit()
 
-        mock_agent = MagicMock()
-
-        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
-            mock_get_agent.return_value = mock_agent
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
                 mock_status.return_value = {
                     "nodes": [
@@ -404,16 +412,21 @@ class TestLinkStateReconciliation:
                 assert link.actual_state == "down"
 
     @pytest.mark.asyncio
-    async def test_link_state_down_when_carrier_off(self, test_db: Session, sample_lab: models.Lab):
+    async def test_link_state_down_when_carrier_off(self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host):
         """Link should be 'down' when carrier state is off on either endpoint."""
         from app.tasks.reconciliation import _reconcile_single_lab
 
-        # Create node states
+        sample_lab.agent_id = sample_host.id
+        test_db.commit()
+
+        # Create node states - desired_state must match actual_state to avoid
+        # triggering enforcement (which would rollback link state changes)
         node1 = models.NodeState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
             node_id="n1",
             node_name="R1",
+            desired_state="running",
             actual_state="running",
         )
         node2 = models.NodeState(
@@ -421,6 +434,7 @@ class TestLinkStateReconciliation:
             lab_id=sample_lab.id,
             node_id="n2",
             node_name="R2",
+            desired_state="running",
             actual_state="running",
         )
         test_db.add_all([node1, node2])
@@ -441,10 +455,7 @@ class TestLinkStateReconciliation:
         test_db.add(link)
         test_db.commit()
 
-        mock_agent = MagicMock()
-
-        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
-            mock_get_agent.return_value = mock_agent
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
                 mock_status.return_value = {
                     "nodes": [
@@ -454,26 +465,30 @@ class TestLinkStateReconciliation:
                 }
                 with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
                     mock_ready.return_value = {"is_ready": True}
+                    # Prevent auto-connect from overwriting link state
+                    with patch("app.tasks.reconciliation.acquire_link_ops_lock", return_value=False):
 
-                    await _reconcile_single_lab(test_db, sample_lab.id)
+                        await _reconcile_single_lab(test_db, sample_lab.id)
 
-                    test_db.refresh(link)
-                    # Link should be down when carrier is off
-                    assert link.actual_state == "down"
+                        test_db.refresh(link)
+                        # Link should be down when carrier is off
+                        assert link.actual_state == "down"
 
     @pytest.mark.asyncio
     async def test_cross_host_link_state_verification(self, test_db: Session, sample_lab: models.Lab):
         """Cross-host link should verify VXLAN tunnel is active."""
         from app.tasks.reconciliation import _reconcile_single_lab
         import json
+        from datetime import datetime, timezone
 
-        # Create hosts
+        # Create hosts with last_heartbeat so is_agent_online works
         host1 = models.Host(
             id="host-1",
             name="Host 1",
             address="192.168.1.1:8080",
             status="online",
             capabilities=json.dumps({"providers": ["docker"]}),
+            last_heartbeat=datetime.now(timezone.utc),
         )
         host2 = models.Host(
             id="host-2",
@@ -481,15 +496,21 @@ class TestLinkStateReconciliation:
             address="192.168.1.2:8080",
             status="online",
             capabilities=json.dumps({"providers": ["docker"]}),
+            last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add_all([host1, host2])
 
-        # Create node states on different hosts
+        # Point lab at first host
+        sample_lab.agent_id = "host-1"
+
+        # Create node states on different hosts - desired_state must match
+        # actual_state to avoid triggering enforcement
         node1 = models.NodeState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
             node_id="n1",
             node_name="R1",
+            desired_state="running",
             actual_state="running",
         )
         node2 = models.NodeState(
@@ -497,6 +518,7 @@ class TestLinkStateReconciliation:
             lab_id=sample_lab.id,
             node_id="n2",
             node_name="R3",
+            desired_state="running",
             actual_state="running",
         )
         test_db.add_all([node1, node2])
@@ -538,10 +560,7 @@ class TestLinkStateReconciliation:
         test_db.add(tunnel)
         test_db.commit()
 
-        mock_agent = MagicMock()
-
-        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
-            mock_get_agent.return_value = mock_agent
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
                 mock_status.return_value = {
                     "nodes": [
@@ -564,17 +583,22 @@ class TestLinkStateCarrierReconciliation:
 
     @pytest.mark.asyncio
     async def test_carrier_state_preserved_during_reconciliation(
-        self, test_db: Session, sample_lab: models.Lab
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
     ):
         """Carrier state should be preserved during reconciliation."""
         from app.tasks.reconciliation import _reconcile_single_lab
 
-        # Create node states
+        sample_lab.agent_id = sample_host.id
+        test_db.commit()
+
+        # Create node states - desired_state must match actual_state to avoid
+        # triggering enforcement (which would rollback link state changes)
         node1 = models.NodeState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
             node_id="n1",
             node_name="R1",
+            desired_state="running",
             actual_state="running",
         )
         node2 = models.NodeState(
@@ -582,6 +606,7 @@ class TestLinkStateCarrierReconciliation:
             lab_id=sample_lab.id,
             node_id="n2",
             node_name="R2",
+            desired_state="running",
             actual_state="running",
         )
         test_db.add_all([node1, node2])
@@ -602,10 +627,7 @@ class TestLinkStateCarrierReconciliation:
         test_db.add(link)
         test_db.commit()
 
-        mock_agent = MagicMock()
-
-        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
-            mock_get_agent.return_value = mock_agent
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
                 mock_status.return_value = {
                     "nodes": [
@@ -615,31 +637,35 @@ class TestLinkStateCarrierReconciliation:
                 }
                 with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
                     mock_ready.return_value = {"is_ready": True}
+                    # Prevent auto-connect from overwriting link state
+                    with patch("app.tasks.reconciliation.acquire_link_ops_lock", return_value=False):
 
-                    await _reconcile_single_lab(test_db, sample_lab.id)
+                        await _reconcile_single_lab(test_db, sample_lab.id)
 
-                    test_db.refresh(link)
-                    # Carrier states should be unchanged
-                    assert link.source_carrier_state == "on"
-                    assert link.target_carrier_state == "off"
-                    # But link should be down since target carrier is off
-                    assert link.actual_state == "down"
+                        test_db.refresh(link)
+                        # Carrier states should be unchanged
+                        assert link.source_carrier_state == "on"
+                        assert link.target_carrier_state == "off"
+                        # But link should be down since target carrier is off
+                        assert link.actual_state == "down"
 
     @pytest.mark.asyncio
     async def test_link_state_updates_on_vxlan_tunnel_failure(
         self, test_db: Session, sample_lab: models.Lab
     ):
-        """Cross-host link should be 'down' if VXLAN tunnel is failed."""
+        """Cross-host link should be 'error' if VXLAN tunnel is failed."""
         from app.tasks.reconciliation import _reconcile_single_lab
         import json
+        from datetime import datetime, timezone
 
-        # Create hosts
+        # Create hosts with last_heartbeat so is_agent_online works
         host1 = models.Host(
             id="host-a",
             name="Host A",
             address="192.168.1.10:8080",
             status="online",
             capabilities=json.dumps({"providers": ["docker"]}),
+            last_heartbeat=datetime.now(timezone.utc),
         )
         host2 = models.Host(
             id="host-b",
@@ -647,15 +673,21 @@ class TestLinkStateCarrierReconciliation:
             address="192.168.1.20:8080",
             status="online",
             capabilities=json.dumps({"providers": ["docker"]}),
+            last_heartbeat=datetime.now(timezone.utc),
         )
         test_db.add_all([host1, host2])
 
-        # Create node states
+        # Point lab at first host
+        sample_lab.agent_id = "host-a"
+
+        # Create node states - desired_state must match actual_state to avoid
+        # triggering enforcement (which would rollback link state changes)
         node1 = models.NodeState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
             node_id="n1",
             node_name="R1",
+            desired_state="running",
             actual_state="running",
         )
         node2 = models.NodeState(
@@ -663,6 +695,7 @@ class TestLinkStateCarrierReconciliation:
             lab_id=sample_lab.id,
             node_id="n2",
             node_name="R3",
+            desired_state="running",
             actual_state="running",
         )
         test_db.add_all([node1, node2])
@@ -705,10 +738,7 @@ class TestLinkStateCarrierReconciliation:
         test_db.add(tunnel)
         test_db.commit()
 
-        mock_agent = MagicMock()
-
-        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
-            mock_get_agent.return_value = mock_agent
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
                 mock_status.return_value = {
                     "nodes": [
@@ -718,9 +748,11 @@ class TestLinkStateCarrierReconciliation:
                 }
                 with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
                     mock_ready.return_value = {"is_ready": True}
+                    # Prevent auto-connect from overwriting link state
+                    with patch("app.tasks.reconciliation.acquire_link_ops_lock", return_value=False):
 
-                    await _reconcile_single_lab(test_db, sample_lab.id)
+                        await _reconcile_single_lab(test_db, sample_lab.id)
 
-                    test_db.refresh(link)
-                    # Link should be down because tunnel failed
-                    assert link.actual_state == "down"
+                        test_db.refresh(link)
+                        # Link should be error because tunnel is not active
+                        assert link.actual_state == "error"
