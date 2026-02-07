@@ -2127,6 +2127,25 @@ async def extract_configs(
                 _save_config_to_workspace, workspace, node_name, content
             )
 
+            # Persist config to node's config_json so deploys include it
+            node = (
+                database.query(models.Node)
+                .filter(
+                    models.Node.lab_id == lab_id,
+                    models.Node.container_name == node_name,
+                )
+                .first()
+            )
+            if node:
+                existing = {}
+                if node.config_json:
+                    try:
+                        existing = json.loads(node.config_json)
+                    except json.JSONDecodeError:
+                        pass
+                existing["startup-config"] = content
+                node.config_json = json.dumps(existing)
+
             # Create snapshot if requested
             if create_snapshot:
                 content_hash = _compute_content_hash(content)
