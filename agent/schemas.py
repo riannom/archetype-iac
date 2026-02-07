@@ -342,6 +342,7 @@ class OverlayStatusResponse(BaseModel):
     vteps: list[dict[str, Any]] = Field(default_factory=list)  # New trunk VTEPs
     tunnels: list[TunnelInfo] = Field(default_factory=list)  # Legacy per-link tunnels
     bridges: list[dict[str, Any]] = Field(default_factory=list)
+    link_tunnels: list[dict[str, Any]] = Field(default_factory=list)  # Per-link VNI tunnels
 
 
 # --- New Trunk VTEP Model ---
