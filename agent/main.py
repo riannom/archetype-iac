@@ -2237,6 +2237,28 @@ async def overlay_status() -> OverlayStatusResponse:
         return OverlayStatusResponse()
 
 
+@app.delete("/overlay/bridge-ports/{port_name}")
+async def delete_bridge_port(port_name: str):
+    """Delete an OVS port by name (for cleanup of orphaned ports)."""
+    import asyncio
+
+    bridge = settings.ovs_bridge_name or "arch-ovs"
+
+    async def run(cmd: str) -> tuple[int, str]:
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, (stdout or stderr).decode().strip()
+
+    code, output = await run(f"ovs-vsctl --if-exists del-port {bridge} {port_name}")
+    return {
+        "deleted": code == 0,
+        "port_name": port_name,
+        "message": output or "ok",
+    }
+
+
 @app.get("/overlay/bridge-ports")
 async def overlay_bridge_ports():
     """Debug: query actual OVS bridge for VXLAN ports and their config."""
