@@ -102,6 +102,18 @@ class Settings(BaseSettings):
     # Grace period after timeout before allowing reconciliation (seconds)
     job_stuck_grace_period: int = 60  # 1 minute
 
+    # Resource capacity validation
+    resource_validation_enabled: bool = True
+    resource_memory_buffer_mb: int = 2048
+    resource_cpu_buffer_cores: float = 1.0
+    resource_disk_buffer_gb: float = 20.0
+    resource_memory_warning_pct: float = 80.0
+    resource_memory_error_pct: float = 95.0
+    resource_cpu_warning_pct: float = 80.0
+    resource_cpu_error_pct: float = 95.0
+    resource_disk_warning_pct: float = 85.0
+    resource_disk_error_pct: float = 95.0
+
     # Feature flags
     feature_multihost_labs: bool = True
     feature_vxlan_overlay: bool = True

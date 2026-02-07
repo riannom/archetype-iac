@@ -492,6 +492,120 @@ async def update_topology(
     return schemas.LabOut.model_validate(lab)
 
 
+class CheckResourcesRequest(BaseModel):
+    """Request body for resource capacity check."""
+    node_ids: list[str] | None = None  # null = check all nodes
+
+
+class PerHostCapacity(BaseModel):
+    agent_name: str = ""
+    fits: bool = True
+    has_warnings: bool = False
+    projected_memory_pct: float = 0
+    projected_cpu_pct: float = 0
+    projected_disk_pct: float = 0
+    node_count: int = 0
+    required_memory_mb: int = 0
+    required_cpu_cores: int = 0
+    available_memory_mb: float = 0
+    available_cpu_cores: float = 0
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CheckResourcesResponse(BaseModel):
+    sufficient: bool = True
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    per_host: dict[str, PerHostCapacity] = Field(default_factory=dict)
+
+
+@router.post("/labs/{lab_id}/check-resources")
+def check_resources(
+    lab_id: str,
+    payload: CheckResourcesRequest | None = None,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> CheckResourcesResponse:
+    """Check if agents have sufficient resources to deploy lab nodes.
+
+    Returns projected resource usage per host with warnings and errors.
+    Does not block or modify anything - purely informational.
+    """
+    from app.services.resource_capacity import (
+        check_multihost_capacity,
+        format_capacity_warnings,
+    )
+
+    lab = get_lab_or_404(lab_id, database, current_user)
+    service = TopologyService(database)
+    nodes = service.get_nodes(lab_id)
+
+    # Filter to specific nodes if requested
+    if payload and payload.node_ids:
+        nodes = [n for n in nodes if n.gui_id in payload.node_ids or n.id in payload.node_ids]
+
+    # Build host -> device_types mapping
+    host_device_map: dict[str, list[str]] = {}
+    unplaced = []
+    for node in nodes:
+        if node.node_type == "external":
+            continue
+        if node.host_id:
+            if node.host_id not in host_device_map:
+                host_device_map[node.host_id] = []
+            host_device_map[node.host_id].append(node.device or "linux")
+        else:
+            unplaced.append(node)
+
+    # Assign unplaced nodes to lab's default agent for estimation
+    if unplaced and lab.agent_id:
+        if lab.agent_id not in host_device_map:
+            host_device_map[lab.agent_id] = []
+        for node in unplaced:
+            host_device_map[lab.agent_id].append(node.device or "linux")
+
+    if not host_device_map:
+        return CheckResourcesResponse()
+
+    results = check_multihost_capacity(host_device_map, database)
+
+    response = CheckResourcesResponse()
+    all_warnings = []
+    all_errors = []
+
+    for host_id, result in results.items():
+        per_host = PerHostCapacity(
+            agent_name=result.agent_name,
+            fits=result.fits,
+            has_warnings=result.has_warnings,
+            projected_memory_pct=result.projected_memory_pct,
+            projected_cpu_pct=result.projected_cpu_pct,
+            projected_disk_pct=result.projected_disk_pct,
+            node_count=result.node_count,
+            required_memory_mb=result.required_memory_mb,
+            required_cpu_cores=result.required_cpu_cores,
+            available_memory_mb=result.available_memory_mb,
+            available_cpu_cores=result.available_cpu_cores,
+            errors=result.errors,
+            warnings=result.warnings,
+        )
+        response.per_host[host_id] = per_host
+
+        if not result.fits:
+            response.sufficient = False
+            for e in result.errors:
+                all_errors.append(f"{result.agent_name}: {e}")
+
+        if result.has_warnings:
+            for w in result.warnings:
+                all_warnings.append(f"{result.agent_name}: {w}")
+
+    response.warnings = all_warnings
+    response.errors = all_errors
+    return response
+
+
 class TopologyGraphWithLayout(schemas.TopologyGraph):
     """Topology graph with optional layout data."""
 
