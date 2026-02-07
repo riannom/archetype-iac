@@ -167,18 +167,15 @@ async def attempt_partial_recovery(
         logger.warning(f"Agents not available for link {link.link_name} recovery")
         return False
 
-    # Get agent IPs and VLAN tag
+    # Get agent IPs and VNI
     from app.agent_client import resolve_agent_ip
+    from app.services.link_manager import allocate_vni
     agent_ip_a = resolve_agent_ip(agent_a.address)
     agent_ip_b = resolve_agent_ip(agent_b.address)
 
-    # Use existing VLAN tag or allocate new one
-    vlan_tag = link.vlan_tag
-    if not vlan_tag:
-        from app.services.link_manager import allocate_vni
-        # Use VNI allocation for VLAN tag (deterministic)
-        vlan_tag = allocate_vni(link.lab_id, link.link_name) % 4000 + 100
-        link.vlan_tag = vlan_tag
+    # Ensure VNI is set (agent discovers local VLANs independently)
+    if not link.vni:
+        link.vni = allocate_vni(link.lab_id, link.link_name)
 
     interface_a = _normalize_interface_name(link.source_interface) if link.source_interface else ""
     interface_b = _normalize_interface_name(link.target_interface) if link.target_interface else ""
@@ -189,19 +186,15 @@ async def attempt_partial_recovery(
     # Re-attach source side if needed
     if not source_ok:
         try:
-            # Ensure VTEP exists
-            await agent_client.ensure_vtep_on_agent(
-                agent_a, agent_ip_a, agent_ip_b, agent_b.id
-            )
-            # Attach interface
             result = await agent_client.attach_overlay_interface_on_agent(
                 agent_a,
                 lab_id=link.lab_id,
                 container_name=link.source_node,
                 interface_name=interface_a,
-                vlan_tag=vlan_tag,
-                link_id=link.link_name,
+                vni=link.vni if link.vni else allocate_vni(link.lab_id, link.link_name),
+                local_ip=agent_ip_a,
                 remote_ip=agent_ip_b,
+                link_id=link.link_name,
             )
             if result.get("success"):
                 source_ok = True
@@ -215,19 +208,15 @@ async def attempt_partial_recovery(
     # Re-attach target side if needed
     if not target_ok:
         try:
-            # Ensure VTEP exists
-            await agent_client.ensure_vtep_on_agent(
-                agent_b, agent_ip_b, agent_ip_a, agent_a.id
-            )
-            # Attach interface
             result = await agent_client.attach_overlay_interface_on_agent(
                 agent_b,
                 lab_id=link.lab_id,
                 container_name=link.target_node,
                 interface_name=interface_b,
-                vlan_tag=vlan_tag,
-                link_id=link.link_name,
+                vni=link.vni if link.vni else allocate_vni(link.lab_id, link.link_name),
+                local_ip=agent_ip_b,
                 remote_ip=agent_ip_a,
+                link_id=link.link_name,
             )
             if result.get("success"):
                 target_ok = True

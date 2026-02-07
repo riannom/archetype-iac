@@ -192,15 +192,15 @@ class LinkManager:
         )
 
         if result.get("success"):
-            vlan_tag = result.get("vlan_tag", 0)
-            link_state.vlan_tag = vlan_tag
+            vni = result.get("vni", 0)
+            link_state.vni = vni
 
             # Create VxlanTunnel record for tracking
             tunnel = models.VxlanTunnel(
                 lab_id=lab_id,
                 link_state_id=link_state.id,
-                vni=0,  # Not per-link in new model
-                vlan_tag=vlan_tag,
+                vni=vni,
+                vlan_tag=0,  # Not used in per-link VNI model (each side uses local VLAN)
                 agent_a_id=agent_a.id,
                 agent_a_ip=agent_ip_a,
                 agent_b_id=agent_b.id,
@@ -252,10 +252,9 @@ class LinkManager:
             logger.warning(f"No VxlanTunnel for link {link_name}, nothing to tear down")
             return True
 
-        # Get agent IP addresses for VTEP reference counting
+        # Get agent IP addresses for rollback
         agent_ip_a = agent_client.resolve_agent_ip(agent_a.address)
         agent_ip_b = agent_client.resolve_agent_ip(agent_b.address)
-        vlan_tag = link_state.vlan_tag
 
         logger.info(
             f"Tearing down cross-host link {link_name} between "
@@ -275,8 +274,6 @@ class LinkManager:
                 container_name=link_state.source_node,
                 interface_name=link_state.source_interface,
                 link_id=link_name,
-                remote_ip=agent_ip_b,
-                delete_vtep_if_unused=True,
             )
             source_ok = result_a.get("success", False)
             if not source_ok:
@@ -300,8 +297,6 @@ class LinkManager:
                 container_name=link_state.target_node,
                 interface_name=link_state.target_interface,
                 link_id=link_name,
-                remote_ip=agent_ip_a,
-                delete_vtep_if_unused=True,
             )
             target_ok = result_b.get("success", False)
             if not target_ok:
@@ -313,20 +308,22 @@ class LinkManager:
             logger.error(f"Failed to detach target on agent_b: {e}")
 
         if not target_ok:
-            # Rollback: Re-attach source interface
+            # Rollback: Re-attach source interface using per-link VNI
             logger.warning(
                 f"Target detach failed, rolling back source for link {link_name}"
             )
-            if vlan_tag:
+            rollback_vni = tunnel.vni if tunnel else None
+            if rollback_vni:
                 try:
                     await agent_client.attach_overlay_interface_on_agent(
                         agent_a,
                         lab_id=lab_id,
                         container_name=link_state.source_node,
                         interface_name=link_state.source_interface,
-                        vlan_tag=vlan_tag,
-                        link_id=link_name,
+                        vni=rollback_vni,
+                        local_ip=agent_ip_a,
                         remote_ip=agent_ip_b,
+                        link_id=link_name,
                     )
                     logger.info(f"Rolled back source attachment for link {link_name}")
                 except Exception as e:

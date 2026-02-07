@@ -377,24 +377,27 @@ class EnsureVtepResponse(BaseModel):
 
 
 class AttachOverlayInterfaceRequest(BaseModel):
-    """Controller -> Agent: Attach container interface with VLAN tag.
+    """Controller -> Agent: Create per-link VXLAN tunnel and attach container.
 
-    This is the new model where VLAN tag is specified by the controller
-    (coordinated across agents) rather than derived from a per-link tunnel.
+    Per-link VNI model: each cross-host link gets its own VXLAN port in
+    access mode. The agent discovers the container's local VLAN and creates
+    an access-mode VXLAN port with tag=<local_vlan> and options:key=<vni>.
     """
     lab_id: str
     container_name: str
     interface_name: str  # Interface inside container (e.g., eth1)
-    vlan_tag: int  # VLAN for link isolation (must match remote side)
-    tenant_mtu: int = 0  # Optional MTU (0 = use default)
-    # For VTEP reference counting
-    link_id: str | None = None  # Link identifier for tracking
-    remote_ip: str | None = None  # Remote VTEP IP for reference counting
+    vni: int  # VXLAN Network Identifier (shared between both sides)
+    local_ip: str  # This agent's IP for VXLAN endpoint
+    remote_ip: str  # Remote agent's IP for VXLAN endpoint
+    link_id: str  # Link identifier for tracking
+    tenant_mtu: int = 0  # Optional MTU (0 = auto-discover)
 
 
 class AttachOverlayInterfaceResponse(BaseModel):
     """Agent -> Controller: Attachment result."""
     success: bool
+    local_vlan: int | None = None  # The container's local VLAN used for access mode
+    vni: int | None = None  # The VNI used for the tunnel
     error: str | None = None
 
 
@@ -403,18 +406,12 @@ class DetachOverlayInterfaceRequest(BaseModel):
 
     This performs a complete detach operation:
     1. Restores the container interface to an isolated VLAN (unique tag)
-    2. Removes the link from VTEP reference counting
-    3. Optionally deletes the VTEP if no more links use it
-
-    The interface isolation ensures the port no longer participates in
-    the cross-host link's L2 domain.
+    2. Deletes the per-link VXLAN tunnel port
     """
     lab_id: str  # Lab identifier
     container_name: str  # Container name (short form, e.g., "eos_1")
     interface_name: str  # Interface inside container (e.g., eth1)
-    link_id: str  # Link identifier for VTEP tracking
-    remote_ip: str  # Remote VTEP IP
-    delete_vtep_if_unused: bool = True  # Delete VTEP if no more links
+    link_id: str  # Link identifier for tunnel lookup
 
 
 class DetachOverlayInterfaceResponse(BaseModel):
@@ -422,8 +419,7 @@ class DetachOverlayInterfaceResponse(BaseModel):
     success: bool
     interface_isolated: bool = False  # True if interface was restored to isolated VLAN
     new_vlan: int | None = None  # The new isolated VLAN assigned
-    vtep_deleted: bool = False  # True if VTEP was deleted
-    remaining_links: int = 0  # Links still using the VTEP
+    tunnel_deleted: bool = False  # True if per-link VXLAN port was deleted
     error: str | None = None
 
 

@@ -1116,80 +1116,7 @@ async def cleanup_overlay_on_agent(agent: models.Host, lab_id: str) -> dict:
         return {"tunnels_deleted": 0, "bridges_deleted": 0, "errors": [str(e)]}
 
 
-# --- New Trunk VTEP Model Functions ---
-
-
-def allocate_link_vlan(lab_id: str, link_name: str) -> int:
-    """Allocate a deterministic VLAN tag for a cross-host link.
-
-    Uses hash of lab_id:link_name to ensure:
-    - Same link always gets same VLAN (idempotent)
-    - Different links get different VLANs (collision-resistant)
-    - Both sides of a link get the same VLAN when using same parameters
-
-    VLAN range: 3000-4000 (matches agent overlay VLAN range)
-
-    Args:
-        lab_id: Lab identifier
-        link_name: Link identifier (e.g., "node1:eth1-node2:eth1")
-
-    Returns:
-        VLAN tag in the overlay range
-    """
-    import hashlib
-
-    combined = f"{lab_id}:{link_name}"
-    hash_val = int(hashlib.md5(combined.encode()).hexdigest()[:8], 16)
-    # Map to VLAN range 3000-4000 (1000 values)
-    return 3000 + (hash_val % 1000)
-
-
-async def ensure_vtep_on_agent(
-    agent: models.Host,
-    local_ip: str,
-    remote_ip: str,
-    remote_host_id: str | None = None,
-) -> dict:
-    """Ensure a VTEP exists on an agent to a remote host.
-
-    This implements the new trunk VTEP model where there is one VTEP per
-    remote host (not per link). The VTEP carries all cross-host links to
-    that remote host with VLAN tags providing isolation.
-
-    Args:
-        agent: The agent to create the VTEP on
-        local_ip: Agent's local IP for VXLAN endpoint
-        remote_ip: Remote agent's IP for VXLAN endpoint
-        remote_host_id: Optional remote host identifier
-
-    Returns:
-        Dict with 'success', 'vtep', 'created', and optionally 'error' keys
-    """
-    url = f"{get_agent_url(agent)}/overlay/vtep"
-
-    payload = {
-        "local_ip": local_ip,
-        "remote_ip": remote_ip,
-    }
-    if remote_host_id:
-        payload["remote_host_id"] = remote_host_id
-
-    try:
-        client = get_http_client()
-        response = await client.post(url, json=payload, timeout=VTEP_OPERATION_TIMEOUT)
-        response.raise_for_status()
-        result = response.json()
-        if result.get("success"):
-            action = "created" if result.get("created") else "found"
-            logger.info(
-                f"VTEP {action} on {agent.id}: {result.get('vtep', {}).get('interface_name')} -> {remote_ip}"
-            )
-        else:
-            logger.warning(f"VTEP ensure failed on {agent.id}: {result.get('error')}")
-        return result
-    except Exception as e:
-        logger.error(f"Failed to ensure VTEP on agent {agent.id}: {e}")
-        return {"success": False, "error": str(e)}
+# --- Per-Link VNI Model Functions ---
 
 
 async def attach_overlay_interface_on_agent(
@@ -1197,28 +1124,30 @@ async def attach_overlay_interface_on_agent(
     lab_id: str,
     container_name: str,
     interface_name: str,
-    vlan_tag: int,
+    vni: int,
+    local_ip: str,
+    remote_ip: str,
+    link_id: str,
     tenant_mtu: int = 0,
-    link_id: str | None = None,
-    remote_ip: str | None = None,
 ) -> dict:
-    """Attach a container interface to the overlay with a specific VLAN tag.
+    """Create a per-link VXLAN tunnel and attach a container interface.
 
-    This is the new model where VLAN tag is specified (coordinated across
-    agents) rather than derived from a per-link tunnel.
+    The agent discovers the container's local VLAN and creates an access-mode
+    VXLAN port with tag=<local_vlan> and options:key=<vni>.
 
     Args:
         agent: The agent where the container is running
         lab_id: Lab identifier
         container_name: Docker container name
         interface_name: Interface name inside container (e.g., eth1)
-        vlan_tag: VLAN tag for link isolation (must match remote side)
-        tenant_mtu: Optional MTU (0 = use default)
-        link_id: Link identifier for VTEP reference counting
-        remote_ip: Remote VTEP IP for reference counting
+        vni: VXLAN Network Identifier (shared between both sides)
+        local_ip: Agent's own IP for VXLAN endpoint
+        remote_ip: Remote agent's IP for VXLAN endpoint
+        link_id: Link identifier for tracking
+        tenant_mtu: Optional MTU (0 = auto-discover)
 
     Returns:
-        Dict with 'success' and optionally 'error' keys
+        Dict with 'success', 'local_vlan', 'vni', and optionally 'error' keys
     """
     url = f"{get_agent_url(agent)}/overlay/attach-link"
 
@@ -1226,13 +1155,12 @@ async def attach_overlay_interface_on_agent(
         "lab_id": lab_id,
         "container_name": container_name,
         "interface_name": interface_name,
-        "vlan_tag": vlan_tag,
+        "vni": vni,
+        "local_ip": local_ip,
+        "remote_ip": remote_ip,
+        "link_id": link_id,
         "tenant_mtu": tenant_mtu,
     }
-    if link_id:
-        payload["link_id"] = link_id
-    if remote_ip:
-        payload["remote_ip"] = remote_ip
 
     try:
         client = get_http_client()
@@ -1241,7 +1169,8 @@ async def attach_overlay_interface_on_agent(
         result = response.json()
         if result.get("success"):
             logger.info(
-                f"Attached {container_name}:{interface_name} to VLAN {vlan_tag} on {agent.id}"
+                f"Attached {container_name}:{interface_name} with VNI {vni} "
+                f"(local VLAN {result.get('local_vlan')}) on {agent.id}"
             )
         else:
             logger.warning(f"Overlay attach failed on {agent.id}: {result.get('error')}")
@@ -1257,28 +1186,23 @@ async def detach_overlay_interface_on_agent(
     container_name: str,
     interface_name: str,
     link_id: str,
-    remote_ip: str,
-    delete_vtep_if_unused: bool = True,
 ) -> dict:
     """Detach a link from the overlay on an agent.
 
-    This performs a complete detach operation:
+    This performs a complete detach:
     1. Restores the container interface to an isolated VLAN (unique tag)
-    2. Removes the link from VTEP reference counting
-    3. Optionally deletes the VTEP if no more links use it
+    2. Deletes the per-link VXLAN tunnel port
 
     Args:
         agent: The agent to detach on
         lab_id: Lab identifier
         container_name: Container name (short form, e.g., "eos_1")
         interface_name: Interface name inside container (e.g., eth1)
-        link_id: Link identifier for VTEP tracking
-        remote_ip: Remote VTEP IP
-        delete_vtep_if_unused: If True, delete VTEP when no links remain
+        link_id: Link identifier for tunnel lookup
 
     Returns:
         Dict with 'success', 'interface_isolated', 'new_vlan',
-        'vtep_deleted', 'remaining_links' keys
+        'tunnel_deleted' keys
     """
     url = f"{get_agent_url(agent)}/overlay/detach-link"
 
@@ -1287,8 +1211,6 @@ async def detach_overlay_interface_on_agent(
         "container_name": container_name,
         "interface_name": interface_name,
         "link_id": link_id,
-        "remote_ip": remote_ip,
-        "delete_vtep_if_unused": delete_vtep_if_unused,
     }
 
     try:
@@ -1298,11 +1220,10 @@ async def detach_overlay_interface_on_agent(
         result = response.json()
         if result.get("success"):
             isolated_msg = f" (interface isolated to VLAN {result.get('new_vlan')})" if result.get("interface_isolated") else ""
-            vtep_msg = " (VTEP deleted)" if result.get("vtep_deleted") else ""
+            tunnel_msg = " (tunnel deleted)" if result.get("tunnel_deleted") else ""
             logger.info(
                 f"Detached {container_name}:{interface_name} link {link_id} "
-                f"from VTEP {remote_ip} on {agent.id}{isolated_msg}{vtep_msg}, "
-                f"{result.get('remaining_links', 0)} links remaining"
+                f"on {agent.id}{isolated_msg}{tunnel_msg}"
             )
         else:
             logger.warning(f"Overlay detach failed on {agent.id}: {result.get('error')}")
@@ -1323,10 +1244,11 @@ async def setup_cross_host_link_v2(
     node_b: str,
     interface_b: str,
 ) -> dict:
-    """Set up a cross-host link using the new trunk VTEP model.
+    """Set up a cross-host link using the per-link VNI model.
 
-    This creates/reuses VTEPs on both agents and attaches the container
-    interfaces with a coordinated VLAN tag.
+    Each cross-host link gets its own VXLAN port on each agent in access mode.
+    The agent discovers the container's local VLAN and creates the VXLAN port
+    with tag=<local_vlan> and options:key=<vni>. No VLAN coordination needed.
 
     Args:
         database: Database session (unused, kept for compatibility)
@@ -1342,45 +1264,25 @@ async def setup_cross_host_link_v2(
     Returns:
         Dict with 'success' and status information
     """
-    # Extract and resolve agent IP addresses (handles hostnames like "local-agent")
+    from app.services.link_manager import allocate_vni
+
+    # Resolve agent IPs (handles hostnames like "local-agent")
     agent_ip_a = resolve_agent_ip(agent_a.address)
     agent_ip_b = resolve_agent_ip(agent_b.address)
 
-    logger.info(f"Setting up cross-host link (v2) {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
+    # Allocate deterministic per-link VNI
+    vni = allocate_vni(lab_id, link_id)
 
-    # Step 1: Ensure VTEPs exist on both agents (can run in parallel)
-    vtep_a_task = ensure_vtep_on_agent(
-        agent_a,
-        local_ip=agent_ip_a,
-        remote_ip=agent_ip_b,
-        remote_host_id=agent_b.id,
+    logger.info(
+        f"Setting up cross-host link {link_id} (VNI {vni}): "
+        f"{agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})"
     )
-    vtep_b_task = ensure_vtep_on_agent(
-        agent_b,
-        local_ip=agent_ip_b,
-        remote_ip=agent_ip_a,
-        remote_host_id=agent_a.id,
-    )
-
-    vtep_a_result, vtep_b_result = await asyncio.gather(vtep_a_task, vtep_b_task)
-
-    if not vtep_a_result.get("success"):
-        return {"success": False, "error": f"VTEP on {agent_a.id} failed: {vtep_a_result.get('error')}"}
-    if not vtep_b_result.get("success"):
-        return {"success": False, "error": f"VTEP on {agent_b.id} failed: {vtep_b_result.get('error')}"}
-
-    # Step 2: Allocate deterministic VLAN for this link
-    vlan_tag = allocate_link_vlan(lab_id, link_id)
-
-    # Step 3: Attach container interfaces with the coordinated VLAN tag (in parallel)
-    # Get tenant MTU from one of the VTEPs
-    tenant_mtu = vtep_a_result.get("vtep", {}).get("tenant_mtu", 0)
 
     # Retry logic for container attachments - containers may still be starting
     max_retries = 3
     retry_delay = 2.0  # seconds
 
-    async def attach_with_retry(agent, node, interface, remote_ip) -> dict:
+    async def attach_with_retry(agent, node, interface, local_ip, remote_ip) -> dict:
         """Attempt attachment with retries for timing issues."""
         last_error = None
         for attempt in range(max_retries):
@@ -1389,55 +1291,60 @@ async def setup_cross_host_link_v2(
                 lab_id=lab_id,
                 container_name=node,
                 interface_name=interface,
-                vlan_tag=vlan_tag,
-                tenant_mtu=tenant_mtu,
-                link_id=link_id,
+                vni=vni,
+                local_ip=local_ip,
                 remote_ip=remote_ip,
+                link_id=link_id,
             )
             if result.get("success"):
                 return result
             last_error = result.get("error", "unknown error")
-            # Check if it's a "not running" error - worth retrying
             if "not running" in str(last_error).lower() and attempt < max_retries - 1:
-                logger.info(f"Container not running, retrying attachment in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                logger.info(
+                    f"Container not running, retrying in {retry_delay}s "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
                 await asyncio.sleep(retry_delay)
             else:
                 break
         return {"success": False, "error": last_error}
 
+    # Create per-link VXLAN ports on both agents in parallel
     attach_a_result, attach_b_result = await asyncio.gather(
-        attach_with_retry(agent_a, node_a, interface_a, agent_ip_b),
-        attach_with_retry(agent_b, node_b, interface_b, agent_ip_a),
+        attach_with_retry(agent_a, node_a, interface_a, agent_ip_a, agent_ip_b),
+        attach_with_retry(agent_b, node_b, interface_b, agent_ip_b, agent_ip_a),
     )
 
-    # Check if either attachment failed - this must fail the whole operation
+    # Check if either attachment failed
     attach_errors = []
     if not attach_a_result.get("success"):
-        attach_errors.append(f"{agent_a.name}:{node_a}:{interface_a}: {attach_a_result.get('error')}")
+        attach_errors.append(
+            f"{agent_a.name}:{node_a}:{interface_a}: {attach_a_result.get('error')}"
+        )
     if not attach_b_result.get("success"):
-        attach_errors.append(f"{agent_b.name}:{node_b}:{interface_b}: {attach_b_result.get('error')}")
+        attach_errors.append(
+            f"{agent_b.name}:{node_b}:{interface_b}: {attach_b_result.get('error')}"
+        )
 
     if attach_errors:
         error_msg = "; ".join(attach_errors)
-        logger.error(f"Container attachment failed for cross-host link {link_id}: {error_msg}")
+        logger.error(
+            f"Per-link tunnel creation failed for {link_id}: {error_msg}"
+        )
         return {
             "success": False,
-            "error": f"Container attachment failed: {error_msg}",
-            "vlan_tag": vlan_tag,
+            "error": f"Per-link tunnel creation failed: {error_msg}",
+            "vni": vni,
         }
 
     return {
         "success": True,
-        "vlan_tag": vlan_tag,
+        "vni": vni,
         "agent_a": agent_a.id,
         "agent_b": agent_b.id,
-        "vteps": {
-            "a": vtep_a_result.get("vtep", {}).get("interface_name"),
-            "b": vtep_b_result.get("vtep", {}).get("interface_name"),
-        },
-        "attachments": {
-            "a": attach_a_result.get("success", False),
-            "b": attach_b_result.get("success", False),
+        "local_vlans": {
+            "a": attach_a_result.get("local_vlan"),
+            "b": attach_b_result.get("local_vlan"),
         },
     }
 

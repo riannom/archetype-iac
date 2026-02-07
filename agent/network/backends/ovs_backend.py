@@ -206,6 +206,29 @@ class OVSBackend(NetworkBackend):
             delete_vtep_if_unused=delete_vtep_if_unused,
         )
 
+    async def overlay_create_link_tunnel(
+        self,
+        lab_id: str,
+        link_id: str,
+        vni: int,
+        local_ip: str,
+        remote_ip: str,
+        local_vlan: int,
+        tenant_mtu: int = 0,
+    ) -> Any:
+        return await self._overlay.create_link_tunnel(
+            lab_id=lab_id,
+            link_id=link_id,
+            vni=vni,
+            local_ip=local_ip,
+            remote_ip=remote_ip,
+            local_vlan=local_vlan,
+            tenant_mtu=tenant_mtu,
+        )
+
+    async def overlay_delete_link_tunnel(self, link_id: str) -> bool:
+        return await self._overlay.delete_link_tunnel(link_id=link_id)
+
     def check_port_exists(self, port_name: str) -> bool:
         try:
             result = subprocess.run(

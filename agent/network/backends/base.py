@@ -158,7 +158,24 @@ class NetworkBackend(ABC):
         remote_ip: str,
         delete_vtep_if_unused: bool = True,
     ) -> dict[str, Any]:
-        """Detach a link from overlay and manage VTEP state."""
+        """Detach a link from overlay and manage VTEP state (legacy)."""
+
+    @abstractmethod
+    async def overlay_create_link_tunnel(
+        self,
+        lab_id: str,
+        link_id: str,
+        vni: int,
+        local_ip: str,
+        remote_ip: str,
+        local_vlan: int,
+        tenant_mtu: int = 0,
+    ) -> Any:
+        """Create a per-link access-mode VXLAN tunnel port."""
+
+    @abstractmethod
+    async def overlay_delete_link_tunnel(self, link_id: str) -> bool:
+        """Delete a per-link VXLAN tunnel port."""
 
     @abstractmethod
     def check_port_exists(self, port_name: str) -> bool:
