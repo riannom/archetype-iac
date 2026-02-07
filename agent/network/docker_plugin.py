@@ -2222,7 +2222,7 @@ class DockerOVSPlugin:
                                 f"Discovered endpoint {ep.endpoint_id[:12]} is stale "
                                 f"(OVS port {ep.host_veth} missing)"
                             )
-                            return None
+                            continue  # Try other networks / strategies 3+4
                         ep.container_name = container_name
                         logger.info(
                             f"Matched endpoint via EndpointID: {container_name}:{interface_name} -> {ep.host_veth}"
@@ -2241,7 +2241,7 @@ class DockerOVSPlugin:
                                     f"Discovered endpoint {ep.endpoint_id[:12]} is stale "
                                     f"(OVS port {ep.host_veth} missing)"
                                 )
-                                return None
+                                continue  # Try other networks / strategies 3+4
                             ep.container_name = container_name
                             logger.info(
                                 f"Matched endpoint via NetworkID: {container_name}:{interface_name} -> {ep.host_veth}"
@@ -2893,6 +2893,15 @@ class DockerOVSPlugin:
         Returns:
             List of dicts with repair results per endpoint.
         """
+        async with self._lock:
+            return await self._repair_endpoints_locked(lab_id, container_name)
+
+    async def _repair_endpoints_locked(
+        self,
+        lab_id: str,
+        container_name: str,
+    ) -> list[dict[str, Any]]:
+        """Inner implementation of repair_endpoints, called under self._lock."""
         results: list[dict[str, Any]] = []
 
         # Collect stale endpoints for this container
@@ -2922,11 +2931,22 @@ class DockerOVSPlugin:
                 networks = await asyncio.to_thread(_get_networks)
                 for net_name, net_info in networks.items():
                     eid = net_info.get("EndpointID")
+                    nid = net_info.get("NetworkID")
+
+                    # Match by EndpointID (direct)
                     if eid and eid in self.endpoints:
                         ep = self.endpoints[eid]
                         if not await self._validate_endpoint_exists(ep):
                             ep.container_name = container_name
                             stale_eps.append(ep)
+                        continue
+
+                    # Fallback: match by NetworkID for recreated containers
+                    if nid:
+                        for ep in self.endpoints.values():
+                            if ep.network_id == nid and not await self._validate_endpoint_exists(ep):
+                                ep.container_name = container_name
+                                stale_eps.append(ep)
             except Exception as e:
                 logger.warning(f"Could not inspect container {container_name}: {e}")
 
