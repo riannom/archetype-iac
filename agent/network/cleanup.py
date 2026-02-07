@@ -72,6 +72,9 @@ class CleanupStats:
     veths_deleted: int = 0
     bridges_deleted: int = 0
     vxlans_deleted: int = 0
+    ovs_orphans_deleted: int = 0
+    ovs_vxlan_orphans_deleted: int = 0
+    ovs_tracked_removed: int = 0
     errors: list[str] = None
 
     def __post_init__(self):
@@ -85,6 +88,9 @@ class CleanupStats:
             "veths_deleted": self.veths_deleted,
             "bridges_deleted": self.bridges_deleted,
             "vxlans_deleted": self.vxlans_deleted,
+            "ovs_orphans_deleted": self.ovs_orphans_deleted,
+            "ovs_vxlan_orphans_deleted": self.ovs_vxlan_orphans_deleted,
+            "ovs_tracked_removed": self.ovs_tracked_removed,
             "errors": self.errors,
         }
 
@@ -425,11 +431,99 @@ class NetworkCleanupManager:
 
         return deleted
 
-    async def run_full_cleanup(self, dry_run: bool = False) -> CleanupStats:
+    async def cleanup_ovs_orphans(self) -> dict[str, Any]:
+        """Reconcile OVS bridge state with tracked ports.
+
+        Calls reconcile_with_ovs() on the OVS manager, which:
+        1. Removes tracking for ports that no longer exist in OVS
+        2. Cleans up orphaned vh* OVS ports not in tracking
+        3. Updates VLAN tags if they've drifted
+
+        Returns dict with orphans_deleted, tracked_removed counts.
+        """
+        result = {"orphans_deleted": 0, "tracked_removed": 0, "errors": []}
+        try:
+            from agent.network.backends.registry import get_network_backend
+            backend = get_network_backend()
+            if not hasattr(backend, 'ovs_manager') or not backend.ovs_manager._initialized:
+                return result
+            reconcile_result = await backend.ovs_manager.reconcile_with_ovs()
+            result["orphans_deleted"] = reconcile_result.get("orphans_deleted", 0)
+            result["tracked_removed"] = reconcile_result.get("tracked_removed", 0)
+            result["errors"] = reconcile_result.get("errors", [])
+        except Exception as e:
+            logger.warning(f"OVS orphan cleanup failed: {e}")
+            result["errors"].append(str(e))
+        return result
+
+    async def cleanup_ovs_vxlan_orphans(self) -> int:
+        """Clean up orphaned VXLAN ports on the OVS bridge.
+
+        Finds VXLAN-type ports on the OVS bridge that are not tracked by
+        the overlay manager (not in _tunnels, _vteps, or _link_tunnels).
+        These can accumulate when:
+        - An agent is offline during lab destroy
+        - Lab destroy fails partway through
+        - Agent crashes during overlay teardown
+
+        Returns number of orphaned VXLAN ports deleted.
+        """
+        deleted = 0
+        try:
+            from agent.network.backends.registry import get_network_backend
+            backend = get_network_backend()
+            if not hasattr(backend, 'ovs_manager') or not backend.ovs_manager._initialized:
+                return 0
+            if not hasattr(backend, 'overlay_manager'):
+                return 0
+
+            ovs_mgr = backend.ovs_manager
+            overlay_mgr = backend.overlay_manager
+
+            # Get all ports on the OVS bridge
+            all_ports = await ovs_mgr.get_all_ovs_ports()
+
+            # Build set of tracked VXLAN port names from overlay manager
+            tracked_vxlan_names: set[str] = set()
+            for tunnel in overlay_mgr._tunnels.values():
+                tracked_vxlan_names.add(tunnel.interface_name)
+            for vtep in overlay_mgr._vteps.values():
+                tracked_vxlan_names.add(vtep.interface_name)
+            for link_tunnel in overlay_mgr._link_tunnels.values():
+                tracked_vxlan_names.add(link_tunnel.interface_name)
+
+            # Find and delete untracked VXLAN ports
+            for port in all_ports:
+                if port.get("type") != "vxlan":
+                    continue
+                port_name = port["port_name"]
+                if port_name in tracked_vxlan_names:
+                    continue
+                # This VXLAN port is not tracked by overlay manager - orphaned
+                try:
+                    success = await ovs_mgr.delete_orphan_port(port_name)
+                    if success:
+                        deleted += 1
+                        logger.info(f"Deleted orphaned VXLAN port: {port_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete orphaned VXLAN port {port_name}: {e}")
+
+            if deleted > 0:
+                logger.info(f"OVS VXLAN orphan cleanup: {deleted} ports deleted")
+        except Exception as e:
+            logger.warning(f"OVS VXLAN orphan cleanup failed: {e}")
+        return deleted
+
+    async def run_full_cleanup(self, dry_run: bool = False, include_ovs: bool = True) -> CleanupStats:
         """Run all cleanup tasks.
 
         Args:
             dry_run: If True, don't delete, just report
+            include_ovs: If True, run OVS reconciliation and VXLAN orphan cleanup.
+                Set to False at startup before the agent is fully registered,
+                since overlay manager tracking is empty until reconciliation
+                populates it (which would cause active VXLAN ports to be
+                incorrectly identified as orphans).
 
         Returns:
             Combined cleanup statistics
@@ -438,12 +532,27 @@ class NetworkCleanupManager:
         stats.bridges_deleted = await self.cleanup_orphaned_bridges(dry_run=dry_run)
         stats.vxlans_deleted = await self.cleanup_orphaned_vxlans(dry_run=dry_run)
 
-        if not dry_run and (stats.veths_deleted > 0 or stats.bridges_deleted > 0 or stats.vxlans_deleted > 0):
+        # OVS reconciliation (only when agent is fully registered and reconciled)
+        if not dry_run and include_ovs:
+            ovs_result = await self.cleanup_ovs_orphans()
+            stats.ovs_orphans_deleted = ovs_result["orphans_deleted"]
+            stats.ovs_tracked_removed = ovs_result["tracked_removed"]
+            stats.ovs_vxlan_orphans_deleted = await self.cleanup_ovs_vxlan_orphans()
+
+        has_cleanup = (
+            stats.veths_deleted > 0 or stats.bridges_deleted > 0 or
+            stats.vxlans_deleted > 0 or stats.ovs_orphans_deleted > 0 or
+            stats.ovs_vxlan_orphans_deleted > 0 or stats.ovs_tracked_removed > 0
+        )
+        if not dry_run and has_cleanup:
             logger.info(
                 f"Network cleanup complete: "
                 f"veths={stats.veths_deleted}, "
                 f"bridges={stats.bridges_deleted}, "
-                f"vxlans={stats.vxlans_deleted}"
+                f"vxlans={stats.vxlans_deleted}, "
+                f"ovs_orphans={stats.ovs_orphans_deleted}, "
+                f"ovs_vxlan_orphans={stats.ovs_vxlan_orphans_deleted}, "
+                f"ovs_tracked_removed={stats.ovs_tracked_removed}"
             )
 
         return stats

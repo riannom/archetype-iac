@@ -1006,6 +1006,16 @@ class LibvirtProvider(Provider):
                 del self._next_vlan[lab_id]
             self._remove_vlan_file(lab_id, workspace)
 
+            # Clean up OVS networking state for this lab
+            try:
+                from agent.network.backends.registry import get_network_backend
+                backend = get_network_backend()
+                if hasattr(backend, 'ovs_manager') and backend.ovs_manager._initialized:
+                    ovs_result = await backend.ovs_manager.cleanup_lab(lab_id)
+                    logger.info(f"OVS cleanup for lab {lab_id}: {ovs_result}")
+            except Exception as e:
+                logger.warning(f"OVS cleanup during VM destroy failed: {e}")
+
             if errors and destroyed_count == 0:
                 return DestroyResult(
                     success=False,
