@@ -457,7 +457,7 @@ class TestPermissionAccessControl:
 
         # Test user should NOT be able to access the lab
         response = test_client.get(f"/labs/{lab.id}", headers=auth_headers)
-        assert response.status_code == 404  # Appears as not found
+        assert response.status_code == 403  # Access denied
 
     def test_shared_lab_appears_in_list(
         self,

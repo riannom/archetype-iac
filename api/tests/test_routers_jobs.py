@@ -24,22 +24,21 @@ from app import models
 class TestLabUp:
     """Tests for lab up endpoint."""
 
-    def test_lab_up_no_agent(
+    def test_lab_up_no_topology(
         self,
         test_client: TestClient,
         test_db: Session,
         sample_lab: models.Lab,
         auth_headers: dict,
     ):
-        """Lab up fails when no agent available."""
-        with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock:
-            mock.return_value = None
+        """Lab up fails when no topology is defined (no nodes in DB)."""
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(False, None)):
             response = test_client.post(
                 f"/labs/{sample_lab.id}/up",
                 headers=auth_headers
             )
-            assert response.status_code == 503
-            assert "No healthy agent" in response.json()["detail"]
+            assert response.status_code == 400
+            assert "No topology defined" in response.json()["detail"]
 
     def test_lab_up_creates_job(
         self,
@@ -48,26 +47,31 @@ class TestLabUp:
         sample_lab: models.Lab,
         sample_host: models.Host,
         auth_headers: dict,
-        tmp_path,
+        monkeypatch,
     ):
         """Lab up creates queued job and starts background task."""
-        # Create topology file
         from app.config import settings
-        with patch.object(settings, "netlab_workspace", str(tmp_path)):
-            topo_dir = tmp_path / sample_lab.id
-            topo_dir.mkdir(parents=True, exist_ok=True)
-            topo_file = topo_dir / "topology.yml"
-            topo_file.write_text("name: test\ntopology:\n  nodes:\n    r1:\n      kind: linux\n")
+        monkeypatch.setattr(settings, "image_sync_enabled", False)
 
+        # Add nodes to the lab in the database (source of truth)
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="r1",
+            container_name="archetype-test-r1",
+            device="linux",
+        )
+        test_db.add(node)
+        test_db.commit()
+
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(False, None)):
             with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                 mock_agent.return_value = sample_host
-                with patch("app.routers.jobs.topology_path") as mock_topo:
-                    mock_topo.return_value = topo_file
-                    with patch("app.routers.jobs.run_agent_job", new_callable=AsyncMock):
-                        response = test_client.post(
-                            f"/labs/{sample_lab.id}/up",
-                            headers=auth_headers
-                        )
+                with patch("app.routers.jobs.safe_create_task"):
+                    response = test_client.post(
+                        f"/labs/{sample_lab.id}/up",
+                        headers=auth_headers
+                    )
 
         assert response.status_code == 200
         data = response.json()
@@ -88,13 +92,14 @@ class TestLabDown:
         auth_headers: dict,
     ):
         """Lab down creates queued job."""
-        with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
-            mock_agent.return_value = sample_host
-            with patch("app.routers.jobs.run_agent_job", new_callable=AsyncMock):
-                response = test_client.post(
-                    f"/labs/{sample_lab.id}/down",
-                    headers=auth_headers
-                )
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(False, None)):
+            with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
+                mock_agent.return_value = sample_host
+                with patch("app.routers.jobs.safe_create_task"):
+                    response = test_client.post(
+                        f"/labs/{sample_lab.id}/down",
+                        headers=auth_headers
+                    )
 
         assert response.status_code == 200
         data = response.json()
@@ -112,25 +117,27 @@ class TestLabRestart:
         sample_lab: models.Lab,
         sample_host: models.Host,
         auth_headers: dict,
-        tmp_path,
     ):
         """Lab restart creates down then up jobs."""
-        from app.config import settings
-        with patch.object(settings, "netlab_workspace", str(tmp_path)):
-            topo_dir = tmp_path / sample_lab.id
-            topo_dir.mkdir(parents=True, exist_ok=True)
-            topo_file = topo_dir / "topology.yml"
-            topo_file.write_text("name: test\ntopology:\n  nodes:\n    r1:\n      kind: linux\n")
+        # Add nodes to the lab in the database (source of truth)
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="r1",
+            container_name="archetype-test-r1",
+            device="linux",
+        )
+        test_db.add(node)
+        test_db.commit()
 
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(False, None)):
             with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                 mock_agent.return_value = sample_host
-                with patch("app.routers.jobs.topology_path") as mock_topo:
-                    mock_topo.return_value = topo_file
-                    with patch("app.routers.jobs.run_agent_job", new_callable=AsyncMock):
-                        response = test_client.post(
-                            f"/labs/{sample_lab.id}/restart",
-                            headers=auth_headers
-                        )
+                with patch("app.routers.jobs.safe_create_task"):
+                    response = test_client.post(
+                        f"/labs/{sample_lab.id}/restart",
+                        headers=auth_headers
+                    )
 
         assert response.status_code == 200
         # Returns the down job first
@@ -144,22 +151,18 @@ class TestLabRestart:
         sample_lab: models.Lab,
         sample_host: models.Host,
         auth_headers: dict,
-        tmp_path,
     ):
-        """Lab restart fails if no topology file."""
-        from app.config import settings
-        with patch.object(settings, "netlab_workspace", str(tmp_path)):
+        """Lab restart fails if no topology (no nodes in DB)."""
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(False, None)):
             with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                 mock_agent.return_value = sample_host
-                with patch("app.routers.jobs.topology_path") as mock_topo:
-                    mock_topo.return_value = tmp_path / "nonexistent" / "topology.yml"
-                    response = test_client.post(
-                        f"/labs/{sample_lab.id}/restart",
-                        headers=auth_headers
-                    )
+                response = test_client.post(
+                    f"/labs/{sample_lab.id}/restart",
+                    headers=auth_headers
+                )
 
         assert response.status_code == 400
-        assert "No topology file" in response.json()["detail"]
+        assert "No topology defined" in response.json()["detail"]
 
 
 class TestNodeAction:
@@ -173,10 +176,21 @@ class TestNodeAction:
         sample_host: models.Host,
         auth_headers: dict,
     ):
-        """Node start creates queued job."""
+        """Node start creates queued sync job."""
+        # Create a NodeState for the node
+        node_state = models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="router1",
+            node_name="router1",
+            desired_state="stopped",
+            actual_state="stopped",
+        )
+        test_db.add(node_state)
+        test_db.commit()
+
         with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
             mock_agent.return_value = sample_host
-            with patch("app.routers.jobs.run_agent_job", new_callable=AsyncMock):
+            with patch("app.routers.jobs.safe_create_task"):
                 response = test_client.post(
                     f"/labs/{sample_lab.id}/nodes/router1/start",
                     headers=auth_headers
@@ -184,7 +198,7 @@ class TestNodeAction:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["action"] == "node:start:router1"
+        assert data["action"] == "sync:node:router1"
 
     def test_node_stop(
         self,
@@ -194,10 +208,21 @@ class TestNodeAction:
         sample_host: models.Host,
         auth_headers: dict,
     ):
-        """Node stop creates queued job."""
+        """Node stop creates queued sync job."""
+        # Create a NodeState for the node
+        node_state = models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="router1",
+            node_name="router1",
+            desired_state="running",
+            actual_state="running",
+        )
+        test_db.add(node_state)
+        test_db.commit()
+
         with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
             mock_agent.return_value = sample_host
-            with patch("app.routers.jobs.run_agent_job", new_callable=AsyncMock):
+            with patch("app.routers.jobs.safe_create_task"):
                 response = test_client.post(
                     f"/labs/{sample_lab.id}/nodes/router1/stop",
                     headers=auth_headers
@@ -205,7 +230,7 @@ class TestNodeAction:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["action"] == "node:stop:router1"
+        assert data["action"] == "sync:node:router1"
 
     def test_node_invalid_action(
         self,
@@ -590,24 +615,26 @@ class TestLabStatus:
         auth_headers: dict,
     ):
         """Lab status fetched from agent."""
-        with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = sample_host
-            with patch("app.routers.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
-                mock_status.return_value = {
-                    "nodes": [
-                        {"name": "r1", "status": "running"},
-                        {"name": "r2", "status": "running"},
-                    ]
-                }
-                response = test_client.get(
-                    f"/labs/{sample_lab.id}/status",
-                    headers=auth_headers
-                )
+        # Set lab's agent_id so it knows which agent to query
+        sample_lab.agent_id = sample_host.id
+        test_db.commit()
+
+        with patch("app.routers.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+            mock_status.return_value = {
+                "nodes": [
+                    {"name": "r1", "status": "running"},
+                    {"name": "r2", "status": "running"},
+                ]
+            }
+            response = test_client.get(
+                f"/labs/{sample_lab.id}/status",
+                headers=auth_headers
+            )
 
         assert response.status_code == 200
         data = response.json()
         assert len(data["nodes"]) == 2
-        assert data["agent_id"] == sample_host.id
+        assert any(a["id"] == sample_host.id for a in data["agents"])
 
     def test_lab_status_no_agent(
         self,
@@ -617,7 +644,7 @@ class TestLabStatus:
         auth_headers: dict,
     ):
         """Lab status falls back to netlab when no agent."""
-        with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get:
+        with patch("app.routers.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = None
             with patch("app.routers.jobs.run_netlab_command") as mock_netlab:
                 mock_netlab.return_value = (0, "Status output", "")

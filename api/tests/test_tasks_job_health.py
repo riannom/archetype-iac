@@ -451,6 +451,7 @@ class TestCheckStuckImageSyncJobs:
     @pytest.mark.asyncio
     async def test_marks_stuck_pending_job_as_failed(self, test_db: Session, sample_host: models.Host, monkeypatch):
         """Should mark pending sync job as failed if stuck too long."""
+        from contextlib import contextmanager
         from app.tasks.job_health import check_stuck_image_sync_jobs
         from app.config import settings
 
@@ -468,7 +469,11 @@ class TestCheckStuckImageSyncJobs:
         test_db.add(job)
         test_db.commit()
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        @contextmanager
+        def fake_get_session():
+            yield test_db
+
+        with patch("app.tasks.job_health.get_session", fake_get_session):
             await check_stuck_image_sync_jobs()
             test_db.refresh(job)
             assert job.status == "failed"
@@ -487,6 +492,7 @@ class TestCheckStuckImageSyncJobs:
     @pytest.mark.asyncio
     async def test_marks_stuck_transferring_job_as_failed(self, test_db: Session, sample_host: models.Host, monkeypatch):
         """Should mark transferring sync job as failed if timed out."""
+        from contextlib import contextmanager
         from app.tasks.job_health import check_stuck_image_sync_jobs
         from app.config import settings
 
@@ -503,7 +509,11 @@ class TestCheckStuckImageSyncJobs:
         test_db.add(job)
         test_db.commit()
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        @contextmanager
+        def fake_get_session():
+            yield test_db
+
+        with patch("app.tasks.job_health.get_session", fake_get_session):
             await check_stuck_image_sync_jobs()
             test_db.refresh(job)
             assert job.status == "failed"
@@ -511,6 +521,7 @@ class TestCheckStuckImageSyncJobs:
     @pytest.mark.asyncio
     async def test_marks_job_failed_when_host_offline(self, test_db: Session, offline_host: models.Host):
         """Should mark sync job as failed when target host is offline."""
+        from contextlib import contextmanager
         from app.tasks.job_health import check_stuck_image_sync_jobs
 
         # Create a transferring job on offline host
@@ -524,7 +535,11 @@ class TestCheckStuckImageSyncJobs:
         test_db.add(job)
         test_db.commit()
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        @contextmanager
+        def fake_get_session():
+            yield test_db
+
+        with patch("app.tasks.job_health.get_session", fake_get_session):
             await check_stuck_image_sync_jobs()
             test_db.refresh(job)
             assert job.status == "failed"

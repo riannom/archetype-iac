@@ -153,30 +153,36 @@ class TestMiddlewareIntegration:
         from app.auth import create_access_token
         from app.config import settings
 
-        monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret-key-for-testing")
+        # Use object.__setattr__ to bypass pydantic validation when setting jwt_secret
+        # monkeypatch.setattr may not work reliably after many test-scoped patches
+        original = settings.jwt_secret
+        object.__setattr__(settings, "jwt_secret", "test-jwt-secret-key-for-testing")
 
-        app = FastAPI()
-        app.add_middleware(CurrentUserMiddleware)
+        try:
+            app = FastAPI()
+            app.add_middleware(CurrentUserMiddleware)
 
-        @app.get("/test")
-        async def test_endpoint(request: Request):
-            user = getattr(request.state, "user", None)
-            return {
-                "user_id": user.id if user else None,
-                "email": user.email if user else None,
-            }
+            @app.get("/test")
+            async def test_endpoint(request: Request):
+                user = getattr(request.state, "user", None)
+                return {
+                    "user_id": user.id if user else None,
+                    "email": user.email if user else None,
+                }
 
-        # Create valid token
-        token = create_access_token(test_user.id)
+            # Create valid token
+            token = create_access_token(test_user.id)
 
-        # Patch SessionLocal to return our test_db
-        with patch("app.middleware.SessionLocal", return_value=test_db):
-            client = TestClient(app)
-            response = client.get("/test", headers={"Authorization": f"Bearer {token}"})
-            assert response.status_code == 200
-            data = response.json()
-            assert data["user_id"] == test_user.id
-            assert data["email"] == test_user.email
+            # Patch SessionLocal to return our test_db
+            with patch("app.middleware.SessionLocal", return_value=test_db):
+                client = TestClient(app)
+                response = client.get("/test", headers={"Authorization": f"Bearer {token}"})
+                assert response.status_code == 200
+                data = response.json()
+                assert data["user_id"] == test_user.id
+                assert data["email"] == test_user.email
+        finally:
+            object.__setattr__(settings, "jwt_secret", original)
 
     def test_middleware_returns_none_for_invalid_token(self, test_db, monkeypatch):
         """Test that middleware returns None for invalid JWT token."""

@@ -35,10 +35,8 @@ class TestReconcileState:
         data = response.json()
         assert "No healthy agents" in str(data["errors"])
 
-    @patch("app.agent_client.discover_labs_on_agent")
-    async def test_reconcile_discovers_running_labs(
+    def test_reconcile_discovers_running_labs(
         self,
-        mock_discover,
         test_client: TestClient,
         test_db: Session,
         admin_auth_headers: dict,
@@ -46,16 +44,19 @@ class TestReconcileState:
         sample_host: models.Host,
     ):
         """Test reconcile discovers running labs from agents."""
-        mock_discover.return_value = {
-            "labs": [
-                {
-                    "lab_id": sample_lab.id,
-                    "nodes": [{"name": "r1", "status": "running"}],
-                }
-            ]
-        }
-
-        response = test_client.post("/reconcile", headers=admin_auth_headers)
+        with patch(
+            "app.routers.admin.agent_client.discover_labs_on_agent",
+            new_callable=AsyncMock,
+            return_value={
+                "labs": [
+                    {
+                        "lab_id": sample_lab.id,
+                        "nodes": [{"name": "r1", "status": "running"}],
+                    }
+                ]
+            },
+        ):
+            response = test_client.post("/reconcile", headers=admin_auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["agents_queried"] >= 0  # May be 0 if async mock not working
@@ -87,7 +88,7 @@ class TestRefreshLabState:
         response = test_client.post(
             f"/labs/{lab.id}/refresh-state", headers=auth_headers
         )
-        assert response.status_code == 404  # Appears as not found
+        assert response.status_code == 403  # Access denied
 
     def test_refresh_lab_state_no_agent(
         self,
@@ -104,12 +105,8 @@ class TestRefreshLabState:
         assert "error" in data
         assert "no healthy agent" in data["error"].lower()
 
-    @patch("app.agent_client.get_healthy_agent")
-    @patch("app.agent_client.get_lab_status_from_agent")
-    async def test_refresh_lab_state_updates_nodes(
+    def test_refresh_lab_state_updates_nodes(
         self,
-        mock_get_status,
-        mock_get_agent,
         test_client: TestClient,
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
@@ -119,17 +116,24 @@ class TestRefreshLabState:
         """Test refresh updates node states from agent."""
         lab, nodes = sample_lab_with_nodes
 
-        mock_get_agent.return_value = sample_host
-        mock_get_status.return_value = {
-            "nodes": [
-                {"name": nodes[0].node_name, "status": "running"},
-                {"name": nodes[1].node_name, "status": "running"},
-            ]
-        }
+        # Set lab's agent_id so refresh knows which agent to query
+        lab.agent_id = sample_host.id
+        test_db.commit()
 
-        response = test_client.post(
-            f"/labs/{lab.id}/refresh-state", headers=auth_headers
-        )
+        with patch("app.routers.admin.agent_client.is_agent_online", return_value=True):
+            with patch(
+                "app.routers.admin.agent_client.get_lab_status_from_agent",
+                new_callable=AsyncMock,
+                return_value={
+                    "nodes": [
+                        {"name": nodes[0].node_name, "status": "running"},
+                        {"name": nodes[1].node_name, "status": "running"},
+                    ]
+                },
+            ):
+                response = test_client.post(
+                    f"/labs/{lab.id}/refresh-state", headers=auth_headers
+                )
         assert response.status_code == 200
 
     def test_refresh_lab_not_found(

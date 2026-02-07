@@ -194,7 +194,7 @@ class TestRunNetlabCommandIntegration:
         # cat without arguments would hang waiting for stdin
         # but with capture_output it shouldn't
         returncode, stdout, stderr = run_netlab_command(
-            ["python", "-c", "import sys; print(sys.stdin.isatty())"]
+            ["python3", "-c", "import sys; print(sys.stdin.isatty())"]
         )
 
         assert returncode == 0
@@ -204,7 +204,7 @@ class TestRunNetlabCommandIntegration:
     def test_multiline_output(self):
         """Test capturing multiline output."""
         returncode, stdout, stderr = run_netlab_command(
-            ["python", "-c", "print('line1'); print('line2'); print('line3')"]
+            ["python3", "-c", "print('line1'); print('line2'); print('line3')"]
         )
 
         assert returncode == 0
@@ -215,7 +215,7 @@ class TestRunNetlabCommandIntegration:
     def test_unicode_output(self):
         """Test capturing unicode characters in output."""
         returncode, stdout, stderr = run_netlab_command(
-            ["python", "-c", "print('Hello World')"]
+            ["python3", "-c", "print('Hello World')"]
         )
 
         assert returncode == 0
@@ -256,7 +256,7 @@ class TestRunNetlabCommandEdgeCases:
         """Test handling large output."""
         # Generate 10KB of output
         returncode, stdout, stderr = run_netlab_command(
-            ["python", "-c", "print('x' * 10000)"]
+            ["python3", "-c", "print('x' * 10000)"]
         )
 
         assert returncode == 0
@@ -266,7 +266,7 @@ class TestRunNetlabCommandEdgeCases:
         """Test that stdout and stderr are captured separately."""
         returncode, stdout, stderr = run_netlab_command(
             [
-                "python",
+                "python3",
                 "-c",
                 "import sys; print('stdout'); print('stderr', file=sys.stderr)",
             ]
@@ -282,7 +282,7 @@ class TestRunNetlabCommandEdgeCases:
         """Test various exit codes are preserved."""
         for expected_code in [0, 1, 2, 42, 127]:
             returncode, _, _ = run_netlab_command(
-                ["python", "-c", f"import sys; sys.exit({expected_code})"]
+                ["python3", "-c", f"import sys; sys.exit({expected_code})"]
             )
             assert returncode == expected_code
 

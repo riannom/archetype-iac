@@ -362,8 +362,9 @@ class TestIsJobWithinTimeout:
             assert is_job_within_timeout("up", "running", started_at) is True
 
     def test_naive_datetime_handled_as_utc(self):
-        """Naive datetime is handled as UTC."""
-        naive_recent = datetime.now() - timedelta(seconds=10)  # Naive
+        """Naive datetime is handled as UTC (replace labels it as UTC without conversion)."""
+        # Use UTC-based naive datetime to avoid local timezone offset issues
+        naive_recent = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=10)
         result = is_job_within_timeout("up", "running", naive_recent)
         assert result is True
 

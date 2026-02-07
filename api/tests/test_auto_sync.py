@@ -4,6 +4,8 @@ Tests the automatic synchronization when nodes are added to running labs.
 """
 from __future__ import annotations
 
+import asyncio
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -162,13 +164,17 @@ class TestAutoSyncConditions:
         test_db.add(new_node)
         test_db.commit()
 
-        with patch("app.tasks.live_nodes.SessionLocal") as mock_session_local:
-            mock_session_local.return_value = test_db
+        @contextmanager
+        def override_get_session():
+            yield test_db
+
+        with patch("app.tasks.live_nodes.get_session", override_get_session):
             with patch("app.tasks.live_nodes.deploy_node_immediately", new_callable=AsyncMock) as mock_deploy:
                 with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                     mock_agent.is_agent_online = MagicMock(return_value=True)
 
                     await process_node_changes(stopped_lab.id, ["n1"], [])
+                    await asyncio.sleep(1)
 
                     mock_deploy.assert_not_called()
 
@@ -198,14 +204,18 @@ class TestAutoSyncConditions:
         test_db.add(new_node)
         test_db.commit()
 
-        with patch("app.tasks.live_nodes.SessionLocal") as mock_session_local:
-            mock_session_local.return_value = test_db
+        @contextmanager
+        def override_get_session():
+            yield test_db
+
+        with patch("app.tasks.live_nodes.get_session", override_get_session):
             with patch("app.tasks.live_nodes.deploy_node_immediately", new_callable=AsyncMock) as mock_deploy:
                 mock_deploy.return_value = True
                 with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                     mock_agent.is_agent_online = MagicMock(return_value=True)
 
                     await process_node_changes(starting_lab.id, ["n1"], [])
+                    await asyncio.sleep(1)
 
                     mock_deploy.assert_called_once()
 
@@ -225,13 +235,17 @@ class TestAutoSyncConditions:
         test_db.add(running_node)
         test_db.commit()
 
-        with patch("app.tasks.live_nodes.SessionLocal") as mock_session_local:
-            mock_session_local.return_value = test_db
+        @contextmanager
+        def override_get_session():
+            yield test_db
+
+        with patch("app.tasks.live_nodes.get_session", override_get_session):
             with patch("app.tasks.live_nodes.deploy_node_immediately", new_callable=AsyncMock) as mock_deploy:
                 with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                     mock_agent.is_agent_online = MagicMock(return_value=True)
 
                     await process_node_changes(running_lab_with_agent.id, ["running-n1"], [])
+                    await asyncio.sleep(1)
 
                     mock_deploy.assert_not_called()
 

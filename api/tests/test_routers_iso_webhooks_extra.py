@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import app.routers.iso as iso_router  # noqa: F401
 import app.routers.webhooks as webhooks_router  # noqa: F401
 import pytest
 
 from app import models
+from app.config import settings
 
 
 def test_iso_browse_empty(test_client, auth_headers, monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("app.routers.iso.ensure_image_store", lambda: tmp_path)
+    monkeypatch.setattr(settings, "iso_upload_dir", str(tmp_path))
 
     resp = test_client.get("/iso/browse", headers=auth_headers)
     assert resp.status_code == 200
@@ -16,7 +19,7 @@ def test_iso_browse_empty(test_client, auth_headers, monkeypatch, tmp_path) -> N
 
 
 def test_iso_upload_init_and_status(test_client, auth_headers, monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("app.routers.iso.ensure_image_store", lambda: tmp_path)
+    monkeypatch.setattr(settings, "iso_upload_dir", str(tmp_path))
 
     init = test_client.post(
         "/iso/upload/init",
@@ -31,7 +34,7 @@ def test_iso_upload_init_and_status(test_client, auth_headers, monkeypatch, tmp_
 
 
 def test_webhook_crud_and_test(test_client, test_db, test_user, auth_headers, monkeypatch) -> None:
-    monkeypatch.setattr("app.webhooks.test_webhook", lambda webhook: (True, 200, None, 5))
+    monkeypatch.setattr("app.webhooks.test_webhook", AsyncMock(return_value=(True, 200, None, 5)))
     monkeypatch.setattr("app.webhooks.build_webhook_payload", lambda event_type, extra=None: {"event": event_type})
     monkeypatch.setattr("app.webhooks.log_delivery", lambda *args, **kwargs: None)
 

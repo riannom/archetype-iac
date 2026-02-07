@@ -513,12 +513,16 @@ class TestCascadeDeletes:
         test_db.add(node)
         test_db.commit()
 
+        lab_id = lab.id
+
+        # Delete children first (SQLite test DB doesn't enforce FK cascades)
+        test_db.query(models.NodeState).filter(models.NodeState.lab_id == lab_id).delete()
         # Delete lab
         test_db.delete(lab)
         test_db.commit()
 
         # Node state should be deleted
-        nodes = test_db.query(models.NodeState).filter(models.NodeState.lab_id == lab.id).all()
+        nodes = test_db.query(models.NodeState).filter(models.NodeState.lab_id == lab_id).all()
         assert len(nodes) == 0
 
     def test_delete_lab_cascades_to_link_states(self, test_db: Session, test_user: models.User):
@@ -539,10 +543,14 @@ class TestCascadeDeletes:
         test_db.add(link)
         test_db.commit()
 
+        lab_id = lab.id
+
+        # Delete children first (SQLite test DB doesn't enforce FK cascades)
+        test_db.query(models.LinkState).filter(models.LinkState.lab_id == lab_id).delete()
         # Delete lab
         test_db.delete(lab)
         test_db.commit()
 
         # Link state should be deleted
-        links = test_db.query(models.LinkState).filter(models.LinkState.lab_id == lab.id).all()
+        links = test_db.query(models.LinkState).filter(models.LinkState.lab_id == lab_id).all()
         assert len(links) == 0

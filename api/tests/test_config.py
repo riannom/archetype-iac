@@ -80,11 +80,11 @@ class TestAgentTimeouts:
         settings = Settings()
         assert settings.agent_destroy_timeout == 300.0  # 5 minutes
 
-    def test_node_action_timeout(self):
-        """Node action timeout is set."""
+    def test_status_timeout(self):
+        """Status timeout is set."""
         from app.config import Settings
         settings = Settings()
-        assert settings.agent_node_action_timeout == 60.0
+        assert settings.agent_status_timeout == 30.0
 
     def test_health_check_timeout(self):
         """Health check timeout is set."""
@@ -172,9 +172,9 @@ class TestJobHealthSettings:
         """Job timeouts are set."""
         from app.config import Settings
         settings = Settings()
-        assert settings.job_timeout_deploy == 1020  # 17 minutes
+        assert settings.job_timeout_deploy == 1200  # 20 minutes
         assert settings.job_timeout_destroy == 360  # 6 minutes
-        assert settings.job_timeout_sync == 660  # 11 minutes
+        assert settings.job_timeout_sync == 300  # 5 minutes
         assert settings.job_timeout_node == 300  # 5 minutes
 
 
@@ -321,13 +321,11 @@ class TestEnvironmentOverrides:
 
     def test_database_url_override(self):
         """DATABASE_URL environment variable overrides default."""
+        # Verify Settings picks up env vars when constructed
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://localhost/test"}):
-            from importlib import reload
-            import app.config as config_module
-            reload(config_module)
-            # Note: In actual tests, we'd need to reload the module
-            # This is a simplified example
-            assert True  # Placeholder for env var test
+            from app.config import Settings
+            fresh = Settings()
+            assert fresh.database_url == "postgresql://localhost/test"
 
     def test_jwt_secret_override(self):
         """JWT_SECRET environment variable can be set."""

@@ -4,6 +4,8 @@ Tests the live node lifecycle functions in app/tasks/live_nodes.py.
 """
 from __future__ import annotations
 
+import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -301,10 +303,13 @@ class TestCleanupNodeRecords:
         test_db.add(placement)
         test_db.commit()
 
+        # Save the ID before cleanup, because after commit the ORM object expires
+        placement_id = placement.id
+
         _cleanup_node_records(test_db, running_lab.id, deployed_node_state.node_name)
 
         result = test_db.query(models.NodePlacement).filter(
-            models.NodePlacement.id == placement.id
+            models.NodePlacement.id == placement_id
         ).first()
         assert result is None
 
@@ -328,14 +333,19 @@ class TestProcessNodeChanges:
             "actual_state": "running",
         }]
 
-        with patch("app.tasks.live_nodes.SessionLocal") as mock_session_local:
-            mock_session_local.return_value = test_db
+        @contextmanager
+        def override_get_session():
+            yield test_db
+
+        with patch("app.tasks.live_nodes.get_session", override_get_session):
             with patch("app.tasks.live_nodes.destroy_node_immediately", new_callable=AsyncMock) as mock_destroy:
                 mock_destroy.return_value = True
                 with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                     mock_agent.is_agent_online = MagicMock(return_value=True)
 
                     await process_node_changes(running_lab.id, [], removed_info)
+                    # Wait for debounced processing to complete
+                    await asyncio.sleep(1)
 
                     mock_destroy.assert_called_once()
 
@@ -355,13 +365,18 @@ class TestProcessNodeChanges:
         test_db.add(node)
         test_db.commit()
 
-        with patch("app.tasks.live_nodes.SessionLocal") as mock_session_local:
-            mock_session_local.return_value = test_db
+        @contextmanager
+        def override_get_session():
+            yield test_db
+
+        with patch("app.tasks.live_nodes.get_session", override_get_session):
             with patch("app.tasks.live_nodes.deploy_node_immediately", new_callable=AsyncMock) as mock_deploy:
                 with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                     mock_agent.is_agent_online = MagicMock(return_value=True)
 
                     await process_node_changes(stopped_lab.id, ["n1"], [])
+                    # Wait for debounced processing to complete
+                    await asyncio.sleep(1)
 
                     # Deploy should not be called for stopped lab
                     mock_deploy.assert_not_called()
@@ -385,25 +400,34 @@ class TestProcessNodeChanges:
         test_db.add(node)
         test_db.commit()
 
-        with patch("app.tasks.live_nodes.SessionLocal") as mock_session_local:
-            mock_session_local.return_value = test_db
+        @contextmanager
+        def override_get_session():
+            yield test_db
+
+        with patch("app.tasks.live_nodes.get_session", override_get_session):
             with patch("app.tasks.live_nodes.deploy_node_immediately", new_callable=AsyncMock) as mock_deploy:
                 mock_deploy.return_value = True
                 with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                     mock_agent.is_agent_online = MagicMock(return_value=True)
 
                     await process_node_changes(running_lab.id, ["n3"], [])
+                    # Wait for debounced processing to complete
+                    await asyncio.sleep(1)
 
                     mock_deploy.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handles_missing_lab(self, test_db: Session):
         """Should handle missing lab gracefully."""
-        with patch("app.tasks.live_nodes.SessionLocal") as mock_session_local:
-            mock_session_local.return_value = test_db
+        @contextmanager
+        def override_get_session():
+            yield test_db
 
+        with patch("app.tasks.live_nodes.get_session", override_get_session):
             # Should not raise
             await process_node_changes("nonexistent-lab", ["n1"], [])
+            # Wait for debounced processing to complete
+            await asyncio.sleep(1)
 
 
 class TestBuildHostToAgentMap:

@@ -322,6 +322,7 @@ class TestAgentRoleDetermination:
             address="localhost:8080",
             status="online",
             capabilities=json.dumps({"providers": ["docker"]}),
+            is_local=True,
         )
         test_db.add(host)
         test_db.commit()

@@ -10,6 +10,20 @@ from sqlalchemy.orm import Session
 from app import models
 
 
+class _FakeSessionLocal:
+    """Wraps a test DB session so that .close() is a no-op."""
+
+    def __init__(self, session: Session):
+        self._session = session
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def close(self):
+        # Don't actually close the test session
+        pass
+
+
 class TestConsoleWebSocket:
     """Tests for WebSocket /labs/{lab_id}/nodes/{node}/console endpoint."""
 
@@ -17,8 +31,10 @@ class TestConsoleWebSocket:
         self,
         test_client: TestClient,
         test_db: Session,
+        monkeypatch,
     ):
         """Test console connection to non-existent lab."""
+        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
         with test_client.websocket_connect(
             "/labs/nonexistent-lab/nodes/r1/console"
         ) as websocket:
@@ -31,8 +47,10 @@ class TestConsoleWebSocket:
         test_client: TestClient,
         test_db: Session,
         sample_lab: models.Lab,
+        monkeypatch,
     ):
         """Test console connection when no healthy agent available."""
+        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
         with test_client.websocket_connect(
             f"/labs/{sample_lab.id}/nodes/r1/console"
         ) as websocket:
@@ -47,31 +65,17 @@ class TestConsoleWebSocket:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         sample_host: models.Host,
-        tmp_path,
+        sample_node_definitions: list[models.Node],
         monkeypatch,
     ):
         """Test that console resolves GUI node ID to container name."""
         lab, nodes = sample_lab_with_nodes
 
-        # Create topology file
-        from app import storage
-
-        workspace = tmp_path / lab.id
-        workspace.mkdir(parents=True)
-        topo_file = workspace / "topology.yml"
-        topo_file.write_text("""
-name: test
-topology:
-  nodes:
-    R1:
-      kind: linux
-    R2:
-      kind: linux
-""")
-        monkeypatch.setattr(storage, "topology_path", lambda lab_id: topo_file)
+        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
 
         # Mock agent client to return healthy agent but fail on connect
         mock_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
+        mock_agent_client.is_agent_online = MagicMock(return_value=True)
         mock_agent_client.get_agent_console_url = MagicMock(
             return_value="ws://agent:8080/console"
         )
@@ -92,8 +96,10 @@ topology:
         test_client: TestClient,
         test_db: Session,
         sample_lab: models.Lab,
+        monkeypatch,
     ):
         """Test that WebSocket connection is accepted initially."""
+        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
         # Even without a healthy agent, the connection should be accepted first
         with test_client.websocket_connect(
             f"/labs/{sample_lab.id}/nodes/r1/console"
@@ -114,17 +120,19 @@ class TestConsoleNodeResolution:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         sample_host: models.Host,
-        tmp_path,
         monkeypatch,
     ):
         """Test that console uses container_name over display name."""
         lab, nodes = sample_lab_with_nodes
+
+        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
 
         # Update node to have different container_name
         nodes[0].node_name = "actual-container-name"
         test_db.commit()
 
         mock_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
+        mock_agent_client.is_agent_online = MagicMock(return_value=True)
 
         captured_node_name = None
 
@@ -156,18 +164,19 @@ class TestConsoleReadinessWarning:
     """Tests for boot readiness warning in console."""
 
     @patch("app.routers.console.agent_client")
-    @patch("app.routers.console.websockets")
     def test_console_shows_boot_warning(
         self,
-        mock_websockets,
         mock_agent_client,
         test_client: TestClient,
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         sample_host: models.Host,
+        monkeypatch,
     ):
         """Test that console shows boot warning for non-ready nodes."""
         lab, nodes = sample_lab_with_nodes
+
+        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
 
         # Set node as running but not ready
         nodes[0].actual_state = "running"
@@ -175,6 +184,7 @@ class TestConsoleReadinessWarning:
         test_db.commit()
 
         mock_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
+        mock_agent_client.is_agent_online = MagicMock(return_value=True)
         mock_agent_client.get_agent_console_url = MagicMock(
             return_value="ws://agent:8080/console"
         )
@@ -182,18 +192,14 @@ class TestConsoleReadinessWarning:
             return_value={"is_ready": False, "progress_percent": 50}
         )
 
-        # Mock websockets.connect to fail (we just want to test the warning logic)
-        mock_websockets.connect = MagicMock(
-            side_effect=Exception("Connection refused")
-        )
-
+        # The websocket will try to connect to agent and fail, but
+        # we can verify the warning logic via the message received
         try:
             with test_client.websocket_connect(
                 f"/labs/{lab.id}/nodes/{nodes[0].node_id}/console"
             ) as websocket:
-                # Should receive boot warning message
+                # Should receive boot warning message or connection error
                 data = websocket.receive_text()
-                # Either boot warning or connection error
                 assert data is not None
         except Exception:
             pass
@@ -210,45 +216,21 @@ class TestConsoleMultiHost:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         multiple_hosts: list[models.Host],
-        tmp_path,
+        sample_node_definitions: list[models.Node],
         monkeypatch,
     ):
         """Test that console routes to the correct host for multi-host labs."""
         lab, nodes = sample_lab_with_nodes
 
-        # Create multi-host topology
-        from app import storage
+        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
 
-        workspace = tmp_path / lab.id
-        workspace.mkdir(parents=True)
-        topo_file = workspace / "topology.yml"
-        topo_file.write_text(f"""
-name: test
-topology:
-  nodes:
-    {nodes[0].node_name}:
-      kind: linux
-      labels:
-        archetype-host: {multiple_hosts[0].id}
-    {nodes[1].node_name}:
-      kind: linux
-      labels:
-        archetype-host: {multiple_hosts[1].id}
-""")
-        monkeypatch.setattr(storage, "topology_path", lambda lab_id: topo_file)
+        # Update node definitions with host assignments
+        sample_node_definitions[0].host_id = multiple_hosts[0].id
+        sample_node_definitions[1].host_id = multiple_hosts[1].id
+        test_db.commit()
 
-        captured_agent_id = None
-
-        async def mock_get_agent_by_name(db, host_id, **kwargs):
-            nonlocal captured_agent_id
-            captured_agent_id = host_id
-            for host in multiple_hosts:
-                if host.id == host_id:
-                    return host
-            return None
-
-        mock_agent_client.get_agent_by_name = mock_get_agent_by_name
         mock_agent_client.get_agent_for_lab = AsyncMock(return_value=multiple_hosts[0])
+        mock_agent_client.is_agent_online = MagicMock(return_value=True)
         mock_agent_client.get_agent_console_url = MagicMock(
             return_value="ws://agent:8080/console"
         )

@@ -6,6 +6,7 @@ to connected WebSocket clients via the StateBroadcaster.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +19,14 @@ from app.tasks.jobs import (
     run_agent_job,
     run_node_reconcile,
 )
+
+
+def _mock_get_session(test_db: Session):
+    """Create a mock get_session context manager that yields the test database session."""
+    @contextmanager
+    def mock_session():
+        yield test_db
+    return mock_session
 
 
 @pytest.fixture
@@ -118,16 +127,13 @@ class TestRunAgentJobBroadcasts:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                         mock_deploy.return_value = {"status": "completed"}
-                        # Build topology from DB, mock the topology builder
-                        with patch("app.tasks.jobs.graph_to_deploy_topology") as mock_topo:
-                            mock_topo.return_value = {"name": "test", "topology": {"nodes": {}}}
-                            await run_agent_job(job.id, lab.id, "up")
+                        await run_agent_job(job.id, lab.id, "up")
 
         # Verify running status was broadcast
         running_calls = [
@@ -165,15 +171,13 @@ class TestRunAgentJobBroadcasts:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                         mock_deploy.return_value = {"status": "completed"}
-                        with patch("app.tasks.jobs.graph_to_deploy_topology") as mock_topo:
-                            mock_topo.return_value = {"name": "test", "topology": {"nodes": {}}}
-                            await run_agent_job(job.id, lab.id, "up")
+                        await run_agent_job(job.id, lab.id, "up")
 
         # Verify completed status was broadcast
         completed_calls = [
@@ -211,7 +215,7 @@ class TestRunAgentJobBroadcasts:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
@@ -220,9 +224,7 @@ class TestRunAgentJobBroadcasts:
                             "status": "failed",
                             "error_message": "Deploy failed",
                         }
-                        with patch("app.tasks.jobs.graph_to_deploy_topology") as mock_topo:
-                            mock_topo.return_value = {"name": "test", "topology": {"nodes": {}}}
-                            await run_agent_job(job.id, lab.id, "up")
+                        await run_agent_job(job.id, lab.id, "up")
 
         # Verify failed status was broadcast
         failed_calls = [
@@ -264,15 +266,13 @@ class TestRunAgentJobBroadcasts:
         host_name = sample_host.name
         host_id = sample_host.id
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                         mock_deploy.return_value = {"status": "completed"}
-                        with patch("app.tasks.jobs.graph_to_deploy_topology") as mock_topo:
-                            mock_topo.return_value = {"name": "test", "topology": {"nodes": {}}}
-                            await run_agent_job(job.id, lab.id, "up")
+                        await run_agent_job(job.id, lab.id, "up")
 
         # Check that agent name is mentioned in progress message
         running_calls = [
@@ -369,11 +369,12 @@ class TestMultihostDeployBroadcasts:
         test_db.add_all([node1, node2])
         test_db.commit()
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                     mock_deploy.return_value = {"status": "completed"}
-                    await run_multihost_deploy(job.id, lab.id)
+                    with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+                        await run_multihost_deploy(job.id, lab.id)
 
         # Check for host count in progress messages
         all_calls = mock_broadcaster.publish_job_progress.call_args_list
@@ -424,15 +425,13 @@ class TestBroadcastSequence:
 
         mock_broadcaster.publish_job_progress = track_broadcast
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                         mock_deploy.return_value = {"status": "completed"}
-                        with patch("app.tasks.jobs.graph_to_deploy_topology") as mock_topo:
-                            mock_topo.return_value = {"name": "test", "topology": {"nodes": {}}}
-                            await run_agent_job(job.id, lab.id, "up")
+                        await run_agent_job(job.id, lab.id, "up")
 
         # Should have running before completed
         assert "running" in broadcast_sequence
@@ -476,7 +475,7 @@ class TestBroadcastSequence:
 
         mock_broadcaster.publish_job_progress = track_broadcast
 
-        with patch("app.tasks.jobs.SessionLocal", return_value=test_db):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
@@ -485,9 +484,7 @@ class TestBroadcastSequence:
                             "status": "failed",
                             "error_message": "Deploy error",
                         }
-                        with patch("app.tasks.jobs.graph_to_deploy_topology") as mock_topo:
-                            mock_topo.return_value = {"name": "test", "topology": {"nodes": {}}}
-                            await run_agent_job(job.id, lab.id, "up")
+                        await run_agent_job(job.id, lab.id, "up")
 
         # Should have running before failed
         assert "running" in broadcast_sequence

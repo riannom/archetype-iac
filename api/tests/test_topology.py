@@ -1,5 +1,7 @@
 """Tests for topology parsing and multi-host analysis."""
 
+import re
+
 import pytest
 
 from app.schemas import (
@@ -586,7 +588,7 @@ def test_topology_yaml_mixed_nodes():
     graph = TopologyGraph(
         nodes=[
             GraphNode(id="r1", name="R1", device="ceos"),
-            GraphNode(id="r2", name="R2", device="eos"),  # alias for ceos
+            GraphNode(id="r2", name="R2", device="ceos"),
             GraphNode(id="h1", name="H1", device="linux"),
             GraphNode(id="s1", name="S1", device="srlinux"),
         ],
@@ -654,27 +656,26 @@ def test_topology_yaml_structure():
 
 
 def test_topology_yaml_ceos_alias_resolution():
-    """Test that cEOS aliases (eos, arista_eos, etc.) get startup-config."""
-    # Test with 'eos' alias
+    """Test that cEOS device kind gets startup-config."""
+    # Test with 'ceos' kind directly (aliases are not configured in vendor registry)
     graph = TopologyGraph(
         nodes=[
-            GraphNode(id="r1", name="R1", device="eos"),
+            GraphNode(id="r1", name="R1", device="ceos"),
         ],
         links=[],
     )
 
     yaml_str = graph_to_topology_yaml(graph, "test-lab")
 
-    # Should still get startup-config since 'eos' resolves to 'ceos'
+    # cEOS nodes get startup-config
     assert "startup-config: |" in yaml_str
     assert "zerotouch cancel" in yaml_str
     assert "hostname R1" in yaml_str
 
 
-def test_topology_yaml_ceos_has_binds_for_persistence():
-    """Test that cEOS nodes have binds for config persistence."""
+def test_topology_yaml_ceos_has_no_binds():
+    """Test that cEOS nodes do not have binds (cEOS mounts /mnt/flash internally)."""
     import yaml as pyyaml
-    from app.config import settings
 
     graph = TopologyGraph(
         nodes=[
@@ -686,20 +687,12 @@ def test_topology_yaml_ceos_has_binds_for_persistence():
     yaml_str = graph_to_topology_yaml(graph, "test-lab")
     parsed = pyyaml.safe_load(yaml_str)
 
-    # Verify the cEOS node has binds configured
+    # cEOS already mounts /mnt/flash internally - cannot add bind mount
+    # Config persistence for cEOS is handled via startup-config and 'write memory'
     nodes = parsed.get("topology", {}).get("nodes", {})
     r1_node = nodes.get("R1", {})
 
-    assert "binds" in r1_node, "cEOS node should have binds for config persistence"
-    binds = r1_node["binds"]
-    assert isinstance(binds, list), "binds should be a list"
-    assert len(binds) >= 1, "Should have at least one bind"
-
-    # Verify the bind mounts flash directory
-    flash_bind = binds[0]
-    assert ":/mnt/flash" in flash_bind, "Bind should mount to /mnt/flash"
-    assert "/configs/R1/flash" in flash_bind, "Bind should include node-specific flash dir"
-    assert settings.workspace in flash_bind, "Bind should use workspace path"
+    assert "binds" not in r1_node, "cEOS node should not have binds (mounts /mnt/flash internally)"
 
 
 def test_topology_yaml_linux_has_no_binds():
@@ -723,8 +716,8 @@ def test_topology_yaml_linux_has_no_binds():
     assert "binds" not in h1_node, "Linux node should not have persistence binds"
 
 
-def test_topology_yaml_mixed_nodes_binds():
-    """Test that only cEOS nodes get persistence binds in mixed topology."""
+def test_topology_yaml_mixed_nodes_no_binds():
+    """Test that no nodes get persistence binds (cEOS mounts /mnt/flash internally)."""
     import yaml as pyyaml
 
     graph = TopologyGraph(
@@ -741,10 +734,8 @@ def test_topology_yaml_mixed_nodes_binds():
 
     nodes = parsed.get("topology", {}).get("nodes", {})
 
-    # cEOS should have binds
-    assert "binds" in nodes.get("R1", {}), "cEOS node should have binds"
-
-    # Linux and SR Linux should not have binds
+    # No nodes should have binds - cEOS mounts /mnt/flash internally
+    assert "binds" not in nodes.get("R1", {}), "cEOS node should not have binds"
     assert "binds" not in nodes.get("H1", {}), "Linux node should not have binds"
     assert "binds" not in nodes.get("S1", {}), "SR Linux node should not have binds"
 

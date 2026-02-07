@@ -140,11 +140,7 @@ class TestCheckAgentHasImage:
         from app.tasks.image_sync import check_agent_has_image
 
         with patch("app.tasks.image_sync.httpx.AsyncClient") as mock_client:
-            mock_instance = MagicMock()
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock()
-            mock_instance.get = AsyncMock(side_effect=Exception("Connection error"))
-            mock_client.return_value = mock_instance
+            mock_client.side_effect = Exception("Connection error")
 
             result = await check_agent_has_image(sample_host, "test:1.0")
 
@@ -186,11 +182,7 @@ class TestGetAgentImageInventory:
         from app.tasks.image_sync import get_agent_image_inventory
 
         with patch("app.tasks.image_sync.httpx.AsyncClient") as mock_client:
-            mock_instance = MagicMock()
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock()
-            mock_instance.get = AsyncMock(side_effect=Exception("Connection error"))
-            mock_client.return_value = mock_instance
+            mock_client.side_effect = Exception("Connection error")
 
             result = await get_agent_image_inventory(sample_host)
 
