@@ -2348,6 +2348,51 @@ async def overlay_bridge_ports():
     }
 
 
+@app.post("/overlay/reconcile-ports")
+async def reconcile_overlay_ports(request: dict):
+    """Remove stale VXLAN ports not in the valid set.
+
+    The API knows which VXLAN ports should exist (from vxlan_tunnels DB table).
+    It sends the valid port names here; we delete any VXLAN port not in the list.
+    """
+    import asyncio
+
+    valid_port_names = set(request.get("valid_port_names", []))
+    bridge = settings.ovs_bridge_name or "arch-ovs"
+
+    async def run(cmd: str) -> tuple[int, str]:
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, (stdout or stderr).decode().strip()
+
+    # List all ports on the bridge
+    _, ports_raw = await run(f"ovs-vsctl list-ports {bridge}")
+    all_ports = ports_raw.split("\n") if ports_raw else []
+
+    removed = []
+    for port_name in all_ports:
+        if not port_name:
+            continue
+        # Check if this port is a VXLAN type
+        _, iface_type = await run(f"ovs-vsctl get interface {port_name} type")
+        if iface_type != "vxlan":
+            continue
+        # Skip if it's in the valid set
+        if port_name in valid_port_names:
+            continue
+        # Delete the stale VXLAN port
+        code, msg = await run(f"ovs-vsctl --if-exists del-port {bridge} {port_name}")
+        if code == 0:
+            removed.append(port_name)
+            logger.info(f"Removed stale VXLAN port: {port_name}")
+        else:
+            logger.warning(f"Failed to remove VXLAN port {port_name}: {msg}")
+
+    return {"removed_ports": removed, "valid_count": len(valid_port_names)}
+
+
 @app.post("/overlay/vtep")
 async def ensure_vtep(request: EnsureVtepRequest) -> EnsureVtepResponse:
     """Ensure a VTEP exists to the remote host.

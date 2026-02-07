@@ -950,6 +950,43 @@ async def cleanup_orphans_on_agent(agent: models.Host, valid_lab_ids: list[str])
         return {"removed_containers": [], "errors": [str(e)]}
 
 
+def compute_vxlan_port_name(lab_id: str, link_name: str) -> str:
+    """Compute the deterministic OVS port name for a per-link VXLAN tunnel.
+
+    Must match agent/network/overlay.py:_link_tunnel_interface_name().
+    """
+    import hashlib
+
+    combined = f"{lab_id}:{link_name}"
+    link_hash = hashlib.md5(combined.encode()).hexdigest()[:8]
+    return f"vxlan-{link_hash}"
+
+
+async def reconcile_vxlan_ports_on_agent(agent: models.Host, valid_port_names: list[str]) -> dict:
+    """Tell agent which VXLAN ports should exist; agent removes the rest.
+
+    Args:
+        agent: The agent to reconcile
+        valid_port_names: List of VXLAN port names that should be kept
+
+    Returns dict with 'removed_ports' key listing what was cleaned up.
+    """
+    url = f"{get_agent_url(agent)}/overlay/reconcile-ports"
+
+    try:
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={"valid_port_names": valid_port_names},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Failed to reconcile VXLAN ports on agent {agent.id}: {e}")
+        return {"removed_ports": [], "errors": [str(e)]}
+
+
 async def cleanup_lab_orphans(
     agent: models.Host,
     lab_id: str,
