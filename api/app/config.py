@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite:///./archetype.db"
+    database_url: str = "postgresql://archetype:archetype@postgres:5432/archetype"
     redis_url: str = "redis://redis:6379/0"
     # Workspace directory for lab files and images
     workspace: str = "/var/lib/archetype"
