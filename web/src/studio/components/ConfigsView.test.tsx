@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ConfigsView from "./ConfigsView";
 import { DeviceNode, DeviceType } from "../types";
@@ -36,6 +36,10 @@ const createMockSnapshot = (overrides: Partial<{
   content_hash: string;
   snapshot_type: string;
   created_at: string;
+  device_kind: string;
+  mapped_to_node_id: string | null;
+  is_active: boolean;
+  is_orphaned: boolean;
 }> = {}) => ({
   id: overrides.id || "snapshot-1",
   lab_id: overrides.lab_id || "lab-1",
@@ -44,6 +48,10 @@ const createMockSnapshot = (overrides: Partial<{
   content_hash: overrides.content_hash || "abc123def456",
   snapshot_type: overrides.snapshot_type || "manual",
   created_at: overrides.created_at || new Date().toISOString(),
+  device_kind: overrides.device_kind || "ceos",
+  mapped_to_node_id: overrides.mapped_to_node_id ?? null,
+  is_active: overrides.is_active ?? false,
+  is_orphaned: overrides.is_orphaned ?? false,
 });
 
 const mockNodes: DeviceNode[] = [
@@ -94,9 +102,9 @@ describe("ConfigsView", () => {
     it("renders the header with title and description", async () => {
       render(<ConfigsView {...defaultProps} />);
 
-      expect(screen.getByText("Configuration Snapshots")).toBeInTheDocument();
+      expect(screen.getByText("Configuration Management")).toBeInTheDocument();
       expect(
-        screen.getByText(/View, compare, and track configuration changes/)
+        screen.getByText(/View, compare, map, and manage configuration snapshots/)
       ).toBeInTheDocument();
     });
 
@@ -117,7 +125,7 @@ describe("ConfigsView", () => {
     it("renders the Nodes section header", async () => {
       render(<ConfigsView {...defaultProps} />);
 
-      expect(screen.getByText("Nodes")).toBeInTheDocument();
+      expect(screen.getByText(/Active Nodes/)).toBeInTheDocument();
     });
 
     it("shows node names in the left panel", async () => {
@@ -132,11 +140,11 @@ describe("ConfigsView", () => {
   });
 
   describe("Empty states", () => {
-    it("shows 'No nodes in topology' when there are no nodes", async () => {
+    it("shows empty active nodes list when there are no nodes", async () => {
       render(<ConfigsView {...defaultProps} nodes={[]} />);
 
       await waitFor(() => {
-        expect(screen.getByText("No nodes in topology")).toBeInTheDocument();
+        expect(screen.getByText("Active Nodes (0)")).toBeInTheDocument();
       });
     });
 
@@ -163,9 +171,9 @@ describe("ConfigsView", () => {
       await user.click(screen.getByText("Router1"));
 
       await waitFor(() => {
-        expect(screen.getByText("No snapshots for this node")).toBeInTheDocument();
+        expect(screen.getByText("No snapshots")).toBeInTheDocument();
         expect(
-          screen.getByText('Click "Extract Configs" to create one')
+          screen.getByText("Extract configs to create snapshots")
         ).toBeInTheDocument();
       });
     });
@@ -230,21 +238,22 @@ describe("ConfigsView", () => {
         expect(screen.getByText("Router1")).toBeInTheDocument();
       });
 
-      await user.click(screen.getByText("Router1"));
+      await user.click(screen.getAllByText("Router1")[0]);
 
       // The node should be selected (shown by the sage-colored text)
-      const nodeButton = screen.getByText("Router1").closest("button");
+      const nodeButton = screen.getAllByText("Router1")[0].closest("button");
       expect(nodeButton).toHaveClass("bg-sage-600/20");
     });
 
-    it("shows 'No configs' label for nodes without snapshots", async () => {
+    it("shows nodes without snapshot counts when no snapshots exist", async () => {
       mockStudioRequest.mockResolvedValue({ snapshots: [] });
       render(<ConfigsView {...defaultProps} />);
 
       await waitFor(() => {
-        // Both nodes should show "No configs" since there are no snapshots
-        const noConfigsLabels = screen.getAllByText("No configs");
-        expect(noConfigsLabels).toHaveLength(2);
+        expect(screen.getByText("Router1")).toBeInTheDocument();
+        expect(screen.getByText("Switch1")).toBeInTheDocument();
+        // No snapshot counts should be shown for nodes without snapshots
+        expect(screen.queryByText(/\d+ snapshot/)).not.toBeInTheDocument();
       });
     });
   });
@@ -361,8 +370,8 @@ describe("ConfigsView", () => {
         expect(screen.getByText("Router1")).toBeInTheDocument();
       });
 
-      // Click on the node
-      await user.click(screen.getByText("Router1"));
+      // Click on the node (use getAllByText since SnapshotList header also shows name)
+      await user.click(screen.getAllByText("Router1")[0]);
 
       // Wait for snapshots panel to update
       await waitFor(() => {
@@ -370,7 +379,7 @@ describe("ConfigsView", () => {
       });
 
       // Click on the snapshot card (by finding a timestamp-like text)
-      const snapshotCard = document.querySelector('[class*="rounded-lg border cursor-pointer"]');
+      const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]');
       if (snapshotCard) {
         await user.click(snapshotCard);
       }
@@ -398,15 +407,15 @@ describe("ConfigsView", () => {
         expect(screen.getByText("Router1")).toBeInTheDocument();
       });
 
-      await user.click(screen.getByText("Router1"));
+      await user.click(screen.getAllByText("Router1")[0]);
 
       // Click on the snapshot
       await waitFor(() => {
-        const snapshotCard = document.querySelector('[class*="rounded-lg border cursor-pointer"]');
+        const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]');
         expect(snapshotCard).toBeInTheDocument();
       });
 
-      const snapshotCard = document.querySelector('[class*="rounded-lg border cursor-pointer"]');
+      const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]');
       if (snapshotCard) {
         await user.click(snapshotCard);
       }
@@ -449,7 +458,7 @@ describe("ConfigsView", () => {
       // Snapshot cards should be rendered
       await waitFor(
         () => {
-          const cards = document.querySelectorAll('[class*="cursor-pointer"][class*="rounded-lg"]');
+          const cards = document.querySelectorAll('[class*="rounded-lg"][class*="cursor-pointer"]');
           expect(cards.length).toBeGreaterThan(0);
         },
         { timeout: 3000 }
@@ -532,7 +541,7 @@ describe("ConfigsView", () => {
       });
     });
 
-    it("shows checkboxes in compare mode", async () => {
+    it("shows selectable snapshot cards in compare mode", async () => {
       const snapshots = [
         createMockSnapshot({ id: "snap-1", node_name: "archetype-lab1-router1" }),
         createMockSnapshot({
@@ -554,11 +563,11 @@ describe("ConfigsView", () => {
       await user.click(screen.getByText("Compare"));
 
       await waitFor(() => {
-        // Checkboxes should be visible (they have a specific class)
-        const checkboxes = document.querySelectorAll(
-          '[class*="w-4 h-4 rounded border-2"]'
+        // Snapshot cards should be present and clickable in compare mode
+        const cards = document.querySelectorAll(
+          '[class*="rounded-lg"][class*="cursor-pointer"]'
         );
-        expect(checkboxes.length).toBeGreaterThanOrEqual(2);
+        expect(cards.length).toBeGreaterThanOrEqual(2);
       });
     });
 
@@ -585,7 +594,7 @@ describe("ConfigsView", () => {
 
       // Select both snapshots
       const snapshotCards = document.querySelectorAll(
-        '[class*="rounded-lg border cursor-pointer"]'
+        '[class*="rounded-lg"][class*="cursor-pointer"]'
       );
       expect(snapshotCards.length).toBeGreaterThanOrEqual(2);
 
@@ -607,8 +616,18 @@ describe("ConfigsView", () => {
       mockStudioRequest.mockResolvedValue({ snapshots });
       render(<ConfigsView {...defaultProps} />);
 
+      // Wait for auto-selection and snapshot card rendering
       await waitFor(() => {
-        const deleteButton = document.querySelector(".fa-trash-can");
+        const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]');
+        expect(snapshotCard).toBeInTheDocument();
+      });
+
+      // Hover the snapshot card to reveal delete button
+      const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]')!;
+      fireEvent.mouseEnter(snapshotCard);
+
+      await waitFor(() => {
+        const deleteButton = document.querySelector(".fa-trash");
         expect(deleteButton).toBeInTheDocument();
       });
     });
@@ -625,16 +644,23 @@ describe("ConfigsView", () => {
       render(<ConfigsView {...defaultProps} />);
 
       await waitFor(() => {
-        const deleteButton = document.querySelector(".fa-trash-can");
-        expect(deleteButton).toBeInTheDocument();
+        const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]');
+        expect(snapshotCard).toBeInTheDocument();
       });
 
-      const deleteButton = document.querySelector(".fa-trash-can")!.closest("button");
+      const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]')!;
+      fireEvent.mouseEnter(snapshotCard);
+
+      await waitFor(() => {
+        expect(document.querySelector(".fa-trash")).toBeInTheDocument();
+      });
+
+      const deleteButton = document.querySelector(".fa-trash")!.closest("button");
       if (deleteButton) {
         await user.click(deleteButton);
       }
 
-      expect(mockConfirm).toHaveBeenCalledWith("Delete this snapshot?");
+      expect(mockConfirm).toHaveBeenCalledWith("Delete this snapshot? This action cannot be undone.");
     });
 
     it("calls delete API when confirmed", async () => {
@@ -649,15 +675,22 @@ describe("ConfigsView", () => {
       render(<ConfigsView {...defaultProps} />);
 
       await waitFor(() => {
-        const deleteButton = document.querySelector(".fa-trash-can");
-        expect(deleteButton).toBeInTheDocument();
+        const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]');
+        expect(snapshotCard).toBeInTheDocument();
       });
 
-      // Clear the initial load call
+      const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]')!;
+      fireEvent.mouseEnter(snapshotCard);
+
+      await waitFor(() => {
+        expect(document.querySelector(".fa-trash")).toBeInTheDocument();
+      });
+
+      // Clear the initial load calls
       mockStudioRequest.mockClear();
       mockStudioRequest.mockResolvedValue({});
 
-      const deleteButton = document.querySelector(".fa-trash-can")!.closest("button");
+      const deleteButton = document.querySelector(".fa-trash")!.closest("button");
       if (deleteButton) {
         await user.click(deleteButton);
       }
@@ -682,19 +715,30 @@ describe("ConfigsView", () => {
       render(<ConfigsView {...defaultProps} />);
 
       await waitFor(() => {
-        const deleteButton = document.querySelector(".fa-trash-can");
-        expect(deleteButton).toBeInTheDocument();
+        const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]');
+        expect(snapshotCard).toBeInTheDocument();
       });
 
-      // Clear the initial load call
+      const snapshotCard = document.querySelector('[class*="rounded-lg"][class*="cursor-pointer"]')!;
+      fireEvent.mouseEnter(snapshotCard);
+
+      await waitFor(() => {
+        expect(document.querySelector(".fa-trash")).toBeInTheDocument();
+      });
+
+      // Clear the initial load calls
       mockStudioRequest.mockClear();
 
-      const deleteButton = document.querySelector(".fa-trash-can")!.closest("button");
+      const deleteButton = document.querySelector(".fa-trash")!.closest("button");
       if (deleteButton) {
         await user.click(deleteButton);
       }
 
-      expect(mockStudioRequest).not.toHaveBeenCalled();
+      // After cancellation, no delete API call should be made
+      expect(mockStudioRequest).not.toHaveBeenCalledWith(
+        "/labs/test-lab-123/config-snapshots/snap-1",
+        { method: "DELETE" }
+      );
     });
   });
 

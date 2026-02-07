@@ -346,6 +346,8 @@ class ConfigSnapshot(Base):
     - Content hash (SHA256) for deduplication - identical configs share hash
     - Snapshot types: "manual" (user-triggered), "auto_stop" (on node stop)
     - Per-node snapshots with timestamps for timeline views
+    - device_kind for type-matching when mapping orphaned configs to new nodes
+    - mapped_to_node_id for reassigning stranded configs to replacement nodes
     """
     __tablename__ = "config_snapshots"
 
@@ -358,6 +360,12 @@ class ConfigSnapshot(Base):
     content_hash: Mapped[str] = mapped_column(String(64))
     # Snapshot type: "manual" or "auto_stop"
     snapshot_type: Mapped[str] = mapped_column(String(50))
+    # Device type (e.g., "ceos", "srl") for type-matching during config mapping
+    device_kind: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # FK to target node when an orphaned config is reassigned
+    mapped_to_node_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -620,6 +628,11 @@ class Node(Base):
 
     # Extra config as JSON (vars, binds, env, role, mgmt, etc.)
     config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Active startup-config snapshot (used for deploy priority)
+    active_config_snapshot_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("config_snapshots.id", ondelete="SET NULL"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
