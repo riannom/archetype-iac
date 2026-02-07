@@ -1811,6 +1811,14 @@ class OVSNetworkManager:
             else:
                 port_info["type"] = "unknown"
 
+            # Get interface error (e.g. "No such device" for stale ports)
+            code, err_stdout, _ = await self._ovs_vsctl("get", "interface", port_name, "error")
+            if code == 0:
+                err_str = err_stdout.strip().strip('"')
+                port_info["error"] = err_str if err_str and err_str != "[]" else ""
+            else:
+                port_info["error"] = ""
+
             ports.append(port_info)
 
         return ports
@@ -1893,8 +1901,16 @@ class OVSNetworkManager:
         tracked_port_names = {p.port_name for p in self._ports.values()}
 
         # Calculate orphaned and missing
-        orphaned = [p for p in ovs_ports if p["port_name"] not in tracked_port_names
-                    and p["port_name"].startswith("vh")]  # Only our veth ports
+        # Only consider vh* ports orphaned if the underlying interface no longer
+        # exists (stale device). Ports with live interfaces belong to running
+        # containers created by the Docker OVS plugin and must not be deleted.
+        orphaned = []
+        for p in ovs_ports:
+            if p["port_name"] not in tracked_port_names and p["port_name"].startswith("vh"):
+                # Check if the interface still exists in the kernel
+                error = p.get("error", "")
+                if "No such device" in error:
+                    orphaned.append(p)
         missing = [key for key, port in self._ports.items()
                    if port.port_name not in ovs_port_names]
 
