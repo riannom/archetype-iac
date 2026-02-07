@@ -933,3 +933,30 @@ class SetMtuResponse(BaseModel):
     persisted: bool = False
     network_manager: str | None = None
     error: str | None = None
+
+
+# --- Endpoint Repair ---
+
+class RepairEndpointsRequest(BaseModel):
+    """Controller -> Agent: Repair missing veth pairs and OVS ports."""
+    nodes: list[str] = Field(default_factory=list)
+    """Node names to repair. If empty, repairs all nodes in the lab."""
+
+
+class EndpointRepairResult(BaseModel):
+    """Result of repairing a single endpoint."""
+    interface: str
+    status: str  # "ok", "repaired", "error"
+    host_veth: str | None = None
+    vlan_tag: int | None = None
+    message: str | None = None
+
+
+class RepairEndpointsResponse(BaseModel):
+    """Agent -> Controller: Endpoint repair results."""
+    success: bool
+    nodes_repaired: int = 0
+    total_endpoints_repaired: int = 0
+    results: dict[str, list[EndpointRepairResult]] = Field(default_factory=dict)
+    """Map of node_name -> list of repair results per endpoint."""
+    error: str | None = None

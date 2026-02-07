@@ -180,6 +180,18 @@ class DockerOVSPlugin:
         """Run ovs-vsctl command."""
         return await self._run_cmd(["ovs-vsctl", *args])
 
+    async def _validate_endpoint_exists(self, ep: EndpointState) -> bool:
+        """Check if endpoint's host veth actually exists as an OVS port.
+
+        This is the single validation gate — every method that returns
+        endpoint data should call this to avoid returning stale state
+        after agent/container restarts where veth pairs no longer exist.
+        """
+        if not ep.host_veth:
+            return False
+        code, _, _ = await self._run_cmd(["ovs-vsctl", "port-to-br", ep.host_veth])
+        return code == 0
+
     async def _ensure_bridge(self, lab_id: str) -> LabBridge:
         """Ensure OVS bridge exists and lab state is tracked.
 
@@ -2205,6 +2217,12 @@ class DockerOVSPlugin:
                     if network and network.lab_id != lab_id:
                         continue
                     if ep.interface_name == interface_name:
+                        if not await self._validate_endpoint_exists(ep):
+                            logger.warning(
+                                f"Discovered endpoint {ep.endpoint_id[:12]} is stale "
+                                f"(OVS port {ep.host_veth} missing)"
+                            )
+                            return None
                         ep.container_name = container_name
                         logger.info(
                             f"Matched endpoint via EndpointID: {container_name}:{interface_name} -> {ep.host_veth}"
@@ -2218,6 +2236,12 @@ class DockerOVSPlugin:
                             network = self.networks.get(ep.network_id)
                             if network and network.lab_id != lab_id:
                                 continue
+                            if not await self._validate_endpoint_exists(ep):
+                                logger.warning(
+                                    f"Discovered endpoint {ep.endpoint_id[:12]} is stale "
+                                    f"(OVS port {ep.host_veth} missing)"
+                                )
+                                return None
                             ep.container_name = container_name
                             logger.info(
                                 f"Matched endpoint via NetworkID: {container_name}:{interface_name} -> {ep.host_veth}"
@@ -2332,6 +2356,20 @@ class DockerOVSPlugin:
 
             if not ep_a or not ep_b:
                 logger.error(f"Endpoints not found for {container_a}:{iface_a} or {container_b}:{iface_b}")
+                return None
+
+            # Validate both endpoints actually exist on OVS
+            if not await self._validate_endpoint_exists(ep_a):
+                logger.error(
+                    f"Cannot hot_connect: source endpoint {ep_a.host_veth} "
+                    f"not on OVS for {container_a}:{iface_a}"
+                )
+                return None
+            if not await self._validate_endpoint_exists(ep_b):
+                logger.error(
+                    f"Cannot hot_connect: target endpoint {ep_b.host_veth} "
+                    f"not on OVS for {container_b}:{iface_b}"
+                )
                 return None
 
             net_a = self.networks.get(ep_a.network_id)
@@ -2603,30 +2641,42 @@ class DockerOVSPlugin:
         async with self._lock:
             for ep in self.endpoints.values():
                 if ep.container_name == container and ep.interface_name == interface:
-                    if read_from_ovs and ep.host_veth:
-                        # Read actual VLAN from OVS for verification
-                        code, stdout, _ = await self._run_cmd([
-                            "ovs-vsctl", "get", "port", ep.host_veth, "tag"
-                        ])
-                        if code == 0:
-                            try:
-                                return int(stdout.strip())
-                            except ValueError:
-                                pass
+                    if read_from_ovs:
+                        if ep.host_veth:
+                            code, stdout, _ = await self._run_cmd([
+                                "ovs-vsctl", "get", "port", ep.host_veth, "tag"
+                            ])
+                            if code == 0:
+                                try:
+                                    return int(stdout.strip())
+                                except ValueError:
+                                    pass
+                        # OVS port missing or read failed — don't return stale value
+                        logger.warning(
+                            f"Endpoint {ep.endpoint_id[:12]} stale: "
+                            f"OVS port {ep.host_veth} missing for {container}:{interface}"
+                        )
+                        return None
                     return ep.vlan_tag
 
         ep = await self._discover_endpoint(lab_id, container, interface)
         if ep:
-            if read_from_ovs and ep.host_veth:
-                # Read actual VLAN from OVS for verification
-                code, stdout, _ = await self._run_cmd([
-                    "ovs-vsctl", "get", "port", ep.host_veth, "tag"
-                ])
-                if code == 0:
-                    try:
-                        return int(stdout.strip())
-                    except ValueError:
-                        pass
+            if read_from_ovs:
+                if ep.host_veth:
+                    code, stdout, _ = await self._run_cmd([
+                        "ovs-vsctl", "get", "port", ep.host_veth, "tag"
+                    ])
+                    if code == 0:
+                        try:
+                            return int(stdout.strip())
+                        except ValueError:
+                            pass
+                # OVS port missing or read failed — don't return stale value
+                logger.warning(
+                    f"Discovered endpoint stale: "
+                    f"OVS port {ep.host_veth} missing for {container}:{interface}"
+                )
+                return None
             return ep.vlan_tag
         return None
 
@@ -2821,6 +2871,179 @@ class DockerOVSPlugin:
         Used by cleanup manager to avoid deleting active veths.
         """
         return {ep.host_veth for ep in self.endpoints.values()}
+
+    # =========================================================================
+    # Endpoint Repair (recreate missing veth pairs after restart)
+    # =========================================================================
+
+    async def repair_endpoints(
+        self,
+        lab_id: str,
+        container_name: str,
+    ) -> list[dict[str, Any]]:
+        """Repair missing veth pairs and OVS ports for a container.
+
+        After agent/container restarts, the plugin may have in-memory endpoint
+        records but the physical veth pairs no longer exist. This method:
+        1. Finds all endpoints for a container
+        2. Checks which ones are missing from OVS
+        3. Recreates the veth pair and OVS attachment
+        4. Moves the container side into the container namespace
+
+        Returns:
+            List of dicts with repair results per endpoint.
+        """
+        results: list[dict[str, Any]] = []
+
+        # Collect stale endpoints for this container
+        stale_eps: list[EndpointState] = []
+        for ep in self.endpoints.values():
+            if ep.container_name == container_name:
+                if not await self._validate_endpoint_exists(ep):
+                    stale_eps.append(ep)
+                else:
+                    results.append({
+                        "interface": ep.interface_name,
+                        "status": "ok",
+                        "message": f"Port {ep.host_veth} already exists",
+                    })
+
+        if not stale_eps:
+            # Also check for endpoints without container_name set
+            # (can happen after agent restart)
+            import docker as docker_lib
+
+            try:
+                def _get_networks():
+                    client = docker_lib.from_env()
+                    ctr = client.containers.get(container_name)
+                    return ctr.attrs["NetworkSettings"]["Networks"]
+
+                networks = await asyncio.to_thread(_get_networks)
+                for net_name, net_info in networks.items():
+                    eid = net_info.get("EndpointID")
+                    if eid and eid in self.endpoints:
+                        ep = self.endpoints[eid]
+                        if not await self._validate_endpoint_exists(ep):
+                            ep.container_name = container_name
+                            stale_eps.append(ep)
+            except Exception as e:
+                logger.warning(f"Could not inspect container {container_name}: {e}")
+
+        if not stale_eps:
+            return results
+
+        # Get container PID for namespace operations
+        pid = await self._get_container_pid(container_name)
+        if not pid:
+            for ep in stale_eps:
+                results.append({
+                    "interface": ep.interface_name,
+                    "status": "error",
+                    "message": f"Container {container_name} not running (no PID)",
+                })
+            return results
+
+        bridge_name = settings.ovs_bridge_name
+
+        for ep in stale_eps:
+            iface = ep.interface_name
+            try:
+                # Clean up old OVS port if it exists (stale reference)
+                await self._ovs_vsctl("--if-exists", "del-port", bridge_name, ep.host_veth)
+                # Clean up old veth if it exists
+                await self._run_cmd(["ip", "link", "delete", ep.host_veth])
+
+                # Generate new veth names (old ones may conflict)
+                host_veth, cont_veth = self._generate_veth_names(ep.endpoint_id)
+
+                # Create veth pair
+                if not await self._create_veth_pair(host_veth, cont_veth):
+                    results.append({
+                        "interface": iface,
+                        "status": "error",
+                        "message": f"Failed to create veth pair {host_veth}/{cont_veth}",
+                    })
+                    continue
+
+                # Attach host side to OVS bridge with stored VLAN tag
+                if not await self._attach_to_ovs(bridge_name, host_veth, ep.vlan_tag):
+                    await self._run_cmd(["ip", "link", "delete", host_veth])
+                    results.append({
+                        "interface": iface,
+                        "status": "error",
+                        "message": f"Failed to attach {host_veth} to OVS",
+                    })
+                    continue
+
+                # Move container side into container namespace
+                code, _, stderr = await self._run_cmd([
+                    "ip", "link", "set", cont_veth, "netns", str(pid),
+                ])
+                if code != 0:
+                    logger.error(f"Failed to move {cont_veth} to ns {pid}: {stderr}")
+                    await self._ovs_vsctl("--if-exists", "del-port", bridge_name, host_veth)
+                    await self._run_cmd(["ip", "link", "delete", host_veth])
+                    results.append({
+                        "interface": iface,
+                        "status": "error",
+                        "message": f"Failed to move veth to container namespace: {stderr}",
+                    })
+                    continue
+
+                # Rename inside namespace to correct interface name
+                code, _, stderr = await self._run_cmd([
+                    "nsenter", "-t", str(pid), "-n",
+                    "ip", "link", "set", cont_veth, "name", iface,
+                ])
+                if code != 0:
+                    logger.error(f"Failed to rename {cont_veth} to {iface}: {stderr}")
+                    results.append({
+                        "interface": iface,
+                        "status": "error",
+                        "message": f"Failed to rename interface: {stderr}",
+                    })
+                    continue
+
+                # Set MTU inside namespace if configured
+                if settings.local_mtu > 0:
+                    await self._run_cmd([
+                        "nsenter", "-t", str(pid), "-n",
+                        "ip", "link", "set", iface, "mtu", str(settings.local_mtu),
+                    ])
+
+                # Bring up inside namespace
+                await self._run_cmd([
+                    "nsenter", "-t", str(pid), "-n",
+                    "ip", "link", "set", iface, "up",
+                ])
+
+                # Update endpoint state with new veth names
+                old_host_veth = ep.host_veth
+                ep.host_veth = host_veth
+                ep.cont_veth = cont_veth
+                await self._mark_dirty_and_save()
+
+                logger.info(
+                    f"Repaired endpoint {container_name}:{iface}: "
+                    f"{old_host_veth} -> {host_veth} (VLAN {ep.vlan_tag})"
+                )
+                results.append({
+                    "interface": iface,
+                    "status": "repaired",
+                    "host_veth": host_veth,
+                    "vlan_tag": ep.vlan_tag,
+                })
+
+            except Exception as e:
+                logger.error(f"Failed to repair {container_name}:{iface}: {e}")
+                results.append({
+                    "interface": iface,
+                    "status": "error",
+                    "message": str(e),
+                })
+
+        return results
 
     # =========================================================================
     # HTTP Server

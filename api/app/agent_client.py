@@ -2118,3 +2118,49 @@ async def get_interface_vlan_from_agent(
     except httpx.RequestError as e:
         logger.warning(f"Get interface VLAN request failed: {e}")
         return None
+
+
+async def repair_endpoints_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    nodes: list[str] | None = None,
+) -> dict:
+    """Repair missing veth pairs and OVS ports on an agent.
+
+    After agent/container restarts, endpoints may have stale in-memory
+    state where the physical veth pairs no longer exist. This triggers
+    recreation of the veth pairs, OVS attachment, and namespace moves.
+
+    Args:
+        agent: The agent to repair endpoints on
+        lab_id: Lab identifier
+        nodes: Optional list of node names to repair (all if None)
+
+    Returns:
+        Dict with 'success', 'nodes_repaired', 'total_endpoints_repaired',
+        'results', and optionally 'error' keys.
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/repair-endpoints"
+    logger.info(
+        f"Repairing endpoints on agent {agent.id} for lab {lab_id}"
+        + (f" nodes={nodes}" if nodes else " (all nodes)")
+    )
+
+    try:
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={"nodes": nodes or []},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        repaired = result.get("total_endpoints_repaired", 0)
+        if repaired > 0:
+            logger.info(
+                f"Repaired {repaired} endpoint(s) on agent {agent.id} for lab {lab_id}"
+            )
+        return result
+    except Exception as e:
+        logger.error(f"Endpoint repair failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
