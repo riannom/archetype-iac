@@ -756,7 +756,7 @@ async def check_and_start_image_sync(
                         sync_job_id=sync_job_id,
                         image_id=image_id,
                         image=lib_image,
-                        host=host,
+                        host_id=host.id,
                         lab_id=lab_id,
                         node_ids=node_ids,
                         image_to_nodes=image_to_nodes,
@@ -771,7 +771,7 @@ async def check_and_start_image_sync(
                     _wait_for_sync_and_callback(
                         sync_job_id=sync_job_id,
                         image=lib_image,
-                        host=host,
+                        host_id=host.id,
                         lab_id=lab_id,
                         node_ids=node_ids,
                         image_to_nodes=image_to_nodes,
@@ -797,7 +797,7 @@ async def _run_sync_and_callback(
     sync_job_id: str,
     image_id: str,
     image: dict,
-    host: models.Host,
+    host_id: str,
     lab_id: str,
     node_ids: list[str],
     image_to_nodes: dict[str, list[str]],
@@ -809,6 +809,15 @@ async def _run_sync_and_callback(
     logger = logging.getLogger(__name__)
 
     from app.routers.images import _execute_sync_job
+
+    # Re-query host in a fresh session — the original may be detached
+    with get_session() as session:
+        host = session.get(models.Host, host_id)
+        if not host:
+            logger.error(f"Host {host_id} not found for sync job {sync_job_id}")
+            return
+        # Expunge so we can use it outside this session (read-only attrs)
+        session.expunge(host)
 
     try:
         await _execute_sync_job(sync_job_id, image_id, image, host)
@@ -834,7 +843,7 @@ async def _run_sync_and_callback(
 async def _wait_for_sync_and_callback(
     sync_job_id: str,
     image: dict,
-    host: models.Host,
+    host_id: str,
     lab_id: str,
     node_ids: list[str],
     image_to_nodes: dict[str, list[str]],
