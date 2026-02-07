@@ -87,23 +87,35 @@ def _get_vendor_configs() -> dict:
         return {}
 
 
+def _get_device_overrides() -> dict[str, dict]:
+    """Load device config overrides (user customizations)."""
+    try:
+        from app.image_store import load_device_overrides
+        return load_device_overrides()
+    except Exception:
+        return {}
+
+
 def calculate_node_requirements(device_types: list[str]) -> ResourceRequirements:
     """Calculate total resource requirements for a list of device types.
 
-    Looks up each device in VENDOR_CONFIGS for memory/cpu requirements.
-    Unknown devices get default values (1024 MB, 1 CPU).
+    Looks up each device in VENDOR_CONFIGS for memory/cpu requirements,
+    with user overrides taking precedence. Unknown devices get default
+    values (1024 MB, 1 CPU).
     """
     vendor_configs = _get_vendor_configs()
+    overrides = _get_device_overrides()
     reqs = ResourceRequirements(node_count=len(device_types))
 
     for device_type in device_types:
+        override = overrides.get(device_type, {})
         if device_type and device_type in vendor_configs:
             config = vendor_configs[device_type]
-            reqs.memory_mb += getattr(config, "memory", DEFAULT_MEMORY_MB)
-            reqs.cpu_cores += getattr(config, "cpu", DEFAULT_CPU_CORES)
+            reqs.memory_mb += override.get("memory", getattr(config, "memory", DEFAULT_MEMORY_MB))
+            reqs.cpu_cores += override.get("cpu", getattr(config, "cpu", DEFAULT_CPU_CORES))
         else:
-            reqs.memory_mb += DEFAULT_MEMORY_MB
-            reqs.cpu_cores += DEFAULT_CPU_CORES
+            reqs.memory_mb += override.get("memory", DEFAULT_MEMORY_MB)
+            reqs.cpu_cores += override.get("cpu", DEFAULT_CPU_CORES)
 
     return reqs
 

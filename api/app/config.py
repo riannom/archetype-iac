@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     resource_cpu_buffer_cores: float = 1.0
     resource_disk_buffer_gb: float = 20.0
     resource_memory_warning_pct: float = 80.0
-    resource_memory_error_pct: float = 95.0
+    resource_memory_error_pct: float = 98.0
     resource_cpu_warning_pct: float = 80.0
     resource_cpu_error_pct: float = 95.0
     resource_disk_warning_pct: float = 85.0
