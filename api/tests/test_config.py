@@ -17,10 +17,10 @@ class TestDefaultSettings:
     """Tests for default configuration values."""
 
     def test_database_url_default(self):
-        """Database URL has SQLite default."""
+        """Database URL has PostgreSQL default."""
         from app.config import Settings
         settings = Settings()
-        assert "sqlite" in settings.database_url
+        assert "postgresql" in settings.database_url
 
     def test_redis_url_default(self):
         """Redis URL has default."""
