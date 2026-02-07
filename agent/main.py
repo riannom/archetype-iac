@@ -710,7 +710,9 @@ async def lifespan(app: FastAPI):
     cleanup_mgr = get_cleanup_manager()
     try:
         # Run initial cleanup to clear any orphans from previous crash
-        initial_stats = await cleanup_mgr.run_full_cleanup()
+        # Skip OVS cleanup at startup - overlay manager tracking is empty until
+        # reconciliation runs, so VXLAN ports would be incorrectly seen as orphans
+        initial_stats = await cleanup_mgr.run_full_cleanup(include_ovs=False)
         if initial_stats.veths_deleted > 0 or initial_stats.bridges_deleted > 0:
             logger.info(f"Initial network cleanup: {initial_stats.to_dict()}")
 
