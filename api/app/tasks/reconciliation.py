@@ -231,6 +231,45 @@ def _backfill_placement_node_ids(session, lab_id: str) -> int:
     return count
 
 
+_lab_orphan_check_counter = 0
+_LAB_ORPHAN_CHECK_INTERVAL = 10  # Every 10th reconciliation cycle (~5 min at 30s interval)
+
+
+async def _maybe_cleanup_labless_containers(session):
+    """Periodically remove containers belonging to deleted labs.
+
+    When a lab is deleted from the database, its containers on agents become
+    invisible to per-lab reconciliation (which iterates DB labs). This function
+    tells each agent the full list of valid lab IDs so it can remove any
+    containers belonging to labs no longer in the database.
+
+    Runs every _LAB_ORPHAN_CHECK_INTERVAL cycles to avoid excessive overhead.
+    """
+    global _lab_orphan_check_counter
+    _lab_orphan_check_counter += 1
+    if _lab_orphan_check_counter < _LAB_ORPHAN_CHECK_INTERVAL:
+        return
+    _lab_orphan_check_counter = 0
+
+    try:
+        valid_lab_ids = [str(lab_id) for (lab_id,) in session.query(models.Lab.id).all()]
+        all_agents = session.query(models.Host).all()
+        for agent in all_agents:
+            if not agent_client.is_agent_online(agent):
+                continue
+            try:
+                result = await agent_client.cleanup_orphans_on_agent(agent, valid_lab_ids)
+                removed = result.get("removed_containers", [])
+                if removed:
+                    logger.info(
+                        f"Removed {len(removed)} lab-less container(s) on {agent.name}: {removed}"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed global orphan check on {agent.name}: {e}")
+    except Exception as e:
+        logger.warning(f"Failed global lab-less container cleanup: {e}")
+
+
 async def refresh_states_from_agents():
     """Query agents and refresh lab/node states with actual container status.
 
@@ -416,13 +455,16 @@ async def refresh_states_from_agents():
             if unready_running_nodes:
                 await _check_readiness_for_nodes(session, unready_running_nodes)
 
-            if not labs_to_reconcile:
-                return  # Nothing to reconcile
+            if labs_to_reconcile:
+                logger.info(f"Reconciling state for {len(labs_to_reconcile)} lab(s)")
 
-            logger.info(f"Reconciling state for {len(labs_to_reconcile)} lab(s)")
+                for lab_id in labs_to_reconcile:
+                    await _reconcile_single_lab(session, lab_id)
 
-            for lab_id in labs_to_reconcile:
-                await _reconcile_single_lab(session, lab_id)
+            # Periodic global orphan cleanup: remove containers from deleted labs
+            # Runs less frequently than per-lab reconciliation since it scans ALL
+            # containers on each agent. Every 10th cycle ≈ every 5 minutes at 30s interval.
+            await _maybe_cleanup_labless_containers(session)
 
         except Exception as e:
             logger.error(f"Error in state reconciliation: {e}")
@@ -941,6 +983,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         # Ensure NodePlacement records exist for containers found on agents
         # This handles cases where deploy jobs failed after containers were created
         # IMPORTANT: Don't blindly trust where containers are found - check node_def.host_id
+        misplaced_containers: dict[str, str] = {}  # node_name -> wrong_agent_id
         for node_name, agent_id in container_agent_map.items():
             # Look up node definition for FK and host assignment
             node_def = session.query(models.Node).filter(
@@ -950,10 +993,10 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
             # Check if container is on the WRONG agent according to node definition
             if node_def and node_def.host_id and node_def.host_id != agent_id:
+                misplaced_containers[node_name] = agent_id
                 logger.warning(
                     f"MISPLACED CONTAINER: {node_name} in lab {lab_id} found on agent {agent_id} "
-                    f"but should be on {node_def.host_id}. Skipping placement update. "
-                    f"Container may need cleanup."
+                    f"but should be on {node_def.host_id}. Queued for removal."
                 )
                 # Don't update placement for misplaced containers - this would perpetuate the bug
                 continue
@@ -991,6 +1034,18 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     status="deployed",
                 )
                 session.add(new_placement)
+
+        # Remove misplaced containers from wrong agents
+        # Only do this when no active job to avoid interfering with deployments
+        if misplaced_containers and not check_active_job:
+            for node_name, wrong_agent_id in misplaced_containers.items():
+                agent = host_to_agent.get(wrong_agent_id)
+                if agent:
+                    try:
+                        await agent_client.destroy_container_on_agent(agent, lab_id, node_name)
+                        logger.info(f"Removed misplaced container {node_name} from agent {agent.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove misplaced {node_name} from {agent.name}: {e}")
 
         # Update lab state based on aggregated node states using state machine
         old_lab_state = lab.state
