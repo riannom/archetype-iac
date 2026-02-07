@@ -269,6 +269,44 @@ async def _maybe_cleanup_labless_containers(session):
     except Exception as e:
         logger.warning(f"Failed global lab-less container cleanup: {e}")
 
+    # Reconcile VXLAN ports: remove stale ports that no longer match active tunnels
+    try:
+        active_tunnels = (
+            session.query(models.VxlanTunnel)
+            .filter(models.VxlanTunnel.status == "active")
+            .all()
+        )
+
+        # Build expected port names per agent
+        agent_valid_ports: dict[str, set[str]] = {}
+        for tunnel in active_tunnels:
+            link_state = session.get(models.LinkState, tunnel.link_state_id)
+            if not link_state:
+                continue
+            port_name = agent_client.compute_vxlan_port_name(
+                str(tunnel.lab_id), link_state.link_name
+            )
+            for aid in [tunnel.agent_a_id, tunnel.agent_b_id]:
+                if aid:
+                    agent_valid_ports.setdefault(aid, set()).add(port_name)
+
+        all_agents = session.query(models.Host).all()
+        for agent in all_agents:
+            if not agent_client.is_agent_online(agent):
+                continue
+            valid = list(agent_valid_ports.get(str(agent.id), set()))
+            try:
+                result = await agent_client.reconcile_vxlan_ports_on_agent(agent, valid)
+                removed = result.get("removed_ports", [])
+                if removed:
+                    logger.info(
+                        f"Removed {len(removed)} stale VXLAN port(s) on {agent.name}: {removed}"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed VXLAN port reconciliation on {agent.name}: {e}")
+    except Exception as e:
+        logger.warning(f"Failed VXLAN port reconciliation: {e}")
+
 
 async def refresh_states_from_agents():
     """Query agents and refresh lab/node states with actual container status.
