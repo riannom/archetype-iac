@@ -1464,8 +1464,10 @@ async def reconcile_nodes(
 
         # Try Docker first
         try:
+            import docker
+            client = docker.from_env()
             container = await asyncio.to_thread(
-                lambda: docker_client.containers.get(container_name)
+                lambda: client.containers.get(container_name)
             )
             current_status = container.status
 
