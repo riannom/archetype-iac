@@ -1,12 +1,12 @@
 """Link validation service for verifying OVS connectivity.
 
 This service verifies that links are actually connected by checking
-that OVS VLAN tags match on both endpoints.
+OVS state on the agents.
 
 Key operations:
 - verify_link_connected: Check if a link is actually working
 - verify_same_host_link: Verify VLAN tags match for same-host link
-- verify_cross_host_link: Verify VLAN tags match for cross-host link
+- verify_cross_host_link: Verify per-link VXLAN tunnels exist on both agents
 """
 from __future__ import annotations
 
@@ -108,11 +108,12 @@ async def verify_cross_host_link(
     link_state: models.LinkState,
     host_to_agent: dict[str, models.Host],
 ) -> tuple[bool, str | None]:
-    """Verify a cross-host link by checking VLAN tags on both agents.
+    """Verify a cross-host link using the per-link VNI model.
 
-    For cross-host links, both endpoints should have the same VLAN tag
-    set on their respective OVS ports. The VXLAN tunnel carries traffic
-    between agents based on these VLAN tags.
+    Each side has its own local VLAN (different values are expected).
+    We verify that:
+    1. Each endpoint has a VLAN tag assigned on its OVS port
+    2. The per-link VXLAN tunnel port exists on both agents
 
     Args:
         session: Database session
@@ -135,7 +136,7 @@ async def verify_cross_host_link(
     source_iface = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
     target_iface = _normalize_interface_name(link_state.target_interface) if link_state.target_interface else ""
 
-    # Get VLAN tags from both agents (read directly from OVS for ground truth)
+    # Verify each endpoint has a VLAN tag on its OVS port
     source_vlan = await agent_client.get_interface_vlan_from_agent(
         source_agent,
         link_state.lab_id,
@@ -158,13 +159,18 @@ async def verify_cross_host_link(
     if target_vlan is None:
         return False, f"Could not read VLAN tag from {target_agent.name} for {link_state.target_node}:{link_state.target_interface}"
 
-    if source_vlan != target_vlan:
-        return False, f"VLAN mismatch across hosts: {source_agent.name}={source_vlan}, {target_agent.name}={target_vlan}"
-
-    # Update link_state with verified VLAN tag
-    if link_state.vlan_tag != source_vlan:
-        logger.debug(f"Updating cross-host link VLAN tag from {link_state.vlan_tag} to {source_vlan}")
-        link_state.vlan_tag = source_vlan
+    # Per-link VNI model: VLANs are local to each agent and need NOT match.
+    # Verify the per-link VXLAN tunnel exists on both agents via overlay status.
+    link_name = link_state.link_name
+    for side, agent in [("source", source_agent), ("target", target_agent)]:
+        try:
+            status = await agent_client.get_overlay_status_from_agent(agent)
+            link_tunnels = status.get("link_tunnels", [])
+            found = any(t.get("link_id") == link_name for t in link_tunnels)
+            if not found:
+                return False, f"Per-link VXLAN tunnel not found on {agent.name} for link {link_name}"
+        except Exception as e:
+            return False, f"Could not check overlay status on {agent.name}: {e}"
 
     return True, None
 

@@ -83,15 +83,14 @@ class VxlanTunnel:
 
 @dataclass
 class Vtep:
-    """Represents a VXLAN Tunnel Endpoint to a remote host (new trunk model).
+    """Represents a VXLAN Tunnel Endpoint to a remote host (legacy trunk model).
 
-    In the new architecture, there is one VTEP per remote host (not per link).
-    The VTEP is created in trunk mode (no VLAN tag) and carries traffic for
-    all cross-host links to that remote host. Link isolation is achieved via
-    VLAN tags on the container interface ports, not on the VTEP itself.
+    In the old architecture, there was one VTEP per remote host (not per link).
+    The VTEP was created in trunk mode (no VLAN tag) and carried traffic for
+    all cross-host links to that remote host. This required both sides to use
+    matching VLANs, which was fragile.
 
-    Reference counting: The `links` set tracks which links use this VTEP.
-    When the last link is detached, the VTEP can be deleted.
+    Deprecated: Use LinkTunnel (per-link VNI model) instead.
     """
 
     interface_name: str  # OVS port name (e.g., "vtep-10.0.0.2")
@@ -111,6 +110,35 @@ class Vtep:
     def link_count(self) -> int:
         """Number of links using this VTEP."""
         return len(self.links)
+
+
+@dataclass
+class LinkTunnel:
+    """Represents a per-link VXLAN tunnel port (access-mode).
+
+    In the per-link VNI model, each cross-host link gets its own VXLAN port
+    on OVS in access mode (with tag=). The VNI is the shared link identifier,
+    and each side uses its container's local VLAN as the tag. This eliminates
+    the need for VLAN coordination between hosts.
+
+    OVS access-mode behavior:
+    - Egress: strips the local VLAN tag, encapsulates with VNI
+    - Ingress: decapsulates VNI, adds the local VLAN tag
+    """
+
+    link_id: str  # Unique link identifier
+    vni: int  # VXLAN Network Identifier (shared between both sides)
+    local_ip: str  # Local VXLAN endpoint IP
+    remote_ip: str  # Remote VXLAN endpoint IP
+    local_vlan: int  # Local container VLAN tag (access mode)
+    interface_name: str  # OVS port name (e.g., "vxlan-abc12345")
+    lab_id: str  # Lab this tunnel belongs to
+    tenant_mtu: int = 0  # Discovered tenant MTU
+
+    @property
+    def key(self) -> str:
+        """Unique key for this tunnel."""
+        return self.link_id
 
 
 @dataclass
@@ -175,7 +203,8 @@ class OverlayManager:
         self._docker: docker.DockerClient | None = None
         self._tunnels: dict[str, VxlanTunnel] = {}  # key -> tunnel (legacy)
         self._bridges: dict[str, OverlayBridge] = {}  # key -> bridge (legacy)
-        self._vteps: dict[str, Vtep] = {}  # remote_ip -> VTEP (new trunk model)
+        self._vteps: dict[str, Vtep] = {}  # remote_ip -> VTEP (legacy trunk model)
+        self._link_tunnels: dict[str, LinkTunnel] = {}  # link_id -> per-link VXLAN port
         self._vni_allocator = VniAllocator()
         self._ovs_initialized = False
         self._bridge_name = settings.ovs_bridge_name  # Default: "arch-ovs"
@@ -1112,6 +1141,158 @@ class OverlayManager:
             logger.error(f"Error deleting VTEP {vtep.interface_name}: {e}")
             return False
 
+    # --- Per-Link VNI Model ---
+
+    @staticmethod
+    def _link_tunnel_interface_name(lab_id: str, link_id: str) -> str:
+        """Generate a deterministic OVS port name for a per-link VXLAN tunnel.
+
+        Uses MD5 hash of lab_id:link_id to create a unique, deterministic name.
+        Format: vxlan-{hash8} (max 14 chars, within OVS 15-char limit).
+        """
+        import hashlib
+
+        combined = f"{lab_id}:{link_id}"
+        link_hash = hashlib.md5(combined.encode()).hexdigest()[:8]
+        return f"vxlan-{link_hash}"
+
+    async def create_link_tunnel(
+        self,
+        lab_id: str,
+        link_id: str,
+        vni: int,
+        local_ip: str,
+        remote_ip: str,
+        local_vlan: int,
+        tenant_mtu: int = 0,
+    ) -> LinkTunnel:
+        """Create a per-link access-mode VXLAN port on OVS.
+
+        Each cross-host link gets its own VXLAN port with:
+        - tag=<local_vlan>: access mode using the container's existing VLAN
+        - options:key=<vni>: shared VNI identifier (same on both sides)
+
+        OVS access-mode behavior handles VLAN translation automatically:
+        - Egress: strips local VLAN, encapsulates with VNI
+        - Ingress: decapsulates VNI, adds local VLAN
+
+        Args:
+            lab_id: Lab identifier
+            link_id: Link identifier (e.g., "node1:eth1-node2:eth1")
+            vni: VXLAN Network Identifier (must match remote side)
+            local_ip: Local host IP for VXLAN endpoint
+            remote_ip: Remote host IP for VXLAN endpoint
+            local_vlan: Container's local VLAN tag for access mode
+            tenant_mtu: MTU for tenant traffic (0 = auto-discover)
+
+        Returns:
+            LinkTunnel object representing the created tunnel
+
+        Raises:
+            RuntimeError: If tunnel creation fails
+        """
+        await self._ensure_ovs_bridge()
+
+        # Return existing tunnel if already created for this link
+        if link_id in self._link_tunnels:
+            existing = self._link_tunnels[link_id]
+            logger.info(f"Link tunnel already exists for {link_id}: {existing.interface_name}")
+            return existing
+
+        # Auto-discover MTU if not provided
+        if tenant_mtu <= 0:
+            path_mtu = await self._discover_path_mtu(remote_ip)
+            if path_mtu > 0:
+                tenant_mtu = path_mtu - self.VXLAN_OVERHEAD
+                logger.info(
+                    f"Link tunnel MTU for {link_id}: {tenant_mtu} "
+                    f"(path {path_mtu} - {self.VXLAN_OVERHEAD})"
+                )
+            else:
+                tenant_mtu = settings.overlay_mtu
+                logger.info(f"Link tunnel using fallback MTU for {link_id}: {tenant_mtu}")
+
+        interface_name = self._link_tunnel_interface_name(lab_id, link_id)
+
+        # Delete existing OVS port if present (from previous run / recovery)
+        if await self._ovs_port_exists(interface_name):
+            logger.warning(f"Link tunnel port {interface_name} already exists, replacing")
+            await self._ovs_vsctl(
+                "--if-exists", "del-port", self._bridge_name, interface_name
+            )
+
+        # Create access-mode VXLAN port on OVS
+        # tag= makes it an access port: strips VLAN on egress, adds on ingress
+        code, _, stderr = await self._ovs_vsctl(
+            "--", "add-port", self._bridge_name, interface_name, f"tag={local_vlan}",
+            "--", "set", "interface", interface_name, "type=vxlan",
+            f"options:remote_ip={remote_ip}",
+            f"options:local_ip={local_ip}",
+            f"options:key={vni}",
+        )
+        if code != 0:
+            raise RuntimeError(
+                f"Failed to create link tunnel {interface_name}: {stderr}"
+            )
+
+        tunnel = LinkTunnel(
+            link_id=link_id,
+            vni=vni,
+            local_ip=local_ip,
+            remote_ip=remote_ip,
+            local_vlan=local_vlan,
+            interface_name=interface_name,
+            lab_id=lab_id,
+            tenant_mtu=tenant_mtu,
+        )
+
+        self._link_tunnels[link_id] = tunnel
+        logger.info(
+            f"Created per-link tunnel {interface_name} "
+            f"(VNI {vni}, VLAN {local_vlan}, MTU {tenant_mtu}) to {remote_ip}"
+        )
+
+        return tunnel
+
+    async def delete_link_tunnel(self, link_id: str) -> bool:
+        """Delete a per-link VXLAN tunnel port.
+
+        Args:
+            link_id: The link identifier whose tunnel to delete
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        tunnel = self._link_tunnels.get(link_id)
+        if not tunnel:
+            logger.warning(f"No link tunnel found for {link_id}")
+            return False
+
+        try:
+            code, _, stderr = await self._ovs_vsctl(
+                "--if-exists", "del-port", self._bridge_name, tunnel.interface_name
+            )
+            if code != 0:
+                logger.warning(
+                    f"Failed to delete link tunnel port {tunnel.interface_name}: {stderr}"
+                )
+
+            del self._link_tunnels[link_id]
+            logger.info(f"Deleted link tunnel {tunnel.interface_name} for {link_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error deleting link tunnel for {link_id}: {e}")
+            return False
+
+    def get_link_tunnel(self, link_id: str) -> LinkTunnel | None:
+        """Get a per-link tunnel by link_id."""
+        return self._link_tunnels.get(link_id)
+
+    def get_all_link_tunnels(self) -> list[LinkTunnel]:
+        """Get all active per-link tunnels."""
+        return list(self._link_tunnels.values())
+
     async def cleanup_lab(self, lab_id: str) -> dict[str, Any]:
         """Clean up all overlay networking for a lab.
 
@@ -1124,6 +1305,7 @@ class OverlayManager:
         result = {
             "tunnels_deleted": 0,
             "bridges_deleted": 0,
+            "link_tunnels_deleted": 0,
             "vnis_released": 0,
             "errors": [],
         }
@@ -1147,6 +1329,17 @@ class OverlayManager:
                     result["tunnels_deleted"] += 1
             except Exception as e:
                 result["errors"].append(f"Tunnel {tunnel.interface_name}: {e}")
+
+        # Delete per-link tunnels (new model)
+        link_tunnels_to_delete = [
+            lt for lt in self._link_tunnels.values() if lt.lab_id == lab_id
+        ]
+        for lt in link_tunnels_to_delete:
+            try:
+                if await self.delete_link_tunnel(lt.link_id):
+                    result["link_tunnels_deleted"] += 1
+            except Exception as e:
+                result["errors"].append(f"LinkTunnel {lt.interface_name}: {e}")
 
         # Release all VNI allocations for this lab
         result["vnis_released"] = self._vni_allocator.release_lab(lab_id)
@@ -1175,7 +1368,7 @@ class OverlayManager:
         return {
             "ovs_bridge": self._bridge_name,
             "mtu_cache": dict(self._mtu_cache),
-            # New trunk VTEP model with reference counting
+            # Legacy trunk VTEP model (deprecated)
             "vteps": [
                 {
                     "interface": v.interface_name,
@@ -1214,6 +1407,20 @@ class OverlayManager:
                     "veth_pairs": b.veth_pairs,
                 }
                 for b in self._bridges.values()
+            ],
+            # Per-link access-mode VXLAN tunnels (current model)
+            "link_tunnels": [
+                {
+                    "link_id": lt.link_id,
+                    "vni": lt.vni,
+                    "local_ip": lt.local_ip,
+                    "remote_ip": lt.remote_ip,
+                    "local_vlan": lt.local_vlan,
+                    "interface_name": lt.interface_name,
+                    "lab_id": lt.lab_id,
+                    "tenant_mtu": lt.tenant_mtu,
+                }
+                for lt in self._link_tunnels.values()
             ],
         }
 

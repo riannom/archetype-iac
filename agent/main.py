@@ -2300,11 +2300,14 @@ async def ensure_vtep(request: EnsureVtepRequest) -> EnsureVtepResponse:
 async def attach_overlay_interface(
     request: AttachOverlayInterfaceRequest,
 ) -> AttachOverlayInterfaceResponse:
-    """Attach a container interface to the overlay with a specific VLAN tag.
+    """Create a per-link VXLAN tunnel and attach a container interface.
 
-    This is the new model where the VLAN tag is specified by the controller
-    (coordinated across agents) rather than derived from a per-link tunnel.
-    The VTEP should already exist (via /overlay/vtep) in trunk mode.
+    Per-link VNI model: each cross-host link gets its own VXLAN port on OVS
+    in access mode. The agent discovers the container's local VLAN from the
+    Docker OVS plugin state and creates an access-mode VXLAN port with
+    tag=<local_vlan> and options:key=<vni>.
+
+    No prior VTEP creation is needed — this endpoint is self-contained.
     """
     if not settings.enable_vxlan:
         return AttachOverlayInterfaceResponse(
@@ -2313,24 +2316,48 @@ async def attach_overlay_interface(
         )
 
     try:
-        backend = get_network_backend()
-        success = await backend.overlay_attach_interface(
-            lab_id=request.lab_id,
-            container_name=request.container_name,
-            interface_name=request.interface_name,
-            vlan_tag=request.vlan_tag,
-            tenant_mtu=request.tenant_mtu,
-            link_id=request.link_id,
-            remote_ip=request.remote_ip,
-        )
-
-        if success:
-            return AttachOverlayInterfaceResponse(success=True)
-        else:
+        # Step 1: Discover the container's current VLAN from docker plugin
+        plugin = _get_docker_ovs_plugin()
+        if plugin is None:
             return AttachOverlayInterfaceResponse(
                 success=False,
-                error="Failed to attach interface",
+                error="Docker OVS plugin not available",
             )
+
+        provider = get_provider_for_request()
+        container_name = provider.get_container_name(
+            request.lab_id, request.container_name
+        )
+
+        local_vlan = await plugin.get_endpoint_vlan(
+            request.lab_id, container_name, request.interface_name
+        )
+        if local_vlan is None:
+            return AttachOverlayInterfaceResponse(
+                success=False,
+                error=(
+                    f"Could not discover VLAN for "
+                    f"{container_name}:{request.interface_name}"
+                ),
+            )
+
+        # Step 2: Create per-link access-mode VXLAN port
+        backend = get_network_backend()
+        tunnel = await backend.overlay_create_link_tunnel(
+            lab_id=request.lab_id,
+            link_id=request.link_id,
+            vni=request.vni,
+            local_ip=request.local_ip,
+            remote_ip=request.remote_ip,
+            local_vlan=local_vlan,
+            tenant_mtu=request.tenant_mtu,
+        )
+
+        return AttachOverlayInterfaceResponse(
+            success=True,
+            local_vlan=local_vlan,
+            vni=tunnel.vni,
+        )
 
     except Exception as e:
         logger.error(f"Attach overlay interface failed: {e}")
@@ -2345,12 +2372,7 @@ async def detach_overlay_interface(
 
     This performs a complete detach:
     1. Isolates the container interface by assigning a unique VLAN tag
-    2. Removes the link from VTEP reference counting
-    3. Optionally deletes the VTEP if no more links use it
-
-    This ensures the interface no longer participates in the cross-host
-    link's L2 domain while preserving the underlying network infrastructure
-    for other links.
+    2. Deletes the per-link VXLAN tunnel port
     """
     if not settings.enable_vxlan:
         return DetachOverlayInterfaceResponse(
@@ -2366,16 +2388,15 @@ async def detach_overlay_interface(
 
     interface_isolated = False
     new_vlan = None
+    tunnel_deleted = False
 
     try:
         # Step 1: Isolate the interface by assigning a unique VLAN
-        # This prevents traffic flow through the overlay for this link
         try:
             plugin = _get_docker_ovs_plugin()
             if plugin is None:
                 logger.warning("Docker OVS plugin not available, skipping interface isolation")
             else:
-                # Build full container name
                 provider = get_provider_for_request()
                 container_name = provider.get_container_name(request.lab_id, request.container_name)
 
@@ -2395,23 +2416,19 @@ async def detach_overlay_interface(
                         f"Failed to isolate {container_name}:{request.interface_name}"
                     )
         except Exception as e:
-            logger.warning(f"Interface isolation failed (continuing with VTEP cleanup): {e}")
+            logger.warning(f"Interface isolation failed (continuing with tunnel cleanup): {e}")
 
-        # Step 2: Handle VTEP reference counting
+        # Step 2: Delete the per-link VXLAN tunnel port
         backend = get_network_backend()
-        result = await backend.overlay_detach_interface(
+        tunnel_deleted = await backend.overlay_delete_link_tunnel(
             link_id=request.link_id,
-            remote_ip=request.remote_ip,
-            delete_vtep_if_unused=request.delete_vtep_if_unused,
         )
 
         return DetachOverlayInterfaceResponse(
-            success=result["success"],
+            success=True,
             interface_isolated=interface_isolated,
             new_vlan=new_vlan,
-            vtep_deleted=result["vtep_deleted"],
-            remaining_links=result["remaining_links"],
-            error=result["error"],
+            tunnel_deleted=tunnel_deleted,
         )
 
     except Exception as e:

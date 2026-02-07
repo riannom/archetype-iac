@@ -328,15 +328,15 @@ async def create_cross_host_link(
 
         if not result.get("success"):
             link_state.actual_state = "error"
-            link_state.error_message = result.get("error", "VTEP setup failed")
+            link_state.error_message = result.get("error", "Link tunnel setup failed")
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
 
-        # Store VLAN tag (no longer per-link VNI in new model)
-        vlan_tag = result.get("vlan_tag", 0)
-        link_state.vlan_tag = vlan_tag
+        # Store VNI (per-link VNI model)
+        vni = result.get("vni", 0)
+        link_state.vni = vni
 
-        # Verify the link is actually connected (VLAN tags match on both agents)
+        # Verify the link is actually connected
         if verify:
             is_valid, error = await verify_link_connected(session, link_state, host_to_agent)
             if not is_valid:
@@ -348,7 +348,7 @@ async def create_cross_host_link(
             # Update interface mappings after successful link creation
             await update_interface_mappings(session, link_state, host_to_agent)
 
-        # Create VxlanTunnel record for tracking (VNI is now per-host-pair)
+        # Create VxlanTunnel record for tracking
         agent_ip_a = agent_client.resolve_agent_ip(agent_a.address)
         agent_ip_b = agent_client.resolve_agent_ip(agent_b.address)
 
@@ -362,8 +362,8 @@ async def create_cross_host_link(
             tunnel = models.VxlanTunnel(
                 lab_id=lab_id,
                 link_state_id=link_state.id,
-                vni=0,  # Not meaningful in new model (VTEP VNI is per-host-pair)
-                vlan_tag=vlan_tag,
+                vni=vni,
+                vlan_tag=0,  # Not used in per-link VNI model
                 agent_a_id=agent_a.id,
                 agent_a_ip=agent_ip_a,
                 agent_b_id=agent_b.id,
@@ -372,7 +372,7 @@ async def create_cross_host_link(
             )
             session.add(tunnel)
         else:
-            existing_tunnel.vlan_tag = vlan_tag
+            existing_tunnel.vni = vni
             existing_tunnel.status = "active"
 
         # Only now mark as "up" and set attachment flags
@@ -383,7 +383,7 @@ async def create_cross_host_link(
         link_state.target_vxlan_attached = True
         link_state.error_message = None
         log_parts.append(
-            f"  {link_state.link_name}: OK (VLAN {vlan_tag}, cross-host VTEP)"
+            f"  {link_state.link_name}: OK (VNI {vni}, per-link VXLAN)"
         )
         return True
 

@@ -211,9 +211,8 @@ async def teardown_link(
         target_node = link_info.get("target_node", "")
         source_iface = _normalize_interface_name(link_info.get("source_interface", "") or "")
         target_iface = _normalize_interface_name(link_info.get("target_interface", "") or "")
-        vlan_tag = link_info.get("vlan_tag")
 
-        # Get agent IPs for VTEP reference counting
+        # Get agent IPs for rollback
         source_agent_ip = agent_client.resolve_agent_ip(source_agent.address)
         target_agent_ip = agent_client.resolve_agent_ip(target_agent.address)
 
@@ -246,8 +245,6 @@ async def teardown_link(
                 container_name=source_node,
                 interface_name=source_iface,
                 link_id=link_name,
-                remote_ip=target_agent_ip,
-                delete_vtep_if_unused=True,
             )
             source_ok = result_a.get("success", False)
             if not source_ok:
@@ -270,8 +267,6 @@ async def teardown_link(
                 container_name=target_node,
                 interface_name=target_iface,
                 link_id=link_name,
-                remote_ip=source_agent_ip,
-                delete_vtep_if_unused=True,
             )
             target_ok = result_b.get("success", False)
             if not target_ok:
@@ -280,18 +275,20 @@ async def teardown_link(
             logger.warning(f"Overlay detach on target agent failed: {e}")
 
         if not target_ok:
-            # Rollback: Re-attach source interface
+            # Rollback: Re-attach source interface using per-link VNI model
             logger.warning(f"Target detach failed, rolling back source for {link_name}")
-            if vlan_tag:
+            rollback_vni = tunnel.vni if tunnel else None
+            if rollback_vni:
                 try:
                     await agent_client.attach_overlay_interface_on_agent(
                         source_agent,
                         lab_id=lab_id,
                         container_name=source_node,
                         interface_name=source_iface,
-                        vlan_tag=vlan_tag,
-                        link_id=link_name,
+                        vni=rollback_vni,
+                        local_ip=source_agent_ip,
                         remote_ip=target_agent_ip,
+                        link_id=link_name,
                     )
                     logger.info(f"Rolled back source attachment for {link_name}")
                 except Exception as e:
