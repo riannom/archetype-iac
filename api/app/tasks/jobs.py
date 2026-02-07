@@ -820,6 +820,8 @@ async def run_multihost_deploy(
                 logger.error(f"Job {job_id} failed: {error_msg}")
                 return
 
+            log_parts: list[str] = []
+
             # --- Resource capacity check (pre-deploy gate) ---
             if settings.resource_validation_enabled:
                 from app.services.resource_capacity import (
@@ -854,11 +856,11 @@ async def run_multihost_deploy(
                 if cap_warnings:
                     for w in cap_warnings:
                         logger.warning(f"Job {job_id}: Resource warning: {w}")
+                        log_parts.append(f"WARNING: {w}")
 
             # Deploy to each host in parallel using JSON topology from database
             deploy_tasks = []
             deploy_results: dict[str, dict] = {}
-            log_parts = []
             host_node_names: dict[str, list[str]] = {}  # For logging
 
             for host_id, node_placements in analysis.placements.items():
