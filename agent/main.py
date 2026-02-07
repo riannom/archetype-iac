@@ -2237,6 +2237,68 @@ async def overlay_status() -> OverlayStatusResponse:
         return OverlayStatusResponse()
 
 
+@app.get("/overlay/bridge-ports")
+async def overlay_bridge_ports():
+    """Debug: query actual OVS bridge for VXLAN ports and their config."""
+    import asyncio
+
+    bridge = settings.ovs_bridge_name or "arch-ovs"
+
+    async def run(cmd: str) -> str:
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        return stdout.decode().strip()
+
+    # Get all ports on the bridge
+    ports_raw = await run(f"ovs-vsctl list-ports {bridge}")
+    all_ports = ports_raw.split("\n") if ports_raw else []
+
+    vxlan_ports = []
+    other_ports = []
+    for port_name in all_ports:
+        if not port_name:
+            continue
+        iface_type = await run(
+            f"ovs-vsctl get interface {port_name} type"
+        )
+        if iface_type == "vxlan":
+            tag = await run(f"ovs-vsctl get port {port_name} tag")
+            options = await run(f"ovs-vsctl get interface {port_name} options")
+            stats = await run(
+                f"ovs-vsctl get interface {port_name} statistics"
+            )
+            vxlan_ports.append({
+                "name": port_name,
+                "tag": tag,
+                "options": options,
+                "statistics": stats,
+            })
+        elif port_name.startswith("vtep"):
+            tag = await run(f"ovs-vsctl get port {port_name} tag")
+            options = await run(f"ovs-vsctl get interface {port_name} options")
+            vxlan_ports.append({
+                "name": port_name,
+                "tag": tag,
+                "options": options,
+                "type": iface_type,
+            })
+        else:
+            tag = await run(f"ovs-vsctl get port {port_name} tag")
+            other_ports.append({"name": port_name, "tag": tag})
+
+    fdb_raw = await run(f"ovs-appctl fdb/show {bridge}")
+
+    return {
+        "bridge": bridge,
+        "total_ports": len(all_ports),
+        "vxlan_ports": vxlan_ports,
+        "container_ports_sample": other_ports[:10],
+        "fdb_lines": fdb_raw.split("\n")[:40] if fdb_raw else [],
+    }
+
+
 @app.post("/overlay/vtep")
 async def ensure_vtep(request: EnsureVtepRequest) -> EnsureVtepResponse:
     """Ensure a VTEP exists to the remote host.
