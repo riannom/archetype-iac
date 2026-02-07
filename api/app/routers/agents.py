@@ -424,6 +424,25 @@ def list_agents(
     return result
 
 
+def _enrich_details(
+    details: list[dict],
+    labs_by_id: dict[str, str],
+    labs_by_prefix: dict[str, tuple[str, str]],
+) -> list[dict]:
+    """Enrich container/VM detail entries with lab_id and lab_name."""
+    from app.utils.lab import find_lab_with_name
+    enriched = []
+    for entry in details:
+        entry = dict(entry)  # copy to avoid mutating cached data
+        lab_id, lab_name = find_lab_with_name(
+            entry.get("lab_prefix", ""), labs_by_id, labs_by_prefix
+        )
+        entry["lab_id"] = lab_id
+        entry["lab_name"] = lab_name
+        enriched.append(entry)
+    return enriched
+
+
 @router.get("/detailed")
 def list_agents_detailed(
     database: Session = Depends(db.get_db),
@@ -449,6 +468,28 @@ def list_agents_detailed(
                 "name": lab.name,
                 "state": lab.state,
             })
+
+    # Build lab lookup maps for container/VM enrichment
+    from app.utils.lab import find_lab_with_name
+    labs_by_id = {lab.id: lab.name for lab in all_labs}
+    labs_by_prefix = {lab.id[:20]: (lab.id, lab.name) for lab in all_labs}
+
+    # Query ImageHost records grouped by host_id
+    image_hosts = database.query(models.ImageHost).filter(
+        models.ImageHost.status.in_(["synced", "syncing", "failed"])
+    ).all()
+    images_by_host: dict[str, list[dict]] = {}
+    for ih in image_hosts:
+        if ih.host_id not in images_by_host:
+            images_by_host[ih.host_id] = []
+        images_by_host[ih.host_id].append({
+            "image_id": ih.image_id,
+            "reference": ih.reference,
+            "status": ih.status,
+            "size_bytes": ih.size_bytes,
+            "synced_at": ih.synced_at.isoformat() if ih.synced_at else None,
+            "error_message": ih.error_message,
+        })
 
     result = []
     for host in hosts:
@@ -494,7 +535,16 @@ def list_agents_detailed(
                 "containers_total": resource_usage.get("containers_total", 0),
                 "vms_running": resource_usage.get("vms_running", 0),
                 "vms_total": resource_usage.get("vms_total", 0),
+                "container_details": _enrich_details(
+                    resource_usage.get("container_details", []),
+                    labs_by_id, labs_by_prefix,
+                ),
+                "vm_details": _enrich_details(
+                    resource_usage.get("vm_details", []),
+                    labs_by_id, labs_by_prefix,
+                ),
             },
+            "images": images_by_host.get(host.id, []),
             "labs": host_labs,
             "lab_count": len(host_labs),
             "started_at": host.started_at.isoformat() if host.started_at else None,

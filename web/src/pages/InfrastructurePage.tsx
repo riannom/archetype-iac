@@ -4,7 +4,7 @@ import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { apiRequest } from '../api';
 import { ArchetypeIcon } from '../components/icons';
-import { formatStorageSize, formatTimestamp, formatUptimeFromBoot } from '../utils/format';
+import { formatSize, formatStorageSize, formatTimestamp, formatUptimeFromBoot } from '../utils/format';
 import {
   getCpuColor,
   getMemoryColor,
@@ -110,6 +110,36 @@ interface LabInfo {
   state: string;
 }
 
+interface ContainerDetail {
+  name: string;
+  status: string;
+  node_name?: string;
+  node_kind?: string;
+  lab_prefix?: string;
+  lab_id?: string | null;
+  lab_name?: string | null;
+  is_system?: boolean;
+}
+
+interface VmDetail {
+  name: string;
+  status: string;
+  node_name?: string;
+  node_kind?: string;
+  lab_prefix?: string;
+  lab_id?: string | null;
+  lab_name?: string | null;
+}
+
+interface ImageDetail {
+  image_id: string;
+  reference: string;
+  status: string;
+  size_bytes: number | null;
+  synced_at: string | null;
+  error_message: string | null;
+}
+
 interface HostDetailed {
   id: string;
   name: string;
@@ -134,7 +164,12 @@ interface HostDetailed {
     storage_total_gb: number;
     containers_running: number;
     containers_total: number;
+    vms_running: number;
+    vms_total: number;
+    container_details: ContainerDetail[];
+    vm_details: VmDetail[];
   };
+  images: ImageDetail[];
   labs: LabInfo[];
   lab_count: number;
   started_at: string | null;
@@ -202,6 +237,9 @@ const InfrastructurePage: React.FC = () => {
   const [hostsLoading, setHostsLoading] = useState(true);
   const [hostsError, setHostsError] = useState<string | null>(null);
   const [expandedLabs, setExpandedLabs] = useState<Set<string>>(new Set());
+  const [expandedContainers, setExpandedContainers] = useState<Set<string>>(new Set());
+  const [expandedVMs, setExpandedVMs] = useState<Set<string>>(new Set());
+  const [expandedImages, setExpandedImages] = useState<Set<string>>(new Set());
   const [latestVersion, setLatestVersion] = useState<string>('');
   const [updatingAgents, setUpdatingAgents] = useState<Set<string>>(new Set());
   const [updateStatuses, setUpdateStatuses] = useState<Map<string, UpdateStatus>>(new Map());
@@ -480,6 +518,30 @@ const InfrastructurePage: React.FC = () => {
       } else {
         next.add(hostId);
       }
+      return next;
+    });
+  };
+
+  const toggleContainersExpanded = (hostId: string) => {
+    setExpandedContainers(prev => {
+      const next = new Set(prev);
+      if (next.has(hostId)) next.delete(hostId); else next.add(hostId);
+      return next;
+    });
+  };
+
+  const toggleVMsExpanded = (hostId: string) => {
+    setExpandedVMs(prev => {
+      const next = new Set(prev);
+      if (next.has(hostId)) next.delete(hostId); else next.add(hostId);
+      return next;
+    });
+  };
+
+  const toggleImagesExpanded = (hostId: string) => {
+    setExpandedImages(prev => {
+      const next = new Set(prev);
+      if (next.has(hostId)) next.delete(hostId); else next.add(hostId);
       return next;
     });
   };
@@ -940,7 +1002,7 @@ const InfrastructurePage: React.FC = () => {
                     return (
                       <div
                         key={host.id}
-                        className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 hover:border-sage-500/30 hover:shadow-xl transition-all"
+                        className={`bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 hover:border-sage-500/30 hover:shadow-xl transition-all ${host.status !== 'online' ? 'opacity-50 hover:opacity-100' : ''}`}
                       >
                         {/* Header */}
                         <div className="flex items-start justify-between mb-4">
@@ -1116,17 +1178,123 @@ const InfrastructurePage: React.FC = () => {
                         </div>
 
                         {/* Containers */}
-                        <div className="flex items-center gap-4 text-xs text-stone-600 dark:text-stone-400 mb-4 py-2 border-t border-stone-100 dark:border-stone-800">
-                          <span className="flex items-center gap-1.5">
-                            <i className="fa-solid fa-cube text-stone-400"></i>
-                            <strong>{host.resource_usage.containers_running}</strong>/{host.resource_usage.containers_total} containers
-                          </span>
-                          {host.capabilities.providers && host.capabilities.providers.length > 0 && (
-                            <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-stone-100 dark:bg-stone-800 rounded">
-                              {host.capabilities.providers.join(', ')}
-                            </span>
-                          )}
-                        </div>
+                        {(() => {
+                          const containers = host.resource_usage.container_details || [];
+                          const labContainers = containers.filter(c => !c.is_system);
+                          const systemCount = containers.filter(c => c.is_system).length;
+                          const isContainersOpen = expandedContainers.has(host.id);
+                          // Group lab containers by lab
+                          const byLab = new Map<string, { name: string; items: ContainerDetail[] }>();
+                          for (const c of labContainers) {
+                            const key = c.lab_id || '_unknown';
+                            if (!byLab.has(key)) byLab.set(key, { name: c.lab_name || 'Unknown Lab', items: [] });
+                            byLab.get(key)!.items.push(c);
+                          }
+                          return (
+                            <div className="py-2 border-t border-stone-100 dark:border-stone-800">
+                              <button
+                                onClick={() => toggleContainersExpanded(host.id)}
+                                className="w-full flex items-center justify-between text-xs text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200 transition-colors"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <i className="fa-solid fa-cube text-stone-400"></i>
+                                  <strong>{host.resource_usage.containers_running}</strong>/{host.resource_usage.containers_total} containers
+                                  {host.capabilities.providers && host.capabilities.providers.length > 0 && (
+                                    <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-stone-100 dark:bg-stone-800 rounded ml-1">
+                                      {host.capabilities.providers.join(', ')}
+                                    </span>
+                                  )}
+                                </span>
+                                <i className={`fa-solid fa-chevron-${isContainersOpen ? 'up' : 'down'} text-[10px] text-stone-400`}></i>
+                              </button>
+                              {isContainersOpen && (
+                                <div className="mt-2 space-y-2">
+                                  {Array.from(byLab.entries()).map(([labId, group]) => (
+                                    <div key={labId}>
+                                      {byLab.size > 1 && (
+                                        <div className="text-[10px] font-medium text-stone-400 dark:text-stone-500 mb-1 truncate">{group.name}</div>
+                                      )}
+                                      <div className="space-y-0.5">
+                                        {group.items.map((c, i) => (
+                                          <div
+                                            key={i}
+                                            className={`flex items-center justify-between text-xs py-1 px-2 bg-stone-50 dark:bg-stone-800/50 rounded ${c.status !== 'running' ? 'opacity-40 hover:opacity-100 transition-opacity' : ''}`}
+                                          >
+                                            <span className="text-stone-700 dark:text-stone-300 truncate max-w-[160px]">{c.node_name || c.name}</span>
+                                            <span className="flex items-center gap-1.5">
+                                              {c.node_kind && (
+                                                <span className="text-[10px] text-stone-400">{c.node_kind}</span>
+                                              )}
+                                              <span className={`w-1.5 h-1.5 rounded-full ${c.status === 'running' ? 'bg-green-500' : 'bg-stone-300 dark:bg-stone-600'}`}></span>
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                  {systemCount > 0 && (
+                                    <div className="text-[10px] text-stone-400 dark:text-stone-500 px-2">
+                                      {systemCount} system container{systemCount !== 1 ? 's' : ''}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* VMs */}
+                        {host.resource_usage.vms_total > 0 && (() => {
+                          const vms = host.resource_usage.vm_details || [];
+                          const isVMsOpen = expandedVMs.has(host.id);
+                          const byLab = new Map<string, { name: string; items: VmDetail[] }>();
+                          for (const v of vms) {
+                            const key = v.lab_id || '_unknown';
+                            if (!byLab.has(key)) byLab.set(key, { name: v.lab_name || 'Unknown Lab', items: [] });
+                            byLab.get(key)!.items.push(v);
+                          }
+                          return (
+                            <div className="py-2 border-t border-stone-100 dark:border-stone-800">
+                              <button
+                                onClick={() => toggleVMsExpanded(host.id)}
+                                className="w-full flex items-center justify-between text-xs text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200 transition-colors"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <i className="fa-solid fa-desktop text-stone-400"></i>
+                                  <strong>{host.resource_usage.vms_running}</strong>/{host.resource_usage.vms_total} VMs
+                                </span>
+                                <i className={`fa-solid fa-chevron-${isVMsOpen ? 'up' : 'down'} text-[10px] text-stone-400`}></i>
+                              </button>
+                              {isVMsOpen && (
+                                <div className="mt-2 space-y-2">
+                                  {Array.from(byLab.entries()).map(([labId, group]) => (
+                                    <div key={labId}>
+                                      {byLab.size > 1 && (
+                                        <div className="text-[10px] font-medium text-stone-400 dark:text-stone-500 mb-1 truncate">{group.name}</div>
+                                      )}
+                                      <div className="space-y-0.5">
+                                        {group.items.map((v, i) => (
+                                          <div
+                                            key={i}
+                                            className={`flex items-center justify-between text-xs py-1 px-2 bg-stone-50 dark:bg-stone-800/50 rounded ${v.status !== 'running' ? 'opacity-40 hover:opacity-100 transition-opacity' : ''}`}
+                                          >
+                                            <span className="text-stone-700 dark:text-stone-300 truncate max-w-[160px]">{v.node_name || v.name}</span>
+                                            <span className="flex items-center gap-1.5">
+                                              {v.node_kind && (
+                                                <span className="text-[10px] text-stone-400">{v.node_kind}</span>
+                                              )}
+                                              <span className={`w-1.5 h-1.5 rounded-full ${v.status === 'running' ? 'bg-green-500' : 'bg-stone-300 dark:bg-stone-600'}`}></span>
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {/* Image Sync Strategy */}
                         <div className="py-2 border-t border-stone-100 dark:border-stone-800">
@@ -1152,6 +1320,58 @@ const InfrastructurePage: React.FC = () => {
                             {SYNC_STRATEGY_OPTIONS.find(o => o.value === (host.image_sync_strategy || 'on_demand'))?.description}
                           </p>
                         </div>
+
+                        {/* Images */}
+                        {host.images && host.images.length > 0 && (() => {
+                          const isImagesOpen = expandedImages.has(host.id);
+                          const syncedCount = host.images.filter(img => img.status === 'synced').length;
+                          const syncingCount = host.images.filter(img => img.status === 'syncing').length;
+                          const failedCount = host.images.filter(img => img.status === 'failed').length;
+                          return (
+                            <div className="py-2 border-t border-stone-100 dark:border-stone-800">
+                              <button
+                                onClick={() => toggleImagesExpanded(host.id)}
+                                className="w-full flex items-center justify-between text-xs text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200 transition-colors"
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <i className="fa-solid fa-box-archive text-stone-400"></i>
+                                  <strong>{syncedCount}</strong> image{syncedCount !== 1 ? 's' : ''} synced
+                                  {syncingCount > 0 && (
+                                    <span className="text-blue-500 dark:text-blue-400 ml-1">{syncingCount} syncing</span>
+                                  )}
+                                  {failedCount > 0 && (
+                                    <span className="text-red-500 dark:text-red-400 ml-1">{failedCount} failed</span>
+                                  )}
+                                </span>
+                                <i className={`fa-solid fa-chevron-${isImagesOpen ? 'up' : 'down'} text-[10px] text-stone-400`}></i>
+                              </button>
+                              {isImagesOpen && (
+                                <div className="mt-2 space-y-0.5">
+                                  {host.images.map((img, i) => (
+                                    <div
+                                      key={i}
+                                      className="flex items-center justify-between text-xs py-1 px-2 bg-stone-50 dark:bg-stone-800/50 rounded"
+                                    >
+                                      <span className="font-mono text-stone-700 dark:text-stone-300 truncate max-w-[140px]" title={img.reference}>{img.reference}</span>
+                                      <span className="flex items-center gap-1.5">
+                                        {img.size_bytes != null && (
+                                          <span className="text-[10px] text-stone-400">{formatSize(img.size_bytes)}</span>
+                                        )}
+                                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium uppercase ${
+                                          img.status === 'synced' ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400' :
+                                          img.status === 'syncing' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' :
+                                          'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
+                                        }`}>
+                                          {img.status}
+                                        </span>
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {/* Labs */}
                         {host.labs.length > 0 && (
