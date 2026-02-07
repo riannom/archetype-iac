@@ -327,6 +327,16 @@ MTUSVC
     fi
 fi
 
+# Disable system suspend/sleep — agent hosts must stay awake
+log_info "Disabling system suspend/hibernate..."
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
+if [ -f /etc/systemd/logind.conf ]; then
+    sed -i 's/^#\?IdleAction=.*/IdleAction=ignore/' /etc/systemd/logind.conf
+    sed -i 's/^#\?IdleActionSec=.*/IdleActionSec=infinity/' /etc/systemd/logind.conf
+    systemctl restart systemd-logind 2>/dev/null || true
+fi
+log_info "System suspend disabled"
+
 # Install Docker
 if [ "$INSTALL_DOCKER" = true ]; then
     if command -v docker &> /dev/null; then
