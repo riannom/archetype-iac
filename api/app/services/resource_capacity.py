@@ -1,0 +1,287 @@
+"""Resource capacity validation for multi-host deployments.
+
+Validates that target agents have sufficient resources (CPU, memory, disk)
+before deploying nodes. Uses agent heartbeat data and VendorConfig device
+requirements to project resource usage.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass, field
+
+from sqlalchemy.orm import Session
+
+from app import models
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Default resource requirements for unknown device types
+DEFAULT_MEMORY_MB = 1024
+DEFAULT_CPU_CORES = 1
+
+
+@dataclass
+class ResourceRequirements:
+    """Aggregated resource requirements for a set of devices."""
+    memory_mb: int = 0
+    cpu_cores: int = 0
+    node_count: int = 0
+
+
+@dataclass
+class AgentCapacity:
+    """Structured capacity data parsed from agent heartbeat."""
+    memory_total_mb: float = 0
+    memory_used_mb: float = 0
+    cpu_cores_total: float = 0
+    cpu_used_cores: float = 0
+    disk_total_gb: float = 0
+    disk_used_gb: float = 0
+    containers_running: int = 0
+
+    @property
+    def memory_available_mb(self) -> float:
+        return max(0, self.memory_total_mb - self.memory_used_mb)
+
+    @property
+    def cpu_available_cores(self) -> float:
+        return max(0, self.cpu_cores_total - self.cpu_used_cores)
+
+    @property
+    def disk_available_gb(self) -> float:
+        return max(0, self.disk_total_gb - self.disk_used_gb)
+
+
+@dataclass
+class CapacityCheckResult:
+    """Result of a resource capacity check for one agent."""
+    fits: bool = True
+    has_warnings: bool = False
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    projected_memory_pct: float = 0
+    projected_cpu_pct: float = 0
+    projected_disk_pct: float = 0
+    required_memory_mb: int = 0
+    required_cpu_cores: int = 0
+    available_memory_mb: float = 0
+    available_cpu_cores: float = 0
+    node_count: int = 0
+    agent_name: str = ""
+
+
+def _get_vendor_configs() -> dict:
+    """Import and return vendor configs from agent package.
+
+    Uses a lazy import since the agent package may not always be
+    importable from the API (cross-package dependency). Falls back
+    gracefully if unavailable.
+    """
+    try:
+        from agent.vendors import VENDOR_CONFIGS
+        return VENDOR_CONFIGS
+    except ImportError:
+        logger.warning("Could not import agent.vendors - using defaults for resource calculations")
+        return {}
+
+
+def calculate_node_requirements(device_types: list[str]) -> ResourceRequirements:
+    """Calculate total resource requirements for a list of device types.
+
+    Looks up each device in VENDOR_CONFIGS for memory/cpu requirements.
+    Unknown devices get default values (1024 MB, 1 CPU).
+    """
+    vendor_configs = _get_vendor_configs()
+    reqs = ResourceRequirements(node_count=len(device_types))
+
+    for device_type in device_types:
+        if device_type and device_type in vendor_configs:
+            config = vendor_configs[device_type]
+            reqs.memory_mb += getattr(config, "memory", DEFAULT_MEMORY_MB)
+            reqs.cpu_cores += getattr(config, "cpu", DEFAULT_CPU_CORES)
+        else:
+            reqs.memory_mb += DEFAULT_MEMORY_MB
+            reqs.cpu_cores += DEFAULT_CPU_CORES
+
+    return reqs
+
+
+def get_agent_capacity(host: models.Host) -> AgentCapacity:
+    """Parse agent heartbeat data into structured capacity info."""
+    try:
+        usage = json.loads(host.resource_usage) if host.resource_usage else {}
+    except (json.JSONDecodeError, TypeError):
+        usage = {}
+
+    memory_total_gb = usage.get("memory_total_gb", 0)
+    memory_used_gb = usage.get("memory_used_gb", 0)
+    cpu_percent = usage.get("cpu_percent", 0)
+    cpu_count = usage.get("cpu_count", 0)
+    disk_total_gb = usage.get("disk_total_gb", 0)
+    disk_used_gb = usage.get("disk_used_gb", 0)
+
+    # cpu_count may not be in heartbeat - estimate from total and percent
+    # The agent reports cpu_percent as overall utilization
+    if not cpu_count:
+        # Fallback: try to infer from capabilities
+        try:
+            caps = json.loads(host.capabilities) if host.capabilities else {}
+        except (json.JSONDecodeError, TypeError):
+            caps = {}
+        cpu_count = caps.get("cpu_count", 0)
+
+    return AgentCapacity(
+        memory_total_mb=memory_total_gb * 1024,
+        memory_used_mb=memory_used_gb * 1024,
+        cpu_cores_total=cpu_count,
+        cpu_used_cores=cpu_count * (cpu_percent / 100) if cpu_count else 0,
+        disk_total_gb=disk_total_gb,
+        disk_used_gb=disk_used_gb,
+        containers_running=usage.get("containers_running", 0),
+    )
+
+
+def check_capacity(
+    host: models.Host,
+    new_devices: list[str],
+) -> CapacityCheckResult:
+    """Check if a host can accommodate new devices.
+
+    Calculates projected usage = current_used + new_requirements and
+    compares against configured thresholds.
+
+    Only validates NEW nodes - already-running containers are reflected
+    in the heartbeat's memory_used_gb, avoiding double-counting.
+    """
+    if not settings.resource_validation_enabled:
+        return CapacityCheckResult(agent_name=host.name or host.id)
+
+    reqs = calculate_node_requirements(new_devices)
+    capacity = get_agent_capacity(host)
+    result = CapacityCheckResult(
+        agent_name=host.name or host.id,
+        required_memory_mb=reqs.memory_mb,
+        required_cpu_cores=reqs.cpu_cores,
+        available_memory_mb=capacity.memory_available_mb,
+        available_cpu_cores=capacity.cpu_available_cores,
+        node_count=reqs.node_count,
+    )
+
+    # Skip checks if we have no capacity data (agent hasn't sent heartbeat yet)
+    if capacity.memory_total_mb == 0:
+        logger.warning(f"No resource data for {host.name} - skipping capacity check")
+        return result
+
+    # Memory check
+    buffer_mb = settings.resource_memory_buffer_mb
+    usable_memory = capacity.memory_total_mb - buffer_mb
+    if usable_memory > 0:
+        projected_memory = capacity.memory_used_mb + reqs.memory_mb
+        result.projected_memory_pct = (projected_memory / capacity.memory_total_mb) * 100
+
+        if result.projected_memory_pct >= settings.resource_memory_error_pct:
+            available = max(0, usable_memory - capacity.memory_used_mb)
+            result.fits = False
+            result.errors.append(
+                f"Memory: Need {reqs.memory_mb} MB, only {available:.0f} MB available "
+                f"(projected {result.projected_memory_pct:.0f}%)"
+            )
+        elif result.projected_memory_pct >= settings.resource_memory_warning_pct:
+            result.has_warnings = True
+            result.warnings.append(
+                f"Memory: {result.projected_memory_pct:.0f}% projected "
+                f"(currently {capacity.memory_used_mb:.0f} MB used, "
+                f"adding {reqs.memory_mb} MB for {reqs.node_count} node(s))"
+            )
+
+    # CPU check
+    if capacity.cpu_cores_total > 0:
+        buffer_cores = settings.resource_cpu_buffer_cores
+        projected_cpu_cores = capacity.cpu_used_cores + reqs.cpu_cores
+        result.projected_cpu_pct = (projected_cpu_cores / capacity.cpu_cores_total) * 100
+
+        if result.projected_cpu_pct >= settings.resource_cpu_error_pct:
+            result.fits = False
+            result.errors.append(
+                f"CPU: Need {reqs.cpu_cores} cores, projected {result.projected_cpu_pct:.0f}%"
+            )
+        elif result.projected_cpu_pct >= settings.resource_cpu_warning_pct:
+            result.has_warnings = True
+            result.warnings.append(
+                f"CPU: {result.projected_cpu_pct:.0f}% projected "
+                f"(adding {reqs.cpu_cores} core(s) for {reqs.node_count} node(s))"
+            )
+
+    # Disk check
+    if capacity.disk_total_gb > 0:
+        disk_pct = (capacity.disk_used_gb / capacity.disk_total_gb) * 100
+        result.projected_disk_pct = disk_pct  # No per-node disk estimate
+
+        if disk_pct >= settings.resource_disk_error_pct:
+            result.fits = False
+            result.errors.append(
+                f"Disk: {disk_pct:.0f}% used ({capacity.disk_available_gb:.1f} GB free)"
+            )
+        elif disk_pct >= settings.resource_disk_warning_pct:
+            result.has_warnings = True
+            result.warnings.append(
+                f"Disk: {disk_pct:.0f}% used ({capacity.disk_available_gb:.1f} GB free)"
+            )
+
+    return result
+
+
+def check_multihost_capacity(
+    placements: dict[str, list[str]],
+    session: Session,
+) -> dict[str, CapacityCheckResult]:
+    """Check capacity across multiple hosts.
+
+    Args:
+        placements: dict of host_id -> list of device types to deploy
+        session: Database session
+
+    Returns:
+        dict of host_id -> CapacityCheckResult
+    """
+    results: dict[str, CapacityCheckResult] = {}
+
+    for host_id, device_types in placements.items():
+        host = session.get(models.Host, host_id)
+        if not host:
+            result = CapacityCheckResult(
+                fits=False,
+                agent_name=host_id,
+                errors=[f"Host {host_id} not found"],
+            )
+        else:
+            result = check_capacity(host, device_types)
+        results[host_id] = result
+
+    return results
+
+
+def format_capacity_error(results: dict[str, CapacityCheckResult]) -> str:
+    """Format capacity check results into a human-readable error message."""
+    lines = ["Insufficient resources for deployment:"]
+    for host_id, result in results.items():
+        if not result.fits:
+            lines.append(f"\n  {result.agent_name}:")
+            for error in result.errors:
+                lines.append(f"    - {error}")
+
+    lines.append("\nSuggestions:")
+    lines.append("  - Assign some nodes to a different agent")
+    lines.append("  - Stop unused labs to free resources")
+    return "\n".join(lines)
+
+
+def format_capacity_warnings(results: dict[str, CapacityCheckResult]) -> list[str]:
+    """Collect warning messages from capacity check results."""
+    warnings = []
+    for host_id, result in results.items():
+        for warning in result.warnings:
+            warnings.append(f"{result.agent_name}: {warning}")
+    return warnings

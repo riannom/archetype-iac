@@ -1055,7 +1055,15 @@ const InfrastructurePage: React.FC = () => {
                         <div className="space-y-3 mb-4">
                           <div>
                             <div className="flex justify-between text-xs mb-1">
-                              <span className="text-stone-500 dark:text-stone-400">CPU</span>
+                              <span className="text-stone-500 dark:text-stone-400 flex items-center gap-1">
+                                CPU
+                                {host.resource_usage.cpu_percent >= 95 && (
+                                  <i className="fa-solid fa-circle-exclamation text-red-500" title="CPU critical - deployment may fail"></i>
+                                )}
+                                {host.resource_usage.cpu_percent >= 80 && host.resource_usage.cpu_percent < 95 && (
+                                  <i className="fa-solid fa-triangle-exclamation text-amber-500" title="CPU high - consider distributing nodes across agents"></i>
+                                )}
+                              </span>
                               <span className="font-medium text-stone-700 dark:text-stone-300">{host.resource_usage.cpu_percent.toFixed(0)}%</span>
                             </div>
                             <div className="h-2 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">
@@ -1065,7 +1073,15 @@ const InfrastructurePage: React.FC = () => {
 
                           <div>
                             <div className="flex justify-between text-xs mb-1">
-                              <span className="text-stone-500 dark:text-stone-400">Memory</span>
+                              <span className="text-stone-500 dark:text-stone-400 flex items-center gap-1">
+                                Memory
+                                {host.resource_usage.memory_percent >= 95 && (
+                                  <i className="fa-solid fa-circle-exclamation text-red-500" title="Memory critical - deployment will likely fail"></i>
+                                )}
+                                {host.resource_usage.memory_percent >= 80 && host.resource_usage.memory_percent < 95 && (
+                                  <i className="fa-solid fa-triangle-exclamation text-amber-500" title="Memory high - consider distributing nodes across agents"></i>
+                                )}
+                              </span>
                               <span className="font-medium text-stone-700 dark:text-stone-300">
                                 {host.resource_usage.memory_total_gb > 0
                                   ? `${formatStorageSize(host.resource_usage.memory_used_gb)} / ${formatStorageSize(host.resource_usage.memory_total_gb)}`
@@ -1080,7 +1096,15 @@ const InfrastructurePage: React.FC = () => {
 
                           <div>
                             <div className="flex justify-between text-xs mb-1">
-                              <span className="text-stone-500 dark:text-stone-400">Storage</span>
+                              <span className="text-stone-500 dark:text-stone-400 flex items-center gap-1">
+                                Storage
+                                {host.resource_usage.storage_percent >= 95 && (
+                                  <i className="fa-solid fa-circle-exclamation text-red-500" title="Storage critical - deployment will likely fail"></i>
+                                )}
+                                {host.resource_usage.storage_percent >= 85 && host.resource_usage.storage_percent < 95 && (
+                                  <i className="fa-solid fa-triangle-exclamation text-amber-500" title="Storage high - consider freeing space or using another agent"></i>
+                                )}
+                              </span>
                               <span className="font-medium text-stone-700 dark:text-stone-300">
                                 {formatStorageSize(host.resource_usage.storage_used_gb)} / {formatStorageSize(host.resource_usage.storage_total_gb)}
                               </span>

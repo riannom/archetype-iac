@@ -1460,6 +1460,40 @@ const StudioPage: React.FC = () => {
         method: 'POST',
         body: JSON.stringify(graph),
       });
+
+      // Pre-deploy resource capacity check
+      try {
+        const resourceCheck = await studioRequest<{
+          sufficient: boolean;
+          warnings: string[];
+          errors: string[];
+        }>(`/labs/${activeLab.id}/check-resources`, { method: 'POST', body: '{}' });
+
+        if (!resourceCheck.sufficient) {
+          const errorList = resourceCheck.errors.join('\n  - ');
+          addTaskLogEntry('error', `Insufficient resources:\n  - ${errorList}`);
+          addTaskLogEntry('info', 'Deploy cancelled. Assign nodes to different agents or free resources.');
+          return;
+        }
+
+        if (resourceCheck.warnings.length > 0) {
+          const warningList = resourceCheck.warnings.join('\n');
+          const proceed = window.confirm(
+            `Resource warnings:\n\n${warningList}\n\nProceed with deployment?`
+          );
+          if (!proceed) {
+            addTaskLogEntry('info', 'Deploy cancelled by user due to resource warnings');
+            return;
+          }
+          for (const w of resourceCheck.warnings) {
+            addTaskLogEntry('warning', w);
+          }
+        }
+      } catch {
+        // Resource check is best-effort - don't block deploy if the endpoint fails
+        addTaskLogEntry('info', 'Resource check skipped');
+      }
+
       addTaskLogEntry('info', 'Deploying lab...');
       const jobResponse = await studioRequest<{ id: string; image_sync_events?: string[] }>(`/labs/${activeLab.id}/up`, {
         method: 'POST',

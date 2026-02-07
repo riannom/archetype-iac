@@ -374,6 +374,7 @@ def _sync_get_resource_usage() -> dict:
     try:
         # CPU usage (average across all cores)
         cpu_percent = psutil.cpu_percent(interval=0.1)
+        cpu_count = psutil.cpu_count() or 0
 
         # Memory usage
         memory = psutil.virtual_memory()
@@ -491,6 +492,7 @@ def _sync_get_resource_usage() -> dict:
 
         return {
             "cpu_percent": cpu_percent,
+            "cpu_count": cpu_count,
             "memory_percent": memory_percent,
             "memory_used_gb": memory_used_gb,
             "memory_total_gb": memory_total_gb,

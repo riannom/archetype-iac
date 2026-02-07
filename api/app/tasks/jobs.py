@@ -820,6 +820,41 @@ async def run_multihost_deploy(
                 logger.error(f"Job {job_id} failed: {error_msg}")
                 return
 
+            # --- Resource capacity check (pre-deploy gate) ---
+            if settings.resource_validation_enabled:
+                from app.services.resource_capacity import (
+                    check_multihost_capacity,
+                    format_capacity_error,
+                    format_capacity_warnings,
+                )
+
+                # Build host_id -> device_types mapping from database nodes
+                host_device_map: dict[str, list[str]] = {}
+                for node in nodes:
+                    hid = node.host_id
+                    if hid:
+                        if hid not in host_device_map:
+                            host_device_map[hid] = []
+                        host_device_map[hid].append(node.device or "linux")
+
+                cap_results = check_multihost_capacity(host_device_map, session)
+                any_errors = any(not r.fits for r in cap_results.values())
+
+                if any_errors:
+                    error_msg = format_capacity_error(cap_results)
+                    logger.warning(f"Job {job_id}: Multi-host resource check failed: {error_msg}")
+                    job.status = JobStatus.FAILED.value
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.log_path = f"ERROR: {error_msg}"
+                    update_lab_state(session, lab_id, LabState.ERROR.value, error="Insufficient resources")
+                    session.commit()
+                    return
+
+                cap_warnings = format_capacity_warnings(cap_results)
+                if cap_warnings:
+                    for w in cap_warnings:
+                        logger.warning(f"Job {job_id}: Resource warning: {w}")
+
             # Deploy to each host in parallel using JSON topology from database
             deploy_tasks = []
             deploy_results: dict[str, dict] = {}
@@ -1531,6 +1566,59 @@ async def run_node_reconcile(
 
             # Initialize graph to None - will be loaded later if needed for deploy
             graph = None
+
+            # --- Resource capacity check (pre-deploy gate) ---
+            if settings.resource_validation_enabled:
+                from app.services.resource_capacity import check_capacity, format_capacity_error
+
+                # Only check resources for nodes that need deployment (new containers)
+                deploy_candidates = [
+                    ns for ns in node_states
+                    if ns.desired_state == NodeDesiredState.RUNNING.value
+                    and ns.actual_state in ("undeployed", "pending")
+                ]
+                if deploy_candidates:
+                    # Look up device types from Node table
+                    candidate_names = {ns.node_name for ns in deploy_candidates}
+                    deploy_nodes = (
+                        session.query(models.Node)
+                        .filter(
+                            models.Node.lab_id == lab_id,
+                            models.Node.container_name.in_(candidate_names),
+                        )
+                        .all()
+                    )
+                    device_types = [n.device or "linux" for n in deploy_nodes]
+
+                    cap_result = check_capacity(agent, device_types)
+                    if not cap_result.fits:
+                        error_msg = format_capacity_error({agent.id: cap_result})
+                        logger.warning(f"Job {job_id}: Resource check failed: {error_msg}")
+                        job.status = JobStatus.FAILED.value
+                        job.completed_at = datetime.now(timezone.utc)
+                        job.log_path = f"ERROR: {error_msg}"
+                        for ns in deploy_candidates:
+                            ns.actual_state = NodeActualState.ERROR.value
+                            ns.error_message = "Insufficient resources on target agent"
+                            safe_create_task(
+                                broadcast_node_state_change(
+                                    lab_id=lab_id,
+                                    node_id=ns.node_id,
+                                    node_name=ns.node_name,
+                                    desired_state=ns.desired_state,
+                                    actual_state=ns.actual_state,
+                                    is_ready=ns.is_ready,
+                                    error_message=ns.error_message,
+                                ),
+                                name=f"broadcast:resource_error:{lab_id}:{ns.node_id}"
+                            )
+                        session.commit()
+                        return
+
+                    if cap_result.has_warnings:
+                        for w in cap_result.warnings:
+                            logger.warning(f"Job {job_id}: Resource warning: {w}")
+                            log_parts.append(f"WARNING: {w}")
 
             # Categorize nodes by what action they need
             # Note: Transitional states (stopping, starting, pending) were set earlier
