@@ -14,6 +14,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import db, models
+from app.auth import get_current_user
 from app.config import settings
 
 
@@ -540,21 +541,178 @@ def get_agent(
     )
 
 
+@router.get("/{agent_id}/deregister-info")
+def get_deregister_info(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Get pre-flight information before deregistering an agent.
+
+    Returns counts of affected resources so the UI can show an
+    informed confirmation dialog.
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Count affected resources
+    labs = (
+        database.query(models.Lab)
+        .filter(models.Lab.agent_id == agent_id)
+        .all()
+    )
+    running_labs = [{"id": l.id, "name": l.name, "state": l.state} for l in labs if l.state in ("running", "starting")]
+
+    node_placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.host_id == agent_id)
+        .count()
+    )
+
+    vxlan_tunnels = (
+        database.query(models.VxlanTunnel)
+        .filter(or_(
+            models.VxlanTunnel.agent_a_id == agent_id,
+            models.VxlanTunnel.agent_b_id == agent_id,
+        ))
+        .count()
+    )
+
+    cross_host_links = (
+        database.query(models.LinkState)
+        .filter(or_(
+            models.LinkState.source_host_id == agent_id,
+            models.LinkState.target_host_id == agent_id,
+        ))
+        .count()
+    )
+
+    nodes_assigned = (
+        database.query(models.Node)
+        .filter(models.Node.host_id == agent_id)
+        .count()
+    )
+
+    return {
+        "agent_id": agent_id,
+        "agent_name": host.name,
+        "agent_status": host.status,
+        "labs_assigned": len(labs),
+        "running_labs": running_labs,
+        "node_placements": node_placements,
+        "nodes_assigned": nodes_assigned,
+        "vxlan_tunnels": vxlan_tunnels,
+        "cross_host_links": cross_host_links,
+    }
+
+
 @router.delete("/{agent_id}")
 def unregister_agent(
     agent_id: str,
     database: Session = Depends(db.get_db),
-) -> dict[str, str]:
-    """Unregister an agent."""
-    host = database.get(models.Host, agent_id)
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Unregister an agent and clean up all database references.
 
+    This does NOT contact the agent or stop containers. It only removes
+    the agent record and cleans up foreign key references so the database
+    remains consistent. Topology data (nodes, links, configs) is preserved.
+
+    Requires admin access.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    host = database.get(models.Host, agent_id)
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    host_name = host.name
+    cleanup = {}
+
+    # 1. SET NULL on Lab.agent_id
+    count = (
+        database.query(models.Lab)
+        .filter(models.Lab.agent_id == agent_id)
+        .update({models.Lab.agent_id: None})
+    )
+    cleanup["labs_unassigned"] = count
+
+    # 2. SET NULL on Job.agent_id
+    count = (
+        database.query(models.Job)
+        .filter(models.Job.agent_id == agent_id)
+        .update({models.Job.agent_id: None})
+    )
+    cleanup["jobs_unassigned"] = count
+
+    # 3. SET NULL on Node.host_id
+    count = (
+        database.query(models.Node)
+        .filter(models.Node.host_id == agent_id)
+        .update({models.Node.host_id: None})
+    )
+    cleanup["nodes_unassigned"] = count
+
+    # 4. DELETE NodePlacement rows
+    count = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.host_id == agent_id)
+        .delete()
+    )
+    cleanup["node_placements_deleted"] = count
+
+    # 5. Clean up LinkState references (SET NULL + clear cross-host flags)
+    source_links = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.source_host_id == agent_id)
+        .update({
+            models.LinkState.source_host_id: None,
+            models.LinkState.is_cross_host: False,
+            models.LinkState.source_vxlan_attached: False,
+        })
+    )
+    target_links = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.target_host_id == agent_id)
+        .update({
+            models.LinkState.target_host_id: None,
+            models.LinkState.is_cross_host: False,
+            models.LinkState.target_vxlan_attached: False,
+        })
+    )
+    cleanup["link_states_cleaned"] = source_links + target_links
+
+    # 6. DELETE VxlanTunnel rows
+    count = (
+        database.query(models.VxlanTunnel)
+        .filter(or_(
+            models.VxlanTunnel.agent_a_id == agent_id,
+            models.VxlanTunnel.agent_b_id == agent_id,
+        ))
+        .delete()
+    )
+    cleanup["vxlan_tunnels_deleted"] = count
+
+    # 7. DELETE the host (cascading FKs handle ImageHost, ImageSyncJob,
+    #    AgentUpdateJob, AgentLink, AgentNetworkConfig automatically)
     database.delete(host)
     database.commit()
 
-    return {"status": "deleted"}
+    logger.info(f"Deregistered agent '{host_name}' ({agent_id}): {cleanup}")
+
+    return {
+        "status": "deleted",
+        "agent_name": host_name,
+        "cleanup": cleanup,
+    }
 
 
 class UpdateSyncStrategyRequest(BaseModel):
