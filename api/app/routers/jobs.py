@@ -613,23 +613,14 @@ async def lab_status(
     # Fetch status from all agents concurrently
     results = await asyncio.gather(*[fetch_agent_status(a) for a in agents])
 
-    # Get valid node names from the database to filter out orphaned containers
-    valid_node_names = set(
-        n.container_name for n in
-        database.query(models.Node.container_name)
-        .filter(models.Node.lab_id == lab.id)
-        .all()
-        if n.container_name
-    )
-
     seen_nodes = set()  # Track which nodes we've already added
     for nodes, error, agent in results:
         if error:
             errors.append(f"{agent.name or agent.id}: {error}")
         for node in nodes:
+            # Avoid duplicates - use node name as key
             node_name = node.get("name", "")
-            # Only include nodes that exist in the lab's node list
-            if node_name not in seen_nodes and (not valid_node_names or node_name in valid_node_names):
+            if node_name not in seen_nodes:
                 all_nodes.append(node)
                 seen_nodes.add(node_name)
         agent_info.append({"id": agent.id, "name": agent.name})
