@@ -52,6 +52,18 @@ async def create_deployment_links(
 
     # Get link definitions from database
     topo_service = TopologyService(session)
+
+    # Normalize link interface names (Ethernet1 -> eth1) before creating
+    # LinkState records. This prevents naming mismatches between old Link
+    # definitions and new LinkState records.
+    try:
+        normalized = topo_service.normalize_links_for_lab(lab_id)
+        if normalized > 0:
+            logger.info(f"Normalized {normalized} link record(s) before deployment")
+            session.flush()
+    except Exception as e:
+        logger.warning(f"Failed to normalize link interfaces: {e}")
+
     db_links = topo_service.get_links(lab_id)
 
     if not db_links:
@@ -68,6 +80,24 @@ async def create_deployment_links(
         .filter(models.LinkState.lab_id == lab_id)
         .all()
     }
+
+    # Clean up orphaned LinkState records from previous deploys
+    # These may have different interface naming (Ethernet vs eth)
+    current_link_names = {link.link_name for link in db_links}
+    orphaned_states = [
+        ls for ls in existing_states.values()
+        if ls.link_name not in current_link_names
+    ]
+    for ls in orphaned_states:
+        logger.info(f"Cleaning up orphaned LinkState: {ls.link_name}")
+        session.delete(ls)
+    if orphaned_states:
+        session.flush()
+        # Refresh existing_states after cleanup
+        existing_states = {
+            name: ls for name, ls in existing_states.items()
+            if name in current_link_names
+        }
 
     link_manager = LinkManager(session)
     success_count = 0
@@ -469,21 +499,15 @@ async def teardown_deployment_links(
     for tunnel in tunnels:
         session.delete(tunnel)
 
-    # Update LinkState records
-    link_states = (
+    # Delete ALL LinkState records for this lab (not just cross-host)
+    # Fresh records will be created on the next deploy
+    all_link_states = (
         session.query(models.LinkState)
-        .filter(
-            models.LinkState.lab_id == lab_id,
-            models.LinkState.is_cross_host == True,
-        )
+        .filter(models.LinkState.lab_id == lab_id)
         .all()
     )
-    for ls in link_states:
-        ls.vni = None
-        ls.vlan_tag = None
-        ls.actual_state = "down"
-        ls.source_vxlan_attached = False
-        ls.target_vxlan_attached = False
+    for ls in all_link_states:
+        session.delete(ls)
 
     session.commit()
 

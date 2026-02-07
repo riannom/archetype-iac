@@ -1128,6 +1128,20 @@ async def run_multihost_destroy(
                     if status != "completed":
                         all_success = False
 
+            # Clean up any remaining LinkState records
+            # Belt-and-suspenders: teardown_deployment_links should have
+            # deleted these, but ensures cleanup even if VXLAN teardown
+            # was skipped (e.g., no tunnels existed)
+            remaining_link_states = (
+                session.query(models.LinkState)
+                .filter(models.LinkState.lab_id == lab_id)
+                .all()
+            )
+            if remaining_link_states:
+                for ls in remaining_link_states:
+                    session.delete(ls)
+                session.flush()
+
             # Update job status
             if all_success:
                 job.status = JobStatus.COMPLETED.value
