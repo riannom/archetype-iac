@@ -1294,6 +1294,20 @@ class TopologyService:
         exec_cmds = config.get("exec", [])
         startup_config = config.get("startup-config")
 
+        # Fallback: use most recent extracted config from config_snapshots table
+        if not startup_config and node.lab_id:
+            latest_snapshot = (
+                self.db.query(models.ConfigSnapshot)
+                .filter(
+                    models.ConfigSnapshot.lab_id == node.lab_id,
+                    models.ConfigSnapshot.node_name == node.container_name,
+                )
+                .order_by(models.ConfigSnapshot.created_at.desc())
+                .first()
+            )
+            if latest_snapshot and latest_snapshot.content:
+                startup_config = latest_snapshot.content
+
         # Resolve image using canonical 3-step fallback
         kind = resolve_device_kind(node.device)
         image = resolve_node_image(node.device, kind, node.image, node.version)

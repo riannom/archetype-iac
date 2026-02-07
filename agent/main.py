@@ -323,6 +323,22 @@ async def _fix_running_interfaces() -> None:
             lab_id = container.labels.get("archetype.lab_id")
             if not lab_id:
                 continue
+
+            # Restart containers that failed due to OVS plugin socket race
+            if container.status == "exited":
+                exit_code = container.attrs.get("State", {}).get("ExitCode", 0)
+                error_msg = container.attrs.get("State", {}).get("Error", "")
+                if exit_code == 255 or "archetype-ovs.sock" in error_msg:
+                    logger.info(f"Restarting {container.name} (OVS socket race, exit {exit_code})")
+                    try:
+                        await asyncio.to_thread(container.start)
+                        await asyncio.sleep(2)
+                        await provider._fix_interface_names(container.name, lab_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to restart {container.name}: {e}")
+                continue
+
+            # Fix interface names for running containers
             try:
                 await provider._fix_interface_names(container.name, lab_id)
             except Exception as e:

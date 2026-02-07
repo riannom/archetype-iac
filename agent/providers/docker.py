@@ -732,8 +732,9 @@ class DockerProvider(Provider):
             "detach": True,
             "tty": True,
             "stdin_open": True,
-            # Auto-restart on crash, but respect explicit stops
-            "restart_policy": {"Name": "unless-stopped"},
+            # Don't auto-restart — agent manages lifecycle via deploy/destroy.
+            # "unless-stopped" races the OVS plugin socket on host reboot.
+            "restart_policy": {"Name": "no"},
         }
 
         # Capabilities
