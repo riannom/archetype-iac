@@ -969,7 +969,7 @@ class OVSNetworkManager:
         code, _, _ = await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, port_name)
 
         # Create VXLAN port
-        options = f"options:remote_ip={remote_ip},options:local_ip={local_ip},options:key={vni}"
+        options = f"options:remote_ip={remote_ip},options:local_ip={local_ip},options:key={vni},options:df_default=false"
         if vlan_tag:
             code, _, stderr = await self._ovs_vsctl(
                 "add-port", self._bridge_name, port_name,

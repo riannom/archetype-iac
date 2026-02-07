@@ -453,6 +453,7 @@ class OverlayManager:
             f"options:remote_ip={remote_ip}",
             f"options:local_ip={local_ip}",
             f"options:key={vni}",
+            "options:df_default=false",
         )
         if code != 0:
             raise RuntimeError(f"Failed to create VTEP port on OVS: {stderr}")
@@ -581,6 +582,7 @@ class OverlayManager:
             f"options:remote_ip={remote_ip}",
             f"options:local_ip={local_ip}",
             f"options:key={vni}",
+            "options:df_default=false",
         )
         if code != 0:
             raise RuntimeError(f"Failed to create VXLAN port on OVS: {stderr}")
@@ -1229,6 +1231,7 @@ class OverlayManager:
             f"options:remote_ip={remote_ip}",
             f"options:local_ip={local_ip}",
             f"options:key={vni}",
+            "options:df_default=false",
         )
         if code != 0:
             raise RuntimeError(
