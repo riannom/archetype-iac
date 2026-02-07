@@ -181,8 +181,17 @@ async def _auto_extract_configs_before_destroy(
             logger.debug(f"No configs extracted before destroy for lab {lab.id}")
             return
 
-        # Create snapshots with auto_stop type
-        import hashlib
+        # Create snapshots with auto_stop type via ConfigService
+        from app.services.config_service import ConfigService
+        config_svc = ConfigService(session)
+
+        # Build node_name -> device_kind lookup
+        lab_nodes = (
+            session.query(models.Node)
+            .filter(models.Node.lab_id == lab.id)
+            .all()
+        )
+        node_device_map = {n.container_name: n.device for n in lab_nodes}
 
         snapshots_created = 0
         for config_data in configs:
@@ -191,33 +200,16 @@ async def _auto_extract_configs_before_destroy(
             if not node_name or not content:
                 continue
 
-            content_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
-
-            # Check for duplicate - skip if content hash matches most recent snapshot
-            latest_snapshot = (
-                session.query(models.ConfigSnapshot)
-                .filter(
-                    models.ConfigSnapshot.lab_id == lab.id,
-                    models.ConfigSnapshot.node_name == node_name,
-                )
-                .order_by(models.ConfigSnapshot.created_at.desc())
-                .first()
-            )
-
-            if latest_snapshot and latest_snapshot.content_hash == content_hash:
-                # Content unchanged, skip creating duplicate
-                continue
-
-            # Create new snapshot
-            snapshot = models.ConfigSnapshot(
+            snapshot = config_svc.save_extracted_config(
                 lab_id=lab.id,
                 node_name=node_name,
                 content=content,
-                content_hash=content_hash,
                 snapshot_type="auto_stop",
+                device_kind=node_device_map.get(node_name),
+                set_as_active=False,  # Don't update active on auto-stop
             )
-            session.add(snapshot)
-            snapshots_created += 1
+            if snapshot:
+                snapshots_created += 1
 
         session.commit()
         logger.info(

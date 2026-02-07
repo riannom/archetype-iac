@@ -1292,21 +1292,11 @@ class TopologyService:
         binds = config.get("binds", [])
         ports = config.get("ports", [])
         exec_cmds = config.get("exec", [])
-        startup_config = config.get("startup-config")
 
-        # Fallback: use most recent extracted config from config_snapshots table
-        if not startup_config and node.lab_id:
-            latest_snapshot = (
-                self.db.query(models.ConfigSnapshot)
-                .filter(
-                    models.ConfigSnapshot.lab_id == node.lab_id,
-                    models.ConfigSnapshot.node_name == node.container_name,
-                )
-                .order_by(models.ConfigSnapshot.created_at.desc())
-                .first()
-            )
-            if latest_snapshot and latest_snapshot.content:
-                startup_config = latest_snapshot.content
+        # Resolve startup config via ConfigService priority chain
+        from app.services.config_service import ConfigService
+        config_svc = ConfigService(self.db)
+        startup_config = config_svc.resolve_startup_config(node)
 
         # Resolve image using canonical 3-step fallback
         kind = resolve_device_kind(node.device)

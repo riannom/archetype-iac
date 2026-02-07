@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -2226,9 +2226,18 @@ async def extract_configs(
         if node_def and agent:
             node_to_agent[node_def.container_name] = agent
 
-    # Save configs to API workspace and create snapshots
+    # Save configs to API workspace and create snapshots via ConfigService
     if configs:
-        workspace = lab_workspace(lab.id)
+        from app.services.config_service import ConfigService
+        config_svc = ConfigService(database)
+
+        # Build node_name -> device_kind lookup
+        lab_nodes = (
+            database.query(models.Node)
+            .filter(models.Node.lab_id == lab_id)
+            .all()
+        )
+        node_device_map = {n.container_name: n.device for n in lab_nodes}
 
         for config_data in configs:
             node_name = config_data.get("node_name")
@@ -2236,60 +2245,29 @@ async def extract_configs(
             if not node_name or not content:
                 continue
 
-            # Save config to workspace (run in thread to avoid blocking event loop)
-            await asyncio.to_thread(
-                _save_config_to_workspace, workspace, node_name, content
-            )
-
-            # Persist config to node's config_json so deploys include it
-            node = (
-                database.query(models.Node)
-                .filter(
-                    models.Node.lab_id == lab_id,
-                    models.Node.container_name == node_name,
-                )
-                .first()
-            )
-            if node:
-                existing = {}
-                if node.config_json:
-                    try:
-                        existing = json.loads(node.config_json)
-                    except json.JSONDecodeError:
-                        pass
-                existing["startup-config"] = content
-                node.config_json = json.dumps(existing)
-
-            # Create snapshot if requested
             if create_snapshot:
-                content_hash = _compute_content_hash(content)
-
-                # Check for duplicate
-                latest_snapshot = (
-                    database.query(models.ConfigSnapshot)
-                    .filter(
-                        models.ConfigSnapshot.lab_id == lab_id,
-                        models.ConfigSnapshot.node_name == node_name,
-                    )
-                    .order_by(models.ConfigSnapshot.created_at.desc())
-                    .first()
-                )
-
-                if latest_snapshot and latest_snapshot.content_hash == content_hash:
-                    continue
-
-                # Create snapshot
-                snapshot = models.ConfigSnapshot(
+                device_kind = node_device_map.get(node_name)
+                snapshot = config_svc.save_extracted_config(
                     lab_id=lab_id,
                     node_name=node_name,
                     content=content,
-                    content_hash=content_hash,
                     snapshot_type=snapshot_type,
+                    device_kind=device_kind,
                 )
-                database.add(snapshot)
-                snapshots_created += 1
+                if snapshot:
+                    snapshots_created += 1
+            else:
+                # Even without snapshot, save to workspace and config_json
+                config_svc.save_extracted_config(
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    content=content,
+                    snapshot_type=snapshot_type,
+                    device_kind=node_device_map.get(node_name),
+                    set_as_active=False,
+                )
 
-            database.commit()
+        database.commit()
 
     # Sync configs to all agents to ensure agent workspaces match API workspace
     # This handles cases where configs are modified in API workspace or extracted
@@ -2401,28 +2379,33 @@ def _compute_content_hash(content: str) -> str:
 def list_config_snapshots(
     lab_id: str,
     node_name: str | None = None,
+    orphaned_only: bool = False,
+    device_kind: str | None = None,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.ConfigSnapshotsResponse:
-    """List all config snapshots for a lab.
+    """List all config snapshots for a lab with orphan and active status.
 
-    Optionally filter by node_name query parameter.
-    Returns snapshots ordered by created_at descending (newest first).
+    Query params:
+    - node_name: Filter by node name
+    - orphaned_only: Only return snapshots for deleted nodes
+    - device_kind: Filter by device type (e.g., "ceos", "srl")
+
+    Returns snapshots with is_orphaned and is_active flags.
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    query = (
-        database.query(models.ConfigSnapshot)
-        .filter(models.ConfigSnapshot.lab_id == lab_id)
+    from app.services.config_service import ConfigService
+    config_svc = ConfigService(database)
+    results = config_svc.list_configs_with_orphan_status(
+        lab_id=lab_id,
+        node_name=node_name,
+        orphaned_only=orphaned_only,
+        device_kind=device_kind,
     )
 
-    if node_name:
-        query = query.filter(models.ConfigSnapshot.node_name == node_name)
-
-    snapshots = query.order_by(models.ConfigSnapshot.created_at.desc()).all()
-
     return schemas.ConfigSnapshotsResponse(
-        snapshots=[schemas.ConfigSnapshotOut.model_validate(s) for s in snapshots]
+        snapshots=[schemas.ConfigSnapshotOut(**r) for r in results]
     )
 
 
@@ -2435,22 +2418,20 @@ def list_node_config_snapshots(
 ) -> schemas.ConfigSnapshotsResponse:
     """List all config snapshots for a specific node.
 
-    Returns snapshots ordered by created_at descending (newest first).
+    Returns snapshots with is_orphaned and is_active flags,
+    ordered by created_at descending (newest first).
     """
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    snapshots = (
-        database.query(models.ConfigSnapshot)
-        .filter(
-            models.ConfigSnapshot.lab_id == lab_id,
-            models.ConfigSnapshot.node_name == node_name,
-        )
-        .order_by(models.ConfigSnapshot.created_at.desc())
-        .all()
+    from app.services.config_service import ConfigService
+    config_svc = ConfigService(database)
+    results = config_svc.list_configs_with_orphan_status(
+        lab_id=lab_id,
+        node_name=node_name,
     )
 
     return schemas.ConfigSnapshotsResponse(
-        snapshots=[schemas.ConfigSnapshotOut.model_validate(s) for s in snapshots]
+        snapshots=[schemas.ConfigSnapshotOut(**r) for r in results]
     )
 
 
@@ -2479,6 +2460,17 @@ async def create_config_snapshot(
             detail="No saved configs found. Run 'Extract Configs' first."
         )
 
+    from app.services.config_service import ConfigService
+    config_svc = ConfigService(database)
+
+    # Build node_name -> device_kind lookup
+    lab_nodes = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id)
+        .all()
+    )
+    node_device_map = {n.container_name: n.device for n in lab_nodes}
+
     created_snapshots = []
     node_name = payload.node_name if payload else None
 
@@ -2499,34 +2491,18 @@ async def create_config_snapshot(
             continue
 
         content = config_file.read_text(encoding="utf-8")
-        content_hash = _compute_content_hash(content)
         current_node_name = node_dir.name
 
-        # Check for duplicate - skip if content hash matches most recent snapshot
-        latest_snapshot = (
-            database.query(models.ConfigSnapshot)
-            .filter(
-                models.ConfigSnapshot.lab_id == lab_id,
-                models.ConfigSnapshot.node_name == current_node_name,
-            )
-            .order_by(models.ConfigSnapshot.created_at.desc())
-            .first()
-        )
-
-        if latest_snapshot and latest_snapshot.content_hash == content_hash:
-            # Content unchanged, skip creating duplicate
-            continue
-
-        # Create new snapshot
-        snapshot = models.ConfigSnapshot(
+        snapshot = config_svc.save_extracted_config(
             lab_id=lab_id,
             node_name=current_node_name,
             content=content,
-            content_hash=content_hash,
             snapshot_type="manual",
+            device_kind=node_device_map.get(current_node_name),
+            set_as_active=True,
         )
-        database.add(snapshot)
-        created_snapshots.append(snapshot)
+        if snapshot:
+            created_snapshots.append(snapshot)
 
     database.commit()
 
@@ -2565,6 +2541,225 @@ def delete_config_snapshot(
     database.commit()
 
     return {"status": "deleted", "snapshot_id": snapshot_id}
+
+
+@router.delete("/labs/{lab_id}/config-snapshots")
+def bulk_delete_config_snapshots(
+    lab_id: str,
+    node_name: str | None = None,
+    orphaned_only: bool = False,
+    force: bool = False,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Bulk delete config snapshots with active config safety guard.
+
+    Query params:
+    - node_name: Delete all snapshots for a specific node
+    - orphaned_only: Only delete snapshots for nodes no longer in the topology
+    - force: Override active config guard (required to delete active startup-configs)
+
+    If any snapshot is the active startup-config for a node and force=False,
+    returns 409 with details about which snapshots are active.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    from app.services.config_service import ConfigService, ActiveConfigGuardError
+    config_svc = ConfigService(database)
+
+    try:
+        result = config_svc.delete_configs(
+            lab_id=lab_id,
+            node_name=node_name,
+            orphaned_only=orphaned_only,
+            force=force,
+        )
+    except ActiveConfigGuardError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(e),
+                "active_snapshots": e.active_snapshots,
+            },
+        )
+
+    database.commit()
+    return result
+
+
+@router.post("/labs/{lab_id}/config-snapshots/{snapshot_id}/map")
+def map_config_snapshot(
+    lab_id: str,
+    snapshot_id: str,
+    payload: schemas.ConfigMappingRequest,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.ConfigSnapshotOut:
+    """Map an orphaned config snapshot to a target node.
+
+    Sets mapped_to_node_id on the snapshot. Validates device_kind
+    compatibility (warns on mismatch but does not block).
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    from app.services.config_service import ConfigService
+    config_svc = ConfigService(database)
+
+    try:
+        snapshot = config_svc.map_config(
+            snapshot_id=snapshot_id,
+            target_node_id=payload.target_node_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    database.commit()
+    database.refresh(snapshot)
+
+    # Get orphan/active status for response
+    results = config_svc.list_configs_with_orphan_status(
+        lab_id=lab_id,
+        node_name=snapshot.node_name,
+    )
+    match = next((r for r in results if r["id"] == snapshot.id), None)
+    if match:
+        return schemas.ConfigSnapshotOut(**match)
+    return schemas.ConfigSnapshotOut.model_validate(snapshot)
+
+
+@router.put("/labs/{lab_id}/nodes/{node_name}/active-config")
+async def set_active_config(
+    lab_id: str,
+    node_name: str,
+    payload: schemas.SetActiveConfigRequest,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Set a specific config snapshot as the active startup-config for a node.
+
+    Updates the node's active_config_snapshot_id, syncs content to
+    config_json["startup-config"], and pushes to the agent workspace.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    node = (
+        database.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name == node_name,
+        )
+        .first()
+    )
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Node '{node_name}' not found")
+
+    from app.services.config_service import ConfigService
+    config_svc = ConfigService(database)
+
+    try:
+        config_svc.set_active_config(node.id, payload.snapshot_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    database.commit()
+
+    # Push to agent
+    placement = (
+        database.query(models.NodePlacement)
+        .filter(
+            models.NodePlacement.lab_id == lab_id,
+            models.NodePlacement.node_definition_id == node.id,
+        )
+        .first()
+    )
+    if placement:
+        agent = database.get(models.Host, placement.host_id)
+        if agent and agent_client.is_agent_online(agent):
+            snapshot = database.get(models.ConfigSnapshot, payload.snapshot_id)
+            if snapshot:
+                await agent_client.update_config_on_agent(
+                    agent, lab_id, node_name, snapshot.content
+                )
+
+    return {
+        "success": True,
+        "node_name": node_name,
+        "active_config_snapshot_id": payload.snapshot_id,
+        "message": f"Active config set for '{node_name}'. Reload node to apply.",
+    }
+
+
+@router.get("/labs/{lab_id}/config-snapshots/download")
+def download_config_snapshots(
+    lab_id: str,
+    node_name: list[str] | None = Query(None),
+    include_orphaned: bool = False,
+    all: bool = False,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Download config snapshots as a zip file.
+
+    Query params:
+    - node_name: Specific node(s) to include (repeatable)
+    - include_orphaned: Include configs for deleted nodes
+    - all: Include everything
+
+    Returns a zip file with configs organized by node and timestamp.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    from app.services.config_service import ConfigService
+    config_svc = ConfigService(database)
+
+    try:
+        zip_buf = config_svc.build_download_zip(
+            lab_id=lab_id,
+            node_names=node_name,
+            include_orphaned=include_orphaned,
+            all_configs=all,
+        )
+    except ValueError as e:
+        status = 413 if "limit" in str(e).lower() else 404
+        raise HTTPException(status_code=status, detail=str(e))
+
+    lab_name = lab.name.replace(" ", "_") if lab.name else lab_id
+    filename = f"{lab_name}_configs.zip"
+
+    from starlette.responses import StreamingResponse
+    return StreamingResponse(
+        zip_buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/labs/{lab_id}/config-snapshots/orphaned")
+def list_orphaned_configs(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """List orphaned config snapshots grouped by device kind.
+
+    Returns stranded configs (from deleted nodes) organized by device type
+    for the config mapping UI.
+    """
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    from app.services.config_service import ConfigService
+    config_svc = ConfigService(database)
+    grouped = config_svc.get_orphaned_configs(lab_id)
+
+    # Convert to serializable format
+    result = {}
+    for kind, configs in grouped.items():
+        result[kind] = [
+            schemas.ConfigSnapshotOut(**c).model_dump(mode="json")
+            for c in configs
+        ]
+
+    return {"orphaned_configs": result, "total_count": sum(len(v) for v in grouped.values())}
 
 
 # ============================================================================

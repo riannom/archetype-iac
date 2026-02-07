@@ -418,7 +418,12 @@ class ConfigSnapshotOut(BaseModel):
     content: str
     content_hash: str
     snapshot_type: str  # "manual" or "auto_stop"
+    device_kind: str | None = None
+    mapped_to_node_id: str | None = None
     created_at: datetime
+    # Computed fields added by API
+    is_active: bool = False
+    is_orphaned: bool = False
 
     class Config:
         from_attributes = True
@@ -434,6 +439,18 @@ class ConfigSnapshotCreate(BaseModel):
     """Input schema for creating a config snapshot."""
 
     node_name: str | None = None  # If None, snapshot all nodes
+
+
+class ConfigMappingRequest(BaseModel):
+    """Input schema for mapping a config snapshot to a target node."""
+
+    target_node_id: str
+
+
+class SetActiveConfigRequest(BaseModel):
+    """Input schema for setting a node's active startup-config."""
+
+    snapshot_id: str
 
 
 class ConfigDiffRequest(BaseModel):
