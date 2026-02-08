@@ -1781,20 +1781,24 @@ class NodeLifecycleManager:
                 continue
 
             try:
+                from app.topology import _normalize_interface_name
+
+                ifname_a = _normalize_interface_name(ep_a.ifname)
+                ifname_b = _normalize_interface_name(ep_b.ifname)
                 result = await agent_client.create_link_on_agent(
                     self.agent,
                     self.lab.id,
                     node_a,
-                    ep_a.ifname,
+                    ifname_a,
                     node_b,
-                    ep_b.ifname,
+                    ifname_b,
                 )
                 if result.get("success"):
                     links_connected += 1
                 else:
                     logger.warning(
-                        f"Failed to connect link {node_a}:{ep_a.ifname} <-> "
-                        f"{node_b}:{ep_b.ifname}: {result.get('error')}"
+                        f"Failed to connect link {node_a}:{ifname_a} <-> "
+                        f"{node_b}:{ifname_b}: {result.get('error')}"
                     )
             except Exception as e:
                 logger.warning(f"Failed to connect link: {e}")

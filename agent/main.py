@@ -2535,6 +2535,18 @@ async def attach_overlay_interface(
             request.lab_id, container_name, request.interface_name
         )
         if local_vlan is None:
+            # Fallback: discover endpoint directly from OVS when docker plugin
+            # state was cleared (e.g. after OVS reconciliation on container restart)
+            ep = await plugin._discover_endpoint(
+                request.lab_id, container_name, request.interface_name
+            )
+            if ep:
+                local_vlan = ep.vlan_tag
+                logger.info(
+                    f"Discovered VLAN {local_vlan} via fallback for "
+                    f"{container_name}:{request.interface_name}"
+                )
+        if local_vlan is None:
             return AttachOverlayInterfaceResponse(
                 success=False,
                 error=(

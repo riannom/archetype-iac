@@ -1253,8 +1253,28 @@ class OverlayManager:
         # Return existing tunnel if already created for this link
         if link_id in self._link_tunnels:
             existing = self._link_tunnels[link_id]
-            logger.info(f"Link tunnel already exists for {link_id}: {existing.interface_name}")
-            return existing
+            if await self._ovs_port_exists(existing.interface_name):
+                # Check if VLAN tag needs updating (container restart scenario)
+                if local_vlan > 0 and local_vlan != existing.local_vlan:
+                    await self._ovs_vsctl(
+                        "set", "port", existing.interface_name, f"tag={local_vlan}"
+                    )
+                    old_vlan = existing.local_vlan
+                    existing.local_vlan = local_vlan
+                    logger.info(
+                        f"Updated VLAN tag for {link_id}: "
+                        f"{existing.interface_name} tag {old_vlan} -> {local_vlan}"
+                    )
+                else:
+                    logger.info(
+                        f"Link tunnel already exists for {link_id}: {existing.interface_name}"
+                    )
+                return existing
+            else:
+                logger.warning(
+                    f"Link tunnel {existing.interface_name} missing from OVS for {link_id}, recreating"
+                )
+                del self._link_tunnels[link_id]
 
         # Auto-discover MTU if not provided
         if tenant_mtu <= 0:

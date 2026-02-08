@@ -1309,7 +1309,8 @@ async def _create_cross_host_links_if_ready(
                     continue
                 status = await agent_client.get_overlay_status_from_agent(agent)
                 tunnels = [t for t in status.get("tunnels", []) if t.get("lab_id") == lab_id]
-                if not tunnels:
+                link_tunnels = [t for t in status.get("link_tunnels", []) if t.get("lab_id") == lab_id]
+                if not tunnels and not link_tunnels:
                     force_recreate = True
                     break
 
