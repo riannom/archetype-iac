@@ -343,6 +343,17 @@ async def lab_up(
     database.commit()
     database.refresh(job)
 
+    # Set desired_state for ALL nodes so enforcement and NLM know
+    # these nodes should be running after deploy
+    node_states = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab.id)
+        .all()
+    )
+    for ns in node_states:
+        ns.desired_state = "running"
+    database.commit()
+
     # Start background task - choose deployment method based on topology
     # Deploy functions build topology from database (source of truth)
     if is_multihost:
@@ -397,6 +408,16 @@ async def lab_down(
     database.add(job)
     database.commit()
     database.refresh(job)
+
+    # Set desired_state so enforcement doesn't restart destroyed containers
+    node_states = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab.id)
+        .all()
+    )
+    for ns in node_states:
+        ns.desired_state = "stopped"
+    database.commit()
 
     # Start background task - choose destroy method based on topology
     # Destroy functions use database for host analysis (source of truth)
