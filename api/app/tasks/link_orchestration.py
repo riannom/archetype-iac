@@ -21,7 +21,7 @@ from app import agent_client, models
 from app.services.link_manager import LinkManager
 from app.services.link_validator import verify_link_connected, update_interface_mappings
 from app.services.topology import TopologyService
-from app.topology import _normalize_interface_name
+from app.services.interface_naming import normalize_interface
 from app.utils.locks import get_link_state_for_update
 
 logger = logging.getLogger(__name__)
@@ -247,8 +247,8 @@ async def create_same_host_link(
     session.flush()
 
     try:
-        source_iface = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
-        target_iface = _normalize_interface_name(link_state.target_interface) if link_state.target_interface else ""
+        source_iface = normalize_interface(link_state.source_interface) if link_state.source_interface else ""
+        target_iface = normalize_interface(link_state.target_interface) if link_state.target_interface else ""
 
         result = await agent_client.create_link_on_agent(
             agent,
@@ -340,8 +340,8 @@ async def create_cross_host_link(
     session.flush()
 
     try:
-        interface_a = _normalize_interface_name(link_state.source_interface) if link_state.source_interface else ""
-        interface_b = _normalize_interface_name(link_state.target_interface) if link_state.target_interface else ""
+        interface_a = normalize_interface(link_state.source_interface) if link_state.source_interface else ""
+        interface_b = normalize_interface(link_state.target_interface) if link_state.target_interface else ""
 
         # Use new trunk VTEP model (setup_cross_host_link_v2)
         result = await agent_client.setup_cross_host_link_v2(

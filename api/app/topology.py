@@ -15,110 +15,15 @@ from app.schemas import (
     TopologyAnalysis,
     TopologyGraph,
 )
-from app.image_store import find_image_reference, find_custom_device, get_device_override
+from app.image_store import find_image_reference
 from app.config import settings
 from app.storage import lab_workspace
-from agent.vendors import get_kind_for_device, get_default_image, get_vendor_config, is_ceos_kind, get_config_by_device
-
-
-def _resolve_device_kind(device: str | None) -> str:
-    """Resolve the canonical kind for a device, checking custom devices.
-
-    Args:
-        device: Device type (e.g., "eos", "ceos", custom device ID)
-
-    Returns:
-        The canonical kind (e.g., "ceos" for EOS devices)
-    """
-    if not device:
-        return "linux"
-
-    # First check if vendor config knows this device
-    config = get_config_by_device(device)
-    if config:
-        return config.kind
-
-    # Check custom devices for a kind override
-    custom = find_custom_device(device)
-    if custom and custom.get("kind"):
-        return custom["kind"]
-
-    # Fall back to the device ID itself
-    return device
-
-
-def _normalize_interface_name(iface_name: str) -> str:
-    """Normalize interface name to deployment format.
-
-    Converts vendor-specific names like 'Ethernet1' or 'GigabitEthernet1'
-    to 'eth1' / 'eth0' for deployment.
-    """
-    # Convert Ethernet1 -> eth1, Ethernet2 -> eth2, etc.
-    match = re.match(r'^[Ee]thernet(\d+)$', iface_name)
-    if match:
-        return f"eth{match.group(1)}"
-    # Convert GigabitEthernet0 -> eth0, GigabitEthernet1 -> eth1, etc.
-    # Cisco uses GigabitEthernet with 0-indexed numbering.
-    match = re.match(r'^GigabitEthernet(\d+)$', iface_name, re.IGNORECASE)
-    if match:
-        return f"eth{int(match.group(1))}"
-    # Already in eth format or other format, return as-is
-    return iface_name
-
-
-def _denormalize_interface_name(iface_name: str, device: str | None) -> str:
-    """Convert normalized interface name to vendor-specific format for UI display.
-
-    This is the reverse of _normalize_interface_name(). It converts generic
-    interface names like 'eth1' to the vendor's preferred naming convention
-    (e.g., 'Ethernet1' for cEOS) based on the device's port_naming config.
-
-    Args:
-        iface_name: The interface name from YAML (e.g., 'eth1')
-        device: The device type (e.g., 'ceos', 'nokia_srlinux')
-
-    Returns:
-        Vendor-formatted interface name (e.g., 'Ethernet1' for cEOS)
-    """
-    if not device or not iface_name:
-        return iface_name
-
-    # Get port naming from vendor config, custom device, and overrides (in that order).
-    kind = _resolve_device_kind(device)
-    config = get_vendor_config(kind)
-
-    port_naming = config.port_naming if config else "eth"
-    port_start_index = config.port_start_index if config else 0
-
-    custom = find_custom_device(device)
-    if custom:
-        port_naming = custom.get("portNaming", port_naming)
-        port_start_index = custom.get("portStartIndex", port_start_index)
-
-    override = get_device_override(device) or get_device_override(kind)
-    if override:
-        port_naming = override.get("portNaming", port_naming)
-        port_start_index = override.get("portStartIndex", port_start_index)
-
-    # If the device uses 'eth' naming, no conversion needed
-    if port_naming == "eth":
-        return iface_name
-
-    # Try to extract index from eth-style interface name
-    match = re.match(r'^eth(\d+)$', iface_name, re.IGNORECASE)
-    if not match:
-        # Not an eth-style name, return as-is
-        return iface_name
-
-    index = int(match.group(1))
-
-    # Generate the vendor-specific interface name
-    # Handle patterns with {index} placeholder vs simple prefix
-    if "{index}" in port_naming:
-        return port_naming.replace("{index}", str(index))
-    else:
-        # Simple prefix like "Ethernet", "e1-", "GigabitEthernet", etc.
-        return f"{port_naming}{index}"
+from app.services.interface_naming import (
+    normalize_interface,
+    denormalize_interface,
+    _resolve_device_kind,
+)
+from agent.vendors import get_default_image, get_vendor_config, is_ceos_kind
 
 
 class _BlockScalarDumper(yaml.SafeDumper):
@@ -503,7 +408,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
                 # Do this BEFORE translating node name since container_to_device uses container_name
                 if endpoint.ifname:
                     device = container_to_device.get(endpoint.node)
-                    endpoint.ifname = _denormalize_interface_name(endpoint.ifname, device)
+                    endpoint.ifname = denormalize_interface(endpoint.ifname, device)
                 # Translate container name to GUI ID
                 endpoint.node = container_to_gui_id[endpoint.node]
 
@@ -563,8 +468,8 @@ def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> T
         # If both endpoints have hosts and they differ, it's a cross-host link
         if host_a and host_b and host_a != host_b:
             # Normalize interface names (e.g., Ethernet1 -> eth1) for deployment
-            iface_a = _normalize_interface_name(ep_a.ifname) if ep_a.ifname else f"eth{link_counter}"
-            iface_b = _normalize_interface_name(ep_b.ifname) if ep_b.ifname else f"eth{link_counter}"
+            iface_a = normalize_interface(ep_a.ifname) if ep_a.ifname else f"eth{link_counter}"
+            iface_b = normalize_interface(ep_b.ifname) if ep_b.ifname else f"eth{link_counter}"
             link_id = f"{ep_a.node}:{iface_a}-{ep_b.node}:{iface_b}"
             cross_host_links.append(
                 CrossHostLink(
@@ -813,13 +718,13 @@ def graph_to_topology_yaml(
 
         # Get or assign interface names (normalize to eth format)
         if ep_a.ifname:
-            iface_a = _normalize_interface_name(ep_a.ifname)
+            iface_a = normalize_interface(ep_a.ifname)
         else:
             iface_a = f"eth{interface_counters.get(node_a, 1)}"
             interface_counters[node_a] = interface_counters.get(node_a, 1) + 1
 
         if ep_b.ifname:
-            iface_b = _normalize_interface_name(ep_b.ifname)
+            iface_b = normalize_interface(ep_b.ifname)
         else:
             iface_b = f"eth{interface_counters.get(node_b, 1)}"
             interface_counters[node_b] = interface_counters.get(node_b, 1) + 1
@@ -842,7 +747,7 @@ def graph_to_topology_yaml(
     if reserved_interfaces:
         for node_name, iface_name in reserved_interfaces:
             # Normalize the interface name for consistent comparison
-            normalized_iface = _normalize_interface_name(iface_name)
+            normalized_iface = normalize_interface(iface_name)
             idx = _extract_interface_index(normalized_iface)
             if idx is not None and node_name in used_interfaces:
                 used_interfaces[node_name].add(idx)
@@ -953,8 +858,8 @@ def split_topology_by_host(
 
             # Skip cross-host links (they're handled by overlay)
             # Normalize interface names to match cross_host_endpoints (which are normalized)
-            iface_a = _normalize_interface_name(ep_a.ifname) if ep_a.ifname else "eth0"
-            iface_b = _normalize_interface_name(ep_b.ifname) if ep_b.ifname else "eth0"
+            iface_a = normalize_interface(ep_a.ifname) if ep_a.ifname else "eth0"
+            iface_b = normalize_interface(ep_b.ifname) if ep_b.ifname else "eth0"
             if (ep_a.node, iface_a) in cross_host_endpoints:
                 continue
             if (ep_b.node, iface_b) in cross_host_endpoints:

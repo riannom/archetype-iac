@@ -26,7 +26,7 @@ from app.tasks.link_orchestration import (
     create_same_host_link,
     create_cross_host_link,
 )
-from app.topology import _normalize_interface_name
+from app.services.interface_naming import normalize_interface
 from app.utils.locks import (
     link_ops_lock,
     extend_link_ops_lock,
@@ -209,8 +209,8 @@ async def teardown_link(
         # Get link details for the detach operation
         source_node = link_info.get("source_node", "")
         target_node = link_info.get("target_node", "")
-        source_iface = _normalize_interface_name(link_info.get("source_interface", "") or "")
-        target_iface = _normalize_interface_name(link_info.get("target_interface", "") or "")
+        source_iface = normalize_interface(link_info.get("source_interface", "") or "")
+        target_iface = normalize_interface(link_info.get("target_interface", "") or "")
 
         # Get agent IPs for rollback
         source_agent_ip = await agent_client.resolve_agent_ip(source_agent.address)
@@ -322,8 +322,8 @@ async def teardown_link(
 
         source_node = link_info.get("source_node", "")
         target_node = link_info.get("target_node", "")
-        source_iface = _normalize_interface_name(link_info.get("source_interface", "") or "")
-        target_iface = _normalize_interface_name(link_info.get("target_interface", "") or "")
+        source_iface = normalize_interface(link_info.get("source_interface", "") or "")
+        target_iface = normalize_interface(link_info.get("target_interface", "") or "")
         normalized_link_id = link_name
         if source_node and target_node and source_iface and target_iface:
             normalized_link_id = f"{source_node}:{source_iface}-{target_node}:{target_iface}"

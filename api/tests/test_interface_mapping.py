@@ -14,7 +14,7 @@ async def test_populate_from_agent_creates_and_updates(test_db, sample_lab, samp
         display_name="R1",
         container_name="r1",
         node_type="device",
-        device="arista_ceos",
+        device="ceos",
     )
     test_db.add(node)
     test_db.commit()
@@ -64,17 +64,18 @@ async def test_populate_from_agent_creates_and_updates(test_db, sample_lab, samp
 
 
 def test_interface_name_translations() -> None:
-    assert interface_mapping.linux_to_vendor_interface("eth1", "arista_ceos") == "Ethernet1"
-    assert interface_mapping.linux_to_vendor_interface("eth9", "srlinux") == "ethernet-1/9"
-    assert interface_mapping.linux_to_vendor_interface("lo", "arista_ceos") is None
+    # Use canonical vendor catalog keys (not old hardcoded aliases)
+    assert interface_mapping.linux_to_vendor_interface("eth1", "ceos") == "Ethernet1"
+    assert interface_mapping.linux_to_vendor_interface("eth9", "nokia_srlinux") == "e1-9"
+    assert interface_mapping.linux_to_vendor_interface("lo", "ceos") is None
     assert interface_mapping.linux_to_vendor_interface("eth1", None) is None
 
-    assert interface_mapping.vendor_to_linux_interface("Ethernet1", "arista_ceos") == "eth1"
-    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "vjunos") == "eth2"
-    # GigabitEthernet0/0/0/3 matches the Ethernet pattern first, capturing the "0"
-    # from "Ethernet0" before the more specific GigabitEthernet pattern can match
-    assert interface_mapping.vendor_to_linux_interface("GigabitEthernet0/0/0/3", "iosxr") == "eth0"
-    assert interface_mapping.vendor_to_linux_interface("weird0", "arista_ceos") is None
+    assert interface_mapping.vendor_to_linux_interface("Ethernet1", "ceos") == "eth1"
+    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosswitch") == "eth2"
+    # Previously a known bug: old regex patterns matched wrong group.
+    # Now uses device-aware translation from vendor catalog — returns eth3 correctly.
+    assert interface_mapping.vendor_to_linux_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth3"
+    assert interface_mapping.vendor_to_linux_interface("weird0", "ceos") is None
 
 
 def test_update_vlan_tag(test_db, sample_lab) -> None:

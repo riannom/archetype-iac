@@ -1802,10 +1802,10 @@ class NodeLifecycleManager:
                 continue
 
             try:
-                from app.topology import _normalize_interface_name
+                from app.services.interface_naming import normalize_interface
 
-                ifname_a = _normalize_interface_name(ep_a.ifname)
-                ifname_b = _normalize_interface_name(ep_b.ifname)
+                ifname_a = normalize_interface(ep_a.ifname)
+                ifname_b = normalize_interface(ep_b.ifname)
                 result = await agent_client.create_link_on_agent(
                     self.agent,
                     self.lab.id,

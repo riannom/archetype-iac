@@ -19,36 +19,15 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
+from app.services.interface_naming import normalize_interface, denormalize_interface
 
 logger = logging.getLogger(__name__)
 
 
-# Vendor interface naming patterns
-# Maps device type to interface name pattern
-VENDOR_INTERFACE_PATTERNS = {
-    # Arista variants
-    "ceos": "Ethernet{n}",
-    "eos": "Ethernet{n}",
-    "arista_ceos": "Ethernet{n}",
-    "arista_eos": "Ethernet{n}",
-    # Nokia
-    "srlinux": "ethernet-1/{n}",
-    "nokia_srlinux": "ethernet-1/{n}",
-    # Juniper
-    "vmx": "ge-0/0/{n}",
-    "vjunos": "ge-0/0/{n}",
-    "juniper_vmx": "ge-0/0/{n}",
-    "juniper_vjunos": "ge-0/0/{n}",
-    # Cisco
-    "iosxr": "GigabitEthernet0/0/0/{n}",
-    "cisco_iosxr": "GigabitEthernet0/0/0/{n}",
-    # Linux
-    "linux": "eth{n}",
-}
-
-
 def linux_to_vendor_interface(linux_if: str, device_type: str | None) -> str | None:
     """Convert Linux interface name to vendor-specific name.
+
+    Delegates to the centralized denormalize_interface().
 
     Args:
         linux_if: Linux interface name (e.g., "eth1")
@@ -60,22 +39,21 @@ def linux_to_vendor_interface(linux_if: str, device_type: str | None) -> str | N
     if not device_type:
         return None
 
-    # Extract interface number
-    match = re.search(r"eth(\d+)", linux_if)
-    if not match:
+    result = denormalize_interface(linux_if, device_type)
+    # Return None if no conversion was possible (input returned unchanged
+    # and it wasn't already a vendor name)
+    if result == linux_if:
+        # Check if the input was actually an eth-style name that just uses eth naming
+        if re.match(r"^eth\d+$", linux_if, re.IGNORECASE):
+            return result  # eth naming device — eth1 IS the vendor name
         return None
-
-    index = int(match.group(1))
-
-    pattern = VENDOR_INTERFACE_PATTERNS.get(device_type)
-    if not pattern:
-        return None
-
-    return pattern.format(n=index)
+    return result
 
 
 def vendor_to_linux_interface(vendor_if: str, device_type: str | None) -> str | None:
     """Convert vendor interface name to Linux interface name.
+
+    Delegates to the centralized normalize_interface().
 
     Args:
         vendor_if: Vendor interface name (e.g., "Ethernet1")
@@ -84,20 +62,10 @@ def vendor_to_linux_interface(vendor_if: str, device_type: str | None) -> str | 
     Returns:
         Linux interface name or None if cannot convert
     """
-    # Try to extract number from various patterns
-    patterns = [
-        r"[Ee]thernet[-/]?(\d+)(?:/\d+)?",  # Ethernet1, ethernet-1/1
-        r"[Gg]e[-/]?\d+/\d+/(\d+)",  # ge-0/0/0
-        r"[Gg]igabit[Ee]thernet\d+/\d+/\d+/(\d+)",  # GigabitEthernet0/0/0/0
-        r"eth(\d+)",  # eth1
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, vendor_if)
-        if match:
-            return f"eth{match.group(1)}"
-
-    return None
+    result = normalize_interface(vendor_if, device_type)
+    if result == vendor_if and not re.match(r"^eth\d+$", vendor_if, re.IGNORECASE):
+        return None
+    return result
 
 
 async def populate_from_agent(

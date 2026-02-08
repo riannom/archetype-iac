@@ -28,7 +28,7 @@ from app.tasks.jobs import run_agent_job, run_multihost_destroy
 from app.topology import analyze_topology
 from app.utils.lab import get_lab_or_404, get_lab_provider, update_lab_provider_from_nodes
 from app.utils.link import generate_link_name
-from app.topology import _normalize_interface_name
+from app.services.interface_naming import normalize_interface
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map, teardown_link
 from app.tasks.link_reconciliation import reconcile_lab_links
 from app.services import interface_mapping as interface_mapping_service
@@ -1898,8 +1898,8 @@ def _upsert_link_states(
         # Resolve node IDs to names
         source_node = node_id_to_name.get(ep_a.node, ep_a.node)
         target_node = node_id_to_name.get(ep_b.node, ep_b.node)
-        source_interface = _normalize_interface_name(ep_a.ifname) if ep_a.ifname else "eth0"
-        target_interface = _normalize_interface_name(ep_b.ifname) if ep_b.ifname else "eth0"
+        source_interface = normalize_interface(ep_a.ifname) if ep_a.ifname else "eth0"
+        target_interface = normalize_interface(ep_b.ifname) if ep_b.ifname else "eth0"
 
         # Generate canonical link name
         link_name = generate_link_name(

@@ -23,7 +23,7 @@ from app.config import settings
 from app.db import get_session
 from app.services.link_validator import verify_link_connected
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
-from app.topology import _normalize_interface_name
+from app.services.interface_naming import normalize_interface
 from app.utils.link import links_needing_reconciliation_filter
 from app.utils.locks import get_link_state_by_id_for_update
 
@@ -178,8 +178,8 @@ async def attempt_partial_recovery(
     if not link.vni:
         link.vni = allocate_vni(link.lab_id, link.link_name)
 
-    interface_a = _normalize_interface_name(link.source_interface) if link.source_interface else ""
-    interface_b = _normalize_interface_name(link.target_interface) if link.target_interface else ""
+    interface_a = normalize_interface(link.source_interface) if link.source_interface else ""
+    interface_b = normalize_interface(link.target_interface) if link.target_interface else ""
 
     source_ok = link.source_vxlan_attached
     target_ok = link.target_vxlan_attached

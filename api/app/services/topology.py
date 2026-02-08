@@ -32,7 +32,7 @@ from app.schemas import (
     GraphNode,
     TopologyGraph,
 )
-from app.topology import _denormalize_interface_name, _normalize_interface_name
+from app.services.interface_naming import normalize_interface, denormalize_interface
 from app.utils.link import generate_link_name
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         for ep in link.endpoints:
             node_key = ep.node
             if ep.ifname:
-                iface = _normalize_interface_name(ep.ifname)
+                iface = normalize_interface(ep.ifname)
                 match = re.search(r"(\d+)$", iface)
                 if match:
                     max_if_index[node_key] = max(
@@ -253,8 +253,8 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         source = node_id_to_name.get(ep1.node, ep1.node)
         target = node_id_to_name.get(ep2.node, ep2.node)
         # Normalize interface names (e.g., Ethernet1 -> eth1)
-        source_iface = _normalize_interface_name(ep1.ifname) if ep1.ifname else ""
-        target_iface = _normalize_interface_name(ep2.ifname) if ep2.ifname else ""
+        source_iface = normalize_interface(ep1.ifname) if ep1.ifname else ""
+        target_iface = normalize_interface(ep2.ifname) if ep2.ifname else ""
         links.append({
             "source_node": source,
             "source_interface": source_iface,
@@ -355,7 +355,7 @@ class TopologyService:
                     continue
                 if not iface:
                     continue
-                iface_norm = _normalize_interface_name(iface)
+                iface_norm = normalize_interface(iface)
                 match = re.search(r"(\d+)$", iface_norm)
                 if match:
                     max_by_node[node_id] = max(max_by_node[node_id], int(match.group(1)))
@@ -945,8 +945,8 @@ class TopologyService:
             target_device = node_id_to_device.get(link.target_node_id)
 
             # Denormalize interface names to vendor-specific format for UI display
-            source_iface = _denormalize_interface_name(link.source_interface, source_device)
-            target_iface = _denormalize_interface_name(link.target_interface, target_device)
+            source_iface = denormalize_interface(link.source_interface, source_device)
+            target_iface = denormalize_interface(link.target_interface, target_device)
 
             # Parse link config_json
             link_config: dict[str, Any] = {}
@@ -1200,8 +1200,8 @@ class TopologyService:
             old_link_name = link.link_name
             old_source_iface = link.source_interface or ""
             old_target_iface = link.target_interface or ""
-            src_iface_norm = _normalize_interface_name(old_source_iface) if old_source_iface else ""
-            tgt_iface_norm = _normalize_interface_name(old_target_iface) if old_target_iface else ""
+            src_iface_norm = normalize_interface(old_source_iface) if old_source_iface else ""
+            tgt_iface_norm = normalize_interface(old_target_iface) if old_target_iface else ""
 
             source_name = source_node.container_name
             target_name = target_node.container_name
@@ -1332,8 +1332,8 @@ class TopologyService:
             Dict matching DeployLink schema
         """
         # Normalize interface names (e.g., Ethernet1 -> eth1)
-        source_iface = _normalize_interface_name(link.source_interface) if link.source_interface else ""
-        target_iface = _normalize_interface_name(link.target_interface) if link.target_interface else ""
+        source_iface = normalize_interface(link.source_interface) if link.source_interface else ""
+        target_iface = normalize_interface(link.target_interface) if link.target_interface else ""
         return {
             "source_node": node_id_to_name.get(link.source_node_id, ""),
             "source_interface": source_iface,
