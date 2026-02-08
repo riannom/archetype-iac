@@ -187,6 +187,8 @@ def graph_to_yaml(graph: TopologyGraph) -> str:
         # Handle external network nodes differently
         if node.node_type == "external":
             node_data["node_type"] = "external"
+            if getattr(node, 'managed_interface_id', None):
+                node_data["managed_interface_id"] = node.managed_interface_id
             if node.connection_type:
                 node_data["connection_type"] = node.connection_type
             if node.parent_interface:
@@ -327,7 +329,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
         "device", "image", "version", "role", "mgmt", "network-mode", "host",
         "_gui_id", "_display_name",
         # External network fields
-        "node_type", "connection_type", "parent_interface", "vlan_id", "bridge_name",
+        "node_type", "managed_interface_id", "connection_type", "parent_interface", "vlan_id", "bridge_name",
         # Additional fields
         "kind", "labels",
     }
@@ -377,6 +379,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
                     network_mode=attrs.get("network-mode"),
                     host=host,
                     # External network fields
+                    managed_interface_id=attrs.get("managed_interface_id"),
                     connection_type=attrs.get("connection_type"),
                     parent_interface=attrs.get("parent_interface"),
                     vlan_id=attrs.get("vlan_id"),
@@ -546,8 +549,13 @@ def graph_to_topology_yaml(
             ext_config: dict[str, Any] = {
                 "name": node.name,
                 "node_type": "external",
-                "connection_type": getattr(node, 'connection_type', None) or 'bridge',
             }
+            if getattr(node, 'managed_interface_id', None):
+                ext_config["managed_interface_id"] = node.managed_interface_id
+                ext_config["managed_interface_name"] = getattr(node, 'managed_interface_name', None)
+                ext_config["connection_type"] = "managed"
+            else:
+                ext_config["connection_type"] = getattr(node, 'connection_type', None) or 'bridge'
             if node.parent_interface:
                 ext_config["parent_interface"] = node.parent_interface
             if node.vlan_id is not None:
@@ -642,7 +650,14 @@ def graph_to_topology_yaml(
         """Generate external endpoint string for an external network node.
 
         Returns format like 'macvlan:eth0.100' for VLAN or 'bridge:br-prod' for bridge.
+        For managed interfaces, uses the interface name directly.
         """
+        # New model: managed interface reference
+        mi_name = getattr(ext_node, 'managed_interface_name', None)
+        if mi_name:
+            return f"macvlan:{mi_name}"
+
+        # Legacy model: connection_type based
         conn_type = getattr(ext_node, 'connection_type', None) or 'bridge'
         if conn_type == 'vlan':
             parent = getattr(ext_node, 'parent_interface', None) or 'eth0'

@@ -2318,6 +2318,39 @@ async def connect_external_on_agent(
         return {"success": False, "error": str(e)}
 
 
+async def detach_external_on_agent(
+    agent: models.Host,
+    external_interface: str,
+) -> dict:
+    """Detach an external interface from the OVS bridge.
+
+    Called during teardown when no more labs reference this external interface.
+
+    Args:
+        agent: The agent where the external interface is connected
+        external_interface: External host interface name to detach
+
+    Returns:
+        Dict with 'success' and optionally 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/ovs-plugin/labs/_global/external/{external_interface}"
+    logger.info(f"Detaching external interface {external_interface} on agent {agent.id}")
+
+    try:
+        client = get_http_client()
+        response = await client.delete(url, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"External detach succeeded for {external_interface}")
+        else:
+            logger.warning(f"External detach failed: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"External detach failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def setup_cross_host_link(
     database: Session,
     lab_id: str,

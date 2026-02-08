@@ -1068,6 +1068,18 @@ async def delete_managed_interface(
     if not iface:
         raise HTTPException(status_code=404, detail="Interface not found")
 
+    # Check for referencing external network nodes
+    ref_count = (
+        database.query(models.Node)
+        .filter(models.Node.managed_interface_id == interface_id)
+        .count()
+    )
+    if ref_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete: {ref_count} external network node(s) reference this interface",
+        )
+
     agent = database.get(models.Host, iface.host_id)
 
     # Delete from agent if online

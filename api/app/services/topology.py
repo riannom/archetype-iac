@@ -732,9 +732,22 @@ class TopologyService:
                 node.parent_interface = graph_node.parent_interface
                 node.vlan_id = graph_node.vlan_id
                 node.bridge_name = graph_node.bridge_name
+                node.managed_interface_id = graph_node.managed_interface_id
                 node.config_json = config_json
+                # Auto-set host_id from managed interface for external nodes
+                if graph_node.managed_interface_id and (graph_node.node_type or "device") == "external":
+                    mi = self.db.get(models.AgentManagedInterface, graph_node.managed_interface_id)
+                    if mi:
+                        node.host_id = mi.host_id
             else:
                 # Create new node
+                effective_host_id = host_id
+                managed_interface_id = graph_node.managed_interface_id
+                # Auto-set host_id from managed interface for external nodes
+                if managed_interface_id and (graph_node.node_type or "device") == "external":
+                    mi = self.db.get(models.AgentManagedInterface, managed_interface_id)
+                    if mi:
+                        effective_host_id = mi.host_id
                 node = models.Node(
                     lab_id=lab_id,
                     gui_id=graph_node.id,
@@ -745,11 +758,12 @@ class TopologyService:
                     image=graph_node.image,
                     version=graph_node.version,
                     network_mode=graph_node.network_mode,
-                    host_id=host_id,
+                    host_id=effective_host_id,
                     connection_type=graph_node.connection_type,
                     parent_interface=graph_node.parent_interface,
                     vlan_id=graph_node.vlan_id,
                     bridge_name=graph_node.bridge_name,
+                    managed_interface_id=managed_interface_id,
                     config_json=config_json,
                 )
                 self.db.add(node)
@@ -906,6 +920,20 @@ class TopologyService:
         # Build node ID to device type map for interface name denormalization
         node_id_to_device: dict[str, str | None] = {n.id: n.device for n in nodes}
 
+        # Pre-load managed interface info for external nodes
+        mi_ids = {n.managed_interface_id for n in nodes if n.managed_interface_id}
+        mi_map: dict[str, models.AgentManagedInterface] = {}
+        mi_host_names: dict[str, str] = {}
+        if mi_ids:
+            mis = self.db.query(models.AgentManagedInterface).filter(
+                models.AgentManagedInterface.id.in_(mi_ids)
+            ).all()
+            mi_map = {mi.id: mi for mi in mis}
+            host_ids = {mi.host_id for mi in mis}
+            if host_ids:
+                hosts = self.db.query(models.Host).filter(models.Host.id.in_(host_ids)).all()
+                mi_host_names = {h.id: h.name for h in hosts}
+
         graph_nodes: list[GraphNode] = []
         for node in nodes:
             # Parse config_json
@@ -915,6 +943,16 @@ class TopologyService:
                     config = json.loads(node.config_json)
                 except json.JSONDecodeError:
                     pass
+
+            # Populate derived managed interface fields
+            mi_name = None
+            mi_host_id = None
+            mi_host_name = None
+            if node.managed_interface_id and node.managed_interface_id in mi_map:
+                mi = mi_map[node.managed_interface_id]
+                mi_name = mi.name
+                mi_host_id = mi.host_id
+                mi_host_name = mi_host_names.get(mi.host_id)
 
             graph_nodes.append(GraphNode(
                 id=node.gui_id,
@@ -926,6 +964,10 @@ class TopologyService:
                 version=node.version,
                 network_mode=node.network_mode,
                 host=node.host_id,  # Export host_id directly (frontend uses agent ID)
+                managed_interface_id=node.managed_interface_id,
+                managed_interface_name=mi_name,
+                managed_interface_host_id=mi_host_id,
+                managed_interface_host_name=mi_host_name,
                 connection_type=node.connection_type,
                 parent_interface=node.parent_interface,
                 vlan_id=node.vlan_id,

@@ -564,9 +564,11 @@ const Canvas: React.FC<CanvasProps> = ({
           if (isExternalNetworkNode(node)) {
             // Render external network node with cloud shape
             const extNode = node;
-            const vlanLabel = extNode.connectionType === 'vlan'
-              ? `VLAN ${extNode.vlanId || '?'}`
-              : extNode.bridgeName || 'Bridge';
+            const vlanLabel = extNode.managedInterfaceName
+              ? extNode.managedInterfaceName
+              : extNode.connectionType === 'vlan'
+                ? `VLAN ${extNode.vlanId || '?'}`
+                : extNode.bridgeName || 'Unconfigured';
 
             return (
               <div

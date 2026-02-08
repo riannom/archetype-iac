@@ -88,6 +88,8 @@ from agent.schemas import (
     AttachOverlayInterfaceResponse,
     DetachOverlayInterfaceRequest,
     DetachOverlayInterfaceResponse,
+    AttachOverlayExternalRequest,
+    AttachOverlayExternalResponse,
     Provider,
     ExternalConnectRequest,
     ExternalConnectResponse,
@@ -2748,6 +2750,44 @@ async def detach_overlay_interface(
             new_vlan=new_vlan,
             error=str(e),
         )
+
+
+@app.post("/overlay/attach-external-link")
+async def attach_overlay_external(
+    request: AttachOverlayExternalRequest,
+) -> AttachOverlayExternalResponse:
+    """Create a per-link VXLAN tunnel for an external interface.
+
+    Similar to attach_overlay_interface but for external (non-container)
+    interfaces. Uses the provided VLAN tag directly instead of discovering
+    it from a container.
+    """
+    if not settings.enable_vxlan:
+        return AttachOverlayExternalResponse(
+            success=False,
+            error="VXLAN overlay is disabled on this agent",
+        )
+
+    try:
+        backend = get_network_backend()
+        tunnel = await backend.overlay_create_link_tunnel(
+            lab_id=request.lab_id,
+            link_id=request.link_id,
+            vni=request.vni,
+            local_ip=request.local_ip,
+            remote_ip=request.remote_ip,
+            local_vlan=request.vlan_tag,
+            tenant_mtu=0,
+        )
+
+        return AttachOverlayExternalResponse(
+            success=True,
+            vni=tunnel.vni,
+        )
+
+    except Exception as e:
+        logger.error(f"Attach overlay external failed: {e}")
+        return AttachOverlayExternalResponse(success=False, error=str(e))
 
 
 @app.post("/network/test-mtu")

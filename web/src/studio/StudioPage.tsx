@@ -75,7 +75,11 @@ const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] =>
         id: node.id,
         nodeType: 'external',
         name: node.name || node.id,
-        connectionType: (node as any).connection_type || 'vlan',
+        managedInterfaceId: (node as any).managed_interface_id,
+        managedInterfaceName: (node as any).managed_interface_name,
+        managedInterfaceHostId: (node as any).managed_interface_host_id,
+        managedInterfaceHostName: (node as any).managed_interface_host_name,
+        connectionType: (node as any).connection_type || undefined,
         parentInterface: (node as any).parent_interface,
         vlanId: (node as any).vlan_id,
         bridgeName: (node as any).bridge_name,
@@ -488,6 +492,7 @@ const StudioPage: React.FC = () => {
               id: node.id,
               name: node.name,
               node_type: 'external',
+              managed_interface_id: node.managedInterfaceId,
               connection_type: node.connectionType,
               parent_interface: node.parentInterface,
               vlan_id: node.vlanId,
@@ -991,7 +996,6 @@ const StudioPage: React.FC = () => {
       id,
       nodeType: 'external',
       name: `External-${extNetCount + 1}`,
-      connectionType: 'vlan',
       x: 350 + Math.random() * 50,
       y: 250 + Math.random() * 50,
     };
@@ -1348,7 +1352,7 @@ const StudioPage: React.FC = () => {
     }
     // Also save if external network fields change
     const extUpdates = updates as Partial<ExternalNetworkNode>;
-    if (extUpdates.connectionType || extUpdates.parentInterface || extUpdates.vlanId || extUpdates.bridgeName || extUpdates.host) {
+    if (extUpdates.managedInterfaceId !== undefined || extUpdates.connectionType || extUpdates.parentInterface || extUpdates.vlanId || extUpdates.bridgeName || extUpdates.host) {
       triggerTopologySave();
     }
   };
@@ -1428,6 +1432,7 @@ const StudioPage: React.FC = () => {
             id: node.id,
             name: node.name,
             node_type: 'external',
+            managed_interface_id: node.managedInterfaceId,
             connection_type: node.connectionType,
             parent_interface: node.parentInterface,
             vlan_id: node.vlanId,

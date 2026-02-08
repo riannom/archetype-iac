@@ -16,31 +16,64 @@ const createMockNode = (overrides: Partial<ExternalNetworkNode> = {}): ExternalN
   id: "ext-net-1",
   name: "Test External Network",
   nodeType: "external",
-  connectionType: "vlan",
   x: 100,
   y: 100,
   ...overrides,
 });
 
-const mockAgents = [
-  { id: "agent-1", name: "Host Alpha" },
-  { id: "agent-2", name: "Host Beta" },
-];
-
-const mockInterfaces = {
+const mockManagedInterfaces = {
   interfaces: [
-    { name: "ens192", state: "up", type: "physical", ipv4_addresses: ["192.168.1.10"], is_vlan: false },
-    { name: "eth0", state: "up", type: "physical", ipv4_addresses: ["10.0.0.5"], is_vlan: false },
-    { name: "ens192.100", state: "up", type: "vlan", ipv4_addresses: [], is_vlan: true },
-    { name: "br0", state: "up", type: "bridge", ipv4_addresses: [], is_vlan: false },
-    { name: "veth123", state: "up", type: "veth", ipv4_addresses: [], is_vlan: false },
-  ],
-};
-
-const mockBridges = {
-  bridges: [
-    { name: "br0", state: "up", interfaces: ["eth0", "veth123"] },
-    { name: "br-prod", state: "up", interfaces: ["ens192"] },
+    {
+      id: "mi-1",
+      host_id: "agent-1",
+      host_name: "Host Alpha",
+      name: "eth0.200",
+      interface_type: "external",
+      parent_interface: "eth0",
+      vlan_id: 200,
+      ip_address: null,
+      desired_mtu: 9000,
+      current_mtu: 9000,
+      is_up: true,
+      sync_status: "synced",
+      sync_error: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+    {
+      id: "mi-2",
+      host_id: "agent-1",
+      host_name: "Host Alpha",
+      name: "eth0.300",
+      interface_type: "external",
+      parent_interface: "eth0",
+      vlan_id: 300,
+      ip_address: "10.0.3.1/24",
+      desired_mtu: 1500,
+      current_mtu: 1500,
+      is_up: true,
+      sync_status: "synced",
+      sync_error: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+    {
+      id: "mi-3",
+      host_id: "agent-2",
+      host_name: "Host Beta",
+      name: "ens192.100",
+      interface_type: "external",
+      parent_interface: "ens192",
+      vlan_id: 100,
+      ip_address: null,
+      desired_mtu: 9000,
+      current_mtu: null,
+      is_up: false,
+      sync_status: "unconfigured",
+      sync_error: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
   ],
 };
 
@@ -52,38 +85,48 @@ describe("ExternalNetworkConfig", () => {
     node: createMockNode(),
     onUpdate: mockOnUpdate,
     onDelete: mockOnDelete,
-    agents: mockAgents,
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockApiRequest.mockReset();
+    mockApiRequest.mockResolvedValue(mockManagedInterfaces);
   });
 
   describe("Header section", () => {
-    it("renders the header with title", () => {
+    it("renders the header with title", async () => {
       render(<ExternalNetworkConfig {...defaultProps} />);
-
-      expect(screen.getByText("External Network")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText("External Network")).toBeInTheDocument();
+      });
     });
 
-    it("shows VLAN Connection subtitle for VLAN type", () => {
+    it("shows Unconfigured subtitle when no interface selected", async () => {
       render(<ExternalNetworkConfig {...defaultProps} />);
-
-      expect(screen.getByText("VLAN Connection")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText("Unconfigured")).toBeInTheDocument();
+      });
     });
 
-    it("shows Bridge Connection subtitle for bridge type", () => {
-      const bridgeNode = createMockNode({ connectionType: "bridge" });
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
+    it("shows interface name in subtitle when interface is selected", async () => {
+      const node = createMockNode({ managedInterfaceId: "mi-1" });
+      render(<ExternalNetworkConfig {...defaultProps} node={node} />);
 
-      expect(screen.getByText("Bridge Connection")).toBeInTheDocument();
+      await waitFor(() => {
+        // The header subtitle shows the selected interface name
+        const subtitles = document.querySelectorAll(".text-purple-600, .dark\\:text-purple-400");
+        const found = Array.from(subtitles).some((el) => el.textContent === "eth0.200");
+        expect(found).toBe(true);
+      });
     });
 
     it("calls onDelete when delete button is clicked", async () => {
       const user = userEvent.setup();
-
       render(<ExternalNetworkConfig {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("External Network")).toBeInTheDocument();
+      });
 
       const deleteButton = document.querySelector(".fa-trash-can")?.closest("button");
       await user.click(deleteButton!);
@@ -93,482 +136,238 @@ describe("ExternalNetworkConfig", () => {
   });
 
   describe("Display Name field", () => {
-    it("renders display name input with current value", () => {
+    it("renders display name input with current value", async () => {
       render(<ExternalNetworkConfig {...defaultProps} />);
 
-      expect(screen.getByText("Display Name")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText("Display Name")).toBeInTheDocument();
+      });
       const input = screen.getByDisplayValue("Test External Network");
       expect(input).toBeInTheDocument();
     });
 
     it("calls onUpdate when display name is changed", async () => {
       const user = userEvent.setup();
-
       render(<ExternalNetworkConfig {...defaultProps} />);
 
+      await waitFor(() => {
+        expect(screen.getByDisplayValue("Test External Network")).toBeInTheDocument();
+      });
+
       const input = screen.getByDisplayValue("Test External Network");
-      // Type a single character to test the onChange handler
       await user.type(input, "X");
 
-      // Verify onUpdate was called with the name field appended
       expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", { name: "Test External NetworkX" });
     });
   });
 
-  describe("Host Agent selection", () => {
-    const getHostAgentSelect = () => {
-      const label = screen.getByText("Host Agent");
-      return label.parentElement?.querySelector("select") as HTMLSelectElement;
-    };
-
-    it("renders host agent dropdown with agents", () => {
-      render(<ExternalNetworkConfig {...defaultProps} />);
-
-      expect(screen.getByText("Host Agent")).toBeInTheDocument();
-      expect(screen.getByText("Select host...")).toBeInTheDocument();
-      expect(screen.getByText("Host Alpha")).toBeInTheDocument();
-      expect(screen.getByText("Host Beta")).toBeInTheDocument();
-    });
-
-    it("shows currently selected host", () => {
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
-      const select = getHostAgentSelect();
-      expect(select.value).toBe("agent-1");
-    });
-
-    it("calls onUpdate when host is changed", async () => {
-      const user = userEvent.setup();
-
-      render(<ExternalNetworkConfig {...defaultProps} />);
-
-      const select = getHostAgentSelect();
-      await user.selectOptions(select, "agent-1");
-
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", { host: "agent-1" });
-    });
-
-    it("clears host when empty option is selected", async () => {
-      const user = userEvent.setup();
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
-      const select = getHostAgentSelect();
-      await user.selectOptions(select, "");
-
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", { host: undefined });
-    });
-  });
-
-  describe("Connection Type toggle", () => {
-    it("renders connection type buttons", () => {
-      render(<ExternalNetworkConfig {...defaultProps} />);
-
-      expect(screen.getByText("Connection Type")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /vlan/i })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /bridge/i })).toBeInTheDocument();
-    });
-
-    it("highlights VLAN button when VLAN is selected", () => {
-      render(<ExternalNetworkConfig {...defaultProps} />);
-
-      const vlanButton = screen.getByRole("button", { name: /vlan/i });
-      expect(vlanButton).toHaveClass("border-blue-500");
-    });
-
-    it("highlights Bridge button when bridge is selected", () => {
-      const bridgeNode = createMockNode({ connectionType: "bridge" });
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
-      const bridgeButton = screen.getByRole("button", { name: /bridge/i });
-      expect(bridgeButton).toHaveClass("border-purple-500");
-    });
-
-    it("calls onUpdate with vlan type when VLAN is clicked", async () => {
-      const user = userEvent.setup();
-      const bridgeNode = createMockNode({ connectionType: "bridge", bridgeName: "br0" });
-
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
-      await user.click(screen.getByRole("button", { name: /vlan/i }));
-
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", {
+  describe("Legacy Warning", () => {
+    it("shows legacy warning for nodes with old-style fields", async () => {
+      const legacyNode = createMockNode({
         connectionType: "vlan",
-        bridgeName: undefined,
+        parentInterface: "eth0",
+        vlanId: 100,
+      });
+      render(<ExternalNetworkConfig {...defaultProps} node={legacyNode} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Legacy Configuration")).toBeInTheDocument();
       });
     });
 
-    it("calls onUpdate with bridge type when Bridge is clicked", async () => {
-      const user = userEvent.setup();
-      const vlanNode = createMockNode({ parentInterface: "ens192", vlanId: 100 });
+    it("shows current legacy config details", async () => {
+      const legacyNode = createMockNode({
+        connectionType: "vlan",
+        parentInterface: "ens192",
+        vlanId: 200,
+      });
+      render(<ExternalNetworkConfig {...defaultProps} node={legacyNode} />);
 
-      render(<ExternalNetworkConfig {...defaultProps} node={vlanNode} />);
+      await waitFor(() => {
+        expect(screen.getByText("Current: ens192.200")).toBeInTheDocument();
+      });
+    });
 
-      await user.click(screen.getByRole("button", { name: /bridge/i }));
+    it("does not show legacy warning for nodes with managed interface", async () => {
+      const node = createMockNode({ managedInterfaceId: "mi-1" });
+      render(<ExternalNetworkConfig {...defaultProps} node={node} />);
 
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", {
-        connectionType: "bridge",
-        parentInterface: undefined,
-        vlanId: undefined,
+      await waitFor(() => {
+        expect(screen.queryByText("Legacy Configuration")).not.toBeInTheDocument();
+      });
+    });
+
+    it("does not show legacy warning for new unconfigured nodes", async () => {
+      render(<ExternalNetworkConfig {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryByText("Legacy Configuration")).not.toBeInTheDocument();
       });
     });
   });
 
-  describe("Loading state", () => {
-    it("shows loading indicator while fetching network info", async () => {
+  describe("Infrastructure Interface Selection", () => {
+    it("fetches external interfaces on mount", async () => {
+      render(<ExternalNetworkConfig {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockApiRequest).toHaveBeenCalledWith(
+          "/infrastructure/interfaces?interface_type=external"
+        );
+      });
+    });
+
+    it("shows loading state while fetching", async () => {
       mockApiRequest.mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockInterfaces), 100))
+        () => new Promise((resolve) => setTimeout(() => resolve(mockManagedInterfaces), 100))
       );
 
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
+      render(<ExternalNetworkConfig {...defaultProps} />);
 
-      expect(screen.getByText("Loading network info...")).toBeInTheDocument();
+      expect(screen.getByText("Loading interfaces...")).toBeInTheDocument();
 
       await waitFor(() => {
-        expect(screen.queryByText("Loading network info...")).not.toBeInTheDocument();
+        expect(screen.queryByText("Loading interfaces...")).not.toBeInTheDocument();
       });
     });
-  });
 
-  describe("Error state", () => {
-    it("shows error message when loading network info fails", async () => {
-      // Suppress console.error for this test since we expect an error
+    it("shows error state when API call fails", async () => {
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      mockApiRequest.mockRejectedValue(new Error("API Error"));
 
-      mockApiRequest.mockImplementation(() => {
-        throw new Error("Network error");
-      });
-
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
+      render(<ExternalNetworkConfig {...defaultProps} />);
 
       await waitFor(() => {
-        expect(screen.getByText(/failed to load network/i)).toBeInTheDocument();
+        expect(screen.getByText("Failed to load infrastructure interfaces")).toBeInTheDocument();
       });
 
       consoleSpy.mockRestore();
     });
-  });
 
-  describe("Network info fetching", () => {
-    it("fetches interfaces and bridges when host is selected", async () => {
-      mockApiRequest
-        .mockResolvedValueOnce(mockInterfaces)
-        .mockResolvedValueOnce(mockBridges);
+    it("shows empty state when no interfaces exist", async () => {
+      mockApiRequest.mockResolvedValue({ interfaces: [] });
 
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
-      await waitFor(() => {
-        expect(mockApiRequest).toHaveBeenCalledWith("/agents/agent-1/interfaces");
-        expect(mockApiRequest).toHaveBeenCalledWith("/agents/agent-1/bridges");
-      });
-    });
-
-    it("does not fetch when no host is selected", () => {
       render(<ExternalNetworkConfig {...defaultProps} />);
 
-      expect(mockApiRequest).not.toHaveBeenCalled();
-    });
-
-    it("clears interfaces and bridges when host is cleared", async () => {
-      mockApiRequest
-        .mockResolvedValueOnce(mockInterfaces)
-        .mockResolvedValueOnce(mockBridges);
-
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      const { rerender } = render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
       await waitFor(() => {
-        expect(mockApiRequest).toHaveBeenCalledTimes(2);
+        expect(screen.getByText(/No external interfaces configured/)).toBeInTheDocument();
       });
-
-      // Simulate host being cleared
-      const nodeWithoutHost = createMockNode({ host: undefined });
-      rerender(<ExternalNetworkConfig {...defaultProps} node={nodeWithoutHost} />);
-
-      // Should not have made additional calls
-      expect(mockApiRequest).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  describe("VLAN Configuration", () => {
-    const getParentInterfaceSelect = () => {
-      const label = screen.getByText("Parent Interface");
-      return label.parentElement?.querySelector("select") as HTMLSelectElement;
-    };
-
-    beforeEach(() => {
-      mockApiRequest
-        .mockResolvedValueOnce(mockInterfaces)
-        .mockResolvedValueOnce(mockBridges);
     });
 
-    it("shows VLAN config section when VLAN is selected", () => {
+    it("renders interface dropdown grouped by host", async () => {
       render(<ExternalNetworkConfig {...defaultProps} />);
 
-      expect(screen.getByText("Parent Interface")).toBeInTheDocument();
-      expect(screen.getByText("VLAN ID")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText("Select interface...")).toBeInTheDocument();
+      });
+
+      // Check optgroup labels
+      const optgroups = document.querySelectorAll("optgroup");
+      expect(optgroups.length).toBe(2); // Host Alpha and Host Beta
     });
 
-    it("does not show VLAN config when bridge is selected", () => {
-      const bridgeNode = createMockNode({ connectionType: "bridge" });
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
-      expect(screen.queryByText("Parent Interface")).not.toBeInTheDocument();
-      expect(screen.queryByText("VLAN ID")).not.toBeInTheDocument();
-    });
-
-    it("disables parent interface select when no host is selected", () => {
+    it("shows interface names with VLAN IDs", async () => {
       render(<ExternalNetworkConfig {...defaultProps} />);
 
-      const select = getParentInterfaceSelect();
-      expect(select).toBeDisabled();
-      expect(screen.getByText("Select host first")).toBeInTheDocument();
-    });
-
-    it("enables parent interface select when host is selected", async () => {
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
       await waitFor(() => {
-        const select = getParentInterfaceSelect();
-        expect(select).not.toBeDisabled();
+        const options = document.querySelectorAll("option");
+        const optionTexts = Array.from(options).map((o) => o.textContent);
+        expect(optionTexts).toContain("eth0.200 (VLAN 200) \u2713");
+        expect(optionTexts).toContain("eth0.300 (VLAN 300) \u2713");
+        expect(optionTexts).toContain("ens192.100 (VLAN 100)");
       });
     });
 
-    it("filters out VLANs, bridges, and veth interfaces from parent interface list", async () => {
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
-      await waitFor(() => {
-        expect(screen.getByText("ens192 (up)")).toBeInTheDocument();
-        expect(screen.getByText("eth0 (up)")).toBeInTheDocument();
-        expect(screen.queryByText("ens192.100")).not.toBeInTheDocument(); // VLAN
-        expect(screen.queryByText("br0")).not.toBeInTheDocument(); // Bridge
-        expect(screen.queryByText("veth123")).not.toBeInTheDocument(); // veth
-      });
-    });
-
-    it("calls onUpdate when parent interface is changed", async () => {
+    it("calls onUpdate when interface is selected", async () => {
       const user = userEvent.setup();
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
-      await waitFor(() => {
-        expect(screen.getByText("ens192 (up)")).toBeInTheDocument();
-      });
-
-      const select = getParentInterfaceSelect();
-      await user.selectOptions(select, "ens192");
-
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", { parentInterface: "ens192" });
-    });
-
-    it("calls onUpdate when VLAN ID is changed", async () => {
-      const user = userEvent.setup();
-
       render(<ExternalNetworkConfig {...defaultProps} />);
 
-      const vlanInput = screen.getByPlaceholderText("100");
-      // Type a single digit to test the onChange handler
-      await user.type(vlanInput, "5");
-
-      // Verify onUpdate was called with vlanId
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", { vlanId: 5 });
-    });
-
-    it("clears VLAN ID when input is empty", async () => {
-      const user = userEvent.setup();
-      const nodeWithVlan = createMockNode({ vlanId: 100 });
-
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithVlan} />);
-
-      const vlanInput = screen.getByDisplayValue("100");
-      await user.clear(vlanInput);
-
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", { vlanId: undefined });
-    });
-
-    it("shows interface preview when both parent interface and VLAN ID are set", () => {
-      const nodeWithVlan = createMockNode({
-        parentInterface: "ens192",
-        vlanId: 100,
+      await waitFor(() => {
+        expect(screen.getByText("Select interface...")).toBeInTheDocument();
       });
 
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithVlan} />);
+      const select = screen.getByText("Select interface...").closest("select")!;
+      await user.selectOptions(select, "mi-1");
 
-      expect(screen.getByText("Interface Preview")).toBeInTheDocument();
-      expect(screen.getByText("ens192.100")).toBeInTheDocument();
+      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", {
+        managedInterfaceId: "mi-1",
+        managedInterfaceName: "eth0.200",
+        managedInterfaceHostId: "agent-1",
+        managedInterfaceHostName: "Host Alpha",
+        host: "agent-1",
+        connectionType: undefined,
+        parentInterface: undefined,
+        vlanId: undefined,
+        bridgeName: undefined,
+      });
     });
 
-    it("does not show interface preview when parent interface is missing", () => {
-      const nodeWithVlan = createMockNode({ vlanId: 100 });
+    it("clears selection when empty option is chosen", async () => {
+      const user = userEvent.setup();
+      const node = createMockNode({ managedInterfaceId: "mi-1" });
+      render(<ExternalNetworkConfig {...defaultProps} node={node} />);
 
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithVlan} />);
+      await waitFor(() => {
+        expect(screen.getByText("Select interface...")).toBeInTheDocument();
+      });
 
-      expect(screen.queryByText("Interface Preview")).not.toBeInTheDocument();
-    });
+      const select = screen.getByText("Select interface...").closest("select")!;
+      await user.selectOptions(select, "");
 
-    it("does not show interface preview when VLAN ID is missing", () => {
-      const nodeWithParent = createMockNode({ parentInterface: "ens192" });
-
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithParent} />);
-
-      expect(screen.queryByText("Interface Preview")).not.toBeInTheDocument();
+      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", {
+        managedInterfaceId: undefined,
+        managedInterfaceName: undefined,
+        managedInterfaceHostId: undefined,
+        managedInterfaceHostName: undefined,
+        host: undefined,
+      });
     });
   });
 
-  describe("Bridge Configuration", () => {
-    const getBridgeNameSelect = () => {
-      const label = screen.getByText("Bridge Name");
-      return label.parentElement?.querySelector("select") as HTMLSelectElement;
-    };
+  describe("Interface Details", () => {
+    it("shows interface details when interface is selected", async () => {
+      const node = createMockNode({ managedInterfaceId: "mi-1" });
+      render(<ExternalNetworkConfig {...defaultProps} node={node} />);
 
-    beforeEach(() => {
-      mockApiRequest
-        .mockResolvedValueOnce(mockInterfaces)
-        .mockResolvedValueOnce(mockBridges);
+      await waitFor(() => {
+        expect(screen.getByText("Interface Details")).toBeInTheDocument();
+        // "eth0.200" appears in both header subtitle and details panel
+        expect(screen.getAllByText("eth0.200").length).toBeGreaterThanOrEqual(2);
+        expect(screen.getByText("Host Alpha")).toBeInTheDocument();
+        expect(screen.getByText("eth0")).toBeInTheDocument(); // parent
+        expect(screen.getByText("200")).toBeInTheDocument(); // VLAN
+        expect(screen.getByText("9000")).toBeInTheDocument(); // MTU
+        expect(screen.getByText("synced")).toBeInTheDocument();
+      });
     });
 
-    it("shows Bridge config section when bridge is selected", () => {
-      const bridgeNode = createMockNode({ connectionType: "bridge" });
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
+    it("shows IP address when available", async () => {
+      const node = createMockNode({ managedInterfaceId: "mi-2" });
+      render(<ExternalNetworkConfig {...defaultProps} node={node} />);
 
-      expect(screen.getByText("Bridge Name")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText("10.0.3.1/24")).toBeInTheDocument();
+      });
     });
 
-    it("does not show Bridge config when VLAN is selected", () => {
+    it("does not show details when no interface is selected", async () => {
       render(<ExternalNetworkConfig {...defaultProps} />);
 
-      expect(screen.queryByText("Bridge Name")).not.toBeInTheDocument();
-    });
-
-    it("disables bridge select when no host is selected", () => {
-      const bridgeNode = createMockNode({ connectionType: "bridge" });
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
-      const select = getBridgeNameSelect();
-      expect(select).toBeDisabled();
-    });
-
-    it("populates bridge dropdown with available bridges", async () => {
-      const bridgeNode = createMockNode({ connectionType: "bridge", host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
       await waitFor(() => {
-        // There should be two bridge options
-        const bridgeSelect = getBridgeNameSelect();
-        const options = bridgeSelect.querySelectorAll("option");
-        // 1 default + 2 bridges = 3 options
-        expect(options.length).toBeGreaterThanOrEqual(3);
+        expect(screen.queryByText("Interface Details")).not.toBeInTheDocument();
       });
-    });
-
-    it("calls onUpdate when bridge is selected from dropdown", async () => {
-      const user = userEvent.setup();
-      const bridgeNode = createMockNode({ connectionType: "bridge", host: "agent-1" });
-
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
-      await waitFor(() => {
-        expect(mockApiRequest).toHaveBeenCalled();
-      });
-
-      const select = getBridgeNameSelect();
-      await user.selectOptions(select, "br-prod");
-
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", { bridgeName: "br-prod" });
-    });
-
-    it("allows manual bridge name entry", async () => {
-      const user = userEvent.setup();
-      const bridgeNode = createMockNode({ connectionType: "bridge", bridgeName: "" });
-
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
-      const manualInput = screen.getByPlaceholderText("br-prod");
-      // Type a single character to verify the onChange handler is called
-      await user.type(manualInput, "x");
-
-      // Verify onUpdate was called with bridgeName
-      expect(mockOnUpdate).toHaveBeenCalledWith("ext-net-1", { bridgeName: "x" });
-    });
-
-    it("shows or enter manually text", () => {
-      const bridgeNode = createMockNode({ connectionType: "bridge" });
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
-      expect(screen.getByText("- or enter manually -")).toBeInTheDocument();
     });
   });
 
   describe("Info Box", () => {
-    it("shows VLAN info when VLAN is selected", () => {
+    it("shows informational text about external networks", async () => {
       render(<ExternalNetworkConfig {...defaultProps} />);
 
-      expect(
-        screen.getByText(/VLAN sub-interfaces are automatically created/i)
-      ).toBeInTheDocument();
-    });
-
-    it("shows bridge info when bridge is selected", () => {
-      const bridgeNode = createMockNode({ connectionType: "bridge" });
-      render(<ExternalNetworkConfig {...defaultProps} node={bridgeNode} />);
-
-      expect(
-        screen.getByText(/Bridge connections use an existing Linux bridge/i)
-      ).toBeInTheDocument();
-    });
-  });
-
-  describe("Graceful API error handling", () => {
-    it("continues with empty interfaces when interfaces API fails", async () => {
-      mockApiRequest
-        .mockRejectedValueOnce(new Error("Interface error"))
-        .mockResolvedValueOnce(mockBridges);
-
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
-      // Should not show error since we catch and continue
       await waitFor(() => {
-        expect(screen.queryByText("Loading network info...")).not.toBeInTheDocument();
+        expect(
+          screen.getByText(/External networks connect lab devices to physical networks/i)
+        ).toBeInTheDocument();
       });
-    });
-
-    it("continues with empty bridges when bridges API fails", async () => {
-      mockApiRequest
-        .mockResolvedValueOnce(mockInterfaces)
-        .mockRejectedValueOnce(new Error("Bridge error"));
-
-      const nodeWithHost = createMockNode({ host: "agent-1" });
-      render(<ExternalNetworkConfig {...defaultProps} node={nodeWithHost} />);
-
-      await waitFor(() => {
-        expect(screen.queryByText("Loading network info...")).not.toBeInTheDocument();
-      });
-    });
-  });
-
-  describe("Empty agents list", () => {
-    it("renders without agents", () => {
-      render(<ExternalNetworkConfig {...defaultProps} agents={[]} />);
-
-      const label = screen.getByText("Host Agent");
-      const select = label.parentElement?.querySelector("select") as HTMLSelectElement;
-      const options = select.querySelectorAll("option");
-      expect(options.length).toBe(1); // Just "Select host..."
-    });
-
-    it("renders with undefined agents (defaults to empty)", () => {
-      render(<ExternalNetworkConfig {...defaultProps} agents={undefined} />);
-
-      expect(screen.getByText("Select host...")).toBeInTheDocument();
     });
   });
 });

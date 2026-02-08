@@ -426,6 +426,29 @@ class DetachOverlayInterfaceResponse(BaseModel):
     error: str | None = None
 
 
+class AttachOverlayExternalRequest(BaseModel):
+    """Controller -> Agent: Create VXLAN tunnel for an external interface.
+
+    Unlike container-based overlay links, this endpoint takes a direct
+    VLAN tag (from the external interface's OVS port) instead of
+    discovering it from a container.
+    """
+    lab_id: str
+    external_interface: str  # Host interface name (e.g., "eth0.200")
+    vlan_tag: int  # OVS VLAN tag of the external interface
+    vni: int  # VXLAN Network Identifier
+    local_ip: str  # This agent's IP for VXLAN endpoint
+    remote_ip: str  # Remote agent's IP for VXLAN endpoint
+    link_id: str  # Link identifier for tracking
+
+
+class AttachOverlayExternalResponse(BaseModel):
+    """Agent -> Controller: External overlay attachment result."""
+    success: bool
+    vni: int | None = None
+    error: str | None = None
+
+
 # --- MTU Testing ---
 
 

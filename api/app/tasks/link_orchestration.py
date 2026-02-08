@@ -103,6 +103,9 @@ async def create_deployment_links(
     success_count = 0
     fail_count = 0
 
+    # Collect external network links for batch processing (shared VLAN per external network)
+    external_link_groups: dict[str, list[tuple]] = {}  # ext_node_id -> [(link, link_state, source, target)]
+
     for link in db_links:
         # Get source and target node info
         source_node = session.get(models.Node, link.source_node_id)
@@ -114,7 +117,47 @@ async def create_deployment_links(
             log_parts.append(f"  {link.link_name}: FAILED - missing node reference")
             continue
 
-        # Get or create LinkState
+        # Detect external network nodes
+        source_is_external = source_node.node_type == "external"
+        target_is_external = target_node.node_type == "external"
+
+        if source_is_external and target_is_external:
+            logger.warning(f"Link {link.link_name} has both endpoints as external - skipping")
+            fail_count += 1
+            log_parts.append(f"  {link.link_name}: FAILED - both endpoints external")
+            continue
+
+        if source_is_external or target_is_external:
+            # External network link - collect for batch processing
+            ext_node = source_node if source_is_external else target_node
+            device_node = target_node if source_is_external else source_node
+            device_interface = link.target_interface if source_is_external else link.source_interface
+
+            # Get or create LinkState (use _ext: prefix for external endpoint name)
+            ext_name = f"_ext:{ext_node.managed_interface_id or ext_node.container_name}"
+            if link.link_name in existing_states:
+                link_state = existing_states[link.link_name]
+            else:
+                link_state = models.LinkState(
+                    lab_id=lab_id,
+                    link_definition_id=link.id,
+                    link_name=link.link_name,
+                    source_node=device_node.container_name,
+                    source_interface=device_interface,
+                    target_node=ext_name,
+                    target_interface="_external",
+                    desired_state="up",
+                    actual_state="pending",
+                )
+                session.add(link_state)
+                session.flush()
+
+            external_link_groups.setdefault(ext_node.id, []).append(
+                (link, link_state, device_node, ext_node, device_interface)
+            )
+            continue
+
+        # Get or create LinkState for regular links
         if link.link_name in existing_states:
             link_state = existing_states[link.link_name]
         else:
@@ -200,10 +243,258 @@ async def create_deployment_links(
         else:
             fail_count += 1
 
+    # Process external network link groups
+    for ext_node_id, group in external_link_groups.items():
+        ok, fail = await create_external_network_links(
+            session, lab_id, ext_node_id, group, host_to_agent, log_parts
+        )
+        success_count += ok
+        fail_count += fail
+
     session.commit()
 
     logger.info(f"Link creation complete: {success_count} succeeded, {fail_count} failed")
     log_parts.append(f"\nLink creation: {success_count} OK, {fail_count} failed")
+
+    return success_count, fail_count
+
+
+async def create_external_network_links(
+    session: Session,
+    lab_id: str,
+    ext_node_id: str,
+    links: list[tuple],
+    host_to_agent: dict[str, models.Host],
+    log_parts: list[str],
+) -> tuple[int, int]:
+    """Process all links to a single external network node as a batch.
+
+    All devices connected to the same external network share one OVS VLAN tag
+    on the external interface's host, creating a true L2 broadcast domain.
+    Cross-host devices get VXLAN tunnels back to the hub host.
+
+    Args:
+        session: Database session
+        lab_id: Lab identifier
+        ext_node_id: External network node ID
+        links: List of (link, link_state, device_node, ext_node, device_interface) tuples
+        host_to_agent: Map of host_id to Host objects
+        log_parts: Log messages list
+
+    Returns:
+        Tuple of (success_count, fail_count)
+    """
+    success_count = 0
+    fail_count = 0
+
+    if not links:
+        return 0, 0
+
+    # All tuples share the same ext_node
+    ext_node = links[0][3]
+
+    # Validate managed interface
+    if not ext_node.managed_interface_id:
+        for _, link_state, _, _, _ in links:
+            link_state.actual_state = "error"
+            link_state.error_message = "External network has no managed interface configured"
+            fail_count += 1
+        log_parts.append(f"  External {ext_node.display_name}: FAILED - no managed interface")
+        return success_count, fail_count
+
+    mi = session.get(models.AgentManagedInterface, ext_node.managed_interface_id)
+    if not mi:
+        for _, link_state, _, _, _ in links:
+            link_state.actual_state = "error"
+            link_state.error_message = "Managed interface not found (may have been deleted)"
+            fail_count += 1
+        log_parts.append(f"  External {ext_node.display_name}: FAILED - managed interface not found")
+        return success_count, fail_count
+
+    ext_host_id = mi.host_id
+    ext_agent = host_to_agent.get(ext_host_id)
+    if not ext_agent:
+        for _, link_state, _, _, _ in links:
+            link_state.actual_state = "error"
+            link_state.error_message = f"Agent for external interface not available"
+            fail_count += 1
+        log_parts.append(f"  External {ext_node.display_name}: FAILED - agent offline")
+        return success_count, fail_count
+
+    logger.info(
+        f"Processing external network '{ext_node.display_name}' "
+        f"(interface {mi.name} on {ext_agent.name}) with {len(links)} connected devices"
+    )
+    log_parts.append(
+        f"\n  External '{ext_node.display_name}' ({mi.name} on {ext_agent.name}): "
+        f"{len(links)} device(s)"
+    )
+
+    # Group devices by host (same-host vs cross-host relative to external interface)
+    same_host_links = []
+    cross_host_by_host: dict[str, list[tuple]] = {}  # remote_host_id -> links
+
+    for link_tuple in links:
+        _, link_state, device_node, _, device_interface = link_tuple
+
+        # Resolve device host
+        device_host_id = device_node.host_id
+        if not device_host_id:
+            placement = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name == device_node.container_name,
+                )
+                .first()
+            )
+            if placement:
+                device_host_id = placement.host_id
+
+        if not device_host_id:
+            link_state.actual_state = "error"
+            link_state.error_message = "Device has no host placement"
+            fail_count += 1
+            log_parts.append(f"    {device_node.container_name}: FAILED - no host placement")
+            continue
+
+        link_state.source_host_id = device_host_id
+        link_state.target_host_id = ext_host_id
+
+        if device_host_id == ext_host_id:
+            same_host_links.append(link_tuple)
+        else:
+            link_state.is_cross_host = True
+            cross_host_by_host.setdefault(device_host_id, []).append(link_tuple)
+
+    # Process same-host devices: connect to external interface, share VLAN
+    allocated_vlan: int | None = None  # VLAN tag shared by all same-host devices
+
+    for link_tuple in same_host_links:
+        _, link_state, device_node, _, device_interface = link_tuple
+
+        try:
+            link_state.actual_state = "creating"
+            result = await agent_client.connect_external_on_agent(
+                agent=ext_agent,
+                lab_id=lab_id,
+                node_name=device_node.container_name,
+                interface_name=device_interface,
+                external_interface=mi.name,
+                vlan_tag=allocated_vlan,  # None for first device (agent allocates)
+            )
+
+            if result.get("success"):
+                returned_vlan = result.get("vlan_tag")
+                if allocated_vlan is None and returned_vlan:
+                    allocated_vlan = returned_vlan
+                link_state.actual_state = "up"
+                link_state.vlan_tag = returned_vlan
+                link_state.source_carrier_state = "on"
+                link_state.target_carrier_state = "on"
+                success_count += 1
+                log_parts.append(
+                    f"    {device_node.container_name}:{device_interface} -> "
+                    f"{mi.name} VLAN {returned_vlan}: OK"
+                )
+            else:
+                link_state.actual_state = "error"
+                link_state.error_message = result.get("error", "Unknown error")
+                fail_count += 1
+                log_parts.append(
+                    f"    {device_node.container_name}:{device_interface}: "
+                    f"FAILED - {result.get('error')}"
+                )
+        except Exception as e:
+            link_state.actual_state = "error"
+            link_state.error_message = str(e)
+            fail_count += 1
+            logger.error(f"External connect failed: {e}")
+
+    # Process cross-host devices: VXLAN tunnel from remote host to external host
+    for remote_host_id, remote_links in cross_host_by_host.items():
+        remote_agent = host_to_agent.get(remote_host_id)
+        if not remote_agent:
+            for _, link_state, device_node, _, _ in remote_links:
+                link_state.actual_state = "error"
+                link_state.error_message = "Remote agent not available"
+                fail_count += 1
+            log_parts.append(f"    Remote host {remote_host_id}: FAILED - agent offline")
+            continue
+
+        for link_tuple in remote_links:
+            link, link_state, device_node, _, device_interface = link_tuple
+
+            try:
+                link_state.actual_state = "creating"
+
+                # Use setup_cross_host_link_v2 which handles both sides
+                # External side: ext_agent, Device side: remote_agent
+                result = await agent_client.setup_cross_host_link_v2(
+                    database=session,
+                    lab_id=lab_id,
+                    link_id=link_state.id,
+                    agent_a=ext_agent,
+                    agent_b=remote_agent,
+                    node_a=f"_ext:{mi.name}",
+                    interface_a="_external",
+                    node_b=device_node.container_name,
+                    interface_b=device_interface,
+                )
+
+                if result.get("success"):
+                    vni = result.get("vni", 0)
+                    link_state.actual_state = "up"
+                    link_state.vni = vni
+                    link_state.source_carrier_state = "on"
+                    link_state.target_carrier_state = "on"
+                    link_state.source_vxlan_attached = True
+                    link_state.target_vxlan_attached = True
+
+                    # Create VxlanTunnel record
+                    ext_ip = await agent_client.resolve_agent_ip(ext_agent.address)
+                    remote_ip = await agent_client.resolve_agent_ip(remote_agent.address)
+
+                    existing_tunnel = (
+                        session.query(models.VxlanTunnel)
+                        .filter(models.VxlanTunnel.link_state_id == link_state.id)
+                        .first()
+                    )
+                    if not existing_tunnel:
+                        tunnel = models.VxlanTunnel(
+                            lab_id=lab_id,
+                            link_state_id=link_state.id,
+                            vni=vni,
+                            vlan_tag=0,
+                            agent_a_id=ext_agent.id,
+                            agent_a_ip=ext_ip,
+                            agent_b_id=remote_agent.id,
+                            agent_b_ip=remote_ip,
+                            status="active",
+                        )
+                        session.add(tunnel)
+                    else:
+                        existing_tunnel.vni = vni
+                        existing_tunnel.status = "active"
+
+                    success_count += 1
+                    log_parts.append(
+                        f"    {device_node.container_name}:{device_interface} -> "
+                        f"{mi.name} (VXLAN VNI {vni}): OK"
+                    )
+                else:
+                    link_state.actual_state = "error"
+                    link_state.error_message = result.get("error", "Unknown error")
+                    fail_count += 1
+                    log_parts.append(
+                        f"    {device_node.container_name}:{device_interface}: "
+                        f"FAILED - {result.get('error')}"
+                    )
+            except Exception as e:
+                link_state.actual_state = "error"
+                link_state.error_message = str(e)
+                fail_count += 1
+                logger.error(f"Cross-host external link failed: {e}")
 
     return success_count, fail_count
 
@@ -498,6 +789,39 @@ async def teardown_deployment_links(
     # Delete VxlanTunnel records
     for tunnel in tunnels:
         session.delete(tunnel)
+
+    # Detach external interfaces (only when no other lab references them)
+    external_nodes = (
+        session.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.node_type == "external",
+            models.Node.managed_interface_id.isnot(None),
+        )
+        .all()
+    )
+    for ext_node in external_nodes:
+        mi = session.get(models.AgentManagedInterface, ext_node.managed_interface_id)
+        if not mi:
+            continue
+        # Reference count: only detach if no OTHER lab uses this interface
+        other_refs = (
+            session.query(models.Node)
+            .filter(
+                models.Node.managed_interface_id == ext_node.managed_interface_id,
+                models.Node.lab_id != lab_id,
+                models.Node.node_type == "external",
+            )
+            .count()
+        )
+        if other_refs == 0:
+            agent = host_to_agent.get(mi.host_id)
+            if agent:
+                try:
+                    await agent_client.detach_external_on_agent(agent, mi.name)
+                    log_parts.append(f"  Detached external interface {mi.name} from {agent.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to detach external {mi.name}: {e}")
 
     # Delete ALL LinkState records for this lab (not just cross-host)
     # Fresh records will be created on the next deploy

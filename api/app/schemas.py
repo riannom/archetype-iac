@@ -96,6 +96,12 @@ class GraphNode(BaseModel):
     network_mode: str | None = None  # Container network mode (e.g., "bridge", "host", "none")
     container_name: str | None = None  # Container name (YAML key), may differ from display name
     # External network fields (when node_type="external")
+    managed_interface_id: str | None = None  # FK to AgentManagedInterface
+    # Derived fields (populated server-side for frontend display)
+    managed_interface_name: str | None = None
+    managed_interface_host_id: str | None = None
+    managed_interface_host_name: str | None = None
+    # Legacy external network fields (kept for backward compat)
     connection_type: str | None = None  # "vlan" or "bridge"
     parent_interface: str | None = None  # e.g., "ens192", "eth0"
     vlan_id: int | None = None  # VLAN ID (1-4094)

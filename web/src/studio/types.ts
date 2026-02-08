@@ -130,7 +130,14 @@ export interface DeviceNode extends BaseNode {
 // External network node - represents an external network connection
 export interface ExternalNetworkNode extends BaseNode {
   nodeType: 'external';
-  connectionType: ExternalConnectionType; // 'vlan' or 'bridge'
+  // New model: reference to infrastructure managed interface
+  managedInterfaceId?: string;
+  // Derived display fields (populated by API)
+  managedInterfaceName?: string;
+  managedInterfaceHostId?: string;
+  managedInterfaceHostName?: string;
+  // Legacy fields (kept for backward compat display)
+  connectionType?: ExternalConnectionType; // 'vlan' or 'bridge'
   parentInterface?: string; // e.g., 'ens192', 'eth0' - for VLAN mode
   vlanId?: number; // VLAN ID (1-4094) - for VLAN mode
   bridgeName?: string; // e.g., 'br-prod' - for bridge mode
