@@ -66,8 +66,8 @@ class NodeLifecycleManager:
     """Per-node lifecycle orchestrator.
 
     Handles the lifecycle of individual nodes: deploy, start, stop, destroy.
-    Each operation is independent at the node level, but containerlab currently
-    requires full topology redeploys for deploy/start operations.
+    Each operation is independent at the node level. Per-node lifecycle uses
+    Docker SDK + OVS for container and networking operations.
 
     Phases (called in order by execute()):
         1. _load_and_validate     — Load state, batch-load maps, early exit if nothing to do

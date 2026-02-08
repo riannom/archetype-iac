@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.netlab import run_netlab_command
 from app.services.topology import TopologyService
 from app.storage import lab_workspace
-from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy, run_node_reconcile
+from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
 from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
@@ -499,13 +499,14 @@ async def node_action(
 
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Resolve node by id or name
+    # Resolve node by id or name (with SELECT FOR UPDATE to prevent races)
     node_state = (
         database.query(models.NodeState)
         .filter(
             models.NodeState.lab_id == lab.id,
             models.NodeState.node_id == node,
         )
+        .with_for_update()
         .first()
     )
     if not node_state:
@@ -515,6 +516,7 @@ async def node_action(
                 models.NodeState.lab_id == lab.id,
                 models.NodeState.node_name == node,
             )
+            .with_for_update()
             .first()
         )
     if not node_state:
@@ -536,30 +538,10 @@ async def node_action(
         database.commit()
         database.refresh(node_state)
 
-        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        has_conflict, _ = has_conflicting_job(lab_id, "sync", session=database)
         if not has_conflict and NodeStateMachine.needs_sync(node_state.actual_state, command):
-            from app.utils.lab import get_node_provider
-            db_node = database.query(models.Node).filter(
-                models.Node.lab_id == lab.id,
-                models.Node.gui_id == node_id
-            ).first()
-            provider = get_node_provider(db_node, database) if db_node else get_lab_provider(lab)
-
-            job = models.Job(
-                lab_id=lab.id,
-                user_id=current_user.id,
-                action=f"sync:node:{node_id}",
-                status="queued",
-            )
-            database.add(job)
-            database.commit()
-            database.refresh(job)
-
-            safe_create_task(
-                run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
-                name=f"sync:node:{job.id}"
-            )
-            return schemas.JobOut.model_validate(job)
+            from app.routers.labs import _create_node_sync_job
+            _create_node_sync_job(database, lab, node_id, current_user)
 
     elif (
         node_state.desired_state == desired_state
@@ -574,32 +556,24 @@ async def node_action(
         database.commit()
         database.refresh(node_state)
 
-        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        has_conflict, _ = has_conflicting_job(lab_id, "sync", session=database)
         if not has_conflict:
-            from app.utils.lab import get_node_provider
-            db_node = database.query(models.Node).filter(
-                models.Node.lab_id == lab.id,
-                models.Node.gui_id == node_id
-            ).first()
-            provider = get_node_provider(db_node, database) if db_node else get_lab_provider(lab)
+            from app.routers.labs import _create_node_sync_job
+            _create_node_sync_job(database, lab, node_id, current_user)
 
-            job = models.Job(
-                lab_id=lab.id,
-                user_id=current_user.id,
-                action=f"sync:node:{node_id}",
-                status="queued",
-            )
-            database.add(job)
-            database.commit()
-            database.refresh(job)
+    # Return latest job for this node, or create a no-op
+    latest_job = (
+        database.query(models.Job)
+        .filter(
+            models.Job.lab_id == lab.id,
+            models.Job.action == f"sync:node:{node_id}",
+        )
+        .order_by(models.Job.created_at.desc())
+        .first()
+    )
+    if latest_job and latest_job.status == "queued":
+        return schemas.JobOut.model_validate(latest_job)
 
-            safe_create_task(
-                run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
-                name=f"sync:node:{job.id}"
-            )
-            return schemas.JobOut.model_validate(job)
-
-    # No sync needed — return a no-op job indicator
     noop_job = models.Job(
         lab_id=lab.id,
         user_id=current_user.id,

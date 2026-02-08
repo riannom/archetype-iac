@@ -300,6 +300,8 @@ const StudioPage: React.FC = () => {
         image_sync_status: wsState.image_sync_status,
         image_sync_message: wsState.image_sync_message,
         will_retry: wsState.will_retry,
+        enforcement_attempts: wsState.enforcement_attempts,
+        max_enforcement_attempts: wsState.max_enforcement_attempts,
         display_state: wsState.display_state,
         created_at: prev[nodeId]?.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),

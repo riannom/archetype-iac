@@ -581,6 +581,35 @@ class TestCheckResources:
         assert ns.actual_state == NodeActualState.ERROR.value
         assert "Insufficient resources" in ns.error_message
 
+    @pytest.mark.asyncio
+    async def test_explicit_host_at_capacity_fails_no_fallback(self, test_db, test_user, monkeypatch):
+        """Explicit host_id + host at capacity → ERROR with resource info, no fallback."""
+        host = _make_host(test_db, "host-a", "Host A")
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+
+        from app.tasks import node_lifecycle
+        monkeypatch.setattr(node_lifecycle.settings, "resource_validation_enabled", True)
+
+        # Mock capacity check to fail
+        mock_cap_result = MagicMock()
+        mock_cap_result.fits = False
+        with patch("app.services.resource_capacity.check_capacity", return_value=mock_cap_result), \
+             patch("app.services.resource_capacity.format_capacity_error", return_value="Host A: requires 4096MB RAM, 2048MB available"):
+            result = await manager._check_resources()
+
+        assert result is False
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert "Host A" in ns.error_message
+        # Verify no fallback to another host was attempted
+        assert manager.agent.id == host.id
+
 
 # ---------------------------------------------------------------------------
 # _categorize_nodes

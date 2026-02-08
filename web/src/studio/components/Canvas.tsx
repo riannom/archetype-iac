@@ -612,11 +612,22 @@ const Canvas: React.FC<CanvasProps> = ({
             else if (status === 'booting') { dotColor = '#eab308'; animate = true; } // yellow-500
             else if (status === 'stopping') { dotColor = '#f97316'; animate = true; } // orange-500
             else if (status === 'error') dotColor = '#ef4444'; // red-500
+
+            // Build tooltip with retry info when applicable
+            let tooltip: string = status;
+            const ns = nodeStates?.[node.id];
+            if (ns?.will_retry && (ns.enforcement_attempts ?? 0) > 0) {
+              const max = ns.max_enforcement_attempts ?? 0;
+              tooltip = max > 0
+                ? `Starting (attempt ${ns.enforcement_attempts}/${max})`
+                : `Starting (attempt ${ns.enforcement_attempts})`;
+            }
+
             return (
               <div
                 className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-white dark:border-stone-800 shadow-sm ${animate ? 'animate-pulse' : ''}`}
                 style={{ backgroundColor: dotColor, transition: 'background-color 300ms ease-in-out' }}
-                title={status}
+                title={tooltip}
               />
             );
           };
