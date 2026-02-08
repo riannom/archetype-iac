@@ -634,6 +634,9 @@ class LibvirtProvider(Provider):
         disk_driver = node_config.get("disk_driver", "virtio")
         nic_driver = node_config.get("nic_driver", "virtio")
 
+        # Map bus type to device name prefix
+        dev_prefix = {"ide": "hd", "sata": "sd", "scsi": "sd"}.get(disk_driver, "vd")
+
         # Generate UUID for the domain
         domain_uuid = str(uuid.uuid4())
 
@@ -642,7 +645,7 @@ class LibvirtProvider(Provider):
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
       <source file='{overlay_path}'/>
-      <target dev='vda' bus='{disk_driver}'/>
+      <target dev='{dev_prefix}a' bus='{disk_driver}'/>
     </disk>'''
 
         if data_volume_path:
@@ -650,7 +653,7 @@ class LibvirtProvider(Provider):
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
       <source file='{data_volume_path}'/>
-      <target dev='vdb' bus='{disk_driver}'/>
+      <target dev='{dev_prefix}b' bus='{disk_driver}'/>
     </disk>'''
 
         # Build network interface elements
