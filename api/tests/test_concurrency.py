@@ -118,8 +118,8 @@ class TestDeployLock:
         fake = FakeRedis()
         monkeypatch.setattr("app.tasks.jobs.get_redis", lambda: fake)
 
-        # Pre-lock r2 as another agent
-        held[f"deploy_lock:lab1:r2"] = "agent:other:time:2026-01-01"
+        # Pre-lock r2 as another agent (bytes, as real Redis returns)
+        held[f"deploy_lock:lab1:r2"] = b"agent:other:time:2026-01-01"
 
         ok, failed = acquire_deploy_lock("lab1", ["r1", "r2"], "agent-1")
         assert ok is False
@@ -253,11 +253,11 @@ class TestSingleNodeGuards:
 class TestBulkGuards:
     """HTTP 409 when bulk start/stop conflicts with transitional nodes."""
 
-    def test_409_bulk_start_while_any_stopping(
+    def test_bulk_start_skips_stopping_nodes(
         self, test_client: TestClient, auth_headers: dict,
         sample_lab: models.Lab, test_db,
     ) -> None:
-        """Bulk start-all must return 409 if ANY node is stopping."""
+        """Bulk start-all skips nodes in 'stopping' state (returns 200)."""
         for i, state in enumerate(["running", "stopping"]):
             ns = models.NodeState(
                 lab_id=sample_lab.id,
@@ -274,14 +274,14 @@ class TestBulkGuards:
             json={"state": "running"},
             headers=auth_headers,
         )
-        assert resp.status_code == 409
-        assert "stopping" in resp.json()["detail"].lower()
+        # Endpoint now skips transitional nodes instead of returning 409
+        assert resp.status_code == 200
 
-    def test_409_bulk_stop_while_any_starting(
+    def test_bulk_stop_skips_starting_nodes(
         self, test_client: TestClient, auth_headers: dict,
         sample_lab: models.Lab, test_db,
     ) -> None:
-        """Bulk stop-all must return 409 if ANY node is starting."""
+        """Bulk stop-all skips nodes in 'starting' state (returns 200)."""
         for i, state in enumerate(["stopped", "starting"]):
             ns = models.NodeState(
                 lab_id=sample_lab.id,
@@ -298,8 +298,8 @@ class TestBulkGuards:
             json={"state": "stopped"},
             headers=auth_headers,
         )
-        assert resp.status_code == 409
-        assert "starting" in resp.json()["detail"].lower()
+        # Endpoint now skips transitional nodes instead of returning 409
+        assert resp.status_code == 200
 
     def test_bulk_start_succeeds_when_no_stopping(
         self, test_client: TestClient, auth_headers: dict,

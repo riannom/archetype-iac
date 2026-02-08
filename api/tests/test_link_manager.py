@@ -455,7 +455,7 @@ class TestLinkManagerCreateCrossHostLink:
         with patch("app.services.link_manager.agent_client") as mock_client:
             mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": True,
-                "vlan_tag": 200,
+                "vni": 200,
             })
             mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
@@ -464,7 +464,7 @@ class TestLinkManagerCreateCrossHostLink:
             )
 
             assert result is True
-            assert cross_host_link_state.vlan_tag == 200
+            assert cross_host_link_state.vni == 200
 
             # Flush session to make pending objects queryable
             test_db.flush()

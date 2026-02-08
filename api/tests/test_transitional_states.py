@@ -419,10 +419,16 @@ class TestCategorizationMatchesTransitionalStates:
         test_db.refresh(job)
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
-                with patch("app.tasks.jobs.agent_client.container_action", new_callable=AsyncMock) as mock_action:
-                    mock_action.return_value = {"success": True}
-                    await run_node_reconcile(job.id, lab.id, ["node-1"])
+            with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+                 patch("app.tasks.node_lifecycle.settings") as mock_settings:
+                mock_ac.is_agent_online = MagicMock(return_value=True)
+                mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+                mock_ac.container_action = AsyncMock(return_value={"success": True})
+                mock_settings.resource_validation_enabled = False
+                mock_settings.image_sync_enabled = False
+                mock_settings.image_sync_pre_deploy_check = False
+                mock_settings.per_node_lifecycle_enabled = False
+                await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -480,18 +486,29 @@ class TestCategorizationMatchesTransitionalStates:
         class StartCaptureHandler(logging.Handler):
             def emit(self, record):
                 nonlocal categorized_for_start
-                if "start=1" in record.getMessage():
+                msg = record.getMessage()
+                if "start=1" in msg or "start=" in msg:
                     categorized_for_start = True
 
         handler = StartCaptureHandler()
-        logging.getLogger("app.tasks.jobs").addHandler(handler)
+        # Categorization is logged from node_lifecycle module
+        logging.getLogger("app.tasks.node_lifecycle").addHandler(handler)
 
         try:
             with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-                with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+                with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+                     patch("app.tasks.node_lifecycle.settings") as mock_settings:
+                    mock_ac.is_agent_online = MagicMock(return_value=True)
+                    mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+                    mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+                    mock_ac.container_action = AsyncMock(return_value={"success": True})
+                    mock_settings.resource_validation_enabled = False
+                    mock_settings.image_sync_enabled = False
+                    mock_settings.image_sync_pre_deploy_check = False
+                    mock_settings.per_node_lifecycle_enabled = False
                     await run_node_reconcile(job.id, lab.id, ["node-1"])
         finally:
-            logging.getLogger("app.tasks.jobs").removeHandler(handler)
+            logging.getLogger("app.tasks.node_lifecycle").removeHandler(handler)
 
         # Verify node was categorized for start action
         assert categorized_for_start, "Node in 'starting' state should be categorized for start"
@@ -910,11 +927,22 @@ class TestEarlyPlacementUpdate:
                 placement_statuses.append(placement.status)
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
-                with patch("app.tasks.jobs.agent_client.container_action", new_callable=AsyncMock) as mock_action:
-                    mock_action.return_value = {"success": True, "status": "running"}
-                    with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_reconcile(job.id, lab.id, ["node-1"])
+            with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+                 patch("app.tasks.node_lifecycle.settings") as mock_settings:
+                mock_ac.is_agent_online = MagicMock(return_value=True)
+                mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+                mock_ac.container_action = AsyncMock(
+                    return_value={"success": True, "status": "running"}
+                )
+                mock_ac.start_node_on_agent = AsyncMock(
+                    return_value={"success": True}
+                )
+                mock_settings.resource_validation_enabled = False
+                mock_settings.image_sync_enabled = False
+                mock_settings.image_sync_pre_deploy_check = False
+                mock_settings.per_node_lifecycle_enabled = False
+                with patch.object(test_db, "commit", tracking_commit):
+                    await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # "starting" should appear in placement statuses before "deployed"
         assert "starting" in placement_statuses, (

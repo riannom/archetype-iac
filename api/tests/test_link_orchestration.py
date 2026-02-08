@@ -312,7 +312,7 @@ class TestCreateCrossHostLinkNormalization:
              patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
             mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": True,
-                "vlan_tag": 3884,
+                "vni": 3884,
             })
             mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
@@ -324,7 +324,7 @@ class TestCreateCrossHostLinkNormalization:
             assert kwargs["interface_b"] == "eth1"
 
             # Check in-memory state (no commit yet from create_cross_host_link)
-            assert link_state.vlan_tag == 3884
+            assert link_state.vni == 3884
             assert link_state.source_carrier_state == "on"
             assert link_state.target_carrier_state == "on"
 
@@ -396,7 +396,7 @@ class TestCreateCrossHostLink:
              patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
             mock_client.setup_cross_host_link_v2 = AsyncMock(return_value={
                 "success": True,
-                "vlan_tag": 200,
+                "vni": 200,
             })
             mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
 
@@ -406,7 +406,7 @@ class TestCreateCrossHostLink:
 
             assert result is True
             assert link_state.actual_state == "up"
-            assert link_state.vlan_tag == 200
+            assert link_state.vni == 200
 
             # Flush session to make pending objects queryable
             test_db.flush()
@@ -631,14 +631,17 @@ class TestTeardownDeploymentLinks:
 
             await teardown_deployment_links(test_db, lab.id, host_to_agent)
 
-            # Check LinkState was updated
+            # LinkState records are deleted during teardown (fresh ones created on next deploy)
             link_state = test_db.query(models.LinkState).filter(
                 models.LinkState.lab_id == lab.id,
-                models.LinkState.is_cross_host == True,
             ).first()
-            assert link_state.vni is None
-            assert link_state.vlan_tag is None
-            assert link_state.actual_state == "down"
+            assert link_state is None
+
+            # VxlanTunnel records should also be deleted
+            tunnel = test_db.query(models.VxlanTunnel).filter(
+                models.VxlanTunnel.lab_id == lab.id,
+            ).first()
+            assert tunnel is None
 
 
 class TestResolveAgentIp:
