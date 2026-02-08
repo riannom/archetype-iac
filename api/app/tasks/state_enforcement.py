@@ -391,6 +391,17 @@ async def enforce_node_state(
             session.add(placement)
             logger.info(f"Created placement for {node_name} on agent {agent.id}")
 
+    # Re-verify desired_state hasn't changed since we started checks
+    # (e.g. user clicked Stop All between check and job creation)
+    session.refresh(node_state)
+    current_desired = node_state.desired_state
+    if current_desired != desired:
+        logger.info(
+            f"Desired state changed for {node_name} ({desired} -> {current_desired}), "
+            f"skipping enforcement"
+        )
+        return False
+
     # Set cooldown BEFORE creating job to prevent race with concurrent iterations
     # This ensures other enforcement loop iterations see the cooldown immediately
     await _set_cooldown(lab_id, node_name)

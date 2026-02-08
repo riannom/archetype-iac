@@ -1254,6 +1254,17 @@ class NodeLifecycleManager:
             "Note: Full redeploy required to recreate network interfaces"
         )
 
+        # Re-read desired_state to catch changes since job was queued
+        for ns in nodes_need_start:
+            self.session.refresh(ns)
+        nodes_need_start = [
+            ns for ns in nodes_need_start
+            if ns.desired_state == NodeDesiredState.RUNNING.value
+        ]
+        if not nodes_need_start:
+            self.log_parts.append("  All nodes' desired_state changed, nothing to start")
+            return
+
         if not self.topo_service.has_nodes(self.lab.id):
             error_msg = "No topology defined in database"
             for ns in nodes_need_start:
@@ -1624,6 +1635,18 @@ class NodeLifecycleManager:
         self.log_parts.append("")
         self.log_parts.append("=== Phase 2: Start Nodes (per-node) ===")
 
+        # Re-read desired_state to catch changes since job was queued
+        # (e.g. user clicked Stop All while deploy was in progress)
+        for ns in nodes_need_start:
+            self.session.refresh(ns)
+        nodes_need_start = [
+            ns for ns in nodes_need_start
+            if ns.desired_state == NodeDesiredState.RUNNING.value
+        ]
+        if not nodes_need_start:
+            self.log_parts.append("  All nodes' desired_state changed, nothing to start")
+            return
+
         started_names = []
         ceos_started = False
 
@@ -1836,6 +1859,18 @@ class NodeLifecycleManager:
         """
         self.log_parts.append("")
         self.log_parts.append("=== Phase 3: Stop Nodes ===")
+
+        # Re-read desired_state to catch changes since job was queued
+        # (e.g. user clicked Start All while stop was in progress)
+        for ns in nodes_need_stop:
+            self.session.refresh(ns)
+        nodes_need_stop = [
+            ns for ns in nodes_need_stop
+            if ns.desired_state == NodeDesiredState.STOPPED.value
+        ]
+        if not nodes_need_stop:
+            self.log_parts.append("  All nodes' desired_state changed, nothing to stop")
+            return
 
         # Group nodes by target agent
         # agent_id -> (agent, [(ns, container_name)])
@@ -2059,6 +2094,13 @@ class NodeLifecycleManager:
                 "completed",
                 progress_message="Node sync completed successfully",
             )
+            # Clear enforcement counters for non-error nodes on success
+            # so stale circuit breakers don't block future operations
+            for ns in self.node_states:
+                if ns.actual_state != NodeActualState.ERROR.value:
+                    ns.enforcement_attempts = 0
+                    ns.enforcement_failed_at = None
+                    ns.last_enforcement_at = None
 
         self.job.completed_at = datetime.now(timezone.utc)
         self.job.log_path = "\n".join(self.log_parts)

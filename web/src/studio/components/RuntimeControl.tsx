@@ -1,5 +1,5 @@
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { DeviceModel, Node, isDeviceNode, DeviceNode } from '../types';
 import { getAgentColor } from '../../utils/agentColors';
 import { NodeRuntimeStatus, NodeStateEntry } from '../../types/nodeState';
@@ -29,6 +29,7 @@ interface RuntimeControlProps {
 const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onSetRuntimeStatus, onRefreshStates, studioRequest, agents = [], onUpdateNode, pendingNodeOps = new Set(), onFlushTopologySave }) => {
   const [isExtracting, setIsExtracting] = useState(false);
   const [pendingOps, setPendingOps] = useState<Set<PendingOp>>(new Set());
+  const lastBulkActionRef = useRef<number>(0);
 
   // Helper to check if an operation is pending
   // Checks both local bulk ops and per-node ops passed from parent
@@ -70,6 +71,11 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     if (!labId || nodes.length === 0) return;
     if (isOperationPending()) return; // Block if any op pending
 
+    // Debounce: ignore rapid double-clicks within 500ms
+    const now = Date.now();
+    if (now - lastBulkActionRef.current < 500) return;
+    lastBulkActionRef.current = now;
+
     // Optimistic update + setPendingOps in same synchronous block
     // so React batches them into a single render (no gap where fallback 'stopped' can flash)
     setPendingOps(prev => new Set(prev).add('bulk'));
@@ -93,6 +99,8 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
       // and optimistic guards protect transitional states from stale polling data
     } catch (error) {
       console.error('Bulk action failed:', error);
+      // Revert optimistic updates by refreshing actual state from server
+      onRefreshStates();
     } finally {
       setPendingOps(prev => {
         const next = new Set(prev);

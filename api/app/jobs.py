@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 from redis import Redis
 from rq import Queue
+from sqlalchemy import or_
 
 from app.config import settings
 from app.db import get_session
@@ -43,13 +44,21 @@ def has_conflicting_job(lab_id: str, action: str, session=None) -> tuple[bool, s
     if not conflicting_actions:
         return False, None
 
+    # Build OR conditions for both exact and prefix matching.
+    # Sync jobs use formats like sync:node:xxx, sync:lab:xxx, sync:batch:N
+    # so we need to match both "sync" exactly and "sync:*" prefixes.
+    conditions = []
+    for action_name in conflicting_actions:
+        conditions.append(Job.action == action_name)
+        conditions.append(Job.action.like(f"{action_name}:%"))
+
     if session is not None:
         active_job = (
             session.query(Job)
             .filter(
                 Job.lab_id == lab_id,
                 Job.status.in_(["queued", "running"]),
-                Job.action.in_(conflicting_actions),
+                or_(*conditions),
             )
             .first()
         )
@@ -61,7 +70,7 @@ def has_conflicting_job(lab_id: str, action: str, session=None) -> tuple[bool, s
             .filter(
                 Job.lab_id == lab_id,
                 Job.status.in_(["queued", "running"]),
-                Job.action.in_(conflicting_actions),
+                or_(*conditions),
             )
             .first()
         )

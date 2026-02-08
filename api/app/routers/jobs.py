@@ -344,14 +344,21 @@ async def lab_up(
     database.refresh(job)
 
     # Set desired_state for ALL nodes so enforcement and NLM know
-    # these nodes should be running after deploy
+    # these nodes should be running after deploy.
+    # Use SELECT FOR UPDATE to prevent races with concurrent state changes.
+    # Reset enforcement counters so stale circuit breakers don't block the new deploy.
     node_states = (
         database.query(models.NodeState)
         .filter(models.NodeState.lab_id == lab.id)
+        .with_for_update()
         .all()
     )
     for ns in node_states:
         ns.desired_state = "running"
+        ns.enforcement_attempts = 0
+        ns.enforcement_failed_at = None
+        ns.last_enforcement_at = None
+        ns.error_message = None
     database.commit()
 
     # Start background task - choose deployment method based on topology
@@ -409,14 +416,20 @@ async def lab_down(
     database.commit()
     database.refresh(job)
 
-    # Set desired_state so enforcement doesn't restart destroyed containers
+    # Set desired_state so enforcement doesn't restart destroyed containers.
+    # Use SELECT FOR UPDATE to prevent races with concurrent state changes.
+    # Reset enforcement counters so stale circuit breakers don't block future ops.
     node_states = (
         database.query(models.NodeState)
         .filter(models.NodeState.lab_id == lab.id)
+        .with_for_update()
         .all()
     )
     for ns in node_states:
         ns.desired_state = "stopped"
+        ns.enforcement_attempts = 0
+        ns.enforcement_failed_at = None
+        ns.last_enforcement_at = None
     database.commit()
 
     # Start background task - choose destroy method based on topology
