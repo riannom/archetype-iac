@@ -70,18 +70,19 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     if (!labId || nodes.length === 0) return;
     if (isOperationPending()) return; // Block if any op pending
 
+    // Optimistic update + setPendingOps in same synchronous block
+    // so React batches them into a single render (no gap where fallback 'stopped' can flash)
     setPendingOps(prev => new Set(prev).add('bulk'));
+    nodes.forEach(node => {
+      onSetRuntimeStatus(node.id, action === 'running' ? 'booting' : 'stopping');
+    });
+
     try {
       // Flush any pending topology saves before deploying
       // This ensures host assignments are committed to DB before the deploy job reads them
       if (onFlushTopologySave) {
         await onFlushTopologySave();
       }
-
-      // Optimistically update UI (without triggering API calls)
-      nodes.forEach(node => {
-        onSetRuntimeStatus(node.id, action === 'running' ? 'booting' : 'stopping');
-      });
 
       // Set all nodes' desired state - this now auto-triggers sync
       await studioRequest(`/labs/${labId}/nodes/desired-state`, {
