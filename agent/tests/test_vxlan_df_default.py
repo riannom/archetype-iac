@@ -1,13 +1,13 @@
-"""Tests for VXLAN df_default=false on outer packets.
+"""Tests for VXLAN nopmtudisc on overlay tunnels.
 
-Verifies that all VXLAN tunnel creation paths disable the DF bit on
-outer encapsulated packets, allowing the underlay to fragment oversized
-packets instead of dropping them with ICMP "frag needed".
+Verifies that all VXLAN tunnel creation paths use Linux VXLAN devices
+with `nopmtudisc` instead of OVS-managed VXLAN ports. The `nopmtudisc`
+flag disables all PMTUD checking on the tunnel, allowing inner packets
+at full MTU while the kernel handles outer packet fragmentation.
 
-Without df_default=false, overlay MTU is capped at (underlay_mtu - 50),
-e.g. 1450 on a 1500 underlay.  With df_default=false, inner packets up
-to the interface MTU pass through and the underlay fragments/reassembles
-the outer encapsulated packets transparently.
+Without nopmtudisc, the kernel's VXLAN xmit path checks the inner
+packet's DF bit against the tunnel PMTU (physical_mtu - 50), generating
+ICMP "Frag Needed" or silently dropping oversized inner packets.
 """
 
 from __future__ import annotations
@@ -49,9 +49,15 @@ def _make_ovs_manager() -> OVSNetworkManager:
     mgr = OVSNetworkManager()
     mgr._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
     mgr._run_cmd = AsyncMock(return_value=(0, "", ""))
+    mgr._ip_link_exists = AsyncMock(return_value=False)
     mgr._initialized = True
     mgr._bridge_name = "arch-ovs"
     return mgr
+
+
+def _get_run_cmd_args(mock: AsyncMock) -> list[list[str]]:
+    """Extract all command lists from a _run_cmd mock."""
+    return [call.args[0] for call in mock.call_args_list if call.args]
 
 
 def _get_ovs_vsctl_args(mock: AsyncMock) -> list[tuple]:
@@ -64,14 +70,38 @@ def _flatten_args(args: tuple) -> str:
     return " ".join(str(a) for a in args)
 
 
+def _find_ip_link_add_cmd(run_cmd_calls: list[list[str]]) -> list[str] | None:
+    """Find the 'ip link add ... type vxlan' command in run_cmd calls."""
+    for cmd in run_cmd_calls:
+        if (isinstance(cmd, list)
+            and "ip" in cmd
+            and "link" in cmd
+            and "add" in cmd
+            and "vxlan" in cmd):
+            return cmd
+    return None
+
+
+def _find_ip_link_delete_cmds(run_cmd_calls: list[list[str]], name: str) -> list[list[str]]:
+    """Find 'ip link delete <name>' commands in run_cmd calls."""
+    return [
+        cmd for cmd in run_cmd_calls
+        if (isinstance(cmd, list)
+            and "ip" in cmd
+            and "link" in cmd
+            and "delete" in cmd
+            and name in cmd)
+    ]
+
+
 # ===========================================================================
 # OverlayManager.create_link_tunnel  (per-link VXLAN — active model)
 # ===========================================================================
 
-class TestCreateLinkTunnelDfDefault:
-    """Per-link access-mode VXLAN ports must set df_default=false."""
+class TestCreateLinkTunnelNopmtudisc:
+    """Per-link VXLAN ports must use Linux VXLAN devices with nopmtudisc."""
 
-    def test_df_default_false_in_ovs_command(self):
+    def test_creates_linux_vxlan_device_with_nopmtudisc(self):
         mgr = _make_overlay_manager()
 
         _run_async(mgr.create_link_tunnel(
@@ -83,17 +113,51 @@ class TestCreateLinkTunnelDfDefault:
             local_vlan=3100,
         ))
 
-        # Find the add-port call
-        calls = _get_ovs_vsctl_args(mgr._ovs_vsctl)
-        assert len(calls) >= 1, "Expected at least one ovs-vsctl call"
+        cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
+        assert cmd is not None, "Expected 'ip link add ... type vxlan' call"
+        assert "nopmtudisc" in cmd, f"nopmtudisc not found in: {cmd}"
+        assert "100001" in cmd or str(100001) in cmd, f"VNI not found in: {cmd}"
 
-        add_port_call = _flatten_args(calls[-1])
-        assert "options:df_default=false" in add_port_call, (
-            f"df_default=false not found in ovs-vsctl args: {add_port_call}"
-        )
+    def test_no_ovs_managed_vxlan_type(self):
+        """Should NOT create OVS-managed VXLAN (type=vxlan in ovs-vsctl)."""
+        mgr = _make_overlay_manager()
 
-    def test_df_default_present_with_auto_mtu_discovery(self):
-        """df_default=false should be set regardless of MTU discovery result."""
+        _run_async(mgr.create_link_tunnel(
+            lab_id="lab1",
+            link_id="r1:eth1-r2:eth1",
+            vni=100001,
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+            local_vlan=3100,
+        ))
+
+        for call_args in _get_ovs_vsctl_args(mgr._ovs_vsctl):
+            flat = _flatten_args(call_args)
+            assert "type=vxlan" not in flat, (
+                f"OVS-managed VXLAN creation found (should use Linux device): {flat}"
+            )
+
+    def test_vxlan_device_added_to_ovs_with_vlan_tag(self):
+        """VXLAN device should be added to OVS with access-mode VLAN tag."""
+        mgr = _make_overlay_manager()
+
+        _run_async(mgr.create_link_tunnel(
+            lab_id="lab1",
+            link_id="r1:eth1-r2:eth1",
+            vni=100001,
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+            local_vlan=3100,
+        ))
+
+        ovs_calls = _get_ovs_vsctl_args(mgr._ovs_vsctl)
+        add_port_calls = [c for c in ovs_calls if "add-port" in _flatten_args(c)]
+        assert len(add_port_calls) >= 1, "Expected add-port call"
+        add_call = _flatten_args(add_port_calls[0])
+        assert "tag=3100" in add_call, f"VLAN tag not found in: {add_call}"
+
+    def test_nopmtudisc_with_auto_mtu_discovery(self):
+        """nopmtudisc should be set regardless of MTU discovery result."""
         mgr = _make_overlay_manager()
         mgr._discover_path_mtu = AsyncMock(return_value=9000)
 
@@ -106,28 +170,12 @@ class TestCreateLinkTunnelDfDefault:
             local_vlan=3100,
         ))
 
-        add_port_call = _flatten_args(_get_ovs_vsctl_args(mgr._ovs_vsctl)[-1])
-        assert "options:df_default=false" in add_port_call
+        cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
+        assert cmd is not None
+        assert "nopmtudisc" in cmd
 
-    def test_df_default_present_with_explicit_mtu(self):
-        """df_default=false should be set even when tenant_mtu is provided."""
-        mgr = _make_overlay_manager()
-
-        _run_async(mgr.create_link_tunnel(
-            lab_id="lab1",
-            link_id="r1:eth1-r2:eth1",
-            vni=100003,
-            local_ip="10.0.0.1",
-            remote_ip="10.0.0.2",
-            local_vlan=3100,
-            tenant_mtu=1400,
-        ))
-
-        add_port_call = _flatten_args(_get_ovs_vsctl_args(mgr._ovs_vsctl)[-1])
-        assert "options:df_default=false" in add_port_call
-
-    def test_df_default_present_with_failed_mtu_discovery(self):
-        """df_default=false should be set even when MTU discovery fails."""
+    def test_nopmtudisc_with_failed_mtu_discovery(self):
+        """nopmtudisc should be set even when MTU discovery fails."""
         mgr = _make_overlay_manager()
         mgr._discover_path_mtu = AsyncMock(return_value=0)
 
@@ -140,18 +188,19 @@ class TestCreateLinkTunnelDfDefault:
             local_vlan=3100,
         ))
 
-        add_port_call = _flatten_args(_get_ovs_vsctl_args(mgr._ovs_vsctl)[-1])
-        assert "options:df_default=false" in add_port_call
+        cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
+        assert cmd is not None
+        assert "nopmtudisc" in cmd
 
 
 # ===========================================================================
 # OverlayManager.ensure_vtep  (trunk VTEP — legacy model)
 # ===========================================================================
 
-class TestEnsureVtepDfDefault:
-    """Trunk VTEP VXLAN ports must set df_default=false."""
+class TestEnsureVtepNopmtudisc:
+    """Trunk VTEP VXLAN ports must use Linux VXLAN devices with nopmtudisc."""
 
-    def test_df_default_false_in_vtep_creation(self):
+    def test_creates_linux_vxlan_device_with_nopmtudisc(self):
         mgr = _make_overlay_manager()
 
         _run_async(mgr.ensure_vtep(
@@ -159,25 +208,34 @@ class TestEnsureVtepDfDefault:
             remote_ip="10.0.0.2",
         ))
 
-        calls = _get_ovs_vsctl_args(mgr._ovs_vsctl)
-        # Filter to just add-port calls (skip --if-exists del-port)
-        add_calls = [c for c in calls if "add-port" in _flatten_args(c)]
-        assert len(add_calls) >= 1, "Expected an add-port call for VTEP"
+        cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
+        assert cmd is not None, "Expected 'ip link add ... type vxlan' call"
+        assert "nopmtudisc" in cmd, f"nopmtudisc not found in: {cmd}"
 
-        vtep_call = _flatten_args(add_calls[0])
-        assert "options:df_default=false" in vtep_call, (
-            f"df_default=false not found in VTEP creation: {vtep_call}"
-        )
+    def test_vtep_added_to_ovs_without_vlan_tag(self):
+        """Trunk VTEP should be added without VLAN tag (trunk mode)."""
+        mgr = _make_overlay_manager()
+
+        _run_async(mgr.ensure_vtep(
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+        ))
+
+        ovs_calls = _get_ovs_vsctl_args(mgr._ovs_vsctl)
+        add_port_calls = [c for c in ovs_calls if "add-port" in _flatten_args(c)]
+        assert len(add_port_calls) >= 1
+        add_call = _flatten_args(add_port_calls[0])
+        assert "tag=" not in add_call, f"Trunk VTEP should not have VLAN tag: {add_call}"
 
     def test_vtep_returns_cached_without_recreating(self):
-        """Second call for same remote should return cached VTEP, no OVS calls."""
+        """Second call for same remote should return cached VTEP, no new commands."""
         mgr = _make_overlay_manager()
 
         vtep1 = _run_async(mgr.ensure_vtep(
             local_ip="10.0.0.1",
             remote_ip="10.0.0.2",
         ))
-        call_count_after_first = mgr._ovs_vsctl.call_count
+        call_count_after_first = mgr._run_cmd.call_count
 
         vtep2 = _run_async(mgr.ensure_vtep(
             local_ip="10.0.0.1",
@@ -185,17 +243,17 @@ class TestEnsureVtepDfDefault:
         ))
 
         assert vtep1 is vtep2
-        assert mgr._ovs_vsctl.call_count == call_count_after_first
+        assert mgr._run_cmd.call_count == call_count_after_first
 
 
 # ===========================================================================
-# OverlayManager._create_tunnel  (legacy per-link VXLAN)
+# OverlayManager.create_tunnel  (legacy per-link VXLAN)
 # ===========================================================================
 
-class TestCreateTunnelLegacyDfDefault:
-    """Legacy per-link VXLAN tunnels must set df_default=false."""
+class TestCreateTunnelLegacyNopmtudisc:
+    """Legacy per-link VXLAN tunnels must use Linux devices with nopmtudisc."""
 
-    def test_df_default_false_in_legacy_tunnel(self):
+    def test_creates_linux_vxlan_device_with_nopmtudisc(self):
         mgr = _make_overlay_manager()
 
         _run_async(mgr.create_tunnel(
@@ -206,13 +264,77 @@ class TestCreateTunnelLegacyDfDefault:
             remote_ip="10.0.0.2",
         ))
 
-        calls = _get_ovs_vsctl_args(mgr._ovs_vsctl)
-        add_calls = [c for c in calls if "add-port" in _flatten_args(c)]
-        assert len(add_calls) >= 1
+        cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
+        assert cmd is not None, "Expected 'ip link add ... type vxlan' call"
+        assert "nopmtudisc" in cmd, f"nopmtudisc not found in: {cmd}"
 
-        tunnel_call = _flatten_args(add_calls[0])
-        assert "options:df_default=false" in tunnel_call, (
-            f"df_default=false not found in legacy tunnel creation: {tunnel_call}"
+
+# ===========================================================================
+# OverlayManager deletion methods clean up Linux devices
+# ===========================================================================
+
+class TestVxlanDeviceCleanup:
+    """Deletion methods must call 'ip link delete' for Linux VXLAN devices."""
+
+    def test_delete_link_tunnel_removes_linux_device(self):
+        mgr = _make_overlay_manager()
+
+        tunnel = _run_async(mgr.create_link_tunnel(
+            lab_id="lab1",
+            link_id="r1:eth1-r2:eth1",
+            vni=100001,
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+            local_vlan=3100,
+        ))
+
+        mgr._run_cmd.reset_mock()
+        _run_async(mgr.delete_link_tunnel("r1:eth1-r2:eth1"))
+
+        delete_cmds = _find_ip_link_delete_cmds(
+            _get_run_cmd_args(mgr._run_cmd), tunnel.interface_name
+        )
+        assert len(delete_cmds) >= 1, (
+            f"Expected 'ip link delete {tunnel.interface_name}' call"
+        )
+
+    def test_delete_tunnel_removes_linux_device(self):
+        mgr = _make_overlay_manager()
+
+        tunnel = _run_async(mgr.create_tunnel(
+            lab_id="lab1",
+            link_id="r1:eth1-r2:eth1",
+            vni=100010,
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+        ))
+
+        mgr._run_cmd.reset_mock()
+        _run_async(mgr.delete_tunnel(tunnel))
+
+        delete_cmds = _find_ip_link_delete_cmds(
+            _get_run_cmd_args(mgr._run_cmd), tunnel.interface_name
+        )
+        assert len(delete_cmds) >= 1, (
+            f"Expected 'ip link delete {tunnel.interface_name}' call"
+        )
+
+    def test_delete_vtep_removes_linux_device(self):
+        mgr = _make_overlay_manager()
+
+        vtep = _run_async(mgr.ensure_vtep(
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+        ))
+
+        mgr._run_cmd.reset_mock()
+        _run_async(mgr.delete_vtep("10.0.0.2"))
+
+        delete_cmds = _find_ip_link_delete_cmds(
+            _get_run_cmd_args(mgr._run_cmd), vtep.interface_name
+        )
+        assert len(delete_cmds) >= 1, (
+            f"Expected 'ip link delete {vtep.interface_name}' call"
         )
 
 
@@ -220,10 +342,10 @@ class TestCreateTunnelLegacyDfDefault:
 # OVSNetworkManager.create_vxlan_tunnel
 # ===========================================================================
 
-class TestOVSManagerDfDefault:
-    """OVSNetworkManager VXLAN tunnels must include df_default=false."""
+class TestOVSManagerNopmtudisc:
+    """OVSNetworkManager VXLAN tunnels must use Linux devices with nopmtudisc."""
 
-    def test_df_default_false_with_vlan_tag(self):
+    def test_creates_linux_vxlan_device_with_nopmtudisc(self):
         mgr = _make_ovs_manager()
 
         _run_async(mgr.create_vxlan_tunnel(
@@ -233,17 +355,12 @@ class TestOVSManagerDfDefault:
             vlan_tag=3200,
         ))
 
-        calls = _get_ovs_vsctl_args(mgr._ovs_vsctl)
-        # Find the add-port call (skip del-port)
-        add_calls = [c for c in calls if "add-port" in _flatten_args(c)]
-        assert len(add_calls) >= 1
+        cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
+        assert cmd is not None, "Expected 'ip link add ... type vxlan' call"
+        assert "nopmtudisc" in cmd, f"nopmtudisc not found in: {cmd}"
 
-        cmd = _flatten_args(add_calls[0])
-        assert "df_default=false" in cmd, (
-            f"df_default=false not found in OVS VXLAN creation: {cmd}"
-        )
-
-    def test_df_default_false_without_vlan_tag(self):
+    def test_no_ovs_managed_vxlan_type(self):
+        """Should NOT create OVS-managed VXLAN (type=vxlan in ovs-vsctl)."""
         mgr = _make_ovs_manager()
 
         _run_async(mgr.create_vxlan_tunnel(
@@ -253,24 +370,38 @@ class TestOVSManagerDfDefault:
             vlan_tag=None,
         ))
 
-        calls = _get_ovs_vsctl_args(mgr._ovs_vsctl)
-        add_calls = [c for c in calls if "add-port" in _flatten_args(c)]
-        assert len(add_calls) >= 1
+        for call_args in _get_ovs_vsctl_args(mgr._ovs_vsctl):
+            flat = _flatten_args(call_args)
+            assert "type=vxlan" not in flat, (
+                f"OVS-managed VXLAN creation found: {flat}"
+            )
 
-        cmd = _flatten_args(add_calls[0])
-        assert "df_default=false" in cmd, (
-            f"df_default=false not found in trunkless OVS VXLAN: {cmd}"
+    def test_delete_removes_linux_device(self):
+        mgr = _make_ovs_manager()
+
+        _run_async(mgr.create_vxlan_tunnel(
+            vni=202,
+            remote_ip="10.0.0.2",
+            local_ip="10.0.0.1",
+        ))
+
+        mgr._run_cmd.reset_mock()
+        _run_async(mgr.delete_vxlan_tunnel(202))
+
+        delete_cmds = _find_ip_link_delete_cmds(
+            _get_run_cmd_args(mgr._run_cmd), "vxlan202"
         )
+        assert len(delete_cmds) >= 1, "Expected 'ip link delete vxlan202' call"
 
 
 # ===========================================================================
 # DockerOVSPlugin.create_vxlan_tunnel  (Linux VXLAN interface)
 # ===========================================================================
 
-class TestDockerPluginDfUnset:
-    """DockerOVSPlugin Linux VXLAN interfaces must use 'df unset'."""
+class TestDockerPluginNopmtudisc:
+    """DockerOVSPlugin Linux VXLAN interfaces must use nopmtudisc."""
 
-    def test_df_unset_in_ip_link_add(self):
+    def test_nopmtudisc_in_ip_link_add(self):
         plugin = DockerOVSPlugin()
         plugin._run_cmd = AsyncMock(return_value=(0, "", ""))
         plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
@@ -298,14 +429,39 @@ class TestDockerPluginDfUnset:
         assert len(ip_link_calls) >= 1, "Expected an 'ip link add' call"
 
         ip_link_cmd = ip_link_calls[0]
-        assert "df" in ip_link_cmd and "unset" in ip_link_cmd, (
-            f"'df unset' not found in ip link add command: {ip_link_cmd}"
+        assert "nopmtudisc" in ip_link_cmd, (
+            f"'nopmtudisc' not found in ip link add command: {ip_link_cmd}"
         )
 
-        # Verify 'df' immediately precedes 'unset'
-        df_idx = ip_link_cmd.index("df")
-        assert ip_link_cmd[df_idx + 1] == "unset", (
-            f"Expected 'unset' after 'df', got: {ip_link_cmd[df_idx + 1]}"
+    def test_df_unset_still_present(self):
+        """df unset should still be set alongside nopmtudisc."""
+        plugin = DockerOVSPlugin()
+        plugin._run_cmd = AsyncMock(return_value=(0, "", ""))
+        plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
+        plugin._mark_dirty_and_save = AsyncMock()
+
+        lab_bridge = LabBridge(lab_id="lab1", bridge_name="arch-ovs")
+        plugin.lab_bridges["lab1"] = lab_bridge
+
+        _run_async(plugin.create_vxlan_tunnel(
+            lab_id="lab1",
+            link_id="r1:eth1-r2:eth1",
+            vni=301,
+            remote_ip="10.0.0.2",
+            local_ip="10.0.0.1",
+            vlan_tag=3301,
+        ))
+
+        ip_link_calls = [
+            call.args[0] for call in plugin._run_cmd.call_args_list
+            if isinstance(call.args[0], list) and "ip" in call.args[0]
+            and "add" in call.args[0]
+        ]
+        assert len(ip_link_calls) >= 1
+        ip_link_cmd = ip_link_calls[0]
+
+        assert "df" in ip_link_cmd and "unset" in ip_link_cmd, (
+            f"'df unset' not found in ip link add command: {ip_link_cmd}"
         )
 
     def test_vxlan_port_added_to_ovs_after_creation(self):
@@ -334,10 +490,10 @@ class TestDockerPluginDfUnset:
         _run_async(plugin.create_vxlan_tunnel(
             lab_id="lab1",
             link_id="r1:eth1-r2:eth1",
-            vni=301,
+            vni=302,
             remote_ip="10.0.0.2",
             local_ip="10.0.0.1",
-            vlan_tag=3301,
+            vlan_tag=3302,
         ))
 
         assert "ip_link_add" in call_order
@@ -350,10 +506,10 @@ class TestDockerPluginDfUnset:
 # ===========================================================================
 
 class TestAllPathsConsistent:
-    """Verify all VXLAN creation paths consistently disable DF."""
+    """Verify all VXLAN creation paths use nopmtudisc consistently."""
 
-    def test_overlay_link_tunnel_and_ovs_manager_both_disable_df(self):
-        """Both the overlay and OVS manager paths should disable DF."""
+    def test_overlay_and_ovs_manager_both_use_nopmtudisc(self):
+        """Both overlay and OVS manager paths should use nopmtudisc."""
         overlay = _make_overlay_manager()
         ovs = _make_ovs_manager()
 
@@ -373,8 +529,35 @@ class TestAllPathsConsistent:
             vlan_tag=3200,
         ))
 
-        overlay_cmd = _flatten_args(_get_ovs_vsctl_args(overlay._ovs_vsctl)[-1])
-        ovs_cmd = _flatten_args(_get_ovs_vsctl_args(ovs._ovs_vsctl)[-1])
+        overlay_cmd = _find_ip_link_add_cmd(_get_run_cmd_args(overlay._run_cmd))
+        ovs_cmd = _find_ip_link_add_cmd(_get_run_cmd_args(ovs._run_cmd))
 
-        assert "df_default=false" in overlay_cmd
-        assert "df_default=false" in ovs_cmd
+        assert overlay_cmd is not None and "nopmtudisc" in overlay_cmd
+        assert ovs_cmd is not None and "nopmtudisc" in ovs_cmd
+
+    def test_no_path_uses_ovs_managed_vxlan(self):
+        """No path should use OVS-managed VXLAN (type=vxlan in ovs-vsctl)."""
+        overlay = _make_overlay_manager()
+        ovs = _make_ovs_manager()
+
+        _run_async(overlay.create_link_tunnel(
+            lab_id="lab1",
+            link_id="r1:eth1-r2:eth1",
+            vni=100060,
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+            local_vlan=3100,
+        ))
+
+        _run_async(ovs.create_vxlan_tunnel(
+            vni=200060,
+            remote_ip="10.0.0.2",
+            local_ip="10.0.0.1",
+            vlan_tag=3200,
+        ))
+
+        for call_args in _get_ovs_vsctl_args(overlay._ovs_vsctl):
+            assert "type=vxlan" not in _flatten_args(call_args)
+
+        for call_args in _get_ovs_vsctl_args(ovs._ovs_vsctl):
+            assert "type=vxlan" not in _flatten_args(call_args)

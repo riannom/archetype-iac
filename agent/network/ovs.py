@@ -943,10 +943,12 @@ class OVSNetworkManager:
         local_ip: str,
         vlan_tag: int | None = None,
     ) -> str:
-        """Create VXLAN port on OVS for cross-host connectivity.
+        """Create VXLAN tunnel on OVS for cross-host connectivity.
 
-        This adds a VXLAN tunnel to the OVS bridge, allowing traffic with
-        a specific VLAN tag to traverse hosts via VXLAN encapsulation.
+        Creates a Linux VXLAN device with nopmtudisc to disable PMTUD,
+        then adds it to the OVS bridge as a system port. This allows
+        inner packets to pass at full MTU while the kernel handles
+        outer packet fragmentation transparently.
 
         Args:
             vni: VXLAN Network Identifier
@@ -965,25 +967,42 @@ class OVSNetworkManager:
 
         port_name = f"vxlan{vni}"
 
-        # Delete if exists
-        code, _, _ = await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, port_name)
+        # Delete existing OVS port if present
+        await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, port_name)
 
-        # Create VXLAN port
-        options = f"options:remote_ip={remote_ip},options:local_ip={local_ip},options:key={vni},options:df_default=false"
+        # Delete existing Linux interface if present
+        if await self._ip_link_exists(port_name):
+            await self._run_cmd(["ip", "link", "delete", port_name])
+
+        # Create Linux VXLAN device with nopmtudisc
+        code, _, stderr = await self._run_cmd([
+            "ip", "link", "add", port_name, "type", "vxlan",
+            "id", str(vni), "local", local_ip, "remote", remote_ip,
+            "dstport", "4789", "nopmtudisc",
+        ])
+        if code != 0:
+            raise RuntimeError(f"Failed to create VXLAN device: {stderr}")
+
+        # Set MTU to match local physical MTU
+        await self._run_cmd(["ip", "link", "set", port_name, "mtu", str(settings.local_mtu)])
+
+        # Bring device up
+        await self._run_cmd(["ip", "link", "set", port_name, "up"])
+
+        # Add to OVS bridge as system port
         if vlan_tag:
             code, _, stderr = await self._ovs_vsctl(
                 "add-port", self._bridge_name, port_name,
                 f"tag={vlan_tag}",
-                "--", "set", "interface", port_name, "type=vxlan", options
             )
         else:
             code, _, stderr = await self._ovs_vsctl(
                 "add-port", self._bridge_name, port_name,
-                "--", "set", "interface", port_name, "type=vxlan", options
             )
 
         if code != 0:
-            raise RuntimeError(f"Failed to create VXLAN tunnel: {stderr}")
+            await self._run_cmd(["ip", "link", "delete", port_name])
+            raise RuntimeError(f"Failed to add VXLAN to OVS: {stderr}")
 
         logger.info(
             f"Created VXLAN tunnel: {port_name} (VNI {vni}) to {remote_ip}"
@@ -1006,6 +1025,9 @@ class OVSNetworkManager:
         if code != 0:
             logger.warning(f"Failed to delete VXLAN tunnel {port_name}: {stderr}")
             return False
+
+        # Delete the Linux VXLAN device (system ports aren't auto-deleted)
+        await self._run_cmd(["ip", "link", "delete", port_name])
 
         logger.info(f"Deleted VXLAN tunnel: {port_name}")
         return True
