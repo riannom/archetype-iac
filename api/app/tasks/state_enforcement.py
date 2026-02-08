@@ -439,6 +439,7 @@ async def enforce_node_state(
 def _is_enforceable(
     session: Session,
     node_state: models.NodeState,
+    active_job_nodes: Set[tuple[str, str]] | None = None,
 ) -> bool:
     """Check if a node passes all pre-filtering for enforcement.
 
@@ -446,6 +447,12 @@ def _is_enforceable(
     - Action determination (state machine)
     - Skip checks (max retries, backoff, cooldown)
     - Active job checks (per-node)
+
+    Args:
+        session: Database session
+        node_state: The node state to check
+        active_job_nodes: Optional pre-loaded set of (lab_id, node_name) tuples
+            with active jobs. When provided, replaces per-node DB query (D.1).
 
     Side effect: marks nodes as failed if max retries exhausted.
     Returns True if the node should be included in a batch enforcement job.
@@ -507,21 +514,143 @@ def _is_enforceable(
         logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
         return False
 
-    # Check for active per-node jobs
-    if _has_active_job(session, lab_id, node_name):
-        logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
-        return False
+    # D.1: Check for active per-node jobs using pre-loaded set or fallback to DB query
+    if active_job_nodes is not None:
+        if (lab_id, node_name) in active_job_nodes:
+            logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
+            return False
+    else:
+        if _has_active_job(session, lab_id, node_name):
+            logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
+            return False
 
     return True
 
 
-def _has_lab_wide_active_job(session: Session, lab_id: str) -> bool:
-    """Check if a lab has an active deploy/destroy job."""
+def _has_lab_wide_active_job(
+    session: Session,
+    lab_id: str,
+    labs_with_active_jobs: Set[str] | None = None,
+) -> bool:
+    """Check if a lab has an active deploy/destroy job.
+
+    Args:
+        session: Database session
+        lab_id: Lab identifier
+        labs_with_active_jobs: Optional pre-loaded set of lab IDs with active
+            deploy/destroy jobs. When provided, replaces DB query (D.1).
+    """
+    if labs_with_active_jobs is not None:
+        return lab_id in labs_with_active_jobs
     return session.query(models.Job).filter(
         models.Job.lab_id == lab_id,
         models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
         models.Job.action.in_(["up", "down"]),
     ).first() is not None
+
+
+async def _try_extract_configs(
+    session: Session,
+    lab: models.Lab,
+    nodes: list[models.NodeState],
+    hosts_by_id: Dict[str, models.Host] | None = None,
+) -> None:
+    """Best-effort config extraction before enforcement restart.
+
+    Extracts running configs from nodes that are about to be restarted
+    (exited/error state) and saves them as snapshots. Silent on failure —
+    the container may already be gone.
+
+    Args:
+        session: Database session
+        lab: Lab model instance
+        nodes: List of node states being enforced
+        hosts_by_id: Optional pre-loaded host dict. When provided,
+            replaces per-host session.get() calls (D.3).
+    """
+    if not settings.feature_auto_extract_on_enforcement:
+        return
+
+    # Only extract from nodes that might still have configs (exited, error)
+    restart_nodes = [
+        ns for ns in nodes
+        if ns.actual_state in (NodeActualState.EXITED.value, NodeActualState.ERROR.value)
+    ]
+    if not restart_nodes:
+        return
+
+    lab_id = lab.id
+    try:
+        # Get agents hosting this lab's nodes
+        placements = (
+            session.query(models.NodePlacement.host_id)
+            .filter(models.NodePlacement.lab_id == lab_id)
+            .distinct()
+            .all()
+        )
+        host_ids = [p.host_id for p in placements]
+        if not host_ids and lab.agent_id:
+            host_ids = [lab.agent_id]
+
+        agents = []
+        for host_id in host_ids:
+            # D.3: Use pre-loaded hosts when available, fall back to DB
+            host = hosts_by_id.get(host_id) if hosts_by_id else session.get(models.Host, host_id)
+            if host and agent_client.is_agent_online(host):
+                agents.append(host)
+
+        if not agents:
+            return
+
+        # Extract concurrently from all agents
+        import asyncio as _asyncio
+        tasks = [agent_client.extract_configs_on_agent(a, lab_id) for a in agents]
+        results = await _asyncio.gather(*tasks, return_exceptions=True)
+
+        # Collect configs
+        configs = []
+        for a, result in zip(agents, results):
+            if isinstance(result, Exception):
+                continue
+            if not result.get("success"):
+                continue
+            configs.extend(result.get("configs", []))
+
+        if not configs:
+            return
+
+        # Filter to only the nodes being restarted
+        restart_names = {ns.node_name for ns in restart_nodes}
+        from app.services.config_service import ConfigService
+        config_svc = ConfigService(session)
+
+        # Build device kind lookup
+        lab_nodes = (
+            session.query(models.Node)
+            .filter(models.Node.lab_id == lab_id)
+            .all()
+        )
+        node_device_map = {n.container_name: n.device for n in lab_nodes}
+
+        for config_data in configs:
+            node_name = config_data.get("node_name")
+            content = config_data.get("content")
+            if not node_name or not content or node_name not in restart_names:
+                continue
+            config_svc.save_extracted_config(
+                lab_id=lab_id,
+                node_name=node_name,
+                content=content,
+                snapshot_type="auto_restart",
+                device_kind=node_device_map.get(node_name),
+                set_as_active=False,
+            )
+
+        logger.info(
+            f"Auto-extracted configs for {len(restart_names)} restart nodes in lab {lab_id}"
+        )
+    except Exception as e:
+        logger.debug(f"Config extraction before enforcement failed for lab {lab_id}: {e}")
 
 
 async def enforce_lab_states():
@@ -555,12 +684,45 @@ async def enforce_lab_states():
 
             logger.debug(f"Found {len(mismatched_states)} nodes with state mismatches")
 
+            # D.1: Batch-load active jobs for all affected labs (replaces per-node LIKE queries)
+            lab_ids = {ns.lab_id for ns in mismatched_states}
+
+            # Batch-load active node-level jobs
+            active_node_jobs = (
+                session.query(models.Job.lab_id, models.Job.action)
+                .filter(
+                    models.Job.lab_id.in_(lab_ids),
+                    models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+                    models.Job.action.like("node:%"),
+                )
+                .all()
+            )
+
+            # Build lookup set: extract node_name from "node:{action}:{node_name}" pattern
+            active_job_nodes: Set[tuple[str, str]] = set()
+            for lab_id_j, action in active_node_jobs:
+                parts = action.split(":")
+                if len(parts) >= 3:
+                    active_job_nodes.add((lab_id_j, parts[2]))
+
+            # Batch-load lab-wide jobs (deploy/destroy)
+            labs_with_active_jobs: Set[str] = {
+                j.lab_id for j in
+                session.query(models.Job.lab_id)
+                .filter(
+                    models.Job.lab_id.in_(lab_ids),
+                    models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+                    models.Job.action.in_(["up", "down"]),
+                )
+                .all()
+            }
+
             # Phase 1: Per-node filtering (skip checks, cooldown, backoff, active jobs)
             # Group passing nodes by lab_id
             enforceable_by_lab: Dict[str, list[models.NodeState]] = {}
             for node_state in mismatched_states:
                 try:
-                    if _is_enforceable(session, node_state):
+                    if _is_enforceable(session, node_state, active_job_nodes=active_job_nodes):
                         enforceable_by_lab.setdefault(node_state.lab_id, []).append(node_state)
                 except Exception as e:
                     logger.error(
@@ -588,6 +750,27 @@ async def enforce_lab_states():
             if not enforceable_by_lab:
                 return
 
+            # D.3: Pre-load hosts referenced by placements and lab agents
+            all_lab_ids = set(enforceable_by_lab.keys())
+            all_placements = (
+                session.query(models.NodePlacement)
+                .filter(models.NodePlacement.lab_id.in_(all_lab_ids))
+                .all()
+            )
+            all_host_ids: Set[str] = {p.host_id for p in all_placements if p.host_id}
+            # Include lab default agents
+            for _lab_id in all_lab_ids:
+                _lab = session.get(models.Lab, _lab_id)
+                if _lab and _lab.agent_id:
+                    all_host_ids.add(_lab.agent_id)
+
+            hosts_by_id: Dict[str, models.Host] = {}
+            if all_host_ids:
+                hosts_by_id = {
+                    h.id: h for h in
+                    session.query(models.Host).filter(models.Host.id.in_(all_host_ids)).all()
+                }
+
             # Phase 2: Create one batch job per lab
             enforced_count = 0
             now = datetime.now(timezone.utc)
@@ -597,12 +780,15 @@ async def enforce_lab_states():
                 if not lab:
                     continue
 
-                # Skip if lab has active deploy/destroy
-                if _has_lab_wide_active_job(session, lab_id):
+                # Skip if lab has active deploy/destroy (D.1: use pre-loaded set)
+                if _has_lab_wide_active_job(session, lab_id, labs_with_active_jobs=labs_with_active_jobs):
                     logger.debug(f"Lab {lab_id} has active deploy/destroy job, skipping batch enforcement")
                     continue
 
                 try:
+                    # Best-effort config extraction before restarting crashed nodes
+                    await _try_extract_configs(session, lab, nodes, hosts_by_id=hosts_by_id)
+
                     # Update per-node tracking
                     node_ids = []
                     for ns in nodes:

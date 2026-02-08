@@ -537,3 +537,162 @@ class TestEnforcementPendingNodeSpecialCase:
         _stub_enforcement_deps(monkeypatch)
         result = await state_enforcement.enforce_node_state(test_db, lab, ns)
         assert result is True
+
+
+# ---------------------------------------------------------------------------
+# Phase B.1: Enforcement Exception Handling in enforce_lab_states()
+# ---------------------------------------------------------------------------
+
+class TestEnforcementExceptionHandling:
+    """Tests for exception handling during enforce_lab_states() filtering (Phase A.2).
+
+    When _is_enforceable() throws an exception during the per-node filtering
+    phase, the exception handler should:
+    - Increment enforcement_attempts to prevent infinite loops
+    - Update last_enforcement_at for backoff tracking
+    - Set enforcement_failed_at when max retries are reached
+    - Handle cascading DB errors gracefully
+    """
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, test_db, monkeypatch):
+        """Set up common mocks for enforce_lab_states() testing."""
+        from contextlib import contextmanager
+
+        @contextmanager
+        def fake_get_session():
+            yield test_db
+
+        monkeypatch.setattr("app.tasks.state_enforcement.get_session", fake_get_session)
+        monkeypatch.setattr(state_enforcement.settings, "state_enforcement_enabled", True)
+        monkeypatch.setattr(state_enforcement.settings, "state_enforcement_max_retries", 3)
+        monkeypatch.setattr("app.tasks.state_enforcement.safe_create_task", lambda *a, **kw: None)
+
+    def _create_mismatched_node(self, test_db, enforcement_attempts=0):
+        """Create a lab + node with desired != actual for enforcement testing."""
+        lab = models.Lab(
+            name="Exception Test", owner_id="user1", provider="docker",
+            state="running", workspace_path="/tmp/exc-test",
+        )
+        test_db.add(lab)
+        test_db.commit()
+        test_db.refresh(lab)
+
+        ns = models.NodeState(
+            lab_id=lab.id, node_id="r1", node_name="r1",
+            desired_state="running", actual_state="stopped",
+            enforcement_attempts=enforcement_attempts,
+        )
+        test_db.add(ns)
+        test_db.commit()
+        test_db.refresh(ns)
+        return lab, ns
+
+    @pytest.mark.asyncio
+    async def test_exception_increments_attempts(self, test_db, monkeypatch) -> None:
+        """Exception in _is_enforceable → enforcement_attempts += 1."""
+        lab, ns = self._create_mismatched_node(test_db)
+        monkeypatch.setattr(
+            state_enforcement, "_is_enforceable",
+            MagicMock(side_effect=RuntimeError("test error")),
+        )
+
+        await state_enforcement.enforce_lab_states()
+
+        test_db.refresh(ns)
+        assert ns.enforcement_attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_exception_updates_last_enforcement_at(self, test_db, monkeypatch) -> None:
+        """last_enforcement_at is updated even on exception."""
+        lab, ns = self._create_mismatched_node(test_db)
+        monkeypatch.setattr(
+            state_enforcement, "_is_enforceable",
+            MagicMock(side_effect=RuntimeError("test error")),
+        )
+
+        before = datetime.now(timezone.utc)
+        await state_enforcement.enforce_lab_states()
+        after = datetime.now(timezone.utc)
+
+        test_db.refresh(ns)
+        assert ns.last_enforcement_at is not None
+        last_at = ns.last_enforcement_at
+        if last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=timezone.utc)
+        assert before <= last_at <= after
+
+    @pytest.mark.asyncio
+    async def test_exceptions_reaching_max_retries_sets_failed(self, test_db, monkeypatch) -> None:
+        """After max exceptions, enforcement_failed_at and error_message are set."""
+        # Start at max_retries - 1 so one more exception triggers failure
+        lab, ns = self._create_mismatched_node(test_db, enforcement_attempts=2)
+        monkeypatch.setattr(
+            state_enforcement, "_is_enforceable",
+            MagicMock(side_effect=RuntimeError("persistent error")),
+        )
+
+        await state_enforcement.enforce_lab_states()
+
+        test_db.refresh(ns)
+        assert ns.enforcement_attempts == 3
+        assert ns.enforcement_failed_at is not None
+        assert "persistent error" in ns.error_message
+
+    @pytest.mark.asyncio
+    async def test_exception_below_max_retries_no_failed_marker(self, test_db, monkeypatch) -> None:
+        """Exception below max retries increments attempts but does NOT set enforcement_failed_at."""
+        lab, ns = self._create_mismatched_node(test_db, enforcement_attempts=0)
+        monkeypatch.setattr(
+            state_enforcement, "_is_enforceable",
+            MagicMock(side_effect=RuntimeError("transient error")),
+        )
+
+        await state_enforcement.enforce_lab_states()
+
+        test_db.refresh(ns)
+        assert ns.enforcement_attempts == 1
+        assert ns.enforcement_failed_at is None  # Not yet at max retries
+
+    @pytest.mark.asyncio
+    async def test_exception_does_not_crash_other_nodes(self, test_db, monkeypatch) -> None:
+        """Exception on one node doesn't block processing of other nodes."""
+        lab = models.Lab(
+            name="Multi-node Exception Test", owner_id="user1", provider="docker",
+            state="running", workspace_path="/tmp/multi-exc-test",
+        )
+        test_db.add(lab)
+        test_db.commit()
+        test_db.refresh(lab)
+
+        ns1 = models.NodeState(
+            lab_id=lab.id, node_id="r1", node_name="r1",
+            desired_state="running", actual_state="stopped",
+        )
+        ns2 = models.NodeState(
+            lab_id=lab.id, node_id="r2", node_name="r2",
+            desired_state="running", actual_state="stopped",
+        )
+        test_db.add_all([ns1, ns2])
+        test_db.commit()
+        test_db.refresh(ns1)
+        test_db.refresh(ns2)
+
+        call_count = 0
+
+        def enforceable_first_fails(session, node_state):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("first node fails")
+            return True
+
+        monkeypatch.setattr(state_enforcement, "_is_enforceable", enforceable_first_fails)
+        # Mock out batch job creation path
+        monkeypatch.setattr(state_enforcement, "_has_lab_wide_active_job", lambda *a: False)
+        monkeypatch.setattr(state_enforcement, "_set_cooldown", lambda *a: None)
+
+        await state_enforcement.enforce_lab_states()
+
+        # Both nodes should have been processed (call_count >= 2)
+        assert call_count == 2

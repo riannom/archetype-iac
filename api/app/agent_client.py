@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import settings
 from app.db import SessionLocal
+from app.events.publisher import emit_agent_offline
 
 
 logger = logging.getLogger(__name__)
@@ -434,6 +435,7 @@ async def mark_agent_offline(database: Session, agent_id: str) -> None:
         agent.status = "offline"
         database.commit()
         logger.warning(f"Agent {agent_id} marked offline")
+        asyncio.create_task(emit_agent_offline(agent_id))
 
 
 async def check_agent_health(agent: models.Host) -> bool:
@@ -797,6 +799,8 @@ async def update_stale_agents(database: Session, timeout_seconds: int | None = N
 
     if marked_offline:
         database.commit()
+        for aid in marked_offline:
+            asyncio.create_task(emit_agent_offline(aid))
 
     return marked_offline
 

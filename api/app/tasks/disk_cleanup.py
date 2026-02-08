@@ -587,11 +587,12 @@ async def run_disk_cleanup() -> dict:
 
 async def disk_cleanup_monitor():
     """Background task to periodically run disk cleanup."""
-    logger.info(f"Disk cleanup monitor started (interval: {settings.cleanup_interval}s)")
+    interval = settings.get_interval("cleanup")
+    logger.info(f"Disk cleanup monitor started (interval: {interval}s)")
 
     while True:
         try:
-            await asyncio.sleep(settings.cleanup_interval)
+            await asyncio.sleep(interval)
             await run_disk_cleanup()
         except asyncio.CancelledError:
             logger.info("Disk cleanup monitor stopped")

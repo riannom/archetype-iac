@@ -718,6 +718,10 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         node_devices: dict[str, str | None] = {n.container_name: n.device for n in db_nodes}
         node_images: dict[str, str | None] = {n.container_name: n.image for n in db_nodes}
 
+        # D.2: Build indexed dicts from bulk-loaded data to avoid per-container queries
+        nodes_by_container_name = {n.container_name: n for n in db_nodes}
+        placements_by_node_name = {p.node_name: p for p in placements}
+
         # Also include the lab's default agent if set
         if lab.agent_id:
             agent_ids.add(lab.agent_id)
@@ -891,6 +895,17 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 session.refresh(ns)
 
         for ns in node_states:
+            # Skip nodes where enforcement has permanently failed.
+            # Enforcement owns their state — reconciliation must not overwrite
+            # the error state, which would cause an infinite retry oscillation.
+            if ns.enforcement_failed_at is not None:
+                logger.debug(
+                    f"Skipping reconciliation for {ns.node_name}: "
+                    f"enforcement_failed_at set"
+                )
+                error_count += 1
+                continue
+
             # Skip nodes with active transitional operations
             # The job will handle state updates - reconciliation should not interfere
             #
@@ -1076,11 +1091,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         # IMPORTANT: Don't blindly trust where containers are found - check node_def.host_id
         misplaced_containers: dict[str, str] = {}  # node_name -> wrong_agent_id
         for node_name, agent_id in container_agent_map.items():
-            # Look up node definition for FK and host assignment
-            node_def = session.query(models.Node).filter(
-                models.Node.lab_id == lab_id,
-                models.Node.container_name == node_name,
-            ).first()
+            # Look up node definition from pre-built index (D.2)
+            node_def = nodes_by_container_name.get(node_name)
 
             # Check if container is on the WRONG agent according to node definition
             if node_def and node_def.host_id and node_def.host_id != agent_id:
@@ -1092,14 +1104,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 # Don't update placement for misplaced containers - this would perpetuate the bug
                 continue
 
-            existing_placement = (
-                session.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.node_name == node_name,
-                )
-                .first()
-            )
+            existing_placement = placements_by_node_name.get(node_name)
             if existing_placement:
                 # Update if container moved to a different agent (and move is valid per node_def)
                 if existing_placement.host_id != agent_id:
@@ -1125,6 +1130,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     status="deployed",
                 )
                 session.add(new_placement)
+                placements_by_node_name[node_name] = new_placement
 
         # Remove misplaced containers from wrong agents
         # Only do this when no active job to avoid interfering with deployments
@@ -1170,6 +1176,17 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             .all()
         )
 
+        # D.4: Batch-load active VXLAN tunnels to avoid per-link queries
+        active_tunnels = (
+            session.query(models.VxlanTunnel)
+            .filter(
+                models.VxlanTunnel.lab_id == lab_id,
+                models.VxlanTunnel.status == "active",
+            )
+            .all()
+        )
+        tunnels_by_link_state_id = {t.link_state_id: t for t in active_tunnels}
+
         for ls in link_states:
             old_actual = ls.actual_state
             source_state = node_actual_states.get(ls.source_node, "unknown")
@@ -1183,15 +1200,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     ls.actual_state = LinkActualState.DOWN.value
                     ls.error_message = "Carrier disabled on one or more endpoints"
                 elif ls.is_cross_host:
-                    # For cross-host links, verify VXLAN tunnel exists
-                    tunnel = (
-                        session.query(models.VxlanTunnel)
-                        .filter(
-                            models.VxlanTunnel.link_state_id == ls.id,
-                            models.VxlanTunnel.status == "active",
-                        )
-                        .first()
-                    )
+                    # For cross-host links, verify VXLAN tunnel exists (D.4: dict lookup)
+                    tunnel = tunnels_by_link_state_id.get(ls.id)
                     if tunnel:
                         ls.actual_state = LinkActualState.UP.value
                         ls.error_message = None
@@ -1374,14 +1384,15 @@ async def state_reconciliation_monitor():
     Runs every reconciliation_interval seconds and queries agents
     for actual container status, updating the database to match reality.
     """
+    interval = settings.get_interval("reconciliation")
     logger.info(
         f"State reconciliation monitor started "
-        f"(interval: {settings.reconciliation_interval}s)"
+        f"(interval: {interval}s)"
     )
 
     while True:
         try:
-            await asyncio.sleep(settings.reconciliation_interval)
+            await asyncio.sleep(interval)
             await refresh_states_from_agents()
         except asyncio.CancelledError:
             logger.info("State reconciliation monitor stopped")
