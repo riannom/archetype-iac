@@ -273,9 +273,12 @@ async def destroy_node_immediately(
         logger.warning(f"No agent available to destroy node {node_name}")
         return False
 
-    # Call agent to destroy just this container
+    # Call agent to destroy this node via the provider-aware endpoint
     try:
-        result = await agent_client.destroy_container_on_agent(agent, lab_id, node_name)
+        provider = node_info.get("provider", "docker")
+        result = await agent_client.destroy_node_on_agent(
+            agent, lab_id, node_name, provider=provider
+        )
         if result.get("success"):
             logger.info(f"Node {node_name} destroyed on agent {agent.name}")
             # Clean up database records

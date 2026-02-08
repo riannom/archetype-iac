@@ -228,11 +228,24 @@ def _upsert_node_states(
                 )
                 .first()
             )
+            # Determine provider before node definition is gone
+            provider = "docker"
+            node_def = database.query(models.Node).filter(
+                models.Node.lab_id == lab_id,
+                models.Node.gui_id == existing_node_id,
+            ).first()
+            if node_def:
+                from app.utils.lab import get_node_provider
+                try:
+                    provider = get_node_provider(node_def, database)
+                except Exception:
+                    pass
             removed_node_info.append({
                 "node_id": existing_state.node_id,
                 "node_name": existing_state.node_name,
                 "actual_state": existing_state.actual_state,
                 "host_id": placement.host_id if placement else None,
+                "provider": provider,
             })
             database.delete(existing_state)
 
