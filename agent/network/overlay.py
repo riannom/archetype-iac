@@ -1412,6 +1412,98 @@ class OverlayManager:
         """
         return await self._vni_allocator.recover_from_system()
 
+    async def recover_link_tunnels(self) -> int:
+        """Recover link tunnel tracking from OVS/Linux state on startup.
+
+        After agent restart, _link_tunnels is empty but VXLAN ports may still
+        exist on OVS. Without recovery, the periodic cleanup treats them as
+        orphans and deletes them, breaking cross-host links.
+
+        Scans for vxlan-* ports on OVS, reads VNI/remote/local from the Linux
+        device, and rebuilds _link_tunnels entries so they're protected from
+        orphan cleanup.
+
+        Returns:
+            Number of link tunnels recovered
+        """
+        recovered = 0
+        try:
+            code, stdout, _ = await self._ovs_vsctl(
+                "list-ports", self._bridge_name
+            )
+            if code != 0:
+                return 0
+
+            port_names = [
+                p.strip() for p in stdout.strip().split("\n")
+                if p.strip().startswith("vxlan-")
+            ]
+
+            for port_name in port_names:
+                # Read VLAN tag from OVS
+                code, tag_out, _ = await self._ovs_vsctl(
+                    "get", "port", port_name, "tag"
+                )
+                local_vlan = 0
+                if code == 0:
+                    tag_str = tag_out.strip()
+                    if tag_str and tag_str != "[]":
+                        try:
+                            local_vlan = int(tag_str)
+                        except ValueError:
+                            pass
+
+                # Read VNI, remote IP, local IP from Linux VXLAN device
+                code, link_out, _ = await self._run_cmd([
+                    "ip", "-d", "link", "show", port_name
+                ])
+                if code != 0:
+                    continue
+
+                # Parse: "vxlan id <VNI> remote <IP> local <IP>"
+                vni = 0
+                remote_ip = ""
+                local_ip = ""
+                parts = link_out.split()
+                for i, part in enumerate(parts):
+                    if part == "id" and i + 1 < len(parts):
+                        try:
+                            vni = int(parts[i + 1])
+                        except ValueError:
+                            pass
+                    elif part == "remote" and i + 1 < len(parts):
+                        remote_ip = parts[i + 1]
+                    elif part == "local" and i + 1 < len(parts):
+                        local_ip = parts[i + 1]
+
+                if not vni or not remote_ip:
+                    continue
+
+                # We can't recover link_id or lab_id from the hash-based name,
+                # so use the port name as a placeholder link_id. The API will
+                # overwrite with the real link_id on the next attach-link call.
+                tunnel = LinkTunnel(
+                    link_id=port_name,
+                    vni=vni,
+                    local_ip=local_ip,
+                    remote_ip=remote_ip,
+                    local_vlan=local_vlan,
+                    interface_name=port_name,
+                    lab_id="recovered",
+                    tenant_mtu=settings.overlay_mtu,
+                )
+                self._link_tunnels[port_name] = tunnel
+                recovered += 1
+
+            if recovered > 0:
+                logger.info(
+                    f"Recovered {recovered} link tunnel(s) from OVS state"
+                )
+        except Exception as e:
+            logger.warning(f"Link tunnel recovery failed: {e}")
+
+        return recovered
+
     async def get_tunnels_for_lab(self, lab_id: str) -> list[VxlanTunnel]:
         """Get all tunnels for a lab."""
         return [t for t in self._tunnels.values() if t.lab_id == lab_id]

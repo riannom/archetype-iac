@@ -49,6 +49,7 @@ class OVSBackend(NetworkBackend):
 
         if settings.enable_vxlan:
             info["vnis_recovered"] = await self._overlay.recover_allocations()
+            info["link_tunnels_recovered"] = await self._overlay.recover_link_tunnels()
 
         if settings.enable_ovs:
             await self._ovs.initialize()

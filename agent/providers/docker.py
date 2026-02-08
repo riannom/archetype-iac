@@ -1676,6 +1676,16 @@ username admin privilege 15 role network-admin nopassword
                 )
                 return
 
+        # Set MTU inside container namespace (Docker resets to 1500 during veth move)
+        if settings.local_mtu > 0:
+            proc = await asyncio.create_subprocess_exec(
+                "nsenter", "-t", str(pid), "-n",
+                "ip", "link", "set", intended_name, "mtu", str(settings.local_mtu),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+
         # Bring interface back up
         proc = await asyncio.create_subprocess_exec(
             "nsenter", "-t", str(pid), "-n",
