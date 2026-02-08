@@ -1040,9 +1040,17 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
 
             if ns.actual_state != old_state or (ns.is_ready != old_is_ready and ns.is_ready):
                 logger.info(
-                    f"Reconciled node {ns.node_name} in lab {lab_id}: "
-                    f"{old_state} -> {ns.actual_state}"
-                    + (f" (ready)" if ns.is_ready and not old_is_ready else "")
+                    "Node state transition",
+                    extra={
+                        "event": "node_state_transition",
+                        "lab_id": lab_id,
+                        "node_id": ns.node_id,
+                        "node_name": ns.node_name,
+                        "old_state": old_state,
+                        "new_state": ns.actual_state,
+                        "is_ready": ns.is_ready,
+                        "trigger": "reconciliation",
+                    },
                 )
                 # Broadcast state change to WebSocket clients
                 # Look up host info for this node
@@ -1210,9 +1218,19 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 ls.error_message = None
 
             if ls.actual_state != old_actual:
-                logger.debug(
-                    f"Reconciled link {ls.link_name} in lab {lab_id}: "
-                    f"{old_actual} -> {ls.actual_state}"
+                logger.info(
+                    "Link state transition",
+                    extra={
+                        "event": "link_state_transition",
+                        "lab_id": lab_id,
+                        "link_name": ls.link_name,
+                        "old_state": old_actual,
+                        "new_state": ls.actual_state,
+                        "source_node": ls.source_node,
+                        "target_node": ls.target_node,
+                        "is_cross_host": ls.is_cross_host,
+                        "trigger": "reconciliation",
+                    },
                 )
                 # Broadcast link state change to WebSocket clients
                 asyncio.create_task(

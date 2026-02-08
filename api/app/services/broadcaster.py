@@ -76,6 +76,7 @@ class StateBroadcaster:
         host_name: str | None = None,
         image_sync_status: str | None = None,
         image_sync_message: str | None = None,
+        will_retry: bool = False,
     ) -> int:
         """Publish a node state change event.
 
@@ -91,6 +92,7 @@ class StateBroadcaster:
             host_name: Agent host name
             image_sync_status: Image sync status (checking/syncing/synced/failed)
             image_sync_message: Image sync progress or error message
+            will_retry: Whether enforcement will automatically retry after error
 
         Returns:
             Number of subscribers that received the message
@@ -111,6 +113,7 @@ class StateBroadcaster:
                     "host_name": host_name,
                     "image_sync_status": image_sync_status,
                     "image_sync_message": image_sync_message,
+                    "will_retry": will_retry,
                 },
             }
             channel = self._channel_name(lab_id)
@@ -319,6 +322,7 @@ async def broadcast_node_state_change(
     host_name: str | None = None,
     image_sync_status: str | None = None,
     image_sync_message: str | None = None,
+    will_retry: bool = False,
 ) -> None:
     """Convenience function to broadcast a node state change.
 
@@ -337,6 +341,7 @@ async def broadcast_node_state_change(
         host_name=host_name,
         image_sync_status=image_sync_status,
         image_sync_message=image_sync_message,
+        will_retry=will_retry,
     )
 
 

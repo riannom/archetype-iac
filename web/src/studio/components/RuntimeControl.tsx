@@ -2,20 +2,13 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { DeviceModel, Node, isDeviceNode, DeviceNode } from '../types';
 import { getAgentColor } from '../../utils/agentColors';
+import { NodeRuntimeStatus, NodeStateEntry } from '../../types/nodeState';
 
-export type RuntimeStatus = 'stopped' | 'booting' | 'running' | 'stopping' | 'error';
+/** @deprecated Use NodeRuntimeStatus from types/nodeState instead */
+export type RuntimeStatus = NodeRuntimeStatus;
 
 // Track pending operations to prevent race conditions from rapid clicks
 type PendingOp = 'bulk' | string; // 'bulk' for bulk actions, node ID for per-node actions
-
-interface NodeStateEntry {
-  id: string;
-  node_id: string;
-  node_name: string;
-  host_id?: string | null;
-  host_name?: string | null;
-  error_message?: string | null;
-}
 
 interface RuntimeControlProps {
   labId: string;

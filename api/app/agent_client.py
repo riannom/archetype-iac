@@ -518,16 +518,52 @@ async def deploy_to_agent(
         raise ValueError("Deploy requires topology JSON; topology_yaml is no longer supported")
 
     url = f"{get_agent_url(agent)}/jobs/deploy"
-    logger.info(f"Deploying lab {lab_id} via agent {agent.id} using provider {provider} (JSON)")
+    logger.info(
+        "Agent request",
+        extra={
+            "event": "agent_request",
+            "method": "deploy",
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "lab_id": lab_id,
+            "provider": provider,
+        },
+    )
 
+    import time as _time
+    _t0 = _time.monotonic()
     try:
         # Reduce retries for deploy since it's a long operation and agent has its own deduplication
         result = await with_retry(
             _do_deploy, url, job_id, lab_id, topology, provider, max_retries=1
         )
-        logger.info(f"Deploy completed for lab {lab_id}: {result.get('status')}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "deploy",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "status": result.get("status", "unknown"),
+                "duration_ms": elapsed_ms,
+            },
+        )
         return result
     except AgentError as e:
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "deploy",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "status": "error",
+                "duration_ms": elapsed_ms,
+                "error": e.message,
+            },
+        )
         e.agent_id = agent.id
         raise
 
@@ -1529,7 +1565,17 @@ async def create_node_on_agent(
         Dict with 'success', 'container_name', 'status', and optionally 'error' keys.
     """
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/create"
-    logger.info(f"Creating node {node_name} (kind={kind}) on agent {agent.id}")
+    logger.info(
+        "Agent request",
+        extra={
+            "event": "agent_request",
+            "method": "create_node",
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "lab_id": lab_id,
+            "node_name": node_name,
+        },
+    )
 
     payload: dict = {"node_name": node_name, "kind": kind}
     if image:
@@ -1545,18 +1591,43 @@ async def create_node_on_agent(
     if startup_config:
         payload["startup_config"] = startup_config
 
+    import time as _time
+    _t0 = _time.monotonic()
     try:
         client = get_http_client()
         response = await client.post(url, json=payload, timeout=120.0)
         response.raise_for_status()
         result = response.json()
-        if result.get("success"):
-            logger.info(f"Created node {node_name} on agent {agent.id}")
-        else:
-            logger.warning(f"Create node {node_name} failed: {result.get('error')}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "create_node",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "success" if result.get("success") else "error",
+                "duration_ms": elapsed_ms,
+                "error": result.get("error") if not result.get("success") else None,
+            },
+        )
         return result
     except Exception as e:
-        logger.error(f"Create node {node_name} failed on agent {agent.id}: {e}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "create_node",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "error",
+                "duration_ms": elapsed_ms,
+                "error": str(e),
+            },
+        )
         return {"success": False, "error": str(e)}
 
 
@@ -1575,8 +1646,20 @@ async def start_node_on_agent(
         and optionally 'error' keys.
     """
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/start"
-    logger.info(f"Starting node {node_name} on agent {agent.id}")
+    logger.info(
+        "Agent request",
+        extra={
+            "event": "agent_request",
+            "method": "start_node",
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "lab_id": lab_id,
+            "node_name": node_name,
+        },
+    )
 
+    import time as _time
+    _t0 = _time.monotonic()
     try:
         client = get_http_client()
         response = await client.post(
@@ -1589,13 +1672,36 @@ async def start_node_on_agent(
         )
         response.raise_for_status()
         result = response.json()
-        if result.get("success"):
-            logger.info(f"Started node {node_name} on agent {agent.id}")
-        else:
-            logger.warning(f"Start node {node_name} failed: {result.get('error')}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "start_node",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "success" if result.get("success") else "error",
+                "duration_ms": elapsed_ms,
+                "error": result.get("error") if not result.get("success") else None,
+            },
+        )
         return result
     except Exception as e:
-        logger.error(f"Start node {node_name} failed on agent {agent.id}: {e}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "start_node",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "error",
+                "duration_ms": elapsed_ms,
+                "error": str(e),
+            },
+        )
         return {"success": False, "error": str(e)}
 
 
@@ -1610,20 +1716,55 @@ async def stop_node_on_agent(
         Dict with 'success', 'status', and optionally 'error' keys.
     """
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/stop"
-    logger.info(f"Stopping node {node_name} on agent {agent.id}")
+    logger.info(
+        "Agent request",
+        extra={
+            "event": "agent_request",
+            "method": "stop_node",
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "lab_id": lab_id,
+            "node_name": node_name,
+        },
+    )
 
+    import time as _time
+    _t0 = _time.monotonic()
     try:
         client = get_http_client()
         response = await client.post(url, timeout=60.0)
         response.raise_for_status()
         result = response.json()
-        if result.get("success"):
-            logger.info(f"Stopped node {node_name} on agent {agent.id}")
-        else:
-            logger.warning(f"Stop node {node_name} failed: {result.get('error')}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "stop_node",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "success" if result.get("success") else "error",
+                "duration_ms": elapsed_ms,
+                "error": result.get("error") if not result.get("success") else None,
+            },
+        )
         return result
     except Exception as e:
-        logger.error(f"Stop node {node_name} failed on agent {agent.id}: {e}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "stop_node",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "error",
+                "duration_ms": elapsed_ms,
+                "error": str(e),
+            },
+        )
         return {"success": False, "error": str(e)}
 
 
@@ -1638,20 +1779,55 @@ async def destroy_node_on_agent(
         Dict with 'success', 'container_removed', and optionally 'error' keys.
     """
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}"
-    logger.info(f"Destroying node {node_name} on agent {agent.id}")
+    logger.info(
+        "Agent request",
+        extra={
+            "event": "agent_request",
+            "method": "destroy_node",
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "lab_id": lab_id,
+            "node_name": node_name,
+        },
+    )
 
+    import time as _time
+    _t0 = _time.monotonic()
     try:
         client = get_http_client()
         response = await client.delete(url, timeout=60.0)
         response.raise_for_status()
         result = response.json()
-        if result.get("success"):
-            logger.info(f"Destroyed node {node_name} on agent {agent.id}")
-        else:
-            logger.warning(f"Destroy node {node_name} failed: {result.get('error')}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "destroy_node",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "success" if result.get("success") else "error",
+                "duration_ms": elapsed_ms,
+                "error": result.get("error") if not result.get("success") else None,
+            },
+        )
         return result
     except Exception as e:
-        logger.error(f"Destroy node {node_name} failed on agent {agent.id}: {e}")
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": "destroy_node",
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "error",
+                "duration_ms": elapsed_ms,
+                "error": str(e),
+            },
+        )
         return {"success": False, "error": str(e)}
 
 

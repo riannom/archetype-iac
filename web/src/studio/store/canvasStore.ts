@@ -26,19 +26,13 @@
 import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { enableMapSet } from 'immer';
 import { Node, Link, DeviceNode, ExternalNetworkNode } from '../types';
+import { NodeStateData } from '../../types/nodeState';
 
-// Runtime state types (from WebSocket)
-export interface NodeStateData {
-  node_id: string;
-  node_name: string;
-  desired_state: 'running' | 'stopped';
-  actual_state: 'undeployed' | 'pending' | 'starting' | 'running' | 'stopped' | 'stopping' | 'error';
-  is_ready: boolean;
-  error_message?: string | null;
-  host_id?: string | null;
-  host_name?: string | null;
-}
+enableMapSet();
+
+export type { NodeStateData };
 
 export interface LinkStateData {
   link_name: string;

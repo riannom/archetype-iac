@@ -1,7 +1,7 @@
 # State Management Overhaul — Implementation Plan
 
 **Created**: 2026-02-07
-**Status**: IN PROGRESS — Phase 0 + Phase 1 + Phase 2 + Phase 3 Complete
+**Status**: IN PROGRESS — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 Complete
 **Scope**: States, runtime control, transitions, placement enforcement, parallelization, logging, UI accuracy
 
 ## Design Principles
@@ -534,7 +534,7 @@ This is a large change. We phase it:
 ### Phase 5: Structured Logging
 > Comprehensive, machine-parseable logging for all state transitions.
 
-- [ ] **5.1** Add structured state transition logging (Issue #15)
+- [x] **5.1** Add structured state transition logging (Issue #15) ✅
   - File: `api/app/tasks/node_lifecycle.py`
   - Log at EVERY state transition point with structured extra:
     ```python
@@ -562,7 +562,7 @@ This is a large change. We phase it:
     6. Error state set (trigger="error", include error_message in extra)
     7. Placement decision (trigger="placement", include decision_chain showing which source was used)
 
-- [ ] **5.2** Add structured logging to agent communications
+- [x] **5.2** Add structured logging to agent communications ✅
   - File: `api/app/agent_client.py`
   - Log request metadata (NOT full payloads — too large):
     ```python
@@ -595,7 +595,7 @@ This is a large change. We phase it:
     )
     ```
 
-- [ ] **5.3** Promote link state changes to info level
+- [x] **5.3** Promote link state changes to info level ✅
   - File: `api/app/tasks/reconciliation.py`
   - Change `logger.debug` (line ~1194) to `logger.info` for link state changes
   - Add structured extra:
@@ -614,7 +614,7 @@ This is a large change. We phase it:
     )
     ```
 
-- [ ] **5.4** Add API endpoint entry logging
+- [x] **5.4** Add API endpoint entry logging ✅
   - File: `api/app/routers/labs.py`
   - Log when user calls state-changing endpoints:
     ```python
@@ -633,7 +633,7 @@ This is a large change. We phase it:
     ```
   - Also log bulk operations with node count
 
-- [ ] **5.5** Add agent-side structured logging
+- [x] **5.5** Add agent-side structured logging ✅
   - File: `agent/main.py`
   - Log container lifecycle events on the agent:
     ```python

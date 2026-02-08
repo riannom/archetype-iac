@@ -1,13 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ConsoleWindow, Node } from '../types';
 import TerminalSession from './TerminalSession';
-
-interface NodeStateEntry {
-  id: string;
-  node_id: string;
-  actual_state: string;
-  is_ready?: boolean;
-}
+import { NodeStateEntry } from '../../types/nodeState';
 
 interface ConsoleManagerProps {
   labId: string;

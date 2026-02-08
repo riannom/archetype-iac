@@ -48,6 +48,13 @@ def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
             node_data.all_ips = json.loads(state.management_ips_json)
         except (json.JSONDecodeError, TypeError):
             node_data.all_ips = []
+    # Compute will_retry: error state with retries remaining and not permanently failed
+    from app.config import settings
+    node_data.will_retry = (
+        state.actual_state == "error"
+        and state.enforcement_attempts < settings.state_enforcement_max_retries
+        and state.enforcement_failed_at is None
+    )
     return node_data
 
 
@@ -822,6 +829,20 @@ async def set_node_desired_state(
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
+
+    logger.info(
+        "User state change request",
+        extra={
+            "event": "user_state_request",
+            "user_id": str(current_user.id),
+            "user_email": current_user.email,
+            "lab_id": lab_id,
+            "node_id": node_id,
+            "requested_state": payload.state,
+            "endpoint": "set_node_desired_state",
+        },
+    )
+
     _ensure_node_states_exist(database, lab.id)
     state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state=payload.state)
 
@@ -947,6 +968,19 @@ async def set_all_nodes_desired_state(
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
+
+    logger.info(
+        "User state change request",
+        extra={
+            "event": "user_state_request",
+            "user_id": str(current_user.id),
+            "user_email": current_user.email,
+            "lab_id": lab_id,
+            "requested_state": payload.state,
+            "endpoint": "set_all_nodes_desired_state",
+        },
+    )
+
     _ensure_node_states_exist(database, lab.id)
 
     transitional_states = {"starting", "stopping", "pending"}
@@ -1000,6 +1034,19 @@ async def set_all_nodes_desired_state(
             nodes_needing_sync.append(state.node_id)
 
     database.commit()
+
+    logger.info(
+        "Bulk state change result",
+        extra={
+            "event": "bulk_state_result",
+            "lab_id": lab_id,
+            "requested_state": payload.state,
+            "affected": affected_count,
+            "skipped_transitional": skipped_transitional_count,
+            "already_in_state": already_in_state_count,
+            "nodes_needing_sync": len(nodes_needing_sync),
+        },
+    )
 
     # Auto-sync: immediately trigger reconciliation for affected nodes
     if nodes_needing_sync:

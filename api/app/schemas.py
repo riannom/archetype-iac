@@ -258,6 +258,8 @@ class NodeStateOut(BaseModel):
     # Host/agent info for multi-host visibility
     host_id: str | None = None
     host_name: str | None = None
+    # Whether enforcement will automatically retry after an error
+    will_retry: bool = False
     created_at: datetime
     updated_at: datetime
 

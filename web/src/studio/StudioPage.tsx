@@ -4,7 +4,7 @@ import Canvas from './components/Canvas';
 import TopBar from './components/TopBar';
 import PropertiesPanel from './components/PropertiesPanel';
 import ConsoleManager from './components/ConsoleManager';
-import RuntimeControl, { RuntimeStatus } from './components/RuntimeControl';
+import RuntimeControl from './components/RuntimeControl';
 import StatusBar from './components/StatusBar';
 import TaskLogPanel, { TaskLogEntry, DockedConsole } from './components/TaskLogPanel';
 import Dashboard from './components/Dashboard';
@@ -18,7 +18,8 @@ import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, Lab
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
-import { useLabStateWS, NodeStateData, JobProgressData } from './hooks/useLabStateWS';
+import { useLabStateWS, JobProgressData } from './hooks/useLabStateWS';
+import { NodeStateEntry, NodeStateData, NodeRuntimeStatus, mapActualToRuntime } from '../types/nodeState';
 import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -34,26 +35,8 @@ interface LabSummary {
   created_at?: string;
 }
 
-interface NodeStateEntry {
-  id: string;
-  lab_id: string;
-  node_id: string;
-  node_name: string;
-  desired_state: 'stopped' | 'running';
-  actual_state: 'undeployed' | 'pending' | 'starting' | 'running' | 'stopped' | 'stopping' | 'error';
-  error_message?: string | null;
-  is_ready?: boolean;
-  boot_started_at?: string | null;
-  // Image sync status: null (not syncing), "checking", "syncing", "synced", "failed"
-  image_sync_status?: string | null;
-  // Image sync progress/error message
-  image_sync_message?: string | null;
-  // Host/agent info for multi-host visibility
-  host_id?: string | null;
-  host_name?: string | null;
-  created_at: string;
-  updated_at: string;
-}
+// RuntimeStatus is an alias for NodeRuntimeStatus for backward compatibility
+type RuntimeStatus = NodeRuntimeStatus;
 
 const DEFAULT_ICON = 'fa-microchip';
 
@@ -207,8 +190,16 @@ const StudioPage: React.FC = () => {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeStatus>>({});
   const [nodeStates, setNodeStates] = useState<Record<string, NodeStateEntry>>({});
+  // Derive runtimeStates from nodeStates — single source of truth
+  const runtimeStates = useMemo(() => {
+    const result: Record<string, RuntimeStatus> = {};
+    for (const [nodeId, state] of Object.entries(nodeStates)) {
+      const status = mapActualToRuntime(state.actual_state, state.desired_state, state.will_retry);
+      if (status !== null) result[nodeId] = status;
+    }
+    return result;
+  }, [nodeStates]);
   const [consoleWindows, setConsoleWindows] = useState<ConsoleWindow[]>([]);
   const [dockedConsoles, setDockedConsoles] = useState<DockedConsole[]>([]);
   const [activeBottomTabId, setActiveBottomTabId] = useState<string>('log');
@@ -289,12 +280,13 @@ const StudioPage: React.FC = () => {
   const portManager = usePortManager(nodes, links);
 
   // WebSocket hook for real-time state updates
-  // Converts WebSocket node state updates to runtime status and nodeStates
+  // Updates nodeStates; runtimeStates are derived automatically via useMemo
   const handleWSNodeStateChange = useCallback((nodeId: string, wsState: NodeStateData) => {
-    // Update nodeStates record
+    // Update nodeStates record — runtimeStates derived automatically
     setNodeStates((prev) => ({
       ...prev,
       [nodeId]: {
+        ...prev[nodeId],
         id: wsState.node_id,
         lab_id: activeLab?.id || '',
         node_id: wsState.node_id,
@@ -307,39 +299,14 @@ const StudioPage: React.FC = () => {
         host_name: wsState.host_name,
         image_sync_status: wsState.image_sync_status,
         image_sync_message: wsState.image_sync_message,
-        created_at: new Date().toISOString(),
+        will_retry: wsState.will_retry,
+        created_at: prev[nodeId]?.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } as NodeStateEntry,
     }));
 
-    // Update runtime status for display
-    setRuntimeStates((prev) => {
-      let newStatus: RuntimeStatus | undefined;
-      if (wsState.actual_state === 'running') {
-        newStatus = 'running';
-      } else if (wsState.actual_state === 'stopping') {
-        newStatus = 'stopping';
-      } else if (wsState.actual_state === 'starting') {
-        newStatus = 'booting';
-      } else if (wsState.actual_state === 'pending') {
-        newStatus = wsState.desired_state === 'running' ? 'booting' : 'stopped';
-      } else if (wsState.actual_state === 'error') {
-        newStatus = 'error';
-      } else if (wsState.actual_state === 'stopped') {
-        newStatus = 'stopped';
-      }
-      // 'undeployed' - no status indicator
-
-      if (newStatus) {
-        return { ...prev, [nodeId]: newStatus };
-      } else {
-        const { [nodeId]: _, ...rest } = prev;
-        return rest;
-      }
-    });
-
-    // Show toast for nodes entering error state
-    if (wsState.actual_state === 'error' && wsState.error_message) {
+    // Show toast for nodes entering error state (suppress if will_retry)
+    if (wsState.actual_state === 'error' && wsState.error_message && !wsState.will_retry) {
       addNotification(
         'error',
         `Node Error: ${wsState.node_name}`,
@@ -695,45 +662,17 @@ const StudioPage: React.FC = () => {
   }, [deviceModels, studioRequest, loadLayout]);
 
   // Load node states from the backend (per-node desired/actual state)
+  // runtimeStates are derived automatically via useMemo
   const loadNodeStates = useCallback(async (labId: string, currentNodes: Node[]) => {
     try {
       const data = await studioRequest<{ nodes: NodeStateEntry[] }>(`/labs/${labId}/nodes/states`);
       const statesByNodeId: Record<string, NodeStateEntry> = {};
-      const runtimeByNodeId: Record<string, RuntimeStatus> = {};
 
       (data.nodes || []).forEach((state) => {
         statesByNodeId[state.node_id] = state;
-        // Convert actual_state to RuntimeStatus for display
-        if (state.actual_state === 'running') {
-          runtimeByNodeId[state.node_id] = 'running';
-        } else if (state.actual_state === 'stopping') {
-          runtimeByNodeId[state.node_id] = 'stopping';
-        } else if (state.actual_state === 'starting') {
-          // "starting" = already-deployed node being started -> shows as booting
-          runtimeByNodeId[state.node_id] = 'booting';
-        } else if (state.actual_state === 'pending') {
-          // "pending" = node being deployed for the first time -> shows as booting
-          runtimeByNodeId[state.node_id] = state.desired_state === 'running' ? 'booting' : 'stopped';
-        } else if (state.actual_state === 'error') {
-          runtimeByNodeId[state.node_id] = 'error';
-        } else if (state.actual_state === 'stopped') {
-          runtimeByNodeId[state.node_id] = 'stopped';
-        }
-        // For 'undeployed', we don't set a runtime status (shows as no status indicator)
       });
 
       setNodeStates(statesByNodeId);
-      // Use functional update to merge with previous state and only update if changed
-      // This prevents flickering when polling returns the same data
-      setRuntimeStates((prev) => {
-        // Check if anything actually changed - if not, return previous state to prevent re-render
-        const prevKeys = Object.keys(prev).sort();
-        const newKeys = Object.keys(runtimeByNodeId).sort();
-        if (prevKeys.length === newKeys.length && prevKeys.every((k, i) => k === newKeys[i] && prev[k] === runtimeByNodeId[k])) {
-          return prev; // No change, skip update
-        }
-        return runtimeByNodeId;
-      });
     } catch {
       // Node states endpoint may fail for new labs - use job-based fallback
     }
@@ -1053,8 +992,15 @@ const StudioPage: React.FC = () => {
     addTaskLogEntry('info', `Setting "${nodeName}" to ${desiredState}...`);
 
     try {
-      // Optimistically update UI to show pending/booting state
-      setRuntimeStates((prev) => ({ ...prev, [nodeId]: status === 'stopped' ? 'stopping' : 'booting' }));
+      // Optimistically update nodeStates — runtimeStates derived automatically
+      setNodeStates((prev) => ({
+        ...prev,
+        [nodeId]: {
+          ...prev[nodeId],
+          actual_state: status === 'stopped' ? 'stopping' : 'starting',
+          desired_state: desiredState as 'stopped' | 'running',
+        },
+      }));
 
       // Set desired state - this now auto-triggers sync
       await studioRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/desired-state`, {
@@ -1088,7 +1034,10 @@ const StudioPage: React.FC = () => {
       }
 
       console.error('Node action failed:', error);
-      setRuntimeStates((prev) => ({ ...prev, [nodeId]: 'error' }));
+      setNodeStates((prev) => ({
+        ...prev,
+        [nodeId]: { ...prev[nodeId], actual_state: 'error', error_message: message },
+      }));
       addTaskLogEntry('error', `Node ${action} failed for "${nodeName}": ${message}`);
     } finally {
       // Clear pending operation
@@ -1601,7 +1550,16 @@ const StudioPage: React.FC = () => {
             nodeStates={nodeStates}
             deviceModels={deviceModels}
             onUpdateStatus={handleUpdateStatus}
-            onSetRuntimeStatus={(nodeId, status) => setRuntimeStates(prev => ({ ...prev, [nodeId]: status }))}
+            onSetRuntimeStatus={(nodeId, status) => {
+              // Map RuntimeStatus back to actual_state for optimistic updates
+              const actualStateMap: Record<string, string> = {
+                booting: 'starting', stopping: 'stopping', running: 'running', stopped: 'stopped', error: 'error',
+              };
+              setNodeStates(prev => ({
+                ...prev,
+                [nodeId]: { ...prev[nodeId], actual_state: actualStateMap[status] || status },
+              }));
+            }}
             onRefreshStates={async () => {
               if (activeLab) {
                 await refreshNodeStatesFromAgent(activeLab.id);
