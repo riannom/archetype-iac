@@ -30,8 +30,8 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
       return 'bg-rose-50 dark:bg-rose-900/30 border-rose-400 dark:border-rose-600 shadow-md animate-pulse';
     }
     if (isSelected) {
-      // Selected devices (both custom and vendor) use sage
-      return 'bg-sage-50 dark:bg-sage-800 border-sage-500 dark:border-sage-600 shadow-sm';
+      // Subtle left accent bar, keep dark background readable
+      return 'bg-sage-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800 border-l-2 border-l-sage-500 dark:border-l-sage-400';
     }
     if (isCustom) {
       // Subtle differentiation for persistent custom devices
@@ -46,7 +46,7 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
       return 'bg-rose-600 text-white';
     }
     if (isSelected) {
-      return 'bg-sage-600 text-white';
+      return 'bg-sage-100 dark:bg-stone-800 text-sage-600 dark:text-sage-400';
     }
     if (isCustom) {
       return 'bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-300';
@@ -60,7 +60,7 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
       return 'text-rose-700 dark:text-rose-400';
     }
     if (isSelected) {
-      return 'text-sage-700 dark:text-sage-400';
+      return 'text-stone-900 dark:text-white';
     }
     return 'text-stone-900 dark:text-white';
   };
