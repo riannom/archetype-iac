@@ -436,16 +436,108 @@ async def enforce_node_state(
     return True
 
 
+def _is_enforceable(
+    session: Session,
+    node_state: models.NodeState,
+) -> bool:
+    """Check if a node passes all pre-filtering for enforcement.
+
+    Runs the same checks as enforce_node_state() but without creating jobs:
+    - Action determination (state machine)
+    - Skip checks (max retries, backoff, cooldown)
+    - Active job checks (per-node)
+
+    Side effect: marks nodes as failed if max retries exhausted.
+    Returns True if the node should be included in a batch enforcement job.
+    """
+    desired = node_state.desired_state
+    actual = node_state.actual_state
+    node_name = node_state.node_name
+    lab_id = node_state.lab_id
+    now = datetime.now(timezone.utc)
+
+    # Determine what action is needed using state machine
+    action = NodeStateMachine.get_enforcement_action(
+        NodeActualState(actual) if actual in [s.value for s in NodeActualState] else NodeActualState.ERROR,
+        NodeDesiredState(desired) if desired in [s.value for s in NodeDesiredState] else NodeDesiredState.STOPPED,
+    )
+
+    # Handle special case: pending node that needs to be started
+    if desired == NodeDesiredState.RUNNING.value and actual == NodeActualState.PENDING.value:
+        action = "start"
+
+    # Handle special case: auto-restart disabled for error state
+    if action == "start" and actual == NodeActualState.ERROR.value:
+        if not settings.state_enforcement_auto_restart_enabled:
+            logger.debug(f"Auto-restart disabled for {node_name}, skipping")
+            return False
+
+    if not action:
+        logger.debug(
+            f"No enforcement action for {node_name}: desired={desired}, actual={actual}"
+        )
+        return False
+
+    # Check if enforcement should be skipped (max retries, backoff, cooldown)
+    should_skip, reason = _should_skip_enforcement(node_state)
+    if should_skip:
+        if "max retries" in reason and not node_state.enforcement_failed_at:
+            node_state.enforcement_failed_at = now
+            node_state.actual_state = NodeActualState.ERROR.value
+            original_error = node_state.error_message
+            node_state.error_message = (
+                f"State enforcement failed after {node_state.enforcement_attempts} attempts. "
+                f"Last error: {original_error or 'unknown'}"
+            )
+            session.commit()
+            logger.warning(
+                f"Node {node_name} in lab {lab_id} exceeded max enforcement retries "
+                f"({node_state.enforcement_attempts}). Marking as error."
+            )
+            safe_create_task(
+                _notify_enforcement_failure(lab_id, node_state),
+                name=f"notify:enforcement:{lab_id}:{node_name}"
+            )
+        else:
+            logger.debug(f"Node {node_name} in lab {lab_id}: {reason}")
+        return False
+
+    # Check legacy Redis cooldown
+    if _is_on_cooldown(lab_id, node_name):
+        logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
+        return False
+
+    # Check for active per-node jobs
+    if _has_active_job(session, lab_id, node_name):
+        logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
+        return False
+
+    return True
+
+
+def _has_lab_wide_active_job(session: Session, lab_id: str) -> bool:
+    """Check if a lab has an active deploy/destroy job."""
+    return session.query(models.Job).filter(
+        models.Job.lab_id == lab_id,
+        models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+        models.Job.action.in_(["up", "down"]),
+    ).first() is not None
+
+
 async def enforce_lab_states():
     """Find and correct all state mismatches across labs.
 
-    This is the main entry point called periodically by the monitor.
+    Batches enforceable nodes by lab, creating one job per lab instead of
+    one per node. This reduces job count, NLM instances, and HTTP round-trips.
     """
     if not settings.state_enforcement_enabled:
         return
 
     with get_session() as session:
         try:
+            from app.tasks.jobs import run_node_reconcile
+            from app.utils.lab import get_lab_provider
+
             # Find all node_states where desired != actual for running labs
             mismatched_states = (
                 session.query(models.NodeState)
@@ -463,21 +555,91 @@ async def enforce_lab_states():
 
             logger.debug(f"Found {len(mismatched_states)} nodes with state mismatches")
 
-            # Process each mismatch
-            enforced_count = 0
+            # Phase 1: Per-node filtering (skip checks, cooldown, backoff, active jobs)
+            # Group passing nodes by lab_id
+            enforceable_by_lab: Dict[str, list[models.NodeState]] = {}
             for node_state in mismatched_states:
-                lab = session.get(models.Lab, node_state.lab_id)
+                try:
+                    if _is_enforceable(session, node_state):
+                        enforceable_by_lab.setdefault(node_state.lab_id, []).append(node_state)
+                except Exception as e:
+                    logger.error(
+                        f"Error filtering {node_state.node_name} "
+                        f"in lab {node_state.lab_id}: {e}"
+                    )
+                    try:
+                        session.rollback()
+                        # Increment attempts to prevent infinite loop on persistent exceptions
+                        node_state.enforcement_attempts += 1
+                        node_state.last_enforcement_at = datetime.now(timezone.utc)
+                        if node_state.enforcement_attempts >= settings.state_enforcement_max_retries:
+                            node_state.enforcement_failed_at = datetime.now(timezone.utc)
+                            node_state.error_message = (
+                                f"Enforcement exception after {node_state.enforcement_attempts} "
+                                f"attempts: {e}"
+                            )
+                        session.commit()
+                    except Exception:
+                        try:
+                            session.rollback()
+                        except Exception:
+                            pass
+
+            if not enforceable_by_lab:
+                return
+
+            # Phase 2: Create one batch job per lab
+            enforced_count = 0
+            now = datetime.now(timezone.utc)
+
+            for lab_id, nodes in enforceable_by_lab.items():
+                lab = session.get(models.Lab, lab_id)
                 if not lab:
                     continue
 
+                # Skip if lab has active deploy/destroy
+                if _has_lab_wide_active_job(session, lab_id):
+                    logger.debug(f"Lab {lab_id} has active deploy/destroy job, skipping batch enforcement")
+                    continue
+
                 try:
-                    if await enforce_node_state(session, lab, node_state):
-                        enforced_count += 1
-                except Exception as e:
-                    logger.error(
-                        f"Error enforcing state for {node_state.node_name} "
-                        f"in lab {node_state.lab_id}: {e}"
+                    # Update per-node tracking
+                    node_ids = []
+                    for ns in nodes:
+                        _set_cooldown(lab_id, ns.node_name)
+                        ns.enforcement_attempts += 1
+                        ns.last_enforcement_at = now
+                        if ns.enforcement_failed_at:
+                            logger.info(f"Retrying failed node {ns.node_name} after crash cooldown")
+                            ns.enforcement_failed_at = None
+                        node_ids.append(ns.node_id)
+
+                    # Create one batch job for all nodes in this lab
+                    job = models.Job(
+                        lab_id=lab_id,
+                        user_id=None,  # System-initiated
+                        action=f"sync:batch:{len(node_ids)}",
+                        status="queued",
                     )
+                    session.add(job)
+                    session.commit()
+                    session.refresh(job)
+
+                    provider = get_lab_provider(lab)
+
+                    logger.info(
+                        f"State enforcement: batch {len(node_ids)} nodes in lab {lab_id} "
+                        f"(job={job.id}, provider={provider})"
+                    )
+
+                    safe_create_task(
+                        run_node_reconcile(job.id, lab_id, node_ids, provider=provider),
+                        name=f"enforce:batch:{job.id}"
+                    )
+
+                    enforced_count += len(node_ids)
+                except Exception as e:
+                    logger.error(f"Error creating batch enforcement for lab {lab_id}: {e}")
                     try:
                         session.rollback()
                     except Exception:
@@ -500,16 +662,17 @@ async def state_enforcement_monitor():
     Runs every state_enforcement_interval seconds and triggers
     corrective actions for nodes where desired_state != actual_state.
     """
+    interval = settings.get_interval("state_enforcement")
     logger.info(
         f"State enforcement monitor started "
         f"(enabled: {settings.state_enforcement_enabled}, "
-        f"interval: {settings.state_enforcement_interval}s, "
+        f"interval: {interval}s, "
         f"cooldown: {settings.state_enforcement_cooldown}s)"
     )
 
     while True:
         try:
-            await asyncio.sleep(settings.state_enforcement_interval)
+            await asyncio.sleep(interval)
             await enforce_lab_states()
         except asyncio.CancelledError:
             logger.info("State enforcement monitor stopped")

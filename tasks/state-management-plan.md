@@ -1,7 +1,7 @@
 # State Management Overhaul — Implementation Plan
 
 **Created**: 2026-02-07
-**Status**: IN PROGRESS — Phases 0-5 Complete + Phase 6 Complete (except 6.4 deferred)
+**Status**: COMPLETE — All phases implemented (0-6 inclusive)
 **Scope**: States, runtime control, transitions, placement enforcement, parallelization, logging, UI accuracy
 
 ## Design Principles
@@ -422,7 +422,7 @@ This is a large change. We phase it:
   - Canonical `NodeStateEntry`, `NodeStateData`, `NodeActualState`, `NodeDesiredState`, `NodeRuntimeStatus` interfaces
   - `mapActualToRuntime()` pure function with server `display_state` preference and `willRetry` suppression
   - Components import from this central file; `RuntimeStatus` aliases in StudioPage/RuntimeControl point to `NodeRuntimeStatus`
-  - `utils/status.ts` `RuntimeStatus` kept separate (lab-level aggregation, different concept)
+  - `utils/status.ts` `RuntimeStatus` renamed to `LabStatus` (lab-level aggregation, distinct from node-level `NodeRuntimeStatus`)
 
 - [x] **4.2** Derive runtimeStates via useMemo (Issue #7) ✅
   - File: `web/src/studio/StudioPage.tsx`
@@ -704,22 +704,19 @@ Phase 3 (Agent Per-Node Lifecycle) ───────────────
 - [x] Tests: 16 display_state combinations in test_state_machine.py (TestComputeDisplayState)
 - [x] Tests: 7 new frontend tests for display_state preference in nodeState.test.ts
 
-### 6.4 Batch + parallel agent reconcile (#R-3A)
-**File:** `api/app/tasks/node_lifecycle.py`
-- [ ] Group nodes by target agent
-- [ ] Send single batch reconcile request per agent (not per-node)
-
+### 6.4 Batch + parallel agent reconcile (#R-3A) ✅ COMPLETE
 **File:** `agent/main.py` (reconcile_nodes endpoint)
-- [ ] Process nodes in parallel within single lock:
-  ```python
-  async with lock_manager.acquire_with_heartbeat(lab_id):
-      results = await asyncio.gather(*[
-          process_single_node(target) for target in request.nodes
-      ], return_exceptions=True)
-  ```
-- [ ] Return per-node results with individual success/failure
+- [x] Extract per-node logic into `_reconcile_single_node()` coroutine (never raises)
+- [x] Replace sequential for-loop with `asyncio.gather()` for parallel processing
+- [x] Lambda closure uses default arg capture to prevent late binding
 
-- [ ] Tests: Batch reconcile, partial failure, single lock acquisition
+**File:** `api/app/tasks/state_enforcement.py`
+- [x] Extract `_is_enforceable()` — per-node pre-filtering (action, skip, cooldown, active jobs)
+- [x] Extract `_has_lab_wide_active_job()` — checks for deploy/destroy
+- [x] Restructure `enforce_lab_states()` to batch by lab: 1 job per lab, 1 NLM instance
+- [x] Preserve `enforce_node_state()` for single-node use (event-driven cleanup)
+
+**NLM stop batching**: Deferred — optional optimization, moderate risk for incremental gain
 
 ### 6.5 Verify strict explicit placement (#R-2A) ✅ COMPLETE
 - [x] Audit `get_agent_for_node()` in agent_client.py — confirm Node.host_id blocks fallback
@@ -767,6 +764,6 @@ Phase 3 (Agent Per-Node Lifecycle) ───────────────
 2. **6.2** (SELECT FOR UPDATE) — small, targeted race fix
 3. **6.3** (display_state) — aligns API contract
 4. **6.5** (Verify placement) — audit + tests, may be already correct
-5. **6.4** (Batch parallel) — agent-side performance
+5. **6.4** (Batch parallel) — agent-side + enforcement batching ✅
 6. **6.6** (Retry display) — UI polish
 7. **6.7** (Containerlab cleanup) — housekeeping

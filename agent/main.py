@@ -1446,6 +1446,126 @@ async def lab_status(lab_id: str) -> LabStatusResponse:
     )
 
 
+async def _reconcile_single_node(
+    lab_id: str,
+    target,
+    workspace: str,
+) -> NodeReconcileResult:
+    """Process one node reconciliation - returns result, never raises."""
+    container_name = target.container_name
+    desired = target.desired_state
+
+    # Try Docker first
+    try:
+        import docker
+        client = docker.from_env()
+        container = await asyncio.to_thread(
+            lambda cn=container_name: client.containers.get(cn)
+        )
+        current_status = container.status
+
+        if desired == "running":
+            if current_status == "running":
+                return NodeReconcileResult(
+                    container_name=container_name,
+                    action="already_running",
+                    success=True,
+                )
+            else:
+                await asyncio.to_thread(container.start)
+                logger.info(f"Started container {container_name}")
+                return NodeReconcileResult(
+                    container_name=container_name,
+                    action="started",
+                    success=True,
+                )
+
+        elif desired == "stopped":
+            if current_status in ("exited", "created", "dead"):
+                return NodeReconcileResult(
+                    container_name=container_name,
+                    action="already_stopped",
+                    success=True,
+                )
+            else:
+                await asyncio.to_thread(container.stop, timeout=30)
+                logger.info(f"Stopped container {container_name}")
+                return NodeReconcileResult(
+                    container_name=container_name,
+                    action="stopped",
+                    success=True,
+                )
+
+    except docker.errors.NotFound:
+        # Docker container not found, try libvirt below
+        pass
+    except Exception as e:
+        logger.error(f"Error reconciling Docker container {container_name}: {e}")
+        return NodeReconcileResult(
+            container_name=container_name,
+            action="error",
+            success=False,
+            error=str(e),
+        )
+
+    # Try libvirt for VMs
+    libvirt_provider = get_provider("libvirt")
+    if libvirt_provider:
+        try:
+            # Extract node name from container_name (format: arch-{lab_id}-{node_name})
+            prefix = f"arch-{lab_id}-"
+            if container_name.startswith(prefix):
+                node_name = container_name[len(prefix):]
+            else:
+                node_name = container_name  # fallback
+
+            if desired == "running":
+                result = await libvirt_provider.start_node(lab_id, node_name, workspace)
+                if result.success:
+                    action = "started" if result.new_status == NodeStatus.RUNNING else "already_running"
+                    return NodeReconcileResult(
+                        container_name=container_name,
+                        action=action,
+                        success=True,
+                    )
+                else:
+                    return NodeReconcileResult(
+                        container_name=container_name,
+                        action="error",
+                        success=False,
+                        error=result.error or "Failed to start VM",
+                    )
+
+            elif desired == "stopped":
+                result = await libvirt_provider.stop_node(lab_id, node_name, workspace)
+                if result.success:
+                    action = "stopped" if result.new_status == NodeStatus.STOPPED else "already_stopped"
+                    return NodeReconcileResult(
+                        container_name=container_name,
+                        action=action,
+                        success=True,
+                    )
+                else:
+                    return NodeReconcileResult(
+                        container_name=container_name,
+                        action="error",
+                        success=False,
+                        error=result.error or "Failed to stop VM",
+                    )
+
+        except Exception as e:
+            logger.error(f"Error reconciling libvirt VM {container_name}: {e}")
+
+    # Neither Docker nor libvirt found the node
+    logger.warning(f"Node {container_name} not found in Docker or libvirt")
+    return NodeReconcileResult(
+        container_name=container_name,
+        action="error",
+        success=False,
+        error=f"Node not found: {container_name}",
+    )
+
+
 @app.post("/labs/{lab_id}/nodes/reconcile")
 async def reconcile_nodes(
     lab_id: str,
@@ -1459,132 +1579,20 @@ async def reconcile_nodes(
     - Skip if already in the desired state
 
     Supports both Docker containers and libvirt VMs.
+    Processes all nodes in parallel using asyncio.gather.
     """
     logger.info(f"Reconcile request: lab={lab_id}, nodes={len(request.nodes)}")
 
-    results: list[NodeReconcileResult] = []
     workspace = get_workspace(lab_id)
 
-    for target in request.nodes:
-        container_name = target.container_name
-        desired = target.desired_state
-
-        # Try Docker first
-        try:
-            import docker
-            client = docker.from_env()
-            container = await asyncio.to_thread(
-                lambda: client.containers.get(container_name)
-            )
-            current_status = container.status
-
-            if desired == "running":
-                if current_status == "running":
-                    results.append(NodeReconcileResult(
-                        container_name=container_name,
-                        action="already_running",
-                        success=True,
-                    ))
-                else:
-                    await asyncio.to_thread(container.start)
-                    logger.info(f"Started container {container_name}")
-                    results.append(NodeReconcileResult(
-                        container_name=container_name,
-                        action="started",
-                        success=True,
-                    ))
-
-            elif desired == "stopped":
-                if current_status in ("exited", "created", "dead"):
-                    results.append(NodeReconcileResult(
-                        container_name=container_name,
-                        action="already_stopped",
-                        success=True,
-                    ))
-                else:
-                    await asyncio.to_thread(container.stop, timeout=30)
-                    logger.info(f"Stopped container {container_name}")
-                    results.append(NodeReconcileResult(
-                        container_name=container_name,
-                        action="stopped",
-                        success=True,
-                    ))
-            continue
-
-        except docker.errors.NotFound:
-            # Docker container not found, try libvirt
-            pass
-        except Exception as e:
-            logger.error(f"Error reconciling Docker container {container_name}: {e}")
-            results.append(NodeReconcileResult(
-                container_name=container_name,
-                action="error",
-                success=False,
-                error=str(e),
-            ))
-            continue
-
-        # Try libvirt for VMs
-        libvirt_provider = get_provider("libvirt")
-        if libvirt_provider:
-            try:
-                # Extract node name from container_name (format: arch-{lab_id}-{node_name})
-                prefix = f"arch-{lab_id}-"
-                if container_name.startswith(prefix):
-                    node_name = container_name[len(prefix):]
-                else:
-                    node_name = container_name  # fallback
-
-                if desired == "running":
-                    result = await libvirt_provider.start_node(lab_id, node_name, workspace)
-                    if result.success:
-                        action = "started" if result.new_status == NodeStatus.RUNNING else "already_running"
-                        results.append(NodeReconcileResult(
-                            container_name=container_name,
-                            action=action,
-                            success=True,
-                        ))
-                    else:
-                        results.append(NodeReconcileResult(
-                            container_name=container_name,
-                            action="error",
-                            success=False,
-                            error=result.error or "Failed to start VM",
-                        ))
-
-                elif desired == "stopped":
-                    result = await libvirt_provider.stop_node(lab_id, node_name, workspace)
-                    if result.success:
-                        action = "stopped" if result.new_status == NodeStatus.STOPPED else "already_stopped"
-                        results.append(NodeReconcileResult(
-                            container_name=container_name,
-                            action=action,
-                            success=True,
-                        ))
-                    else:
-                        results.append(NodeReconcileResult(
-                            container_name=container_name,
-                            action="error",
-                            success=False,
-                            error=result.error or "Failed to stop VM",
-                        ))
-                continue
-
-            except Exception as e:
-                logger.error(f"Error reconciling libvirt VM {container_name}: {e}")
-
-        # Neither Docker nor libvirt found the node
-        logger.warning(f"Node {container_name} not found in Docker or libvirt")
-        results.append(NodeReconcileResult(
-            container_name=container_name,
-            action="error",
-            success=False,
-            error=f"Node not found: {container_name}",
-        ))
+    results = await asyncio.gather(*[
+        _reconcile_single_node(lab_id, target, workspace)
+        for target in request.nodes
+    ])
 
     return NodeReconcileResponse(
         lab_id=lab_id,
-        results=results,
+        results=list(results),
     )
 
 
