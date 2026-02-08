@@ -940,7 +940,8 @@ async def set_all_nodes_desired_state(
     """Set the desired state for all nodes in a lab.
 
     Useful for "Start All" or "Stop All" operations.
-    Auto-triggers sync to immediately apply the changes.
+    Selectively processes nodes that are ready, skips transitional nodes,
+    and returns counts of affected/skipped/already-in-state.
     """
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
@@ -948,37 +949,7 @@ async def set_all_nodes_desired_state(
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
 
-    # Block start operations if any nodes are currently stopping
-    if payload.state == "running":
-        stopping_count = (
-            database.query(models.NodeState)
-            .filter(
-                models.NodeState.lab_id == lab_id,
-                models.NodeState.actual_state == "stopping",
-            )
-            .count()
-        )
-        if stopping_count > 0:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot start: {stopping_count} node(s) are currently stopping"
-            )
-
-    # Block stop operations if any nodes are currently starting
-    if payload.state == "stopped":
-        starting_count = (
-            database.query(models.NodeState)
-            .filter(
-                models.NodeState.lab_id == lab_id,
-                models.NodeState.actual_state == "starting",
-            )
-            .count()
-        )
-        if starting_count > 0:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot stop: {starting_count} node(s) are currently starting"
-            )
+    transitional_states = {"starting", "stopping", "pending"}
 
     states = (
         database.query(models.NodeState)
@@ -986,14 +957,41 @@ async def set_all_nodes_desired_state(
         .all()
     )
 
-    # Track which nodes need syncing
+    # Selective processing: classify each node
+    affected_count = 0
+    skipped_transitional_count = 0
+    already_in_state_count = 0
     nodes_needing_sync: list[str] = []
 
     for state in states:
-        old_desired = state.desired_state
+        # Skip nodes in transitional states
+        if state.actual_state in transitional_states:
+            skipped_transitional_count += 1
+            continue
+
+        # Check if already in desired state
+        if payload.state == "running":
+            already_there = state.actual_state in ("running",) and state.desired_state == "running"
+        else:  # stopped
+            already_there = state.actual_state in ("stopped", "undeployed") and state.desired_state == "stopped"
+
+        if already_there:
+            already_in_state_count += 1
+            continue
+
+        # This node can be processed
         state.desired_state = payload.state
 
-        # Check if this node needs sync after update
+        # Reset enforcement state for error nodes being retried
+        if state.actual_state == "error" and payload.state == "running":
+            state.enforcement_attempts = 0
+            state.enforcement_failed_at = None
+            state.last_enforcement_at = None
+            state.error_message = None
+
+        affected_count += 1
+
+        # Check if this node needs sync
         is_out_of_sync = (
             (payload.state == "running" and state.actual_state not in ("running", "pending", "starting"))
             or (payload.state == "stopped" and state.actual_state not in ("stopped", "undeployed", "stopping"))
@@ -1003,7 +1001,7 @@ async def set_all_nodes_desired_state(
 
     database.commit()
 
-    # Auto-sync: immediately trigger reconciliation for all out-of-sync nodes
+    # Auto-sync: immediately trigger reconciliation for affected nodes
     if nodes_needing_sync:
         has_conflict, _ = has_conflicting_job(lab_id, "sync")
         if not has_conflict:
@@ -1018,13 +1016,12 @@ async def set_all_nodes_desired_state(
             database.commit()
             database.refresh(job)
 
-            # Start background sync task
             safe_create_task(
                 run_node_reconcile(job.id, lab.id, nodes_needing_sync, provider=provider),
                 name=f"sync:bulk:{job.id}"
             )
 
-    # Refresh and return all states
+    # Refresh and return all states with counts
     states = (
         database.query(models.NodeState)
         .filter(models.NodeState.lab_id == lab_id)
@@ -1032,7 +1029,10 @@ async def set_all_nodes_desired_state(
         .all()
     )
     return schemas.NodeStatesResponse(
-        nodes=[_enrich_node_state(s) for s in states]
+        nodes=[_enrich_node_state(s) for s in states],
+        affected=affected_count,
+        skipped_transitional=skipped_transitional_count,
+        already_in_state=already_in_state_count,
     )
 
 

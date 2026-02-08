@@ -67,6 +67,12 @@ def _should_skip_enforcement(node_state: models.NodeState) -> tuple[bool, str]:
     """
     now = datetime.now(timezone.utc)
 
+    def _ensure_aware(dt: datetime | None) -> datetime | None:
+        """Ensure datetime is timezone-aware (SQLite strips tz info)."""
+        if dt is not None and dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
     # Skip if max retries exhausted
     if node_state.enforcement_attempts >= settings.state_enforcement_max_retries:
         if node_state.enforcement_failed_at:
@@ -75,8 +81,9 @@ def _should_skip_enforcement(node_state: models.NodeState) -> tuple[bool, str]:
         return True, "max retries reached"
 
     # Skip if within crash cooldown
-    if node_state.enforcement_failed_at:
-        cooldown_end = node_state.enforcement_failed_at + timedelta(
+    failed_at = _ensure_aware(node_state.enforcement_failed_at)
+    if failed_at:
+        cooldown_end = failed_at + timedelta(
             seconds=settings.state_enforcement_crash_cooldown
         )
         if now < cooldown_end:
@@ -84,9 +91,10 @@ def _should_skip_enforcement(node_state: models.NodeState) -> tuple[bool, str]:
             return True, f"in crash cooldown ({remaining}s remaining)"
 
     # Skip if within backoff delay
-    if node_state.last_enforcement_at and node_state.enforcement_attempts > 0:
+    last_at = _ensure_aware(node_state.last_enforcement_at)
+    if last_at and node_state.enforcement_attempts > 0:
         backoff = _calculate_backoff(node_state.enforcement_attempts - 1)
-        backoff_end = node_state.last_enforcement_at + timedelta(seconds=backoff)
+        backoff_end = last_at + timedelta(seconds=backoff)
         if now < backoff_end:
             remaining = (backoff_end - now).seconds
             return True, f"in backoff delay ({remaining}s remaining)"
@@ -297,9 +305,10 @@ async def enforce_node_state(
         if "max retries" in reason and not node_state.enforcement_failed_at:
             node_state.enforcement_failed_at = now
             node_state.actual_state = NodeActualState.ERROR.value
+            original_error = node_state.error_message
             node_state.error_message = (
                 f"State enforcement failed after {node_state.enforcement_attempts} attempts. "
-                f"Manual intervention required."
+                f"Last error: {original_error or 'unknown'}"
             )
             session.commit()
             logger.warning(
@@ -344,9 +353,9 @@ async def enforce_node_state(
         return False
 
     # Ensure placement record matches the agent we're using
+    node_def = None
     if action == "start":
         # Get node_definition_id for FK-based placement
-        node_def = None
         if node_state.node_definition_id:
             node_def = session.get(models.Node, node_state.node_definition_id)
         if not node_def:

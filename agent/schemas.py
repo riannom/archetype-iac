@@ -935,6 +935,58 @@ class SetMtuResponse(BaseModel):
     error: str | None = None
 
 
+# --- Per-Node Lifecycle ---
+
+class CreateNodeRequest(BaseModel):
+    """Controller -> Agent: Create a single node container."""
+    node_name: str
+    display_name: str | None = None
+    kind: str = "linux"
+    image: str | None = None
+    interface_count: int | None = None
+    binds: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    startup_config: str | None = None
+
+
+class CreateNodeResponse(BaseModel):
+    """Agent -> Controller: Node creation result."""
+    success: bool
+    container_name: str | None = None
+    container_id: str | None = None
+    status: str = "unknown"
+    error: str | None = None
+
+
+class StartNodeRequest(BaseModel):
+    """Controller -> Agent: Start a node with optional veth repair."""
+    repair_endpoints: bool = True
+    fix_interfaces: bool = True
+
+
+class StartNodeResponse(BaseModel):
+    """Agent -> Controller: Node start result."""
+    success: bool
+    status: str = "unknown"
+    endpoints_repaired: int = 0
+    interfaces_fixed: int = 0
+    error: str | None = None
+
+
+class StopNodeResponse(BaseModel):
+    """Agent -> Controller: Node stop result."""
+    success: bool
+    status: str = "unknown"
+    error: str | None = None
+
+
+class DestroyNodeResponse(BaseModel):
+    """Agent -> Controller: Node destroy result."""
+    success: bool
+    container_removed: bool = False
+    error: str | None = None
+
+
 # --- Endpoint Repair ---
 
 class RepairEndpointsRequest(BaseModel):

@@ -275,6 +275,9 @@ class NodeStatesResponse(BaseModel):
     """Response schema for listing all node states in a lab."""
 
     nodes: list[NodeStateOut]
+    affected: int | None = None
+    skipped_transitional: int | None = None
+    already_in_state: int | None = None
 
 
 class ReconcileResponse(BaseModel):

@@ -1510,6 +1510,151 @@ async def container_action(
         return {"success": False, "error": str(e)}
 
 
+async def create_node_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    kind: str,
+    *,
+    image: str | None = None,
+    display_name: str | None = None,
+    interface_count: int | None = None,
+    binds: list[str] | None = None,
+    env: dict[str, str] | None = None,
+    startup_config: str | None = None,
+) -> dict:
+    """Create a single node container on an agent without starting it.
+
+    Returns:
+        Dict with 'success', 'container_name', 'status', and optionally 'error' keys.
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/create"
+    logger.info(f"Creating node {node_name} (kind={kind}) on agent {agent.id}")
+
+    payload: dict = {"node_name": node_name, "kind": kind}
+    if image:
+        payload["image"] = image
+    if display_name:
+        payload["display_name"] = display_name
+    if interface_count is not None:
+        payload["interface_count"] = interface_count
+    if binds:
+        payload["binds"] = binds
+    if env:
+        payload["env"] = env
+    if startup_config:
+        payload["startup_config"] = startup_config
+
+    try:
+        client = get_http_client()
+        response = await client.post(url, json=payload, timeout=120.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Created node {node_name} on agent {agent.id}")
+        else:
+            logger.warning(f"Create node {node_name} failed: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"Create node {node_name} failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def start_node_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    *,
+    repair_endpoints: bool = True,
+    fix_interfaces: bool = True,
+) -> dict:
+    """Start a node on an agent with optional veth repair.
+
+    Returns:
+        Dict with 'success', 'status', 'endpoints_repaired', 'interfaces_fixed',
+        and optionally 'error' keys.
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/start"
+    logger.info(f"Starting node {node_name} on agent {agent.id}")
+
+    try:
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={
+                "repair_endpoints": repair_endpoints,
+                "fix_interfaces": fix_interfaces,
+            },
+            timeout=120.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Started node {node_name} on agent {agent.id}")
+        else:
+            logger.warning(f"Start node {node_name} failed: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"Start node {node_name} failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def stop_node_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+) -> dict:
+    """Stop a node on an agent.
+
+    Returns:
+        Dict with 'success', 'status', and optionally 'error' keys.
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/stop"
+    logger.info(f"Stopping node {node_name} on agent {agent.id}")
+
+    try:
+        client = get_http_client()
+        response = await client.post(url, timeout=60.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Stopped node {node_name} on agent {agent.id}")
+        else:
+            logger.warning(f"Stop node {node_name} failed: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"Stop node {node_name} failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def destroy_node_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+) -> dict:
+    """Destroy a node container on an agent.
+
+    Returns:
+        Dict with 'success', 'container_removed', and optionally 'error' keys.
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}"
+    logger.info(f"Destroying node {node_name} on agent {agent.id}")
+
+    try:
+        client = get_http_client()
+        response = await client.delete(url, timeout=60.0)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("success"):
+            logger.info(f"Destroyed node {node_name} on agent {agent.id}")
+        else:
+            logger.warning(f"Destroy node {node_name} failed: {result.get('error')}")
+        return result
+    except Exception as e:
+        logger.error(f"Destroy node {node_name} failed on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def extract_configs_on_agent(
     agent: models.Host,
     lab_id: str,

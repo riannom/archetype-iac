@@ -139,6 +139,13 @@ from agent.schemas import (
     # Endpoint repair
     RepairEndpointsRequest,
     RepairEndpointsResponse,
+    # Per-node lifecycle
+    CreateNodeRequest,
+    CreateNodeResponse,
+    StartNodeRequest,
+    StartNodeResponse,
+    StopNodeResponse,
+    DestroyNodeResponse,
 )
 from agent.version import __version__, get_commit
 from agent.updater import (
@@ -2869,6 +2876,120 @@ async def repair_lab_endpoints(
         nodes_repaired=nodes_with_repairs,
         total_endpoints_repaired=total_repaired,
         results=all_results,
+    )
+
+
+# --- Per-Node Lifecycle Endpoints ---
+
+
+@app.post("/labs/{lab_id}/nodes/{node_name}/create")
+async def create_node(
+    lab_id: str,
+    node_name: str,
+    request: CreateNodeRequest,
+) -> CreateNodeResponse:
+    """Create a single node container without starting it."""
+    provider = get_provider_for_request()
+    workspace = get_workspace(lab_id)
+
+    result = await provider.create_node(
+        lab_id=lab_id,
+        node_name=node_name,
+        kind=request.kind,
+        workspace=workspace,
+        image=request.image,
+        display_name=request.display_name,
+        interface_count=request.interface_count,
+        binds=request.binds,
+        env=request.env,
+        startup_config=request.startup_config,
+    )
+
+    return CreateNodeResponse(
+        success=result.success,
+        container_name=provider.get_container_name(lab_id, node_name) if hasattr(provider, "get_container_name") else f"archetype-{lab_id}-{node_name}",
+        status=result.new_status.value if result.new_status else "unknown",
+        error=result.error,
+    )
+
+
+@app.post("/labs/{lab_id}/nodes/{node_name}/start")
+async def start_node(
+    lab_id: str,
+    node_name: str,
+    request: StartNodeRequest | None = None,
+) -> StartNodeResponse:
+    """Start a node with optional veth repair and interface fixing."""
+    provider = get_provider_for_request()
+    workspace = get_workspace(lab_id)
+
+    repair = request.repair_endpoints if request else True
+    fix = request.fix_interfaces if request else True
+
+    result = await provider.start_node(
+        lab_id=lab_id,
+        node_name=node_name,
+        workspace=workspace,
+        repair_endpoints=repair,
+        fix_interfaces=fix,
+    )
+
+    # Parse repair/fix counts from stdout if available
+    endpoints_repaired = 0
+    interfaces_fixed = 0
+    if result.stdout:
+        import re as _re
+        ep_match = _re.search(r"repaired (\d+) endpoints", result.stdout)
+        if_match = _re.search(r"fixed (\d+) interfaces", result.stdout)
+        if ep_match:
+            endpoints_repaired = int(ep_match.group(1))
+        if if_match:
+            interfaces_fixed = int(if_match.group(1))
+
+    return StartNodeResponse(
+        success=result.success,
+        status=result.new_status.value if result.new_status else "unknown",
+        endpoints_repaired=endpoints_repaired,
+        interfaces_fixed=interfaces_fixed,
+        error=result.error,
+    )
+
+
+@app.post("/labs/{lab_id}/nodes/{node_name}/stop")
+async def stop_node(lab_id: str, node_name: str) -> StopNodeResponse:
+    """Stop a running node."""
+    provider = get_provider_for_request()
+    workspace = get_workspace(lab_id)
+
+    result = await provider.stop_node(
+        lab_id=lab_id,
+        node_name=node_name,
+        workspace=workspace,
+    )
+
+    return StopNodeResponse(
+        success=result.success,
+        status=result.new_status.value if result.new_status else "unknown",
+        error=result.error,
+    )
+
+
+@app.delete("/labs/{lab_id}/nodes/{node_name}")
+async def destroy_node(lab_id: str, node_name: str) -> DestroyNodeResponse:
+    """Destroy a node container and clean up resources."""
+    provider = get_provider_for_request()
+    workspace = get_workspace(lab_id)
+
+    result = await provider.destroy_node(
+        lab_id=lab_id,
+        node_name=node_name,
+        workspace=workspace,
+    )
+
+    return DestroyNodeResponse(
+        success=result.success,
+        container_removed=result.success,
+        error=result.error,
     )
 
 
