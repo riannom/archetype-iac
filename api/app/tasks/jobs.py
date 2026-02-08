@@ -1230,6 +1230,7 @@ async def _create_cross_host_links_if_ready(
     session,
     lab_id: str,
     log_parts: list[str],
+    current_job_id: str | None = None,
 ) -> None:
     """Create cross-host links (VXLAN tunnels) if both endpoints are ready.
 
@@ -1243,24 +1244,23 @@ async def _create_cross_host_links_if_ready(
         session: Database session
         lab_id: Lab identifier
         log_parts: List to append log messages to
+        current_job_id: ID of the calling job (excluded from conflict check)
     """
     from app.tasks.link_orchestration import create_deployment_links
 
-    # Skip if there's an active deploy/destroy job — it handles cross-host links itself.
-    # Without this guard, NLM and deploy can deadlock on the same link_states rows.
-    active_deploy = (
-        session.query(models.Job)
-        .filter(
-            models.Job.lab_id == lab_id,
-            models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-            models.Job.action.in_(["up", "down"]),
-        )
-        .first()
+    # Skip if ANY other active job exists for this lab — prevents deadlock
+    # when two async tasks do concurrent session.flush() on link_states rows.
+    conflict_query = session.query(models.Job).filter(
+        models.Job.lab_id == lab_id,
+        models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
     )
-    if active_deploy:
+    if current_job_id:
+        conflict_query = conflict_query.filter(models.Job.id != current_job_id)
+    conflicting_job = conflict_query.first()
+    if conflicting_job:
         logger.debug(
             f"Skipping cross-host link creation for lab {lab_id}: "
-            f"active deploy/destroy job {active_deploy.id}"
+            f"active job {conflicting_job.id} (action={conflicting_job.action})"
         )
         return
 
