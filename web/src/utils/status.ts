@@ -83,7 +83,8 @@ export function getStorageColor(percent: number): string {
   return 'bg-violet-500';
 }
 
-export type RuntimeStatus = 'running' | 'stopped' | 'pending' | 'error' | 'partial' | 'unknown';
+/** Lab-level aggregate status (distinct from node-level NodeRuntimeStatus in types/nodeState.ts). */
+export type LabStatus = 'running' | 'stopped' | 'pending' | 'error' | 'partial' | 'unknown';
 
 /**
  * Get color classes for runtime status display.
@@ -91,7 +92,7 @@ export type RuntimeStatus = 'running' | 'stopped' | 'pending' | 'error' | 'parti
  * @param status - Runtime status
  * @returns Tailwind class string for status badge
  */
-export function getRuntimeStatusColor(status: RuntimeStatus): string {
+export function getRuntimeStatusColor(status: LabStatus): string {
   switch (status) {
     case 'running':
       return 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 border-green-200 dark:border-green-700';

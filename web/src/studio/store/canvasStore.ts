@@ -32,7 +32,6 @@ import { NodeStateData } from '../../types/nodeState';
 
 enableMapSet();
 
-export type { NodeStateData };
 
 export interface LinkStateData {
   link_name: string;
