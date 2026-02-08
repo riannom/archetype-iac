@@ -978,7 +978,7 @@ class OVSNetworkManager:
         code, _, stderr = await self._run_cmd([
             "ip", "link", "add", port_name, "type", "vxlan",
             "id", str(vni), "local", local_ip, "remote", remote_ip,
-            "dstport", "4789", "nopmtudisc",
+            "dstport", "4789", "df", "unset", "nopmtudisc",
         ])
         if code != 0:
             raise RuntimeError(f"Failed to create VXLAN device: {stderr}")

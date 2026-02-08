@@ -2353,7 +2353,13 @@ async def overlay_bridge_ports():
         iface_type = await run(
             f"ovs-vsctl get interface {port_name} type"
         )
-        if iface_type == "vxlan":
+        # Detect VXLAN ports by OVS type OR by name pattern (Linux VXLAN
+        # devices added as system ports have type="" in OVS)
+        is_vxlan = (
+            iface_type == "vxlan"
+            or port_name.startswith(("vxlan-", "vxlan", "vtep"))
+        )
+        if is_vxlan:
             tag = await run(f"ovs-vsctl get port {port_name} tag")
             options = await run(f"ovs-vsctl get interface {port_name} options")
             stats = await run(
@@ -2364,14 +2370,6 @@ async def overlay_bridge_ports():
                 "tag": tag,
                 "options": options,
                 "statistics": stats,
-            })
-        elif port_name.startswith("vtep"):
-            tag = await run(f"ovs-vsctl get port {port_name} tag")
-            options = await run(f"ovs-vsctl get interface {port_name} options")
-            vxlan_ports.append({
-                "name": port_name,
-                "tag": tag,
-                "options": options,
                 "type": iface_type,
             })
         else:
@@ -2416,16 +2414,22 @@ async def reconcile_overlay_ports(request: dict):
     for port_name in all_ports:
         if not port_name:
             continue
-        # Check if this port is a VXLAN type
+        # Check if this port is a VXLAN type (OVS-managed or Linux device)
         _, iface_type = await run(f"ovs-vsctl get interface {port_name} type")
-        if iface_type != "vxlan":
+        is_vxlan = (
+            iface_type == "vxlan"
+            or port_name.startswith(("vxlan-", "vxlan"))
+        )
+        if not is_vxlan:
             continue
         # Skip if it's in the valid set
         if port_name in valid_port_names:
             continue
-        # Delete the stale VXLAN port
+        # Delete the stale VXLAN port from OVS
         code, msg = await run(f"ovs-vsctl --if-exists del-port {bridge} {port_name}")
         if code == 0:
+            # Clean up Linux VXLAN device (system ports aren't auto-deleted by OVS)
+            await run(f"ip link delete {port_name}")
             removed.append(port_name)
             logger.info(f"Removed stale VXLAN port: {port_name}")
         else:

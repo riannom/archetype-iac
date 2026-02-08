@@ -313,7 +313,7 @@ class OverlayManager:
         code, _, stderr = await self._run_cmd([
             "ip", "link", "add", name, "type", "vxlan",
             "id", str(vni), "local", local_ip, "remote", remote_ip,
-            "dstport", str(VXLAN_PORT), "nopmtudisc",
+            "dstport", str(VXLAN_PORT), "df", "unset", "nopmtudisc",
         ])
         if code != 0:
             raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
@@ -855,9 +855,9 @@ class OverlayManager:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
 
             # Set MTU for overlay link
-            # Use local_mtu (jumbo frames) since VXLAN devices now handle
-            # fragmentation transparently via nopmtudisc
-            mtu_to_use = settings.local_mtu
+            # Use tenant_mtu (overlay effective MTU) since containers on
+            # overlay links shouldn't advertise jumbo MTU
+            mtu_to_use = tenant_mtu if tenant_mtu > 0 else settings.overlay_mtu
             if mtu_to_use > 0 and settings.overlay_clamp_host_mtu:
                 await self._run_cmd([
                     "ip", "link", "set", veth_host, "mtu", str(mtu_to_use)
@@ -1045,8 +1045,9 @@ class OverlayManager:
             if code != 0:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
 
-            # Set MTU - use local_mtu since VXLAN handles fragmentation via nopmtudisc
-            mtu_to_use = settings.local_mtu
+            # Set MTU - use tenant_mtu since containers on overlay links
+            # shouldn't advertise jumbo MTU
+            mtu_to_use = tenant_mtu if tenant_mtu > 0 else settings.overlay_mtu
             if mtu_to_use > 0:
                 await self._run_cmd(["ip", "link", "set", veth_host, "mtu", str(mtu_to_use)])
                 await self._run_cmd(["ip", "link", "set", veth_cont, "mtu", str(mtu_to_use)])
