@@ -24,6 +24,15 @@ from app.tasks.jobs import _auto_extract_configs_before_destroy
 # --- Fixtures ---
 
 
+@pytest.fixture(autouse=True)
+def _mock_workspace_write(monkeypatch):
+    """Prevent workspace filesystem writes that fail in CI."""
+    monkeypatch.setattr(
+        "app.services.config_service._save_config_to_workspace",
+        lambda workspace, node_name, content: None,
+    )
+
+
 @pytest.fixture
 def sample_host_2(test_db: Session) -> models.Host:
     """Create a second agent host for multi-host testing."""

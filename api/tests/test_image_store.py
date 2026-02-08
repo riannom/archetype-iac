@@ -26,6 +26,13 @@ from app.image_store import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _mock_image_store_path(tmp_path, monkeypatch):
+    """Redirect image store to a temp directory to avoid PermissionError on CI."""
+    monkeypatch.setattr("app.image_store.ensure_image_store", lambda: tmp_path)
+    monkeypatch.setattr("app.image_store.image_store_root", lambda: tmp_path)
+
+
 class TestDetectDeviceFromFilename:
     """Tests for detect_device_from_filename function."""
 

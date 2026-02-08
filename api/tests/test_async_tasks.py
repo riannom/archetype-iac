@@ -12,10 +12,11 @@ async def test_safe_create_task_logs_exception(caplog) -> None:
     async def boom():
         raise ValueError("boom")
 
-    task = async_tasks.safe_create_task(boom(), name="boom-task")
+    with caplog.at_level("ERROR", logger="app.utils.async_tasks"):
+        task = async_tasks.safe_create_task(boom(), name="boom-task")
 
-    with pytest.raises(ValueError):
-        await task
+        with pytest.raises(ValueError):
+            await task
 
     assert any("boom-task" in record.message for record in caplog.records)
 
@@ -31,7 +32,8 @@ def test_setup_asyncio_exception_handler_logs(caplog) -> None:
     async_tasks.setup_asyncio_exception_handler(loop=loop)
 
     handler = captured["handler"]
-    handler(loop, {"message": "oops"})
+    with caplog.at_level("ERROR", logger="app.utils.async_tasks"):
+        handler(loop, {"message": "oops"})
 
     assert any("oops" in record.message for record in caplog.records)
 
@@ -50,7 +52,8 @@ def test_setup_asyncio_exception_handler_with_exception(caplog) -> None:
         raise RuntimeError("bad")
     except RuntimeError as exc:
         handler = captured["handler"]
-        handler(loop, {"message": "fail", "exception": exc})
+        with caplog.at_level("ERROR", logger="app.utils.async_tasks"):
+            handler(loop, {"message": "fail", "exception": exc})
 
     assert any("RuntimeError" in record.message for record in caplog.records)
 

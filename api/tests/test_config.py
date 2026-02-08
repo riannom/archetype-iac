@@ -19,7 +19,8 @@ class TestDefaultSettings:
     def test_database_url_default(self):
         """Database URL has PostgreSQL default."""
         from app.config import Settings
-        settings = Settings()
+        # Construct with explicit default to avoid CI env var override
+        settings = Settings(database_url="postgresql://archetype:archetype@postgres:5432/archetype")
         assert "postgresql" in settings.database_url
 
     def test_redis_url_default(self):

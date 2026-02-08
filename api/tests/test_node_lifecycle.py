@@ -1312,6 +1312,7 @@ class TestExecuteOrchestration:
             mock_settings.resource_validation_enabled = False
             mock_settings.image_sync_enabled = False
             mock_settings.image_sync_pre_deploy_check = False
+            mock_settings.per_node_lifecycle_enabled = False
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             # Deploy fails
