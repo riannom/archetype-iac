@@ -322,7 +322,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     "cisco_csr1000v": VendorConfig(
         kind="cisco_csr1000v",
         vendor="Cisco",
-        console_shell="/bin/sh",
+        console_shell="/bin/sh",  # Fallback, not used with SSH method
         default_image=None,  # Requires user-provided image
         aliases=[],
         device_type=DeviceType.ROUTER,
@@ -346,6 +346,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started",
         readiness_timeout=300,
+        console_method="ssh",
+        console_user="admin",
+        console_password="admin",
         # Config extraction via serial console
         config_extract_method="serial",
         config_extract_command="show running-config",
@@ -1428,7 +1431,14 @@ def get_container_config(
         config = VENDOR_CONFIGS.get("linux")
 
     # Use provided image or default
-    final_image = image or config.default_image or "alpine:latest"
+    final_image = image or config.default_image
+    if not final_image:
+        if config.requires_image:
+            raise ValueError(
+                f"Device '{device}' requires an image but none was provided. "
+                f"Import a compatible image ({', '.join(config.supported_image_kinds)}) first."
+            )
+        final_image = "alpine:latest"
 
     # Process bind mounts - substitute {workspace} and {node}
     processed_binds = []

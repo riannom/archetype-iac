@@ -22,7 +22,7 @@ from app.agent_client import AgentUnavailableError
 from app.config import settings
 from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
 from app.services.state_machine import NodeStateMachine
-from app.services.topology import TopologyService, graph_to_deploy_topology
+from app.services.topology import TopologyService, graph_to_deploy_topology, resolve_node_image
 from app.state import (
     HostStatus,
     JobStatus,
@@ -1501,6 +1501,14 @@ class NodeLifecycleManager:
             iface_count = self._get_interface_count(ns.node_name)
             startup_config = self._get_startup_config(ns.node_name, db_node)
 
+            # Resolve image: explicit → manifest → vendor default
+            image = resolve_node_image(db_node.device, kind, db_node.image, db_node.version)
+            if not image:
+                ns.actual_state = NodeActualState.ERROR.value
+                ns.error_message = f"No image found for device '{db_node.device}'. Import one first."
+                self.log_parts.append(f"  {ns.node_name}: ERROR - no image available")
+                continue
+
             # cEOS stagger: wait between starts
             if _is_ceos_kind(kind) and ceos_started:
                 logger.info(f"Waiting 5s before starting {ns.node_name} (cEOS stagger)")
@@ -1513,7 +1521,7 @@ class NodeLifecycleManager:
                     self.lab.id,
                     ns.node_name,
                     kind,
-                    image=db_node.image,
+                    image=image,
                     display_name=db_node.display_name,
                     interface_count=iface_count,
                     startup_config=startup_config,
