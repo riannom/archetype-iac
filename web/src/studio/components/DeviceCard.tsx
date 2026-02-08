@@ -63,7 +63,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
       className={`
         relative rounded-xl border transition-all duration-200 cursor-pointer
         ${isSelected
-          ? 'bg-sage-50 dark:bg-stone-800 border-sage-500 dark:border-sage-600 shadow-lg shadow-sage-500/10'
+          ? 'bg-sage-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800 border-l-2 border-l-sage-500 dark:border-l-sage-400'
           : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700'
         }
         ${isDropTarget
@@ -81,7 +81,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
             className={`
               w-12 h-12 rounded-lg flex items-center justify-center text-lg shrink-0
               ${isSelected
-                ? 'bg-sage-500 text-white'
+                ? 'bg-sage-100 dark:bg-stone-800 text-sage-600 dark:text-sage-400'
                 : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
               }
             `}
