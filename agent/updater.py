@@ -301,10 +301,15 @@ async def perform_systemd_update(
             await report_progress(client, callback_url, job_id, agent_id, "downloading", 30)
 
             # Resolve the target version to a checkout ref
-            # Support: commit SHAs, tags (v0.3.7), version strings (0.3.7), branches (main)
+            # Support: "latest" (origin/main), commit SHAs, tags (v0.3.7),
+            # version strings (0.3.7), branches (main)
             checkout_ref = None
 
-            if is_commit_sha(target_version):
+            if target_version.lower() == "latest":
+                # "latest" means the tip of the default branch
+                checkout_ref = "origin/main"
+                logger.info(f"Update {job_id}: resolved 'latest' to origin/main")
+            elif is_commit_sha(target_version):
                 # Direct commit SHA - verify it exists
                 result = await asyncio.to_thread(
                     _run_subprocess,

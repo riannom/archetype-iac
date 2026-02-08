@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app import db, models
 from app.auth import get_current_user
 from app.config import settings
+from app.routers.system import get_commit
 
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -1095,8 +1096,10 @@ async def trigger_agent_update(
             detail=f"Update already in progress (job {active_job.id})"
         )
 
-    # Determine target version
+    # Determine target version (for display/tracking) and checkout ref (for git)
     target_version = (request.target_version if request else None) or get_latest_agent_version()
+    # The agent needs a git commit SHA to checkout, not a version string
+    checkout_ref = get_commit()
 
     # Check if already at target version
     if host.version == target_version:
@@ -1120,14 +1123,14 @@ async def trigger_agent_update(
     # Build callback URL
     callback_url = f"{settings.internal_url}/callbacks/update/{job_id}"
 
-    # Send update request to agent
+    # Send update request to agent with commit SHA as target
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"http://{host.address}/update",
                 json={
                     "job_id": job_id,
-                    "target_version": target_version,
+                    "target_version": checkout_ref,
                     "callback_url": callback_url,
                 },
             )
@@ -1196,6 +1199,8 @@ async def trigger_bulk_update(
     bulk_logger = logging.getLogger(__name__)
 
     target_version = request.target_version or get_latest_agent_version()
+    # The agent needs a git commit SHA to checkout, not a version string
+    checkout_ref = get_commit()
     results: list[dict] = []
     # Jobs to dispatch: list of (agent_id, job_id, host_address)
     pending_dispatches: list[tuple[str, str, str]] = []
@@ -1252,7 +1257,7 @@ async def trigger_bulk_update(
                     f"http://{address}/update",
                     json={
                         "job_id": job_id,
-                        "target_version": target_version,
+                        "target_version": checkout_ref,
                         "callback_url": callback_url,
                     },
                 )
