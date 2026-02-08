@@ -366,27 +366,11 @@ async def _process_node_changes_impl(
                 except Exception as e:
                     logger.error(f"Error destroying node {node_info.get('node_name')}: {e}")
 
-            # Only auto-deploy new nodes if the lab is in a running state
-            # (meaning there are already deployed nodes and user expects live updates)
-            if lab.state in ("running", "starting"):
-                for node_id in added_node_ids:
-                    try:
-                        # Find the NodeState for this node
-                        node_state = (
-                            session.query(models.NodeState)
-                            .filter(
-                                models.NodeState.lab_id == lab_id,
-                                models.NodeState.node_id == node_id,
-                            )
-                            .first()
-                        )
-                        if node_state and node_state.actual_state in ("undeployed", "stopped"):
-                            await deploy_node_immediately(session, lab_id, node_state, lab)
-                    except Exception as e:
-                        logger.error(f"Error deploying node {node_id}: {e}")
-            else:
-                logger.debug(
-                    f"Lab {lab_id} is in state '{lab.state}', skipping auto-deploy for new nodes"
+            # New nodes are created in stopped/undeployed state.
+            # User can start them manually via the play button.
+            if added_node_ids:
+                logger.info(
+                    f"Lab {lab_id}: {len(added_node_ids)} new node(s) added in stopped state"
                 )
 
         except Exception as e:
