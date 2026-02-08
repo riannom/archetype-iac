@@ -378,6 +378,29 @@ class LibvirtProvider(Provider):
 
         return vlans
 
+    async def _set_vm_tap_mtu(self, lab_id: str, node_name: str) -> None:
+        """Set MTU on all tap devices for a running VM.
+
+        VM tap devices inherit the OVS bridge MTU (often 1450 from VXLAN ports),
+        which blocks standard 1500-byte frames. This sets them to local_mtu.
+        """
+        if settings.local_mtu <= 0:
+            return
+
+        vlans = self.get_node_vlans(lab_id, node_name)
+        for i in range(len(vlans)):
+            port_name = await self.get_vm_interface_port(lab_id, node_name, i)
+            if port_name:
+                try:
+                    subprocess.run(
+                        ["ip", "link", "set", port_name, "mtu", str(settings.local_mtu)],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                except subprocess.CalledProcessError as e:
+                    logger.warning(f"Failed to set MTU on {port_name}: {e.stderr}")
+
     def get_node_vlans(self, lab_id: str, node_name: str) -> list[int]:
         """Get the VLAN tags allocated to a VM's interfaces.
 
@@ -893,6 +916,7 @@ class LibvirtProvider(Provider):
                 else:
                     # Start the existing domain
                     existing.create()
+                    await self._set_vm_tap_mtu(lab_id, node_name)
                     return NodeInfo(
                         name=node_name,
                         status=NodeStatus.RUNNING,
@@ -945,6 +969,9 @@ class LibvirtProvider(Provider):
 
         domain.create()
         logger.info(f"Started domain {domain_name}")
+
+        # Set MTU on tap devices (they inherit bridge MTU which may be 1450)
+        await self._set_vm_tap_mtu(lab_id, node_name)
 
         return NodeInfo(
             name=node_name,
@@ -1086,6 +1113,7 @@ class LibvirtProvider(Provider):
                 )
 
             domain.create()
+            await self._set_vm_tap_mtu(lab_id, node_name)
 
             return NodeActionResult(
                 success=True,
@@ -1744,6 +1772,23 @@ class LibvirtProvider(Provider):
             Timeout in seconds
         """
         return get_readiness_timeout(kind)
+
+    def get_node_kind(self, lab_id: str, node_name: str) -> str | None:
+        """Get the device kind for a VM node from its domain metadata.
+
+        Args:
+            lab_id: Lab identifier
+            node_name: Node name
+
+        Returns:
+            Device kind string, or None if not found
+        """
+        domain_name = self._domain_name(lab_id, node_name)
+        try:
+            domain = self.conn.lookupByName(domain_name)
+            return self._get_domain_kind(domain)
+        except Exception:
+            return None
 
     def _get_domain_kind(self, domain) -> str | None:
         """Get the device kind for a libvirt domain.

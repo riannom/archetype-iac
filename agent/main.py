@@ -2502,12 +2502,12 @@ async def ensure_vtep(request: EnsureVtepRequest) -> EnsureVtepResponse:
 async def attach_overlay_interface(
     request: AttachOverlayInterfaceRequest,
 ) -> AttachOverlayInterfaceResponse:
-    """Create a per-link VXLAN tunnel and attach a container interface.
+    """Create a per-link VXLAN tunnel and attach a node interface.
 
     Per-link VNI model: each cross-host link gets its own VXLAN port on OVS
-    in access mode. The agent discovers the container's local VLAN from the
-    Docker OVS plugin state and creates an access-mode VXLAN port with
-    tag=<local_vlan> and options:key=<vni>.
+    in access mode. The agent discovers the node's local VLAN from OVS
+    (supports both Docker containers and libvirt VMs) and creates an
+    access-mode VXLAN port with tag=<local_vlan> and options:key=<vni>.
 
     No prior VTEP creation is needed — this endpoint is self-contained.
     """
@@ -2518,42 +2518,19 @@ async def attach_overlay_interface(
         )
 
     try:
-        # Step 1: Discover the container's current VLAN from docker plugin
-        plugin = _get_docker_ovs_plugin()
-        if plugin is None:
-            return AttachOverlayInterfaceResponse(
-                success=False,
-                error="Docker OVS plugin not available",
-            )
-
-        provider = get_provider_for_request()
-        container_name = provider.get_container_name(
-            request.lab_id, request.container_name
+        # Step 1: Discover the node's current VLAN (works for both Docker and libvirt)
+        port_info = await _resolve_ovs_port(
+            request.lab_id, request.container_name, request.interface_name
         )
-
-        local_vlan = await plugin.get_endpoint_vlan(
-            request.lab_id, container_name, request.interface_name
-        )
-        if local_vlan is None:
-            # Fallback: discover endpoint directly from OVS when docker plugin
-            # state was cleared (e.g. after OVS reconciliation on container restart)
-            ep = await plugin._discover_endpoint(
-                request.lab_id, container_name, request.interface_name
-            )
-            if ep:
-                local_vlan = ep.vlan_tag
-                logger.info(
-                    f"Discovered VLAN {local_vlan} via fallback for "
-                    f"{container_name}:{request.interface_name}"
-                )
-        if local_vlan is None:
+        if not port_info:
             return AttachOverlayInterfaceResponse(
                 success=False,
                 error=(
-                    f"Could not discover VLAN for "
-                    f"{container_name}:{request.interface_name}"
+                    f"Could not find OVS port for "
+                    f"{request.container_name}:{request.interface_name}"
                 ),
             )
+        local_vlan = port_info.vlan_tag
 
         # Step 2: Create per-link access-mode VXLAN port
         backend = get_network_backend()
@@ -3145,22 +3122,32 @@ class OVSPortInfo:
     provider: str     # "docker" or "libvirt"
 
 
-def _interface_name_to_index(interface_name: str) -> int:
+def _interface_name_to_index(interface_name: str, port_start_index: int = 0) -> int:
     """Convert an interface name to a 0-based index for libvirt VM lookup.
 
-    Examples:
+    The port_start_index parameter accounts for vendor-specific numbering:
+    - CSR1000v (port_start_index=1): eth1 -> 0, eth2 -> 1
+    - cEOS (port_start_index=0): eth0 -> 0, eth1 -> 1
+
+    For non-eth interfaces, the number is always treated as 1-indexed
+    (GigabitEthernet1 -> 0) regardless of port_start_index, because the
+    API normalisation layer already converts these to eth* form.
+
+    Examples (port_start_index=0):
         eth0 -> 0, eth1 -> 1
         GigabitEthernet1 -> 0, GigabitEthernet2 -> 1
-        Ethernet1 -> 0, Ethernet2 -> 1
+    Examples (port_start_index=1):
+        eth1 -> 0, eth2 -> 1
     """
     import re
     match = re.search(r"(\d+)$", interface_name)
     if not match:
         raise ValueError(f"Cannot extract interface index from '{interface_name}'")
     number = int(match.group(1))
-    # eth* interfaces are 0-indexed; everything else (GigabitEthernet, Ethernet, etc.) is 1-indexed
+    # eth* interfaces: subtract port_start_index (vendor-specific offset)
     if interface_name.lower().startswith("eth"):
-        return number
+        return max(0, number - port_start_index)
+    # Non-eth interfaces (GigabitEthernet, Ethernet, etc.) are 1-indexed
     return max(0, number - 1)
 
 
@@ -3212,7 +3199,16 @@ async def _resolve_ovs_port(
     libvirt_provider = get_provider("libvirt")
     if libvirt_provider is not None:
         try:
-            intf_index = _interface_name_to_index(interface_name)
+            # Get port_start_index from the VM's device kind (stored in domain metadata)
+            port_start_index = 0
+            kind = libvirt_provider.get_node_kind(lab_id, node_name)
+            if kind:
+                from agent.vendors import get_vendor_config
+                config = get_vendor_config(kind)
+                if config:
+                    port_start_index = config.port_start_index
+
+            intf_index = _interface_name_to_index(interface_name, port_start_index)
             port_name = await libvirt_provider.get_vm_interface_port(
                 lab_id, node_name, intf_index,
             )
