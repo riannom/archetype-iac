@@ -174,6 +174,7 @@ interface HostDetailed {
   lab_count: number;
   started_at: string | null;
   last_heartbeat: string | null;
+  git_sha: string | null;
   last_error: string | null;
   error_since: string | null;
 }
@@ -243,6 +244,8 @@ const InfrastructurePage: React.FC = () => {
   const [latestVersion, setLatestVersion] = useState<string>('');
   const [updatingAgents, setUpdatingAgents] = useState<Set<string>>(new Set());
   const [updateStatuses, setUpdateStatuses] = useState<Map<string, UpdateStatus>>(new Map());
+  const [customUpdateTarget, setCustomUpdateTarget] = useState<{ hostId: string; hostName: string } | null>(null);
+  const [customVersion, setCustomVersion] = useState('');
 
   // Deregister state
   const [deregisterHost, setDeregisterHost] = useState<HostDetailed | null>(null);
@@ -361,11 +364,7 @@ const InfrastructurePage: React.FC = () => {
                   status: 'completed',
                   progress_percent: 100
                 }));
-                setUpdatingAgents(prev => {
-                  const next = new Set(prev);
-                  next.delete(agentId);
-                  return next;
-                });
+                removeUpdatingAgent(agentId);
                 loadHosts();
                 continue;
               }
@@ -374,11 +373,7 @@ const InfrastructurePage: React.FC = () => {
             setUpdateStatuses(prev => new Map(prev).set(agentId, status));
 
             if (status.status === 'completed' || status.status === 'failed') {
-              setUpdatingAgents(prev => {
-                const next = new Set(prev);
-                next.delete(agentId);
-                return next;
-              });
+              removeUpdatingAgent(agentId);
               if (status.status === 'completed') {
                 loadHosts();
               }
@@ -561,30 +556,33 @@ const InfrastructurePage: React.FC = () => {
     }
   };
 
-  const triggerUpdate = async (hostId: string) => {
+  const removeUpdatingAgent = useCallback((hostId: string) => {
+    setUpdatingAgents(prev => {
+      const next = new Set(prev);
+      next.delete(hostId);
+      return next;
+    });
+  }, []);
+
+  const triggerUpdate = async (hostId: string, targetVersion?: string) => {
     try {
       setUpdatingAgents(prev => new Set(prev).add(hostId));
       const response = await apiRequest<{ job_id: string; status: string; message: string }>(
         `/agents/${hostId}/update`,
-        { method: 'POST' }
+        {
+          method: 'POST',
+          ...(targetVersion ? { body: JSON.stringify({ target_version: targetVersion }) } : {}),
+        }
       );
 
       if (response.status === 'failed') {
         alert(response.message || 'Update failed to start');
-        setUpdatingAgents(prev => {
-          const next = new Set(prev);
-          next.delete(hostId);
-          return next;
-        });
+        removeUpdatingAgent(hostId);
       }
     } catch (err) {
       console.error('Failed to trigger update:', err);
       alert(err instanceof Error ? err.message : 'Failed to trigger update');
-      setUpdatingAgents(prev => {
-        const next = new Set(prev);
-        next.delete(hostId);
-        return next;
-      });
+      removeUpdatingAgent(hostId);
     }
   };
 
@@ -602,29 +600,17 @@ const InfrastructurePage: React.FC = () => {
 
       if (response.success) {
         setTimeout(() => {
-          setUpdatingAgents(prev => {
-            const next = new Set(prev);
-            next.delete(hostId);
-            return next;
-          });
+          removeUpdatingAgent(hostId);
           loadHosts();
         }, 5000);
       } else {
         alert(response.message || 'Rebuild failed');
-        setUpdatingAgents(prev => {
-          const next = new Set(prev);
-          next.delete(hostId);
-          return next;
-        });
+        removeUpdatingAgent(hostId);
       }
     } catch (err) {
       console.error('Failed to trigger rebuild:', err);
       alert(err instanceof Error ? err.message : 'Failed to trigger rebuild');
-      setUpdatingAgents(prev => {
-        const next = new Set(prev);
-        next.delete(hostId);
-        return next;
-      });
+      removeUpdatingAgent(hostId);
     }
   };
 
@@ -668,11 +654,7 @@ const InfrastructurePage: React.FC = () => {
       }
 
       response.results.filter(r => !r.success).forEach(r => {
-        setUpdatingAgents(prev => {
-          const next = new Set(prev);
-          next.delete(r.agent_id);
-          return next;
-        });
+        removeUpdatingAgent(r.agent_id);
       });
     } catch (err) {
       console.error('Failed to trigger bulk update:', err);
@@ -1025,7 +1007,14 @@ const InfrastructurePage: React.FC = () => {
                             {getConnectionStatusText(host.status as ConnectionStatus)}
                           </span>
                           <span className={isUpdateAvailable(host) ? 'text-amber-600 dark:text-amber-400' : ''}>
-                            v{host.version}
+                            <span title={host.git_sha ? `Commit: ${host.git_sha}` : ''}>
+                              v{host.version}
+                              {host.git_sha && (
+                                <span className="ml-1 text-stone-400 dark:text-stone-500 font-mono text-[10px]">
+                                  ({host.git_sha.substring(0, 7)})
+                                </span>
+                              )}
+                            </span>
                             {isUpdateAvailable(host) && (
                               <i className="fa-solid fa-arrow-up ml-1 text-[10px]" title={`Update available: v${latestVersion}`}></i>
                             )}
@@ -1102,13 +1091,25 @@ const InfrastructurePage: React.FC = () => {
                                 Rebuild Container
                               </button>
                             ) : (
-                              <button
-                                onClick={() => triggerUpdate(host.id)}
-                                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 rounded-lg transition-all text-xs font-medium"
-                              >
-                                <i className="fa-solid fa-download"></i>
-                                Update to v{latestVersion}
-                              </button>
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={() => triggerUpdate(host.id)}
+                                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 rounded-l-lg transition-all text-xs font-medium"
+                                >
+                                  <i className="fa-solid fa-download"></i>
+                                  Update to v{latestVersion}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setCustomUpdateTarget({ hostId: host.id, hostName: host.name });
+                                    setCustomVersion('');
+                                  }}
+                                  className="flex items-center justify-center px-2 py-2 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 border border-l-0 border-amber-300 dark:border-amber-700 rounded-r-lg transition-all text-xs"
+                                  title="Update to custom version or commit"
+                                >
+                                  <i className="fa-solid fa-ellipsis-vertical"></i>
+                                </button>
+                              </div>
                             )}
                           </div>
                         ) : null}
@@ -1352,7 +1353,7 @@ const InfrastructurePage: React.FC = () => {
                                       key={i}
                                       className="flex items-center justify-between text-xs py-1 px-2 bg-stone-50 dark:bg-stone-800/50 rounded"
                                     >
-                                      <span className="font-mono text-stone-700 dark:text-stone-300 truncate max-w-[140px]" title={img.reference}>{img.reference}</span>
+                                      <span className="font-mono text-stone-700 dark:text-stone-300 truncate max-w-[140px]" title={img.reference}>{img.reference.includes('/') ? img.reference.split('/').pop() : img.reference}</span>
                                       <span className="flex items-center gap-1.5">
                                         {img.size_bytes != null && (
                                           <span className="text-[10px] text-stone-400">{formatSize(img.size_bytes)}</span>
@@ -2164,6 +2165,68 @@ const InfrastructurePage: React.FC = () => {
                     Apply MTU
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Version Update Modal */}
+      {customUpdateTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl shadow-xl w-full max-w-md mx-4">
+            <div className="p-5 border-b border-stone-200 dark:border-stone-800">
+              <h3 className="text-lg font-semibold text-stone-800 dark:text-stone-200">
+                Custom Update Target
+              </h3>
+              <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
+                Update <span className="font-medium">{customUpdateTarget.hostName}</span> to a specific version, branch, or commit
+              </p>
+            </div>
+            <div className="p-5">
+              <input
+                type="text"
+                value={customVersion}
+                onChange={e => setCustomVersion(e.target.value)}
+                placeholder="e.g. 0.3.7, abc1234, or main"
+                className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg text-sm text-stone-800 dark:text-stone-200 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400 font-mono"
+                autoFocus
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && customVersion.trim()) {
+                    triggerUpdate(customUpdateTarget.hostId, customVersion.trim());
+                    setCustomUpdateTarget(null);
+                  } else if (e.key === 'Escape') {
+                    setCustomUpdateTarget(null);
+                  }
+                }}
+              />
+              <p className="text-[10px] text-stone-400 dark:text-stone-500 mt-2">
+                Accepts version tags (0.3.7), commit SHAs (abc1234), or branch names (main)
+              </p>
+            </div>
+            <div className="p-4 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
+              <button
+                onClick={() => setCustomUpdateTarget(null)}
+                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (customVersion.trim()) {
+                    triggerUpdate(customUpdateTarget.hostId, customVersion.trim());
+                    setCustomUpdateTarget(null);
+                  }
+                }}
+                disabled={!customVersion.trim()}
+                className={`px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                  customVersion.trim()
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                    : 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
+                }`}
+              >
+                <i className="fa-solid fa-download mr-2"></i>
+                Update
               </button>
             </div>
           </div>
