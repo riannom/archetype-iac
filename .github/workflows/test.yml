@@ -33,6 +33,9 @@ jobs:
           pip install pytest-cov
 
       - name: Run API tests with coverage
+        env:
+          DATABASE_URL: sqlite:///test.db
+          REDIS_URL: redis://localhost:6379/0
         run: |
           cd api
           PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=65

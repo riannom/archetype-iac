@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
+import { enableMapSet } from "immer";
+
+// Enable immer MapSet plugin globally before any store modules are loaded
+enableMapSet();
 
 // Cleanup after each test
 afterEach(() => {
