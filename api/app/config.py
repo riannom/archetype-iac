@@ -159,6 +159,18 @@ class Settings(BaseSettings):
     # Auto-trigger vrnetlab builds on qcow2 upload
     vrnetlab_auto_build: bool = True
 
+    # Reconciliation thresholds (previously hardcoded)
+    # How long a node can be in stopping operation before reconciliation recovers it (seconds)
+    stale_stopping_threshold: int = 360  # 6 minutes
+    # How long a node can be in starting operation before reconciliation recovers it (seconds)
+    stale_node_starting_threshold: int = 360  # 6 minutes
+    # Run full orphan check every N reconciliation cycles
+    lab_orphan_check_multiplier: int = 10
+    # Orphaned tunnel cleanup timeout (seconds) - tunnels stuck in cleanup state
+    orphaned_tunnel_cleanup_timeout: int = 300  # 5 minutes
+    # Cooldown before retrying link repair (seconds)
+    link_repair_cooldown: int = 120  # 2 minutes
+
     # Disk cleanup settings
     # How often the cleanup task runs (seconds)
     cleanup_interval: int = 3600  # 1 hour

@@ -19,6 +19,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
+from app.config import settings
 from app.db import SessionLocal
 from app.services.link_validator import verify_link_connected
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
@@ -310,7 +311,7 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
     Returns:
         Number of orphaned tunnels deleted
     """
-    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=settings.orphaned_tunnel_cleanup_timeout)
 
     orphaned = (
         session.query(models.VxlanTunnel)
