@@ -1803,14 +1803,18 @@ class NodeLifecycleManager:
             self.log_parts.append(f"  Connected {links_connected} same-host link(s)")
 
     async def _stop_nodes(self, nodes_need_stop: list[models.NodeState]):
-        """Stop running containers.
+        """Stop running containers using batch reconcile per agent.
 
-        Uses actual node placement (not configured placement) since nodes may
-        have migrated to a different agent.
+        Groups nodes by target agent (using placement data) and sends one
+        batch reconcile request per agent. Nodes not found on a non-default
+        agent are retried on the default agent in a single fallback batch.
         """
         self.log_parts.append("")
         self.log_parts.append("=== Phase 3: Stop Nodes ===")
 
+        # Group nodes by target agent
+        # agent_id -> (agent, [(ns, container_name)])
+        agent_groups: dict[str, tuple[models.Host, list[tuple[models.NodeState, str]]]] = {}
         for ns in nodes_need_stop:
             container_name = _get_container_name(self.lab.id, ns.node_name)
             self.log_parts.append(
@@ -1836,101 +1840,169 @@ class NodeLifecycleManager:
             else:
                 stop_agent = self.agent
 
+            agent_groups.setdefault(
+                stop_agent.id, (stop_agent, [])
+            )[1].append((ns, container_name))
+
+        # Send one batch reconcile per agent
+        # Track nodes that need fallback retry on default agent
+        fallback_nodes: list[tuple[models.NodeState, str]] = []
+
+        for agent_id, (stop_agent, node_list) in agent_groups.items():
+            batch = [
+                {"container_name": cn, "desired_state": "stopped"}
+                for _, cn in node_list
+            ]
+            # Build lookup: container_name -> ns
+            ns_by_container = {cn: ns for ns, cn in node_list}
+
             try:
-                result = await agent_client.container_action(
-                    stop_agent,
-                    container_name,
-                    "stop",
-                    lab_id=self.lab.id,
+                response = await agent_client.reconcile_nodes_on_agent(
+                    stop_agent, self.lab.id, batch
                 )
-                # Fallback: try configured agent if not found on placement
-                if not result.get("success") and "not found" in result.get(
-                    "error", ""
-                ).lower():
-                    if stop_agent.id != self.agent.id:
+                results = response.get("results", [])
+                # Build results lookup
+                results_by_name = {
+                    r.get("container_name"): r for r in results
+                }
+
+                for ns, container_name in node_list:
+                    result = results_by_name.get(container_name, {})
+                    # Check for "not found" on non-default agent -> queue fallback
+                    if (
+                        not result.get("success")
+                        and "not found" in result.get("error", "").lower()
+                        and stop_agent.id != self.agent.id
+                    ):
                         self.log_parts.append(
                             f"    Container not on {stop_agent.name}, "
-                            f"trying {self.agent.name}..."
+                            f"will retry on {self.agent.name}..."
                         )
-                        result = await agent_client.container_action(
-                            self.agent,
-                            container_name,
-                            "stop",
-                            lab_id=self.lab.id,
-                        )
+                        fallback_nodes.append((ns, container_name))
+                        continue
 
-                if result.get("success"):
-                    old_state = ns.actual_state
-                    ns.actual_state = NodeActualState.STOPPED.value
-                    ns.stopping_started_at = None
-                    ns.error_message = None
-                    ns.boot_started_at = None
-                    ns.is_ready = False
-                    self.log_parts.append(f"  {ns.node_name}: stopped")
-                    self._broadcast_state(ns, name_suffix="stopped")
-                    logger.info(
-                        "Node state transition",
-                        extra={
-                            "event": "node_state_transition",
-                            "lab_id": self.lab.id,
-                            "node_id": ns.node_id,
-                            "node_name": ns.node_name,
-                            "old_state": old_state,
-                            "new_state": "stopped",
-                            "trigger": "agent_response",
-                            "agent_id": stop_agent.id,
-                            "job_id": self.job.id,
-                        },
-                    )
-                else:
-                    old_state = ns.actual_state
-                    ns.actual_state = NodeActualState.ERROR.value
-                    ns.stopping_started_at = None
-                    ns.error_message = (
-                        result.get("error") or "Stop failed"
-                    )
-                    ns.boot_started_at = None
-                    ns.is_ready = False
-                    self.log_parts.append(
-                        f"  {ns.node_name}: FAILED - {ns.error_message}"
-                    )
-                    self._broadcast_state(ns, name_suffix="error")
-                    logger.info(
-                        "Node state transition",
-                        extra={
-                            "event": "node_state_transition",
-                            "lab_id": self.lab.id,
-                            "node_id": ns.node_id,
-                            "node_name": ns.node_name,
-                            "old_state": old_state,
-                            "new_state": "error",
-                            "trigger": "agent_response",
-                            "agent_id": stop_agent.id,
-                            "job_id": self.job.id,
-                            "error_message": ns.error_message,
-                        },
-                    )
+                    self._apply_stop_result(ns, result, stop_agent)
 
             except AgentUnavailableError as e:
                 error_msg = f"Agent unreachable (transient): {e.message}"
-                ns.error_message = error_msg
-                self.log_parts.append(
-                    f"  {ns.node_name}: FAILED (transient) - {error_msg}"
-                )
-                logger.warning(
-                    f"Stop {ns.node_name} in job {self.job.id} failed due "
-                    f"to agent unavailability"
-                )
+                for ns, container_name in node_list:
+                    ns.error_message = error_msg
+                    self.log_parts.append(
+                        f"  {ns.node_name}: FAILED (transient) - {error_msg}"
+                    )
+                    logger.warning(
+                        f"Stop {ns.node_name} in job {self.job.id} failed due "
+                        f"to agent unavailability"
+                    )
             except Exception as e:
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.stopping_started_at = None
-                ns.error_message = str(e)
-                ns.boot_started_at = None
-                ns.is_ready = False
-                self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
-                self._broadcast_state(ns, name_suffix="error")
+                for ns, container_name in node_list:
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.stopping_started_at = None
+                    ns.error_message = str(e)
+                    ns.boot_started_at = None
+                    ns.is_ready = False
+                    self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
+                    self._broadcast_state(ns, name_suffix="error")
+
+        # Fallback: retry not-found nodes on default agent in one batch
+        if fallback_nodes:
+            fallback_batch = [
+                {"container_name": cn, "desired_state": "stopped"}
+                for _, cn in fallback_nodes
+            ]
+            try:
+                response = await agent_client.reconcile_nodes_on_agent(
+                    self.agent, self.lab.id, fallback_batch
+                )
+                results = response.get("results", [])
+                results_by_name = {
+                    r.get("container_name"): r for r in results
+                }
+                for ns, container_name in fallback_nodes:
+                    result = results_by_name.get(container_name, {})
+                    self._apply_stop_result(ns, result, self.agent)
+
+            except AgentUnavailableError as e:
+                error_msg = f"Agent unreachable (transient): {e.message}"
+                for ns, container_name in fallback_nodes:
+                    ns.error_message = error_msg
+                    self.log_parts.append(
+                        f"  {ns.node_name}: FAILED (transient) - {error_msg}"
+                    )
+                    logger.warning(
+                        f"Stop {ns.node_name} in job {self.job.id} failed due "
+                        f"to agent unavailability (fallback)"
+                    )
+            except Exception as e:
+                for ns, container_name in fallback_nodes:
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.stopping_started_at = None
+                    ns.error_message = str(e)
+                    ns.boot_started_at = None
+                    ns.is_ready = False
+                    self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
+                    self._broadcast_state(ns, name_suffix="error")
 
         self.session.commit()
+
+    def _apply_stop_result(
+        self,
+        ns: models.NodeState,
+        result: dict,
+        stop_agent: models.Host,
+    ):
+        """Apply a single stop result to a node state, broadcast, and log."""
+        if result.get("success"):
+            old_state = ns.actual_state
+            ns.actual_state = NodeActualState.STOPPED.value
+            ns.stopping_started_at = None
+            ns.error_message = None
+            ns.boot_started_at = None
+            ns.is_ready = False
+            self.log_parts.append(f"  {ns.node_name}: stopped")
+            self._broadcast_state(ns, name_suffix="stopped")
+            logger.info(
+                "Node state transition",
+                extra={
+                    "event": "node_state_transition",
+                    "lab_id": self.lab.id,
+                    "node_id": ns.node_id,
+                    "node_name": ns.node_name,
+                    "old_state": old_state,
+                    "new_state": "stopped",
+                    "trigger": "agent_response",
+                    "agent_id": stop_agent.id,
+                    "job_id": self.job.id,
+                },
+            )
+        else:
+            old_state = ns.actual_state
+            ns.actual_state = NodeActualState.ERROR.value
+            ns.stopping_started_at = None
+            ns.error_message = (
+                result.get("error") or "Stop failed"
+            )
+            ns.boot_started_at = None
+            ns.is_ready = False
+            self.log_parts.append(
+                f"  {ns.node_name}: FAILED - {ns.error_message}"
+            )
+            self._broadcast_state(ns, name_suffix="error")
+            logger.info(
+                "Node state transition",
+                extra={
+                    "event": "node_state_transition",
+                    "lab_id": self.lab.id,
+                    "node_id": ns.node_id,
+                    "node_name": ns.node_name,
+                    "old_state": old_state,
+                    "new_state": "error",
+                    "trigger": "agent_response",
+                    "agent_id": stop_agent.id,
+                    "job_id": self.job.id,
+                    "error_message": ns.error_message,
+                },
+            )
 
     async def _post_operation_cleanup(self):
         """Post-operation cleanup: create cross-host VXLAN links."""

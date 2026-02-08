@@ -716,7 +716,11 @@ Phase 3 (Agent Per-Node Lifecycle) ───────────────
 - [x] Restructure `enforce_lab_states()` to batch by lab: 1 job per lab, 1 NLM instance
 - [x] Preserve `enforce_node_state()` for single-node use (event-driven cleanup)
 
-**NLM stop batching**: Deferred — optional optimization, moderate risk for incremental gain
+**File:** `api/app/tasks/node_lifecycle.py` (_stop_nodes)
+- [x] Group nodes by target agent using placement data
+- [x] Send one `reconcile_nodes_on_agent()` per agent group
+- [x] Extract `_apply_stop_result()` for per-node state update + broadcast + logging
+- [x] Collect "not found" nodes from non-default agents for fallback batch on default agent
 
 ### 6.5 Verify strict explicit placement (#R-2A) ✅ COMPLETE
 - [x] Audit `get_agent_for_node()` in agent_client.py — confirm Node.host_id blocks fallback
