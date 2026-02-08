@@ -5,16 +5,7 @@ import { RuntimeStatus } from './RuntimeControl';
 import { useTheme } from '../../theme/index';
 import { getAgentColor, getAgentInitials } from '../../utils/agentColors';
 import { useNotifications } from '../../contexts/NotificationContext';
-
-interface NodeStateEntry {
-  id: string;
-  node_id: string;
-  node_name: string;
-  host_id?: string | null;
-  host_name?: string | null;
-  actual_state?: string;
-  error_message?: string | null;
-}
+import { NodeStateEntry } from '../../types/nodeState';
 
 interface CanvasProps {
   nodes: Node[];

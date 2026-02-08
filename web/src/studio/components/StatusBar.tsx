@@ -1,20 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { APP_VERSION, APP_VERSION_LABEL } from '../../config';
 import { formatUptime } from '../../utils/format';
-
-interface NodeStateEntry {
-  id: string;
-  lab_id: string;
-  node_id: string;
-  node_name: string;
-  desired_state: 'stopped' | 'running';
-  actual_state: 'undeployed' | 'pending' | 'starting' | 'running' | 'stopped' | 'stopping' | 'error';
-  error_message?: string | null;
-  is_ready?: boolean;
-  boot_started_at?: string | null;
-  created_at: string;
-  updated_at: string;
-}
+import { NodeStateEntry } from '../../types/nodeState';
 
 interface StatusBarProps {
   nodeStates: Record<string, NodeStateEntry>;

@@ -6,24 +6,7 @@ import InterfaceSelect from './InterfaceSelect';
 import { PortManager } from '../hooks/usePortManager';
 import ExternalNetworkConfig from './ExternalNetworkConfig';
 import { getAgentColor } from '../../utils/agentColors';
-
-interface NodeStateEntry {
-  id: string;
-  lab_id: string;
-  node_id: string;
-  node_name: string;
-  desired_state: 'stopped' | 'running';
-  actual_state: 'undeployed' | 'pending' | 'starting' | 'running' | 'stopped' | 'stopping' | 'error';
-  error_message?: string | null;
-  is_ready?: boolean;
-  boot_started_at?: string | null;
-  image_sync_status?: string | null;
-  image_sync_message?: string | null;
-  host_id?: string | null;
-  host_name?: string | null;
-  created_at: string;
-  updated_at: string;
-}
+import { NodeStateEntry } from '../../types/nodeState';
 
 interface PropertiesPanelProps {
   selectedItem: Node | Link | Annotation | null;

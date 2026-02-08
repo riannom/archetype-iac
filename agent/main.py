@@ -2889,6 +2889,9 @@ async def create_node(
     request: CreateNodeRequest,
 ) -> CreateNodeResponse:
     """Create a single node container without starting it."""
+    import time as _time
+    _t0 = _time.monotonic()
+
     provider = get_provider_for_request()
     workspace = get_workspace(lab_id)
 
@@ -2903,6 +2906,20 @@ async def create_node(
         binds=request.binds,
         env=request.env,
         startup_config=request.startup_config,
+    )
+
+    elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+    logger.info(
+        "Container operation",
+        extra={
+            "event": "container_operation",
+            "operation": "create",
+            "lab_id": lab_id,
+            "node_name": node_name,
+            "result": "success" if result.success else "error",
+            "duration_ms": elapsed_ms,
+            "error": result.error if not result.success else None,
+        },
     )
 
     return CreateNodeResponse(
@@ -2920,6 +2937,9 @@ async def start_node(
     request: StartNodeRequest | None = None,
 ) -> StartNodeResponse:
     """Start a node with optional veth repair and interface fixing."""
+    import time as _time
+    _t0 = _time.monotonic()
+
     provider = get_provider_for_request()
     workspace = get_workspace(lab_id)
 
@@ -2946,6 +2966,20 @@ async def start_node(
         if if_match:
             interfaces_fixed = int(if_match.group(1))
 
+    elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+    logger.info(
+        "Container operation",
+        extra={
+            "event": "container_operation",
+            "operation": "start",
+            "lab_id": lab_id,
+            "node_name": node_name,
+            "result": "success" if result.success else "error",
+            "duration_ms": elapsed_ms,
+            "error": result.error if not result.success else None,
+        },
+    )
+
     return StartNodeResponse(
         success=result.success,
         status=result.new_status.value if result.new_status else "unknown",
@@ -2958,6 +2992,9 @@ async def start_node(
 @app.post("/labs/{lab_id}/nodes/{node_name}/stop")
 async def stop_node(lab_id: str, node_name: str) -> StopNodeResponse:
     """Stop a running node."""
+    import time as _time
+    _t0 = _time.monotonic()
+
     provider = get_provider_for_request()
     workspace = get_workspace(lab_id)
 
@@ -2965,6 +3002,20 @@ async def stop_node(lab_id: str, node_name: str) -> StopNodeResponse:
         lab_id=lab_id,
         node_name=node_name,
         workspace=workspace,
+    )
+
+    elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+    logger.info(
+        "Container operation",
+        extra={
+            "event": "container_operation",
+            "operation": "stop",
+            "lab_id": lab_id,
+            "node_name": node_name,
+            "result": "success" if result.success else "error",
+            "duration_ms": elapsed_ms,
+            "error": result.error if not result.success else None,
+        },
     )
 
     return StopNodeResponse(
@@ -2977,6 +3028,9 @@ async def stop_node(lab_id: str, node_name: str) -> StopNodeResponse:
 @app.delete("/labs/{lab_id}/nodes/{node_name}")
 async def destroy_node(lab_id: str, node_name: str) -> DestroyNodeResponse:
     """Destroy a node container and clean up resources."""
+    import time as _time
+    _t0 = _time.monotonic()
+
     provider = get_provider_for_request()
     workspace = get_workspace(lab_id)
 
@@ -2984,6 +3038,20 @@ async def destroy_node(lab_id: str, node_name: str) -> DestroyNodeResponse:
         lab_id=lab_id,
         node_name=node_name,
         workspace=workspace,
+    )
+
+    elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+    logger.info(
+        "Container operation",
+        extra={
+            "event": "container_operation",
+            "operation": "destroy",
+            "lab_id": lab_id,
+            "node_name": node_name,
+            "result": "success" if result.success else "error",
+            "duration_ms": elapsed_ms,
+            "error": result.error if not result.success else None,
+        },
     )
 
     return DestroyNodeResponse(

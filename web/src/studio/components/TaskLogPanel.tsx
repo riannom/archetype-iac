@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import TerminalSession from './TerminalSession';
+import { NodeStateEntry } from '../../types/nodeState';
 
 export interface TaskLogEntry {
   id: string;
@@ -7,13 +8,6 @@ export interface TaskLogEntry {
   level: 'info' | 'success' | 'warning' | 'error';
   message: string;
   jobId?: string;
-}
-
-interface NodeStateEntry {
-  id: string;
-  node_id: string;
-  actual_state: string;
-  is_ready?: boolean;
 }
 
 export interface DockedConsole {

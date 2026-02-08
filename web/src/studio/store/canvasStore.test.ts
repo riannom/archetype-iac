@@ -38,32 +38,34 @@ afterEach(() => {
 
 describe('canvasStore', () => {
   it('adds nodes and marks dirty', () => {
-    const store = useCanvasStore.getState();
-    store.addNode(nodeA);
+    useCanvasStore.getState().addNode(nodeA);
 
+    const store = useCanvasStore.getState();
     expect(store.nodes.size).toBe(1);
     expect(store.isDirty).toBe(true);
   });
 
   it('removes node and connected links', () => {
+    const { addNode, addLink, removeNode } = useCanvasStore.getState();
+    addNode(nodeA);
+    addNode(nodeB);
+    addLink(link);
+
+    removeNode('n1');
+
     const store = useCanvasStore.getState();
-    store.addNode(nodeA);
-    store.addNode(nodeB);
-    store.addLink(link);
-
-    store.removeNode('n1');
-
     expect(store.nodes.has('n1')).toBe(false);
     expect(store.links.size).toBe(0);
   });
 
   it('resets state when lab changes', () => {
+    const { addNode, selectNode, setLabId } = useCanvasStore.getState();
+    addNode(nodeA);
+    selectNode('n1');
+
+    setLabId('lab-1');
+
     const store = useCanvasStore.getState();
-    store.addNode(nodeA);
-    store.selectNode('n1');
-
-    store.setLabId('lab-1');
-
     expect(store.nodes.size).toBe(0);
     expect(store.selectedNodeIds.size).toBe(0);
   });

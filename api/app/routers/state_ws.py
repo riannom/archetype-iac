@@ -26,6 +26,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.orm import Session
 
 from app import db, models
+from app.config import settings
 from app.services.broadcaster import get_broadcaster
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,12 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str, database: Sessi
         nodes_data = []
         for ns in node_states:
             host_id = placement_by_node.get(ns.node_name) or lab.agent_id
+            # Calculate will_retry: error state with retries remaining and not permanently failed
+            will_retry = (
+                ns.actual_state == "error"
+                and ns.enforcement_attempts < settings.state_enforcement_max_retries
+                and ns.enforcement_failed_at is None
+            )
             nodes_data.append({
                 "node_id": ns.node_id,
                 "node_name": ns.node_name,
@@ -179,6 +186,7 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str, database: Sessi
                 "host_name": hosts.get(host_id) if host_id else None,
                 "image_sync_status": ns.image_sync_status,
                 "image_sync_message": ns.image_sync_message,
+                "will_retry": will_retry,
             })
 
         await websocket.send_json({

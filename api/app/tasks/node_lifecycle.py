@@ -322,6 +322,19 @@ class NodeLifecycleManager:
                     ns.error_message = None
 
             if ns.actual_state != old_state:
+                logger.info(
+                    "Node state transition",
+                    extra={
+                        "event": "node_state_transition",
+                        "lab_id": self.lab.id,
+                        "node_id": ns.node_id,
+                        "node_name": ns.node_name,
+                        "old_state": old_state,
+                        "new_state": ns.actual_state,
+                        "trigger": "lifecycle_manager",
+                        "job_id": self.job.id,
+                    },
+                )
                 self._broadcast_state(ns)
 
         self.session.commit()
@@ -355,8 +368,16 @@ class NodeLifecycleManager:
                 else:
                     all_node_agents[db_node.container_name] = db_node.host_id
                     logger.info(
-                        f"Node {db_node.container_name} -> host "
-                        f"{host_agent.name} (explicit placement)"
+                        "Placement decision",
+                        extra={
+                            "event": "placement_decision",
+                            "lab_id": self.lab.id,
+                            "node_name": db_node.container_name,
+                            "agent_id": db_node.host_id,
+                            "agent_name": host_agent.name,
+                            "decision_source": "explicit_host_id",
+                            "job_id": self.job.id,
+                        },
                     )
 
         # Fail fast if any explicit placements can't be honored
@@ -1519,6 +1540,20 @@ class NodeLifecycleManager:
                     deployed_names.append(ns.node_name)
                     self.log_parts.append(f"  {ns.node_name}: deployed and started")
                     self._broadcast_state(ns, name_suffix="started")
+                    logger.info(
+                        "Node state transition",
+                        extra={
+                            "event": "node_state_transition",
+                            "lab_id": self.lab.id,
+                            "node_id": ns.node_id,
+                            "node_name": ns.node_name,
+                            "old_state": "pending",
+                            "new_state": "running",
+                            "trigger": "agent_response",
+                            "agent_id": self.agent.id,
+                            "job_id": self.job.id,
+                        },
+                    )
                     if _is_ceos_kind(kind):
                         ceos_started = True
                 else:
@@ -1526,6 +1561,21 @@ class NodeLifecycleManager:
                     ns.actual_state = NodeActualState.ERROR.value
                     ns.error_message = error_msg
                     self.log_parts.append(f"  {ns.node_name}: START FAILED - {error_msg}")
+                    logger.info(
+                        "Node state transition",
+                        extra={
+                            "event": "node_state_transition",
+                            "lab_id": self.lab.id,
+                            "node_id": ns.node_id,
+                            "node_name": ns.node_name,
+                            "old_state": "pending",
+                            "new_state": "error",
+                            "trigger": "agent_response",
+                            "agent_id": self.agent.id,
+                            "job_id": self.job.id,
+                            "error_message": error_msg,
+                        },
+                    )
 
             except AgentUnavailableError as e:
                 ns.actual_state = NodeActualState.PENDING.value
@@ -1580,6 +1630,7 @@ class NodeLifecycleManager:
                 )
 
                 if result.get("success"):
+                    old_state = ns.actual_state
                     ns.actual_state = NodeActualState.RUNNING.value
                     ns.starting_started_at = None
                     ns.error_message = None
@@ -1588,14 +1639,44 @@ class NodeLifecycleManager:
                     started_names.append(ns.node_name)
                     self.log_parts.append(f"  {ns.node_name}: started")
                     self._broadcast_state(ns, name_suffix="started")
+                    logger.info(
+                        "Node state transition",
+                        extra={
+                            "event": "node_state_transition",
+                            "lab_id": self.lab.id,
+                            "node_id": ns.node_id,
+                            "node_name": ns.node_name,
+                            "old_state": old_state,
+                            "new_state": "running",
+                            "trigger": "agent_response",
+                            "agent_id": self.agent.id,
+                            "job_id": self.job.id,
+                        },
+                    )
                     if _is_ceos_kind(kind):
                         ceos_started = True
                 else:
                     error_msg = result.get("error", "Start failed")
+                    old_state = ns.actual_state
                     ns.actual_state = NodeActualState.ERROR.value
                     ns.starting_started_at = None
                     ns.error_message = error_msg
                     self.log_parts.append(f"  {ns.node_name}: FAILED - {error_msg}")
+                    logger.info(
+                        "Node state transition",
+                        extra={
+                            "event": "node_state_transition",
+                            "lab_id": self.lab.id,
+                            "node_id": ns.node_id,
+                            "node_name": ns.node_name,
+                            "old_state": old_state,
+                            "new_state": "error",
+                            "trigger": "agent_response",
+                            "agent_id": self.agent.id,
+                            "job_id": self.job.id,
+                            "error_message": error_msg,
+                        },
+                    )
 
             except AgentUnavailableError as e:
                 ns.starting_started_at = None
@@ -1779,6 +1860,7 @@ class NodeLifecycleManager:
                         )
 
                 if result.get("success"):
+                    old_state = ns.actual_state
                     ns.actual_state = NodeActualState.STOPPED.value
                     ns.stopping_started_at = None
                     ns.error_message = None
@@ -1786,7 +1868,22 @@ class NodeLifecycleManager:
                     ns.is_ready = False
                     self.log_parts.append(f"  {ns.node_name}: stopped")
                     self._broadcast_state(ns, name_suffix="stopped")
+                    logger.info(
+                        "Node state transition",
+                        extra={
+                            "event": "node_state_transition",
+                            "lab_id": self.lab.id,
+                            "node_id": ns.node_id,
+                            "node_name": ns.node_name,
+                            "old_state": old_state,
+                            "new_state": "stopped",
+                            "trigger": "agent_response",
+                            "agent_id": stop_agent.id,
+                            "job_id": self.job.id,
+                        },
+                    )
                 else:
+                    old_state = ns.actual_state
                     ns.actual_state = NodeActualState.ERROR.value
                     ns.stopping_started_at = None
                     ns.error_message = (
@@ -1798,6 +1895,21 @@ class NodeLifecycleManager:
                         f"  {ns.node_name}: FAILED - {ns.error_message}"
                     )
                     self._broadcast_state(ns, name_suffix="error")
+                    logger.info(
+                        "Node state transition",
+                        extra={
+                            "event": "node_state_transition",
+                            "lab_id": self.lab.id,
+                            "node_id": ns.node_id,
+                            "node_name": ns.node_name,
+                            "old_state": old_state,
+                            "new_state": "error",
+                            "trigger": "agent_response",
+                            "agent_id": stop_agent.id,
+                            "job_id": self.job.id,
+                            "error_message": ns.error_message,
+                        },
+                    )
 
             except AgentUnavailableError as e:
                 error_msg = f"Agent unreachable (transient): {e.message}"

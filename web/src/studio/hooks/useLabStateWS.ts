@@ -18,19 +18,9 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { API_BASE_URL } from '../../api';
+import { NodeStateData } from '../../types/nodeState';
 
-export interface NodeStateData {
-  node_id: string;
-  node_name: string;
-  desired_state: 'running' | 'stopped';
-  actual_state: 'undeployed' | 'pending' | 'starting' | 'running' | 'stopped' | 'stopping' | 'error';
-  is_ready: boolean;
-  error_message?: string | null;
-  host_id?: string | null;
-  host_name?: string | null;
-  image_sync_status?: string | null;
-  image_sync_message?: string | null;
-}
+export type { NodeStateData };
 
 export interface LinkStateData {
   link_name: string;
