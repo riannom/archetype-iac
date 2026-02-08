@@ -89,6 +89,7 @@ class VendorConfig:
     # Libvirt/QEMU VM settings (for qcow2-based devices)
     disk_driver: str = "virtio"  # Disk bus type: virtio, ide, sata
     nic_driver: str = "virtio"   # NIC model: virtio, e1000, rtl8139
+    machine_type: str = "pc-q35-6.2"  # QEMU machine type: pc-q35-* (modern), pc-i440fx-* (legacy IDE)
     data_volume_gb: int = 0      # Size of additional data volume (0 = none)
     force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
 
@@ -298,7 +299,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         max_ports=8,
         memory=2048,  # 2GB recommended
         cpu=1,
-        disk_driver="sata",  # IOSv GRUB needs non-virtio disk; Q35 machines don't support IDE
+        machine_type="pc-i440fx-6.2",  # IOSv GRUB requires IDE; only i440fx has IDE controller
+        disk_driver="ide",  # IOSv GRUB needs IDE for flash/NVRAM writes
         nic_driver="e1000",  # IOSv requires e1000 NICs
         requires_image=True,
         supported_image_kinds=["qcow2"],
@@ -1474,6 +1476,7 @@ class LibvirtRuntimeConfig:
     """
     memory_mb: int
     cpu_count: int
+    machine_type: str
     disk_driver: str
     nic_driver: str
     data_volume_gb: int
@@ -1505,6 +1508,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         return LibvirtRuntimeConfig(
             memory_mb=2048,
             cpu_count=1,
+            machine_type="pc-q35-6.2",
             disk_driver="virtio",
             nic_driver="virtio",
             data_volume_gb=0,
@@ -1517,6 +1521,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
     return LibvirtRuntimeConfig(
         memory_mb=config.memory,
         cpu_count=config.cpu,
+        machine_type=config.machine_type,
         disk_driver=config.disk_driver,
         nic_driver=config.nic_driver,
         data_volume_gb=config.data_volume_gb,

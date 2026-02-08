@@ -630,7 +630,8 @@ class LibvirtProvider(Provider):
         memory_mb = node_config.get("memory", 2048)
         cpus = node_config.get("cpu", 1)
 
-        # Get driver settings
+        # Get driver and machine settings
+        machine_type = node_config.get("machine_type", "pc-q35-6.2")
         disk_driver = node_config.get("disk_driver", "virtio")
         nic_driver = node_config.get("nic_driver", "virtio")
 
@@ -704,7 +705,7 @@ class LibvirtProvider(Provider):
   <memory unit='MiB'>{memory_mb}</memory>
   <vcpu>{cpus}</vcpu>
   <os>
-    <type arch='x86_64' machine='pc-q35-6.2'>hvm</type>
+    <type arch='x86_64' machine='{machine_type}'>hvm</type>
     <boot dev='hd'/>
   </os>
   <features>
@@ -845,6 +846,7 @@ class LibvirtProvider(Provider):
                 "image": node.image,
                 "memory": libvirt_config.memory_mb,
                 "cpu": libvirt_config.cpu_count,
+                "machine_type": libvirt_config.machine_type,
                 "disk_driver": libvirt_config.disk_driver,
                 "nic_driver": libvirt_config.nic_driver,
                 "data_volume_gb": libvirt_config.data_volume_gb,
@@ -1270,6 +1272,7 @@ class LibvirtProvider(Provider):
                 "image": image,
                 "memory": libvirt_config.memory_mb,
                 "cpu": libvirt_config.cpu_count,
+                "machine_type": libvirt_config.machine_type,
                 "disk_driver": libvirt_config.disk_driver,
                 "nic_driver": libvirt_config.nic_driver,
                 "data_volume_gb": libvirt_config.data_volume_gb,
