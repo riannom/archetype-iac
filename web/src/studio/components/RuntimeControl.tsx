@@ -89,9 +89,8 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
         method: 'PUT',
         body: JSON.stringify({ state: action === 'running' ? 'running' : 'stopped' }),
       });
-
-      // Refresh states after a short delay (WebSocket will also push updates)
-      setTimeout(() => onRefreshStates(), 1000);
+      // No manual refresh needed — WebSocket pushes real-time state updates,
+      // and optimistic guards protect transitional states from stale polling data
     } catch (error) {
       console.error('Bulk action failed:', error);
     } finally {
