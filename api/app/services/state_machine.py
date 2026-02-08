@@ -203,6 +203,14 @@ class NodeStateMachine:
         """
         if actual_state == "pending":
             return "starting" if desired_state == "running" else "stopped"
+
+        # When desired diverges from actual, show transitional state
+        # This prevents flashing "running" while a stop is in progress
+        if actual_state == "running" and desired_state == "stopped":
+            return "stopping"
+        if actual_state in ("stopped", "exited", "undeployed") and desired_state == "running":
+            return "starting"
+
         display_map = {
             "running": "running",
             "starting": "starting",

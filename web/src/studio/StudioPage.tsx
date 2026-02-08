@@ -1560,7 +1560,11 @@ const StudioPage: React.FC = () => {
               };
               setNodeStates(prev => ({
                 ...prev,
-                [nodeId]: { ...prev[nodeId], actual_state: actualStateMap[status] || status },
+                [nodeId]: {
+                  ...prev[nodeId],
+                  actual_state: actualStateMap[status] || status,
+                  display_state: undefined,  // Clear stale server display_state
+                },
               }));
             }}
             onRefreshStates={async () => {
