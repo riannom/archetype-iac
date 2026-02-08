@@ -822,6 +822,23 @@ class TestComputeDisplayState:
     def test_error(self) -> None:
         assert NodeStateMachine.compute_display_state("error", "running") == "error"
 
+    def test_error_desired_stopped(self) -> None:
+        assert NodeStateMachine.compute_display_state("error", "stopped") == "error"
+
+    def test_running_desired_stopped_shows_stopping(self) -> None:
+        """When stop requested but container still running, show 'stopping'."""
+        assert NodeStateMachine.compute_display_state("running", "stopped") == "stopping"
+
+    def test_stopped_desired_running_shows_starting(self) -> None:
+        """When start requested but container still stopped, show 'starting'."""
+        assert NodeStateMachine.compute_display_state("stopped", "running") == "starting"
+
+    def test_exited_desired_running_shows_starting(self) -> None:
+        assert NodeStateMachine.compute_display_state("exited", "running") == "starting"
+
+    def test_undeployed_desired_running_shows_starting(self) -> None:
+        assert NodeStateMachine.compute_display_state("undeployed", "running") == "starting"
+
     def test_pending_desired_running(self) -> None:
         assert NodeStateMachine.compute_display_state("pending", "running") == "starting"
 
@@ -834,18 +851,18 @@ class TestComputeDisplayState:
     # Cross-product: verify all 8 actual × 2 desired combinations
     @pytest.mark.parametrize("actual,desired,expected", [
         ("undeployed", "stopped", "stopped"),
-        ("undeployed", "running", "stopped"),
+        ("undeployed", "running", "starting"),
         ("pending", "running", "starting"),
         ("pending", "stopped", "stopped"),
         ("starting", "running", "starting"),
         ("starting", "stopped", "starting"),
         ("running", "running", "running"),
-        ("running", "stopped", "running"),
+        ("running", "stopped", "stopping"),
         ("stopping", "running", "stopping"),
         ("stopping", "stopped", "stopping"),
-        ("stopped", "running", "stopped"),
+        ("stopped", "running", "starting"),
         ("stopped", "stopped", "stopped"),
-        ("exited", "running", "stopped"),
+        ("exited", "running", "starting"),
         ("exited", "stopped", "stopped"),
         ("error", "running", "error"),
         ("error", "stopped", "error"),
