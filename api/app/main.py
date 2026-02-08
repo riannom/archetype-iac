@@ -17,13 +17,17 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import JSONResponse as StarletteJSONResponse
+from starlette.routing import Route
+
 from app import db, models
-from app.db import SessionLocal
 from app.config import settings
 from app.auth import get_current_user, hash_password
 from app.catalog import list_devices as catalog_devices, list_images as catalog_images
@@ -36,16 +40,8 @@ from app.logging_config import (
 from app.middleware import CurrentUserMiddleware, DeprecationMiddleware
 from app.routers.v1 import router as v1_router
 from app.routers import admin, agents, auth, callbacks, console, events, images, infrastructure, iso, jobs, labs, permissions, state_ws, system, vendors, webhooks
-from app.tasks.health import agent_health_monitor
-from app.tasks.job_health import job_health_monitor
-from app.tasks.reconciliation import state_reconciliation_monitor
-from app.tasks.disk_cleanup import disk_cleanup_monitor
-from app.tasks.image_reconciliation import image_reconciliation_monitor
-from app.tasks.state_enforcement import state_enforcement_monitor
-from app.tasks.link_reconciliation import link_reconciliation_monitor
-from app.tasks.cleanup_handler import cleanup_event_monitor
 from app.events.publisher import close_publisher
-from app.utils.async_tasks import setup_asyncio_exception_handler, safe_create_task
+from app.utils.async_tasks import setup_asyncio_exception_handler
 from alembic.config import Config as AlembicConfig
 from alembic import command as alembic_command
 
@@ -54,22 +50,9 @@ setup_logging()
 
 logger = logging.getLogger(__name__)
 
-# Background task handles
-_agent_monitor_task: asyncio.Task | None = None
-_reconciliation_task: asyncio.Task | None = None
-_job_health_task: asyncio.Task | None = None
-_disk_cleanup_task: asyncio.Task | None = None
-_image_reconciliation_task: asyncio.Task | None = None
-_state_enforcement_task: asyncio.Task | None = None
-_link_reconciliation_task: asyncio.Task | None = None
-_cleanup_event_task: asyncio.Task | None = None
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan - start background tasks on startup, cleanup on shutdown."""
-    global _agent_monitor_task, _reconciliation_task, _job_health_task, _disk_cleanup_task, _image_reconciliation_task, _state_enforcement_task, _link_reconciliation_task, _cleanup_event_task
-
+    """Application lifespan - run migrations and seed data on startup."""
     # Startup
     logger.info("Starting Archetype API controller")
 
@@ -90,8 +73,7 @@ async def lifespan(app: FastAPI):
 
     # Seed admin user if configured
     if settings.admin_email and settings.admin_password:
-        session = SessionLocal()
-        try:
+        with db.get_session() as session:
             existing = session.query(models.User).filter(models.User.email == settings.admin_email).first()
             if not existing:
                 if len(settings.admin_password.encode("utf-8")) > 72:
@@ -105,101 +87,71 @@ async def lifespan(app: FastAPI):
                     session.add(admin_user)
                     session.commit()
                     logger.info(f"Created admin user: {settings.admin_email}")
-        finally:
-            session.close()
 
-    # Start background monitor tasks with proper exception handling
-    _agent_monitor_task = safe_create_task(
-        agent_health_monitor(), name="agent_health_monitor"
-    )
-    _reconciliation_task = safe_create_task(
-        state_reconciliation_monitor(), name="state_reconciliation_monitor"
-    )
-    _job_health_task = safe_create_task(
-        job_health_monitor(), name="job_health_monitor"
-    )
-    _disk_cleanup_task = safe_create_task(
-        disk_cleanup_monitor(), name="disk_cleanup_monitor"
-    )
-    _image_reconciliation_task = safe_create_task(
-        image_reconciliation_monitor(), name="image_reconciliation_monitor"
-    )
-    _state_enforcement_task = safe_create_task(
-        state_enforcement_monitor(), name="state_enforcement_monitor"
-    )
-    _link_reconciliation_task = safe_create_task(
-        link_reconciliation_monitor(), name="link_reconciliation_monitor"
-    )
-    if settings.cleanup_event_driven_enabled:
-        _cleanup_event_task = safe_create_task(
-            cleanup_event_monitor(), name="cleanup_event_monitor"
-        )
+    # Background monitors run in the separate scheduler service.
+    # See app/scheduler.py and docker-compose scheduler service.
 
     yield
 
     # Shutdown
     logger.info("Shutting down Archetype API controller")
-
-    if _agent_monitor_task:
-        _agent_monitor_task.cancel()
-        try:
-            await _agent_monitor_task
-        except asyncio.CancelledError:
-            pass
-
-    if _reconciliation_task:
-        _reconciliation_task.cancel()
-        try:
-            await _reconciliation_task
-        except asyncio.CancelledError:
-            pass
-
-    if _job_health_task:
-        _job_health_task.cancel()
-        try:
-            await _job_health_task
-        except asyncio.CancelledError:
-            pass
-
-    if _disk_cleanup_task:
-        _disk_cleanup_task.cancel()
-        try:
-            await _disk_cleanup_task
-        except asyncio.CancelledError:
-            pass
-
-    if _image_reconciliation_task:
-        _image_reconciliation_task.cancel()
-        try:
-            await _image_reconciliation_task
-        except asyncio.CancelledError:
-            pass
-
-    if _state_enforcement_task:
-        _state_enforcement_task.cancel()
-        try:
-            await _state_enforcement_task
-        except asyncio.CancelledError:
-            pass
-
-    if _link_reconciliation_task:
-        _link_reconciliation_task.cancel()
-        try:
-            await _link_reconciliation_task
-        except asyncio.CancelledError:
-            pass
-
-    if _cleanup_event_task:
-        _cleanup_event_task.cancel()
-        try:
-            await _cleanup_event_task
-        except asyncio.CancelledError:
-            pass
-
     await close_publisher()
 
 
-app = FastAPI(title="Archetype API", version="0.1.0", lifespan=lifespan)
+async def healthz(request: StarletteRequest) -> StarletteJSONResponse:
+    """Lightweight health probe that bypasses all middleware.
+
+    Always returns 200 to prove the event loop is alive.
+    DB and Redis status are informational only.
+    """
+    import time
+
+    result: dict = {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Non-blocking DB check (informational)
+    try:
+        start = time.monotonic()
+        with db.get_session() as session:
+            session.execute(sa_text("SELECT 1"))
+        result["db"] = "ok"
+        result["db_ms"] = round((time.monotonic() - start) * 1000, 1)
+    except Exception as e:
+        result["db"] = f"error: {type(e).__name__}"
+
+    # Non-blocking Redis check (informational)
+    try:
+        start = time.monotonic()
+        r = db.get_redis()
+        r.ping()
+        result["redis"] = "ok"
+        result["redis_ms"] = round((time.monotonic() - start) * 1000, 1)
+    except Exception as e:
+        result["redis"] = f"error: {type(e).__name__}"
+
+    # Pool stats (informational)
+    try:
+        pool = db.engine.pool
+        result["db_pool"] = {
+            "size": pool.size(),
+            "checked_in": pool.checkedin(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+        }
+    except Exception:
+        pass
+
+    return StarletteJSONResponse(result)
+
+
+app = FastAPI(
+    title="Archetype API",
+    version="0.1.0",
+    lifespan=lifespan,
+    routes=[Route("/healthz", healthz)],  # Bypass all middleware
+)
 
 
 # Global exception handler for unhandled exceptions
@@ -315,19 +267,26 @@ def health(request: Request) -> dict[str, str]:
     }
 
 
+_metrics_last_update: float = 0.0
+_METRICS_MIN_INTERVAL: float = 15.0  # seconds between recomputes
+
+
 @app.get("/metrics")
 def metrics(database: Session = Depends(db.get_db)):
     """Prometheus metrics endpoint.
 
     Returns metrics in Prometheus text format for scraping.
-    Automatically updates all metrics from database before returning.
+    Recomputes from database at most every 15 seconds.
     """
+    import time
     from app.metrics import get_metrics, update_all_metrics
 
-    # Update all metrics from current database state
-    update_all_metrics(database)
+    global _metrics_last_update
+    now = time.monotonic()
+    if now - _metrics_last_update >= _METRICS_MIN_INTERVAL:
+        update_all_metrics(database)
+        _metrics_last_update = now
 
-    # Generate and return metrics
     content, content_type = get_metrics()
     return Response(content=content, media_type=content_type)
 
@@ -365,6 +324,11 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     Returns agent counts, container counts, CPU/memory usage, and lab stats.
     Labs running count is based on actual container presence, not database state.
     """
+    from app.utils.cache import cache_get, cache_set
+    cached = cache_get("dashboard:metrics")
+    if cached is not None:
+        return cached
+
     import json
     from app.utils.lab import find_lab_by_prefix
 
@@ -459,7 +423,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
     # Determine if multi-host environment
     is_multi_host = total_agents > 1
 
-    return {
+    result = {
         "agents": {"online": online_agents, "total": total_agents},
         "containers": {"running": total_containers_running, "total": total_containers},
         "vms": {"running": total_vms_running, "total": total_vms},
@@ -480,11 +444,18 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
         "per_host": per_host,
         "is_multi_host": is_multi_host,
     }
+    cache_set("dashboard:metrics", result)
+    return result
 
 
 @app.get("/dashboard/metrics/containers")
 def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
     """Get detailed container and VM breakdown by lab."""
+    from app.utils.cache import cache_get, cache_set
+    cached = cache_get("dashboard:containers")
+    if cached is not None:
+        return cached
+
     import json
     from app.utils.lab import find_lab_with_name
 
@@ -543,7 +514,7 @@ def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
                 by_lab[lab_id] = {"name": vm["lab_name"], "containers": [], "vms": []}
             by_lab[lab_id]["vms"].append(vm)
 
-    return {
+    result = {
         "by_lab": by_lab,
         "system_containers": system_containers,
         "total_running": sum(1 for c in all_containers if c.get("status") == "running"),
@@ -551,11 +522,18 @@ def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
         "vms_running": sum(1 for vm in all_vms if vm.get("status") == "running"),
         "vms_stopped": sum(1 for vm in all_vms if vm.get("status") != "running"),
     }
+    cache_set("dashboard:containers", result)
+    return result
 
 
 @app.get("/dashboard/metrics/resources")
 def get_resource_distribution(database: Session = Depends(db.get_db)) -> dict:
     """Get resource usage distribution by agent and lab."""
+    from app.utils.cache import cache_get, cache_set
+    cached = cache_get("dashboard:resources")
+    if cached is not None:
+        return cached
+
     import json
     from app.utils.lab import find_lab_by_prefix
 
@@ -598,4 +576,6 @@ def get_resource_distribution(database: Session = Depends(db.get_db)) -> dict:
         for lab_id, count in lab_containers.items()
     ]
 
-    return {"by_agent": by_agent, "by_lab": sorted(by_lab, key=lambda x: -x["container_count"])}
+    result = {"by_agent": by_agent, "by_lab": sorted(by_lab, key=lambda x: -x["container_count"])}
+    cache_set("dashboard:resources", result)
+    return result

@@ -21,7 +21,7 @@ from uuid import uuid4
 import httpx
 
 from app import models
-from app.db import SessionLocal
+from app.db import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -219,103 +219,100 @@ async def dispatch_webhook_event(
     Returns:
         List of webhook IDs that were triggered
     """
-    session = SessionLocal()
     triggered_webhooks = []
 
-    try:
-        # Get lab if not provided but lab_id is
-        if lab_id and not lab:
-            lab = session.get(models.Lab, lab_id)
+    with get_session() as session:
+        try:
+            # Get lab if not provided but lab_id is
+            if lab_id and not lab:
+                lab = session.get(models.Lab, lab_id)
 
-        # Determine user_id from lab if not provided
-        if not user_id and lab:
-            user_id = lab.owner_id
+            # Determine user_id from lab if not provided
+            if not user_id and lab:
+                user_id = lab.owner_id
 
-        if not user_id:
-            logger.warning(f"Cannot dispatch webhook {event_type}: no user_id")
-            return []
+            if not user_id:
+                logger.warning(f"Cannot dispatch webhook {event_type}: no user_id")
+                return []
 
-        # Find matching webhooks
-        # Match webhooks where:
-        # 1. Owner matches user_id
-        # 2. Webhook is enabled
-        # 3. Event type is in webhook's events list
-        # 4. Either webhook.lab_id is NULL (global) or matches the lab_id
-        webhooks = (
-            session.query(models.Webhook)
-            .filter(
-                models.Webhook.owner_id == user_id,
-                models.Webhook.enabled == True,
+            # Find matching webhooks
+            # Match webhooks where:
+            # 1. Owner matches user_id
+            # 2. Webhook is enabled
+            # 3. Event type is in webhook's events list
+            # 4. Either webhook.lab_id is NULL (global) or matches the lab_id
+            webhooks = (
+                session.query(models.Webhook)
+                .filter(
+                    models.Webhook.owner_id == user_id,
+                    models.Webhook.enabled == True,
+                )
+                .all()
             )
-            .all()
-        )
 
-        # Filter by event type and lab scope
-        matching_webhooks = []
-        for webhook in webhooks:
-            # Check event type
-            try:
-                events = json.loads(webhook.events)
-                if event_type not in events:
+            # Filter by event type and lab scope
+            matching_webhooks = []
+            for webhook in webhooks:
+                # Check event type
+                try:
+                    events = json.loads(webhook.events)
+                    if event_type not in events:
+                        continue
+                except json.JSONDecodeError:
                     continue
-            except json.JSONDecodeError:
-                continue
 
-            # Check lab scope
-            if webhook.lab_id and lab_id and webhook.lab_id != lab_id:
-                continue
+                # Check lab scope
+                if webhook.lab_id and lab_id and webhook.lab_id != lab_id:
+                    continue
 
-            matching_webhooks.append(webhook)
+                matching_webhooks.append(webhook)
 
-        if not matching_webhooks:
-            logger.debug(f"No webhooks matched event {event_type} for user {user_id}")
-            return []
+            if not matching_webhooks:
+                logger.debug(f"No webhooks matched event {event_type} for user {user_id}")
+                return []
 
-        # Build payload
-        payload = build_webhook_payload(
-            event_type=event_type,
-            lab=lab,
-            job=job,
-            nodes=nodes,
-            extra=extra,
-        )
-
-        # Deliver to all matching webhooks concurrently
-        async def deliver_and_log(webhook: models.Webhook):
-            success, status_code, error, duration_ms = await deliver_webhook(
-                webhook, payload
+            # Build payload
+            payload = build_webhook_payload(
+                event_type=event_type,
+                lab=lab,
+                job=job,
+                nodes=nodes,
+                extra=extra,
             )
-            log_delivery(
-                session,
-                webhook,
-                event_type,
-                payload,
-                success,
-                status_code,
-                error,
-                duration_ms,
+
+            # Deliver to all matching webhooks concurrently
+            async def deliver_and_log(webhook: models.Webhook):
+                success, status_code, error, duration_ms = await deliver_webhook(
+                    webhook, payload
+                )
+                log_delivery(
+                    session,
+                    webhook,
+                    event_type,
+                    payload,
+                    success,
+                    status_code,
+                    error,
+                    duration_ms,
+                )
+                return webhook.id
+
+            tasks = [deliver_and_log(wh) for wh in matching_webhooks]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, str):
+                    triggered_webhooks.append(result)
+                elif isinstance(result, Exception):
+                    logger.error(f"Webhook delivery error: {result}")
+
+            logger.info(
+                f"Dispatched {event_type} to {len(triggered_webhooks)} webhook(s) "
+                f"for lab {lab_id}"
             )
-            return webhook.id
 
-        tasks = [deliver_and_log(wh) for wh in matching_webhooks]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for result in results:
-            if isinstance(result, str):
-                triggered_webhooks.append(result)
-            elif isinstance(result, Exception):
-                logger.error(f"Webhook delivery error: {result}")
-
-        logger.info(
-            f"Dispatched {event_type} to {len(triggered_webhooks)} webhook(s) "
-            f"for lab {lab_id}"
-        )
-
-    except Exception as e:
-        logger.exception(f"Error dispatching webhook event {event_type}: {e}")
-
-    finally:
-        session.close()
+        except Exception as e:
+            logger.exception(f"Error dispatching webhook event {event_type}: {e}")
 
     return triggered_webhooks
 

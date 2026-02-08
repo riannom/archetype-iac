@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
 from app.auth import get_current_user
-from app.db import SessionLocal
+from app.db import get_session
 from app.netlab import run_netlab_command
 from app.services.topology import TopologyService
 from app.storage import lab_workspace
@@ -479,8 +479,7 @@ async def lab_restart(
     async def restart_sequence():
         await run_agent_job(down_job.id, lab.id, "down", provider=lab_provider)
         # Check if down succeeded before starting up
-        session = SessionLocal()
-        try:
+        with get_session() as session:
             dj = session.get(models.Job, down_job.id)
             uj = session.get(models.Job, up_job.id)
             if dj and dj.status == "failed":
@@ -490,10 +489,8 @@ async def lab_restart(
                     uj.log = "Cancelled: down phase failed"
                     session.commit()
                 return
-            # Proceed with up phase (topology is built from database)
-            await run_agent_job(up_job.id, lab.id, "up", provider=lab_provider)
-        finally:
-            session.close()
+        # Proceed with up phase (topology is built from database)
+        await run_agent_job(up_job.id, lab.id, "up", provider=lab_provider)
 
     safe_create_task(restart_sequence(), name=f"restart:{down_job.id}")
 

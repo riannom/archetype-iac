@@ -7,18 +7,15 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.auth import get_current_user_optional
-from app.db import SessionLocal
+from app.db import get_session
 
 logger = logging.getLogger(__name__)
 
 
 class CurrentUserMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        database = SessionLocal()
-        try:
+        with get_session() as database:
             request.state.user = get_current_user_optional(request, database)
-        finally:
-            database.close()
         return await call_next(request)
 
 
@@ -40,6 +37,7 @@ class DeprecationMiddleware(BaseHTTPMiddleware):
     # Endpoints that are exempt from deprecation warnings
     EXEMPT_PATHS = {
         "/health",
+        "/healthz",
         "/metrics",
         "/docs",
         "/redoc",

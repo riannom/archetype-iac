@@ -175,8 +175,8 @@ class LinkManager:
         lab_id = link_state.lab_id
 
         # Get agent IP addresses
-        agent_ip_a = agent_client.resolve_agent_ip(agent_a.address)
-        agent_ip_b = agent_client.resolve_agent_ip(agent_b.address)
+        agent_ip_a = await agent_client.resolve_agent_ip(agent_a.address)
+        agent_ip_b = await agent_client.resolve_agent_ip(agent_b.address)
 
         # Use new trunk VTEP model
         result = await agent_client.setup_cross_host_link_v2(
@@ -253,8 +253,8 @@ class LinkManager:
             return True
 
         # Get agent IP addresses for rollback
-        agent_ip_a = agent_client.resolve_agent_ip(agent_a.address)
-        agent_ip_b = agent_client.resolve_agent_ip(agent_b.address)
+        agent_ip_a = await agent_client.resolve_agent_ip(agent_a.address)
+        agent_ip_b = await agent_client.resolve_agent_ip(agent_b.address)
 
         logger.info(
             f"Tearing down cross-host link {link_name} between "

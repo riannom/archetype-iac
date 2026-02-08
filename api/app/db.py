@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 import redis
+import redis.asyncio as aioredis
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -12,10 +13,10 @@ engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,
     future=True,
-    pool_size=10,           # Number of persistent connections
-    max_overflow=20,        # Additional connections when pool is exhausted
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
     pool_recycle=300,       # Recycle connections after 5 minutes
-    pool_timeout=30,        # Wait max 30s for connection
+    pool_timeout=settings.db_pool_timeout,
     connect_args={"options": "-c statement_timeout=30000"},  # 30s max per SQL statement
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
@@ -36,6 +37,26 @@ def get_redis() -> redis.Redis:
     if _redis is None:
         _redis = redis.from_url(settings.redis_url)
     return _redis
+
+
+# Shared async Redis client for non-blocking operations
+_async_redis: aioredis.Redis | None = None
+
+
+def get_async_redis() -> aioredis.Redis:
+    """Get the shared async Redis client, creating it if necessary.
+
+    Returns a lazily-initialized async Redis client for use in async contexts:
+    - State broadcasting (already uses redis.asyncio)
+    - Cooldown checks in enforcement
+    - Lock operations from async code paths
+
+    The sync get_redis() is kept for RQ worker and other sync contexts.
+    """
+    global _async_redis
+    if _async_redis is None:
+        _async_redis = aioredis.from_url(settings.redis_url)
+    return _async_redis
 
 
 def get_db():

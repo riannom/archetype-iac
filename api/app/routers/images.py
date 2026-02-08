@@ -1346,155 +1346,152 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
     Uses structured error handling for better error messages.
     """
     import logging
-    from app.db import SessionLocal
+    from app.db import get_session
     from app.errors import ErrorCategory, StructuredError, categorize_httpx_error
 
     logger = logging.getLogger(__name__)
     logger.info(f"Starting sync job {job_id}: {image_id} -> {host.name}")
 
-    session = SessionLocal()
-    try:
-        # Get fresh job record
-        job = session.get(models.ImageSyncJob, job_id)
-        if not job:
-            logger.warning(f"Sync job {job_id} not found")
-            return
-
-        job.status = "transferring"
-        job.started_at = datetime.now(timezone.utc)
-        session.commit()
-
-        # Get image reference
-        reference = image.get("reference", "")
-        if not reference:
-            raise ValueError("Image has no Docker reference")
-
-        # Get image size from Docker (async subprocess to avoid blocking event loop)
+    with get_session() as session:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker", "inspect", "--format", "{{.Size}}", reference,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-            if proc.returncode == 0:
-                job.total_bytes = int(stdout.decode().strip())
-                session.commit()
-        except Exception as e:
-            logger.warning(f"Could not get image size for {reference}: {e}")
+            # Get fresh job record
+            job = session.get(models.ImageSyncJob, job_id)
+            if not job:
+                logger.warning(f"Sync job {job_id} not found")
+                return
 
-        # Stream image to agent
-        # Use docker save and pipe to agent
-        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout)) as client:
-            # Build agent URL
-            agent_url = f"http://{host.address}/images/receive"
-
-            # Use subprocess to stream docker save output
-            proc = await asyncio.create_subprocess_exec(
-                "docker", "save", reference,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            # Read all output (for now, TODO: true streaming)
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                error_msg = stderr.decode() if stderr else "docker save failed"
-                raise ValueError(error_msg)
-
-            # Update progress
-            job.bytes_transferred = len(stdout)
-            job.progress_percent = 50
+            job.status = "transferring"
+            job.started_at = datetime.now(timezone.utc)
             session.commit()
 
-            # Send to agent
-            files = {"file": ("image.tar", stdout, "application/x-tar")}
-            params = {
-                "image_id": image_id,
-                "reference": reference,
-                "total_bytes": str(len(stdout)),
-                "job_id": job_id,
-            }
+            # Get image reference
+            reference = image.get("reference", "")
+            if not reference:
+                raise ValueError("Image has no Docker reference")
 
+            # Get image size from Docker (async subprocess to avoid blocking event loop)
             try:
-                response = await client.post(
-                    agent_url,
-                    files=files,
-                    params=params,
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "inspect", "--format", "{{.Size}}", reference,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                response.raise_for_status()
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                if proc.returncode == 0:
+                    job.total_bytes = int(stdout.decode().strip())
+                    session.commit()
+            except Exception as e:
+                logger.warning(f"Could not get image size for {reference}: {e}")
 
-                result = response.json()
-                if not result.get("success"):
-                    raise ValueError(result.get("error", "Agent failed to load image"))
+            # Stream image to agent
+            # Use docker save and pipe to agent
+            async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout)) as client:
+                # Build agent URL
+                agent_url = f"http://{host.address}/images/receive"
 
-            except httpx.TimeoutException as e:
-                structured_error = categorize_httpx_error(
-                    e, host_name=host.name, agent_id=host.id, job_id=job_id
+                # Use subprocess to stream docker save output
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "save", reference,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                raise ValueError(structured_error.to_error_message()) from e
 
-            except httpx.ConnectError as e:
-                structured_error = categorize_httpx_error(
-                    e, host_name=host.name, agent_id=host.id, job_id=job_id
-                )
-                raise ValueError(structured_error.to_error_message()) from e
+                # Read all output (for now, TODO: true streaming)
+                stdout, stderr = await proc.communicate()
 
-            except httpx.HTTPStatusError as e:
-                structured_error = categorize_httpx_error(
-                    e, host_name=host.name, agent_id=host.id, job_id=job_id
-                )
-                raise ValueError(structured_error.to_error_message()) from e
+                if proc.returncode != 0:
+                    error_msg = stderr.decode() if stderr else "docker save failed"
+                    raise ValueError(error_msg)
 
-        # Success
-        job.status = "completed"
-        job.progress_percent = 100
-        job.completed_at = datetime.now(timezone.utc)
-        session.commit()
+                # Update progress
+                job.bytes_transferred = len(stdout)
+                job.progress_percent = 50
+                session.commit()
 
-        # Update ImageHost record
-        image_host = session.query(models.ImageHost).filter(
-            models.ImageHost.image_id == image_id,
-            models.ImageHost.host_id == host.id
-        ).first()
-        if image_host:
-            image_host.status = "synced"
-            image_host.synced_at = datetime.now(timezone.utc)
-            image_host.size_bytes = job.total_bytes
-            image_host.error_message = None
-            session.commit()
+                # Send to agent
+                files = {"file": ("image.tar", stdout, "application/x-tar")}
+                params = {
+                    "image_id": image_id,
+                    "reference": reference,
+                    "total_bytes": str(len(stdout)),
+                    "job_id": job_id,
+                }
 
-        logger.info(f"Sync job {job_id} completed successfully: {image_id} -> {host.name}")
+                try:
+                    response = await client.post(
+                        agent_url,
+                        files=files,
+                        params=params,
+                    )
+                    response.raise_for_status()
 
-    except Exception as e:
-        import traceback
-        logger.error(f"Sync job {job_id} failed: {e}")
-        logger.debug(traceback.format_exc())
+                    result = response.json()
+                    if not result.get("success"):
+                        raise ValueError(result.get("error", "Agent failed to load image"))
 
-        # Determine error message - use structured error if available
-        error_message = str(e)
+                except httpx.TimeoutException as e:
+                    structured_error = categorize_httpx_error(
+                        e, host_name=host.name, agent_id=host.id, job_id=job_id
+                    )
+                    raise ValueError(structured_error.to_error_message()) from e
 
-        # Update job status
-        job = session.get(models.ImageSyncJob, job_id)
-        if job:
-            job.status = "failed"
-            job.error_message = error_message
+                except httpx.ConnectError as e:
+                    structured_error = categorize_httpx_error(
+                        e, host_name=host.name, agent_id=host.id, job_id=job_id
+                    )
+                    raise ValueError(structured_error.to_error_message()) from e
+
+                except httpx.HTTPStatusError as e:
+                    structured_error = categorize_httpx_error(
+                        e, host_name=host.name, agent_id=host.id, job_id=job_id
+                    )
+                    raise ValueError(structured_error.to_error_message()) from e
+
+            # Success
+            job.status = "completed"
+            job.progress_percent = 100
             job.completed_at = datetime.now(timezone.utc)
             session.commit()
 
-        # Update ImageHost status
-        image_host = session.query(models.ImageHost).filter(
-            models.ImageHost.image_id == image_id,
-            models.ImageHost.host_id == host.id
-        ).first()
-        if image_host:
-            image_host.status = "failed"
-            image_host.error_message = error_message
-            session.commit()
+            # Update ImageHost record
+            image_host = session.query(models.ImageHost).filter(
+                models.ImageHost.image_id == image_id,
+                models.ImageHost.host_id == host.id
+            ).first()
+            if image_host:
+                image_host.status = "synced"
+                image_host.synced_at = datetime.now(timezone.utc)
+                image_host.size_bytes = job.total_bytes
+                image_host.error_message = None
+                session.commit()
 
-    finally:
-        session.close()
+            logger.info(f"Sync job {job_id} completed successfully: {image_id} -> {host.name}")
+
+        except Exception as e:
+            import traceback
+            logger.error(f"Sync job {job_id} failed: {e}")
+            logger.debug(traceback.format_exc())
+
+            # Determine error message - use structured error if available
+            error_message = str(e)
+
+            # Update job status
+            job = session.get(models.ImageSyncJob, job_id)
+            if job:
+                job.status = "failed"
+                job.error_message = error_message
+                job.completed_at = datetime.now(timezone.utc)
+                session.commit()
+
+            # Update ImageHost status
+            image_host = session.query(models.ImageHost).filter(
+                models.ImageHost.image_id == image_id,
+                models.ImageHost.host_id == host.id
+            ).first()
+            if image_host:
+                image_host.status = "failed"
+                image_host.error_message = error_message
+                session.commit()
 
 
 @router.get("/library/{image_id}/stream")

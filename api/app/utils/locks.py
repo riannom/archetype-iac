@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 LINK_OPS_LOCK_KEY = "link_ops:{lab_id}"
 
 # Lock timeouts (TTL in seconds)
-LINK_OPS_LOCK_TTL = 30  # Auto-release after 30 seconds if holder crashes
+LINK_OPS_LOCK_TTL = 60  # Auto-release after 60 seconds if holder crashes
 
 
 def acquire_link_ops_lock(lab_id: str, timeout: int = 5) -> bool:

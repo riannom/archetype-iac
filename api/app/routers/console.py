@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app import agent_client, models
-from app.db import SessionLocal
+from app.db import get_session
 from app.services.topology import TopologyService
 
 logger = logging.getLogger(__name__)
@@ -20,8 +20,7 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
     """Proxy console WebSocket to agent."""
     await websocket.accept()
 
-    database = SessionLocal()
-    try:
+    with get_session() as database:
         lab = database.get(models.Lab, lab_id)
         if not lab:
             await websocket.send_text("Lab not found\r\n")
@@ -111,9 +110,6 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
                     boot_warning = f"\r\n[Boot in progress{progress_str}... Console may be unresponsive]\r\n\r\n"
             except Exception as e:
                 logger.debug(f"Readiness check failed for {node_name}: {e}")
-
-    finally:
-        database.close()
 
     # Connect to agent WebSocket and proxy
     import websockets

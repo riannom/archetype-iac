@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.db import SessionLocal, get_redis, get_session
+from app.db import get_async_redis, get_session
 from app import agent_client
 from app.utils.async_tasks import safe_create_task
 from app.state import (
@@ -135,26 +135,28 @@ def _cooldown_key(lab_id: str, node_name: str) -> str:
     return f"enforcement_cooldown:{lab_id}:{node_name}"
 
 
-def _is_on_cooldown(lab_id: str, node_name: str) -> bool:
+async def _is_on_cooldown(lab_id: str, node_name: str) -> bool:
     """Check if a node is still on cooldown from a recent enforcement attempt.
 
-    Uses Redis EXIST to check if the cooldown key exists (TTL handles expiry).
+    Uses async Redis EXISTS to check if the cooldown key exists (TTL handles expiry).
     """
     try:
-        return get_redis().exists(_cooldown_key(lab_id, node_name)) > 0
+        r = get_async_redis()
+        return await r.exists(_cooldown_key(lab_id, node_name)) > 0
     except redis.RedisError as e:
         logger.warning(f"Redis error checking cooldown: {e}")
         # On Redis error, assume not on cooldown to avoid blocking enforcement
         return False
 
 
-def _set_cooldown(lab_id: str, node_name: str):
+async def _set_cooldown(lab_id: str, node_name: str):
     """Mark a node as having a recent enforcement attempt.
 
-    Uses Redis SETEX with TTL equal to the cooldown period.
+    Uses async Redis SETEX with TTL equal to the cooldown period.
     """
     try:
-        get_redis().setex(
+        r = get_async_redis()
+        await r.setex(
             _cooldown_key(lab_id, node_name),
             settings.state_enforcement_cooldown,
             "1"
@@ -325,7 +327,7 @@ async def enforce_node_state(
         return False
 
     # Check legacy Redis cooldown (for backward compatibility)
-    if _is_on_cooldown(lab_id, node_name):
+    if await _is_on_cooldown(lab_id, node_name):
         logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
         return False
 
@@ -391,7 +393,7 @@ async def enforce_node_state(
 
     # Set cooldown BEFORE creating job to prevent race with concurrent iterations
     # This ensures other enforcement loop iterations see the cooldown immediately
-    _set_cooldown(lab_id, node_name)
+    await _set_cooldown(lab_id, node_name)
 
     # Track enforcement attempt in database
     node_state.enforcement_attempts += 1
@@ -436,7 +438,7 @@ async def enforce_node_state(
     return True
 
 
-def _is_enforceable(
+async def _is_enforceable(
     session: Session,
     node_state: models.NodeState,
     active_job_nodes: Set[tuple[str, str]] | None = None,
@@ -510,7 +512,7 @@ def _is_enforceable(
         return False
 
     # Check legacy Redis cooldown
-    if _is_on_cooldown(lab_id, node_name):
+    if await _is_on_cooldown(lab_id, node_name):
         logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
         return False
 
@@ -722,7 +724,7 @@ async def enforce_lab_states():
             enforceable_by_lab: Dict[str, list[models.NodeState]] = {}
             for node_state in mismatched_states:
                 try:
-                    if _is_enforceable(session, node_state, active_job_nodes=active_job_nodes):
+                    if await _is_enforceable(session, node_state, active_job_nodes=active_job_nodes):
                         enforceable_by_lab.setdefault(node_state.lab_id, []).append(node_state)
                 except Exception as e:
                     logger.error(
@@ -792,7 +794,7 @@ async def enforce_lab_states():
                     # Update per-node tracking
                     node_ids = []
                     for ns in nodes:
-                        _set_cooldown(lab_id, ns.node_name)
+                        await _set_cooldown(lab_id, ns.node_name)
                         ns.enforcement_attempts += 1
                         ns.last_enforcement_at = now
                         if ns.enforcement_failed_at:

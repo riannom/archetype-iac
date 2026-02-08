@@ -15,17 +15,17 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.db import SessionLocal
 from app.events.publisher import emit_agent_offline
+from app.utils.timeouts import AGENT_HTTP_TIMEOUT, AGENT_VTEP_TIMEOUT
 
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_agent_ip(address: str) -> str:
+async def resolve_agent_ip(address: str) -> str:
     """Extract and resolve IP address from agent address.
 
-    Handles both IP addresses and hostnames. For hostnames, performs DNS
+    Handles both IP addresses and hostnames. For hostnames, performs async DNS
     resolution to get the actual IP address (needed for VXLAN endpoints).
 
     Args:
@@ -42,12 +42,16 @@ def resolve_agent_ip(address: str) -> str:
     if all(part.isdigit() for part in host.split(".")):
         return host
 
-    # Resolve hostname to IP
+    # Resolve hostname to IP (non-blocking)
     try:
-        ip = socket.gethostbyname(host)
-        logger.debug(f"Resolved hostname {host} to IP {ip}")
-        return ip
-    except socket.gaierror as e:
+        results = await asyncio.getaddrinfo(host, None, family=socket.AF_INET)
+        if results:
+            ip = results[0][4][0]
+            logger.debug(f"Resolved hostname {host} to IP {ip}")
+            return ip
+        logger.warning(f"No DNS results for hostname {host}, using as-is")
+        return host
+    except (socket.gaierror, OSError) as e:
         logger.warning(f"Failed to resolve hostname {host}: {e}, using as-is")
         return host
 
@@ -55,7 +59,7 @@ def resolve_agent_ip(address: str) -> str:
 MAX_RETRIES = settings.agent_max_retries
 
 # VTEP operations can be slow due to OVS bridge operations
-VTEP_OPERATION_TIMEOUT = 60.0
+VTEP_OPERATION_TIMEOUT = AGENT_VTEP_TIMEOUT
 
 # Cache for healthy agents
 _agent_cache: dict[str, tuple[str, datetime]] = {}  # agent_id -> (address, last_check)
@@ -77,7 +81,7 @@ def get_http_client() -> httpx.AsyncClient:
                 max_connections=100,
                 max_keepalive_connections=20,
             ),
-            timeout=httpx.Timeout(30.0),
+            timeout=httpx.Timeout(AGENT_HTTP_TIMEOUT),
         )
     return _http_client
 
@@ -1344,8 +1348,8 @@ async def setup_cross_host_link_v2(
     from app.services.link_manager import allocate_vni
 
     # Resolve agent IPs (handles hostnames like "local-agent")
-    agent_ip_a = resolve_agent_ip(agent_a.address)
-    agent_ip_b = resolve_agent_ip(agent_b.address)
+    agent_ip_a = await resolve_agent_ip(agent_a.address)
+    agent_ip_b = await resolve_agent_ip(agent_b.address)
 
     # Allocate deterministic per-link VNI
     vni = allocate_vni(lab_id, link_id)
@@ -2295,8 +2299,8 @@ async def setup_cross_host_link(
         return {"success": False, "error": f"Agent {agent_b.id} does not support VXLAN"}
 
     # Extract and resolve agent IP addresses (handles hostnames like "local-agent")
-    agent_ip_a = resolve_agent_ip(agent_a.address)
-    agent_ip_b = resolve_agent_ip(agent_b.address)
+    agent_ip_a = await resolve_agent_ip(agent_a.address)
+    agent_ip_b = await resolve_agent_ip(agent_b.address)
 
     logger.info(f"Setting up cross-host link {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
 

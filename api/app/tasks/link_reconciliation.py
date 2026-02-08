@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.config import settings
-from app.db import SessionLocal
+from app.db import get_session
 from app.services.link_validator import verify_link_connected
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
 from app.topology import _normalize_interface_name
@@ -171,8 +171,8 @@ async def attempt_partial_recovery(
     # Get agent IPs and VNI
     from app.agent_client import resolve_agent_ip
     from app.services.link_manager import allocate_vni
-    agent_ip_a = resolve_agent_ip(agent_a.address)
-    agent_ip_b = resolve_agent_ip(agent_b.address)
+    agent_ip_a = await resolve_agent_ip(agent_a.address)
+    agent_ip_b = await resolve_agent_ip(agent_b.address)
 
     # Ensure VNI is set (agent discovers local VLANs independently)
     if not link.vni:
@@ -355,28 +355,25 @@ async def link_reconciliation_monitor():
             if not RECONCILIATION_ENABLED:
                 continue
 
-            session = SessionLocal()
-            try:
-                results = await reconcile_link_states(session)
+            with get_session() as session:
+                try:
+                    results = await reconcile_link_states(session)
 
-                if results["checked"] > 0:
-                    logger.info(
-                        f"Link reconciliation: checked={results['checked']}, "
-                        f"valid={results['valid']}, repaired={results['repaired']}, "
-                        f"recovered={results['recovered']}, "
-                        f"errors={results['errors']}, skipped={results['skipped']}"
-                    )
+                    if results["checked"] > 0:
+                        logger.info(
+                            f"Link reconciliation: checked={results['checked']}, "
+                            f"valid={results['valid']}, repaired={results['repaired']}, "
+                            f"recovered={results['recovered']}, "
+                            f"errors={results['errors']}, skipped={results['skipped']}"
+                        )
 
-                # Clean up orphaned VxlanTunnel records
-                orphans_deleted = await cleanup_orphaned_tunnels(session)
-                if orphans_deleted > 0:
-                    logger.info(f"Cleaned up {orphans_deleted} orphaned VxlanTunnel records")
+                    # Clean up orphaned VxlanTunnel records
+                    orphans_deleted = await cleanup_orphaned_tunnels(session)
+                    if orphans_deleted > 0:
+                        logger.info(f"Cleaned up {orphans_deleted} orphaned VxlanTunnel records")
 
-            except Exception as e:
-                logger.error(f"Link reconciliation error: {e}")
-                session.rollback()
-            finally:
-                session.close()
+                except Exception as e:
+                    logger.error(f"Link reconciliation error: {e}")
 
         except asyncio.CancelledError:
             logger.info("Link reconciliation monitor cancelled")

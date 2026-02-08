@@ -226,6 +226,13 @@ class Settings(BaseSettings):
         normal, extended = intervals[name]
         return extended if self.cleanup_event_driven_enabled else normal
 
+    # Database connection pool tuning
+    # API process: more connections, fail fast for user requests
+    # Scheduler process: fewer connections, can wait longer
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+
     # Version checking
     github_repo: str = "riannom/archetype-iac"
     version_check_cache_ttl: int = 3600  # 1 hour cache

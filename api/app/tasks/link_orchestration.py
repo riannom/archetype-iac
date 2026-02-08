@@ -379,8 +379,8 @@ async def create_cross_host_link(
             await update_interface_mappings(session, link_state, host_to_agent)
 
         # Create VxlanTunnel record for tracking
-        agent_ip_a = agent_client.resolve_agent_ip(agent_a.address)
-        agent_ip_b = agent_client.resolve_agent_ip(agent_b.address)
+        agent_ip_a = await agent_client.resolve_agent_ip(agent_a.address)
+        agent_ip_b = await agent_client.resolve_agent_ip(agent_b.address)
 
         # Check if tunnel record already exists for this link
         existing_tunnel = (

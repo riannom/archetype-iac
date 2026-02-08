@@ -8,7 +8,7 @@ from redis import Redis
 from rq import Queue
 
 from app.config import settings
-from app.db import SessionLocal
+from app.db import get_session
 from app.models import Job, Lab
 from app.netlab import run_netlab_command
 from app.providers import ProviderActionError, node_action_command
@@ -34,7 +34,7 @@ def has_conflicting_job(lab_id: str, action: str, session=None) -> tuple[bool, s
         action: The action being attempted (up, down, sync, etc.)
         session: Optional SQLAlchemy session to use. If provided, uses that
             session (important for transactional consistency with SELECT FOR UPDATE).
-            Otherwise creates a new SessionLocal().
+            Otherwise creates a new session via get_session().
 
     Returns:
         Tuple of (has_conflict, conflicting_action_name)
@@ -43,10 +43,7 @@ def has_conflicting_job(lab_id: str, action: str, session=None) -> tuple[bool, s
     if not conflicting_actions:
         return False, None
 
-    own_session = session is None
-    if own_session:
-        session = SessionLocal()
-    try:
+    if session is not None:
         active_job = (
             session.query(Job)
             .filter(
@@ -56,13 +53,19 @@ def has_conflicting_job(lab_id: str, action: str, session=None) -> tuple[bool, s
             )
             .first()
         )
+        return (True, active_job.action) if active_job else (False, None)
 
-        if active_job:
-            return True, active_job.action
-        return False, None
-    finally:
-        if own_session:
-            session.close()
+    with get_session() as s:
+        active_job = (
+            s.query(Job)
+            .filter(
+                Job.lab_id == lab_id,
+                Job.status.in_(["queued", "running"]),
+                Job.action.in_(conflicting_actions),
+            )
+            .first()
+        )
+        return (True, active_job.action) if active_job else (False, None)
 
 
 def _build_command(lab_id: str, action: str) -> list[list[str]]:
@@ -76,8 +79,7 @@ def _build_command(lab_id: str, action: str) -> list[list[str]]:
 
 
 def execute_netlab_action(job_id: str, lab_id: str, action: str) -> None:
-    session = SessionLocal()
-    try:
+    with get_session() as session:
         job_record = session.get(Job, job_id)
         lab = session.get(Lab, lab_id)
         if not job_record or not lab:
@@ -129,13 +131,10 @@ def execute_netlab_action(job_id: str, lab_id: str, action: str) -> None:
                 )
             except Exception:
                 pass
-    finally:
-        session.close()
 
 
 def enqueue_job(lab_id: str, action: str, user_id: str | None) -> Job:
-    session = SessionLocal()
-    try:
+    with get_session() as session:
         if user_id:
             # Use Redis lock to prevent race condition in concurrency check
             lock_key = f"job_limit_lock:{user_id}"
@@ -164,5 +163,3 @@ def enqueue_job(lab_id: str, action: str, user_id: str | None) -> Job:
 
         queue.enqueue(execute_netlab_action, job_record.id, lab_id, action)
         return job_record
-    finally:
-        session.close()

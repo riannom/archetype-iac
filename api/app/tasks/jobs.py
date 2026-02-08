@@ -1230,7 +1230,6 @@ async def _create_cross_host_links_if_ready(
     session,
     lab_id: str,
     log_parts: list[str],
-    current_job_id: str | None = None,
 ) -> None:
     """Create cross-host links (VXLAN tunnels) if both endpoints are ready.
 
@@ -1240,29 +1239,16 @@ async def _create_cross_host_links_if_ready(
     2. Both agents are online
     3. The link hasn't already been created
 
+    Uses link_ops_lock to serialize link_states modifications and prevent
+    deadlocks from concurrent flush operations.
+
     Args:
         session: Database session
         lab_id: Lab identifier
         log_parts: List to append log messages to
-        current_job_id: ID of the calling job (excluded from conflict check)
     """
     from app.tasks.link_orchestration import create_deployment_links
-
-    # Skip if ANY other active job exists for this lab — prevents deadlock
-    # when two async tasks do concurrent session.flush() on link_states rows.
-    conflict_query = session.query(models.Job).filter(
-        models.Job.lab_id == lab_id,
-        models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-    )
-    if current_job_id:
-        conflict_query = conflict_query.filter(models.Job.id != current_job_id)
-    conflicting_job = conflict_query.first()
-    if conflicting_job:
-        logger.debug(
-            f"Skipping cross-host link creation for lab {lab_id}: "
-            f"active job {conflicting_job.id} (action={conflicting_job.action})"
-        )
-        return
+    from app.utils.locks import link_ops_lock
 
     # Check if there are any cross-host links that need creation
     # First, check if any link_states exist with is_cross_host=True and actual_state != "up"
@@ -1355,15 +1341,24 @@ async def _create_cross_host_links_if_ready(
     log_parts.append("")
     log_parts.append("=== Phase 4: Cross-Host Links ===")
 
-    try:
-        links_ok, links_failed = await create_deployment_links(
-            session, lab_id, host_to_agent, log_parts
-        )
-        if links_ok > 0 or links_failed > 0:
-            logger.info(f"Cross-host link creation: {links_ok} OK, {links_failed} failed")
-    except Exception as e:
-        logger.error(f"Failed to create cross-host links for lab {lab_id}: {e}")
-        log_parts.append(f"  Cross-host link creation failed: {e}")
+    # Serialize link_states modifications via Redis lock to prevent deadlocks
+    with link_ops_lock(lab_id) as lock_acquired:
+        if not lock_acquired:
+            logger.debug(
+                f"Skipping cross-host link creation for lab {lab_id}: "
+                f"link ops lock held by another operation"
+            )
+            return
+
+        try:
+            links_ok, links_failed = await create_deployment_links(
+                session, lab_id, host_to_agent, log_parts
+            )
+            if links_ok > 0 or links_failed > 0:
+                logger.info(f"Cross-host link creation: {links_ok} OK, {links_failed} failed")
+        except Exception as e:
+            logger.error(f"Failed to create cross-host links for lab {lab_id}: {e}")
+            log_parts.append(f"  Cross-host link creation failed: {e}")
 
 
 def _get_container_name(lab_id: str, node_name: str, provider: str = "docker") -> str:

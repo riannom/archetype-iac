@@ -25,6 +25,7 @@ from typing import AsyncGenerator, Literal
 import redis.asyncio as aioredis
 
 from app.config import settings
+from app.utils.timeouts import REDIS_OPERATION_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,14 @@ class StateBroadcaster:
     def _channel_name(self, lab_id: str) -> str:
         """Get the Redis channel name for a lab."""
         return f"lab_state:{lab_id}"
+
+    async def _publish(self, channel: str, data: str) -> int:
+        """Publish to Redis with timeout protection."""
+        r = await self._get_redis()
+        return await asyncio.wait_for(
+            r.publish(channel, data),
+            timeout=REDIS_OPERATION_TIMEOUT,
+        )
 
     async def publish_node_state(
         self,
@@ -109,7 +118,6 @@ class StateBroadcaster:
                 from app.services.state_machine import NodeStateMachine
                 display_state = NodeStateMachine.compute_display_state(actual_state, desired_state)
 
-            redis = await self._get_redis()
             message = {
                 "type": "node_state",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -131,7 +139,7 @@ class StateBroadcaster:
                 },
             }
             channel = self._channel_name(lab_id)
-            count = await redis.publish(channel, json.dumps(message))
+            count = await self._publish(channel, json.dumps(message))
             logger.debug(f"Published node state to {channel}: {node_name} -> {actual_state} ({count} subscribers)")
             return count
         except Exception as e:
@@ -163,7 +171,6 @@ class StateBroadcaster:
             Number of subscribers that received the message
         """
         try:
-            redis = await self._get_redis()
             message = {
                 "type": "link_state",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -177,7 +184,7 @@ class StateBroadcaster:
                 },
             }
             channel = self._channel_name(lab_id)
-            count = await redis.publish(channel, json.dumps(message))
+            count = await self._publish(channel, json.dumps(message))
             logger.debug(f"Published link state to {channel}: {link_name} -> {actual_state}")
             return count
         except Exception as e:
@@ -201,7 +208,6 @@ class StateBroadcaster:
             Number of subscribers that received the message
         """
         try:
-            redis = await self._get_redis()
             message = {
                 "type": "lab_state",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -212,7 +218,7 @@ class StateBroadcaster:
                 },
             }
             channel = self._channel_name(lab_id)
-            count = await redis.publish(channel, json.dumps(message))
+            count = await self._publish(channel, json.dumps(message))
             logger.debug(f"Published lab state to {channel}: {state}")
             return count
         except Exception as e:
@@ -242,7 +248,6 @@ class StateBroadcaster:
             Number of subscribers that received the message
         """
         try:
-            redis = await self._get_redis()
             message = {
                 "type": "job_progress",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -255,7 +260,7 @@ class StateBroadcaster:
                 },
             }
             channel = self._channel_name(lab_id)
-            count = await redis.publish(channel, json.dumps(message))
+            count = await self._publish(channel, json.dumps(message))
             logger.debug(f"Published job progress to {channel}: {job_id} -> {status}")
             return count
         except Exception as e:

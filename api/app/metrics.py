@@ -198,35 +198,44 @@ else:
 def update_node_metrics(session: "Session") -> None:
     """Update node-related metrics from database.
 
-    Call this periodically or on state changes to keep metrics current.
+    Uses SQL GROUP BY to aggregate counts in the database instead of
+    loading all rows into Python.
     """
     if not PROMETHEUS_AVAILABLE:
         return
 
     try:
+        from sqlalchemy import func
         from app import models
 
         # Clear existing lab-specific metrics
         nodes_total._metrics.clear()
         nodes_ready._metrics.clear()
 
-        # Get node states grouped by lab and state
-        node_states = session.query(models.NodeState).all()
-
-        lab_state_counts: dict[tuple[str, str], int] = {}
-        lab_ready_counts: dict[str, int] = {}
-
-        for ns in node_states:
-            key = (ns.lab_id, ns.actual_state)
-            lab_state_counts[key] = lab_state_counts.get(key, 0) + 1
-
-            if ns.is_ready:
-                lab_ready_counts[ns.lab_id] = lab_ready_counts.get(ns.lab_id, 0) + 1
-
-        for (lab_id, state), count in lab_state_counts.items():
+        # Aggregate node counts by lab and state in SQL
+        state_counts = (
+            session.query(
+                models.NodeState.lab_id,
+                models.NodeState.actual_state,
+                func.count(),
+            )
+            .group_by(models.NodeState.lab_id, models.NodeState.actual_state)
+            .all()
+        )
+        for lab_id, state, count in state_counts:
             nodes_total.labels(lab_id=lab_id, state=state).set(count)
 
-        for lab_id, count in lab_ready_counts.items():
+        # Aggregate ready counts by lab in SQL
+        ready_counts = (
+            session.query(
+                models.NodeState.lab_id,
+                func.count(),
+            )
+            .filter(models.NodeState.is_ready == True)
+            .group_by(models.NodeState.lab_id)
+            .all()
+        )
+        for lab_id, count in ready_counts:
             nodes_ready.labels(lab_id=lab_id).set(count)
 
     except Exception as e:
@@ -290,11 +299,17 @@ def update_agent_metrics(session: "Session") -> None:
                     host_id=host.id, host_name=host_name
                 ).set(usage["vms_running"])
 
-        # Count nodes per host
-        placements = session.query(models.NodePlacement).all()
-        host_node_counts: dict[str, int] = {}
-        for p in placements:
-            host_node_counts[p.host_id] = host_node_counts.get(p.host_id, 0) + 1
+        # Count nodes per host using SQL GROUP BY
+        from sqlalchemy import func
+        placement_counts = (
+            session.query(
+                models.NodePlacement.host_id,
+                func.count(),
+            )
+            .group_by(models.NodePlacement.host_id)
+            .all()
+        )
+        host_node_counts = {host_id: count for host_id, count in placement_counts}
 
         for host in hosts:
             host_name = host.name or host.id
@@ -311,58 +326,64 @@ def update_agent_metrics(session: "Session") -> None:
 def update_job_metrics(session: "Session") -> None:
     """Update job-related metrics from database.
 
-    Call this periodically to keep job metrics current.
+    Uses SQL GROUP BY to count active jobs by action.
     """
     if not PROMETHEUS_AVAILABLE:
         return
 
     try:
+        from sqlalchemy import func
         from app import models
 
         # Clear action-specific active job counts
         jobs_active._metrics.clear()
 
-        # Count active jobs by action
-        active_jobs = (
-            session.query(models.Job)
+        # Count active jobs by action in SQL
+        action_counts = (
+            session.query(
+                models.Job.action,
+                func.count(),
+            )
             .filter(models.Job.status.in_(["queued", "running"]))
+            .group_by(models.Job.action)
             .all()
         )
-
-        action_counts: dict[str, int] = {}
-        for job in active_jobs:
-            action = job.action.split(":")[0]  # Normalize action
-            action_counts[action] = action_counts.get(action, 0) + 1
-
-        for action, count in action_counts.items():
-            jobs_active.labels(action=action).set(count)
+        for action, count in action_counts:
+            # Normalize action (strip sub-action after colon)
+            jobs_active.labels(action=action.split(":")[0]).set(count)
 
     except Exception as e:
         logger.warning(f"Error updating job metrics: {e}")
 
 
 def update_lab_metrics(session: "Session") -> None:
-    """Update lab-related metrics from database."""
+    """Update lab-related metrics from database.
+
+    Uses SQL GROUP BY to count labs by state.
+    """
     if not PROMETHEUS_AVAILABLE:
         return
 
     try:
+        from sqlalchemy import func
         from app import models
 
         labs_total._metrics.clear()
 
-        labs = session.query(models.Lab).all()
+        state_counts = (
+            session.query(
+                models.Lab.state,
+                func.count(),
+            )
+            .group_by(models.Lab.state)
+            .all()
+        )
 
-        state_counts: dict[str, int] = {}
         active_count = 0
-
-        for lab in labs:
-            state_counts[lab.state] = state_counts.get(lab.state, 0) + 1
-            if lab.state == "running":
-                active_count += 1
-
-        for state, count in state_counts.items():
+        for state, count in state_counts:
             labs_total.labels(state=state).set(count)
+            if state == "running":
+                active_count = count
 
         labs_active.set(active_count)
 

@@ -961,7 +961,6 @@ async def _import_single_image(
 
     elif image.image_type == "docker":
         # Extract tar.gz and load into Docker
-        import subprocess
         import tempfile
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -975,20 +974,22 @@ async def _import_single_image(
 
             _update_image_progress(session_id, image_id, "loading", 92)
 
-            # Load into Docker
-            result = subprocess.run(
-                ["docker", "load", "-i", str(temp_path)],
-                capture_output=True,
-                text=True,
-                timeout=600,
+            # Load into Docker (async to avoid blocking event loop)
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "load", "-i", str(temp_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+            result_stdout = stdout.decode() if stdout else ""
+            result_stderr = stderr.decode() if stderr else ""
 
-            if result.returncode != 0:
-                raise RuntimeError(f"docker load failed: {result.stderr}")
+            if proc.returncode != 0:
+                raise RuntimeError(f"docker load failed: {result_stderr}")
 
             # Parse loaded image name
             docker_ref = None
-            for line in (result.stdout + result.stderr).splitlines():
+            for line in (result_stdout + result_stderr).splitlines():
                 if "Loaded image:" in line:
                     docker_ref = line.split("Loaded image:", 1)[-1].strip()
                     break

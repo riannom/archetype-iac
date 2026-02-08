@@ -213,8 +213,8 @@ async def teardown_link(
         target_iface = _normalize_interface_name(link_info.get("target_interface", "") or "")
 
         # Get agent IPs for rollback
-        source_agent_ip = agent_client.resolve_agent_ip(source_agent.address)
-        target_agent_ip = agent_client.resolve_agent_ip(target_agent.address)
+        source_agent_ip = await agent_client.resolve_agent_ip(source_agent.address)
+        target_agent_ip = await agent_client.resolve_agent_ip(target_agent.address)
 
         # Find and mark tunnel as cleanup
         tunnel = None

@@ -2010,7 +2010,6 @@ class NodeLifecycleManager:
 
         await _create_cross_host_links_if_ready(
             self.session, self.lab.id, self.log_parts,
-            current_job_id=self.job.id,
         )
 
     async def _finalize(self) -> LifecycleResult:

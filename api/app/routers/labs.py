@@ -1885,8 +1885,8 @@ def _upsert_link_states(
         # Resolve node IDs to names
         source_node = node_id_to_name.get(ep_a.node, ep_a.node)
         target_node = node_id_to_name.get(ep_b.node, ep_b.node)
-        source_interface = ep_a.ifname or "eth0"
-        target_interface = ep_b.ifname or "eth0"
+        source_interface = _normalize_interface_name(ep_a.ifname) if ep_a.ifname else "eth0"
+        target_interface = _normalize_interface_name(ep_b.ifname) if ep_b.ifname else "eth0"
 
         # Generate canonical link name
         link_name = generate_link_name(

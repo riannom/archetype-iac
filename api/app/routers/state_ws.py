@@ -22,8 +22,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app import db, models
 from app.config import settings
@@ -111,126 +110,131 @@ async def _subscribe_and_forward(websocket: WebSocket, lab_id: str) -> None:
         logger.warning(f"Error in subscription loop for lab {lab_id}: {e}")
 
 
-async def _send_initial_state(websocket: WebSocket, lab_id: str, database: Session) -> None:
+async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
     """Send initial state snapshot when client connects.
 
-    This ensures the client has current state before receiving incremental updates.
+    Queries all data from the database, releases the session, then sends
+    messages over WebSocket. This prevents holding a DB connection during I/O.
     """
     try:
-        # Get lab state
-        lab = database.get(models.Lab, lab_id)
-        if not lab:
-            await websocket.send_json({
-                "type": "error",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "data": {"message": f"Lab {lab_id} not found"},
-            })
-            return
+        # Phase 1: Query all data and build messages (session held briefly)
+        messages = []
+        with db.get_session() as database:
+            lab = database.get(models.Lab, lab_id)
+            if not lab:
+                messages.append({
+                    "type": "error",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {"message": f"Lab {lab_id} not found"},
+                })
+                # Release session, then send error
+            else:
+                messages.append({
+                    "type": "lab_state",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {
+                        "lab_id": lab_id,
+                        "state": lab.state,
+                        "error": lab.state_error,
+                    },
+                })
 
-        # Send lab state
-        await websocket.send_json({
-            "type": "lab_state",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "data": {
-                "lab_id": lab_id,
-                "state": lab.state,
-                "error": lab.state_error,
-            },
-        })
+                # Get node states
+                node_states = (
+                    database.query(models.NodeState)
+                    .filter(models.NodeState.lab_id == lab_id)
+                    .all()
+                )
 
-        # Get node states
-        node_states = (
-            database.query(models.NodeState)
-            .filter(models.NodeState.lab_id == lab_id)
-            .all()
-        )
+                # Get host placements for host info
+                placements = (
+                    database.query(models.NodePlacement)
+                    .filter(models.NodePlacement.lab_id == lab_id)
+                    .all()
+                )
+                placement_by_node = {p.node_name: p.host_id for p in placements}
 
-        # Get host placements for host info
-        placements = (
-            database.query(models.NodePlacement)
-            .filter(models.NodePlacement.lab_id == lab_id)
-            .all()
-        )
-        placement_by_node = {p.node_name: p.host_id for p in placements}
+                # Get host names
+                host_ids = set(placement_by_node.values())
+                if lab.agent_id:
+                    host_ids.add(lab.agent_id)
+                hosts = {}
+                if host_ids:
+                    host_records = (
+                        database.query(models.Host)
+                        .filter(models.Host.id.in_(host_ids))
+                        .all()
+                    )
+                    hosts = {h.id: h.name for h in host_records}
 
-        # Get host names
-        host_ids = set(placement_by_node.values())
-        if lab.agent_id:
-            host_ids.add(lab.agent_id)
-        hosts = {}
-        if host_ids:
-            host_records = (
-                database.query(models.Host)
-                .filter(models.Host.id.in_(host_ids))
-                .all()
-            )
-            hosts = {h.id: h.name for h in host_records}
+                # Build node data
+                nodes_data = []
+                for ns in node_states:
+                    host_id = placement_by_node.get(ns.node_name) or lab.agent_id
+                    will_retry = (
+                        ns.actual_state == "error"
+                        and ns.enforcement_attempts < settings.state_enforcement_max_retries
+                        and ns.enforcement_failed_at is None
+                    )
+                    nodes_data.append({
+                        "node_id": ns.node_id,
+                        "node_name": ns.node_name,
+                        "desired_state": ns.desired_state,
+                        "actual_state": ns.actual_state,
+                        "is_ready": ns.is_ready,
+                        "error_message": ns.error_message,
+                        "host_id": host_id,
+                        "host_name": hosts.get(host_id) if host_id else None,
+                        "image_sync_status": ns.image_sync_status,
+                        "image_sync_message": ns.image_sync_message,
+                        "will_retry": will_retry,
+                        "display_state": NodeStateMachine.compute_display_state(
+                            ns.actual_state, ns.desired_state
+                        ),
+                        "enforcement_attempts": ns.enforcement_attempts,
+                        "max_enforcement_attempts": settings.state_enforcement_max_retries,
+                    })
 
-        # Send initial node states as a batch
-        nodes_data = []
-        for ns in node_states:
-            host_id = placement_by_node.get(ns.node_name) or lab.agent_id
-            # Calculate will_retry: error state with retries remaining and not permanently failed
-            will_retry = (
-                ns.actual_state == "error"
-                and ns.enforcement_attempts < settings.state_enforcement_max_retries
-                and ns.enforcement_failed_at is None
-            )
-            nodes_data.append({
-                "node_id": ns.node_id,
-                "node_name": ns.node_name,
-                "desired_state": ns.desired_state,
-                "actual_state": ns.actual_state,
-                "is_ready": ns.is_ready,
-                "error_message": ns.error_message,
-                "host_id": host_id,
-                "host_name": hosts.get(host_id) if host_id else None,
-                "image_sync_status": ns.image_sync_status,
-                "image_sync_message": ns.image_sync_message,
-                "will_retry": will_retry,
-                "display_state": NodeStateMachine.compute_display_state(
-                    ns.actual_state, ns.desired_state
-                ),
-                "enforcement_attempts": ns.enforcement_attempts,
-                "max_enforcement_attempts": settings.state_enforcement_max_retries,
-            })
+                messages.append({
+                    "type": "initial_state",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {"nodes": nodes_data},
+                })
 
-        await websocket.send_json({
-            "type": "initial_state",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "data": {
-                "nodes": nodes_data,
-            },
-        })
+                # Get link states
+                link_states = (
+                    database.query(models.LinkState)
+                    .filter(models.LinkState.lab_id == lab_id)
+                    .all()
+                )
 
-        # Get link states
-        link_states = (
-            database.query(models.LinkState)
-            .filter(models.LinkState.lab_id == lab_id)
-            .all()
-        )
+                links_data = []
+                for ls in link_states:
+                    links_data.append({
+                        "link_name": ls.link_name,
+                        "desired_state": ls.desired_state,
+                        "actual_state": ls.actual_state,
+                        "source_node": ls.source_node,
+                        "target_node": ls.target_node,
+                        "error_message": ls.error_message,
+                    })
 
-        links_data = []
-        for ls in link_states:
-            links_data.append({
-                "link_name": ls.link_name,
-                "desired_state": ls.desired_state,
-                "actual_state": ls.actual_state,
-                "source_node": ls.source_node,
-                "target_node": ls.target_node,
-                "error_message": ls.error_message,
-            })
+                if links_data:
+                    messages.append({
+                        "type": "initial_links",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "data": {"links": links_data},
+                    })
 
-        if links_data:
-            await websocket.send_json({
-                "type": "initial_links",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "data": {
-                    "links": links_data,
-                },
-            })
+        # Phase 2: Send all messages (session already released)
+        for message in messages:
+            await websocket.send_json(message)
 
-        logger.debug(f"Sent initial state for lab {lab_id}: {len(nodes_data)} nodes, {len(links_data)} links")
+        if len(messages) > 1:
+            # Count nodes/links from built data
+            n_nodes = len(messages[1].get("data", {}).get("nodes", []))
+            n_links = len(messages[2]["data"]["links"]) if len(messages) > 2 else 0
+            logger.debug(f"Sent initial state for lab {lab_id}: {n_nodes} nodes, {n_links} links")
 
     except Exception as e:
         logger.error(f"Failed to send initial state for lab {lab_id}: {e}")
@@ -268,10 +272,8 @@ async def lab_state_websocket(
     subscription_task = asyncio.create_task(_subscribe_and_forward(websocket, lab_id))
 
     try:
-        # Send initial state using scoped session
-        # (don't use Depends(get_db) for long-lived WebSocket handlers)
-        with db.get_session() as database:
-            await _send_initial_state(websocket, lab_id, database)
+        # Send initial state (opens and releases its own session)
+        await _send_initial_state(websocket, lab_id)
 
         # Keep connection alive and handle client messages
         while True:
@@ -293,8 +295,8 @@ async def lab_state_websocket(
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         })
                     elif msg_type == "refresh":
-                        # Client requests state refresh
-                        await _send_initial_state(websocket, lab_id, database)
+                        # Client requests state refresh (opens own session)
+                        await _send_initial_state(websocket, lab_id)
                 except json.JSONDecodeError:
                     pass  # Ignore non-JSON messages
 
