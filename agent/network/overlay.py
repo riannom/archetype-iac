@@ -318,8 +318,12 @@ class OverlayManager:
         if code != 0:
             raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
 
-        # Set MTU to match local physical MTU
-        await self._run_cmd(["ip", "link", "set", name, "mtu", str(settings.local_mtu)])
+        # Set MTU to desired overlay/tenant MTU (not local_mtu which is for veth pairs)
+        # With df=unset, the kernel fragments oversized outer packets transparently,
+        # so the VXLAN device can advertise the full tenant MTU (e.g. 1500) even when
+        # the underlay path MTU is also 1500. This hides fragmentation from the overlay.
+        vxlan_mtu = settings.overlay_mtu if settings.overlay_mtu > 0 else 1500
+        await self._run_cmd(["ip", "link", "set", name, "mtu", str(vxlan_mtu)])
 
         # Bring device up
         await self._run_cmd(["ip", "link", "set", name, "up"])
@@ -493,14 +497,9 @@ class OverlayManager:
         # Generate deterministic VNI from host-pair
         vni = self._host_pair_vni(local_ip, remote_ip)
 
-        # Discover path MTU to remote peer
-        path_mtu = await self._discover_path_mtu(remote_ip)
-        if path_mtu > 0:
-            tenant_mtu = path_mtu - self.VXLAN_OVERHEAD
-            logger.info(f"VTEP tenant MTU for {remote_ip}: {tenant_mtu} (path {path_mtu} - {self.VXLAN_OVERHEAD})")
-        else:
-            tenant_mtu = settings.overlay_mtu
-            logger.info(f"VTEP using fallback tenant MTU for {remote_ip}: {tenant_mtu}")
+        # Use overlay_mtu directly — with df=unset, outer fragmentation is transparent
+        tenant_mtu = settings.overlay_mtu if settings.overlay_mtu > 0 else 1500
+        logger.info(f"VTEP tenant MTU for {remote_ip}: {tenant_mtu}")
 
         # Create interface name from remote IP (replace dots with dashes)
         # e.g., "vtep-10-0-0-2" for remote IP 10.0.0.2
@@ -614,15 +613,9 @@ class OverlayManager:
         if vni is None:
             vni = self._vni_allocator.allocate(lab_id, link_id)
 
-        # Discover path MTU to remote peer
-        path_mtu = await self._discover_path_mtu(remote_ip)
-        if path_mtu > 0:
-            tenant_mtu = path_mtu - self.VXLAN_OVERHEAD
-            logger.info(f"Calculated tenant MTU for {remote_ip}: {tenant_mtu} (path MTU {path_mtu} - {self.VXLAN_OVERHEAD} overhead)")
-        else:
-            # Discovery failed, use fallback
-            tenant_mtu = settings.overlay_mtu
-            logger.info(f"Using fallback tenant MTU for {remote_ip}: {tenant_mtu}")
+        # Use overlay_mtu directly — with df=unset, outer fragmentation is transparent
+        tenant_mtu = settings.overlay_mtu if settings.overlay_mtu > 0 else 1500
+        logger.info(f"Tunnel tenant MTU for {remote_ip}: {tenant_mtu}")
 
         # Create interface name from VNI
         interface_name = f"vxlan{vni}"
@@ -1276,18 +1269,11 @@ class OverlayManager:
                 )
                 del self._link_tunnels[link_id]
 
-        # Auto-discover MTU if not provided
+        # Use overlay_mtu directly — with df=unset, the kernel handles outer
+        # fragmentation transparently so we present full MTU to the overlay
         if tenant_mtu <= 0:
-            path_mtu = await self._discover_path_mtu(remote_ip)
-            if path_mtu > 0:
-                tenant_mtu = path_mtu - self.VXLAN_OVERHEAD
-                logger.info(
-                    f"Link tunnel MTU for {link_id}: {tenant_mtu} "
-                    f"(path {path_mtu} - {self.VXLAN_OVERHEAD})"
-                )
-            else:
-                tenant_mtu = settings.overlay_mtu
-                logger.info(f"Link tunnel using fallback MTU for {link_id}: {tenant_mtu}")
+            tenant_mtu = settings.overlay_mtu if settings.overlay_mtu > 0 else 1500
+            logger.info(f"Link tunnel MTU for {link_id}: {tenant_mtu}")
 
         interface_name = self._link_tunnel_interface_name(lab_id, link_id)
 

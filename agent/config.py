@@ -82,7 +82,9 @@ class Settings(BaseSettings):
     # If discovery succeeds, tenant MTU = path_mtu - 50 (e.g., 9000 -> 8950, 1500 -> 1450)
     # If discovery fails, this fallback value is used.
     # Set to 0 to disable explicit MTU configuration (inherit from system)
-    overlay_mtu: int = 1450  # Fallback MTU for tenant interfaces on overlay links
+    overlay_mtu: int = 1500  # MTU presented to overlay tenant interfaces (VXLAN device MTU)
+    # With df=unset, the kernel fragments oversized outer packets transparently,
+    # so this can match the container MTU even when underlay MTU is smaller.
     overlay_preserve_container_mtu: bool = False  # Keep container MTU unchanged for overlay links
     overlay_clamp_host_mtu: bool = True  # Clamp host-side veth MTU to tenant MTU
 
