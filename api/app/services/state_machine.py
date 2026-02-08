@@ -139,6 +139,81 @@ class NodeStateMachine:
                 return "stop"
         return None
 
+    # ------------------------------------------------------------------
+    # Command guard methods (Phase 6.1)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def can_accept_command(cls, actual_state: str, command: str) -> tuple[bool, str]:
+        """Check if a node can accept a start/stop command.
+
+        Returns (True, "") if allowed, (False, reason) if blocked.
+        Blocks: start while stopping, stop while starting.
+        """
+        if command == "start" and actual_state == "stopping":
+            return False, "Cannot start: node is currently stopping"
+        if command == "stop" and actual_state == "starting":
+            return False, "Cannot stop: node is currently starting"
+        return True, ""
+
+    @classmethod
+    def can_accept_bulk_command(cls, actual_state: str, desired_state: str, command: str) -> tuple[str, str]:
+        """Classify a node for bulk command processing.
+
+        Returns:
+            ("skip_transitional", reason) — node in transitional state
+            ("already_in_state", reason) — already at desired state
+            ("reset_and_proceed", "") — error node needing retry
+            ("proceed", "") — actionable
+        """
+        # Skip transitional
+        if actual_state in ("starting", "stopping", "pending"):
+            return "skip_transitional", f"Node in transitional state: {actual_state}"
+
+        # Already in desired state
+        if command == "start":
+            if actual_state == "running" and desired_state == "running":
+                return "already_in_state", "Already running"
+        else:  # stop
+            if actual_state in ("stopped", "undeployed") and desired_state == "stopped":
+                return "already_in_state", "Already stopped"
+
+        # Error node being retried
+        if actual_state == "error" and command == "start" and desired_state == "running":
+            return "reset_and_proceed", ""
+
+        return "proceed", ""
+
+    @classmethod
+    def needs_sync(cls, actual_state: str, command: str) -> bool:
+        """Check if actual_state is out of sync with the command's target.
+
+        True means a sync job should be created.
+        """
+        if command == "start":
+            return actual_state not in ("running", "pending", "starting")
+        else:  # stop
+            return actual_state not in ("stopped", "undeployed", "stopping")
+
+    @classmethod
+    def compute_display_state(cls, actual_state: str, desired_state: str) -> str:
+        """Map 8 internal states to 5 display states.
+
+        Display states: running, starting, stopping, stopped, error.
+        """
+        if actual_state == "pending":
+            return "starting" if desired_state == "running" else "stopped"
+        display_map = {
+            "running": "running",
+            "starting": "starting",
+            "stopping": "stopping",
+            "stopped": "stopped",
+            "exited": "stopped",
+            "undeployed": "stopped",
+            "error": "error",
+        }
+        return display_map.get(actual_state, "error")
+
 
 class LinkStateMachine:
     """Centralized state transition logic for links.

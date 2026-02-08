@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class LabCreate(BaseModel):
@@ -260,11 +260,21 @@ class NodeStateOut(BaseModel):
     host_name: str | None = None
     # Whether enforcement will automatically retry after an error
     will_retry: bool = False
+    # Server-computed display state: running, starting, stopping, stopped, error
+    display_state: str = "stopped"
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="after")
+    def _compute_display_state(self) -> "NodeStateOut":
+        from app.services.state_machine import NodeStateMachine
+        self.display_state = NodeStateMachine.compute_display_state(
+            self.actual_state, self.desired_state
+        )
+        return self
 
 
 class NodeStateUpdate(BaseModel):

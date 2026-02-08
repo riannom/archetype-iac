@@ -41,6 +41,8 @@ export interface NodeStateEntry {
   management_ip?: string | null;
   all_ips?: string[];
   will_retry?: boolean;
+  /** Server-computed display state: running, starting, stopping, stopped, error */
+  display_state?: string;
   created_at: string;
   updated_at: string;
 }
@@ -58,10 +60,24 @@ export interface NodeStateData {
   image_sync_status?: string | null;
   image_sync_message?: string | null;
   will_retry?: boolean;
+  /** Server-computed display state: running, starting, stopping, stopped, error */
+  display_state?: string;
 }
+
+/** Map server display_state to frontend NodeRuntimeStatus. */
+const DISPLAY_STATE_MAP: Record<string, NodeRuntimeStatus | null> = {
+  running: 'running',
+  starting: 'booting',
+  stopping: 'stopping',
+  stopped: 'stopped',
+  error: 'error',
+};
 
 /**
  * Map an actual_state + desired_state to a display-level runtime status.
+ *
+ * Prefers server-computed display_state when available. Falls back to
+ * client-side mapping for backward compatibility.
  *
  * Returns null for states that should show no indicator (e.g. 'undeployed').
  */
@@ -69,7 +85,15 @@ export function mapActualToRuntime(
   actualState: string,
   desiredState?: string,
   willRetry?: boolean,
+  displayState?: string,
 ): NodeRuntimeStatus | null {
+  // Prefer server-computed display_state
+  if (displayState) {
+    if (displayState === 'error' && willRetry) return 'booting';
+    return DISPLAY_STATE_MAP[displayState] ?? null;
+  }
+
+  // Fallback to client-side mapping
   switch (actualState) {
     case 'running':
       return 'running';

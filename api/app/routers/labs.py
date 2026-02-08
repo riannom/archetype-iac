@@ -34,6 +34,8 @@ from app.tasks.link_reconciliation import reconcile_lab_links
 from app.services import interface_mapping as interface_mapping_service
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
+from app.services.state_machine import NodeStateMachine
+from app.events.publisher import emit_lab_deleted, emit_link_removed, emit_node_removed
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,7 @@ def _get_or_create_node_state(
     lab_id: str,
     node_id: str,
     initial_desired_state: str = "stopped",
+    for_update: bool = False,
 ) -> models.NodeState:
     """Get or create NodeState, using Node definition for correct naming.
 
@@ -74,18 +77,21 @@ def _get_or_create_node_state(
         lab_id: Lab identifier
         node_id: Frontend GUI node ID
         initial_desired_state: Desired state for new records (default: "stopped")
+        for_update: If True, acquire row-level lock (SELECT FOR UPDATE)
 
     Returns:
         Existing or newly created NodeState record
     """
-    state = (
+    query = (
         database.query(models.NodeState)
         .filter(
             models.NodeState.lab_id == lab_id,
             models.NodeState.node_id == node_id,
         )
-        .first()
     )
+    if for_update:
+        query = query.with_for_update()
+    state = query.first()
     if state:
         return state
 
@@ -117,6 +123,41 @@ def _get_or_create_node_state(
     database.commit()
     database.refresh(state)
     return state
+
+
+def _create_node_sync_job(
+    database: Session,
+    lab: models.Lab,
+    node_id: str,
+    current_user: models.User,
+) -> None:
+    """Create a sync job for a single node and start the background task."""
+    from app.tasks.jobs import run_node_reconcile
+    from app.utils.lab import get_node_provider
+
+    db_node = database.query(models.Node).filter(
+        models.Node.lab_id == lab.id,
+        models.Node.gui_id == node_id
+    ).first()
+    if db_node:
+        provider = get_node_provider(db_node, database)
+    else:
+        provider = get_lab_provider(lab)
+
+    job = models.Job(
+        lab_id=lab.id,
+        user_id=current_user.id,
+        action=f"sync:node:{node_id}",
+        status="queued",
+    )
+    database.add(job)
+    database.commit()
+    database.refresh(job)
+
+    safe_create_task(
+        run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
+        name=f"sync:node:{job.id}"
+    )
 
 
 def _upsert_node_states(
@@ -357,6 +398,7 @@ async def delete_lab(
 
     database.delete(lab)
     database.commit()
+    asyncio.create_task(emit_lab_deleted(lab_id))
     return {"status": "deleted"}
 
 
@@ -479,6 +521,12 @@ async def update_topology(
     )
 
     database.commit()
+
+    # Emit cleanup events for removed nodes/links
+    for info in removed_node_info:
+        asyncio.create_task(emit_node_removed(lab.id, info["node_name"], info.get("host_id")))
+    if removed_link_info:
+        asyncio.create_task(emit_link_removed(lab.id))
 
     # Trigger live link operations in background if there are changes
     if added_link_names or removed_link_info:
@@ -844,68 +892,27 @@ async def set_node_desired_state(
     )
 
     _ensure_node_states_exist(database, lab.id)
-    state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state=payload.state)
+    command = "start" if payload.state == "running" else "stop"
+    state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state=payload.state, for_update=True)
 
-    # Block start if this node is currently stopping
-    if payload.state == "running" and state.actual_state == "stopping":
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot start: node is currently stopping"
-        )
-
-    # Block stop if this node is currently starting
-    if payload.state == "stopped" and state.actual_state == "starting":
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot stop: node is currently starting"
-        )
+    # Centralized guard check (6.1)
+    allowed, reason = NodeStateMachine.can_accept_command(state.actual_state, command)
+    if not allowed:
+        raise HTTPException(status_code=409, detail=reason)
 
     # Check if state actually changed
-    needs_sync = state.desired_state != payload.state
+    desired_changed = state.desired_state != payload.state
 
     # Update desired state (may differ from initial if record already existed)
-    if needs_sync:
+    if desired_changed:
         state.desired_state = payload.state
         database.commit()
         database.refresh(state)
 
         # Auto-sync: immediately trigger reconciliation for this node
-        # Check if there's already a conflicting job
-        has_conflict, _ = has_conflicting_job(lab_id, "sync")
-        if not has_conflict:
-            # Check if node is out of sync and needs action
-            is_out_of_sync = (
-                (payload.state == "running" and state.actual_state not in ("running", "pending", "starting"))
-                or (payload.state == "stopped" and state.actual_state not in ("stopped", "undeployed", "stopping"))
-            )
-
-            if is_out_of_sync:
-                # Determine provider based on node's image type
-                from app.utils.lab import get_node_provider
-                db_node = database.query(models.Node).filter(
-                    models.Node.lab_id == lab.id,
-                    models.Node.gui_id == node_id
-                ).first()
-                if db_node:
-                    provider = get_node_provider(db_node, database)
-                else:
-                    provider = get_lab_provider(lab)
-
-                job = models.Job(
-                    lab_id=lab.id,
-                    user_id=current_user.id,
-                    action=f"sync:node:{node_id}",
-                    status="queued",
-                )
-                database.add(job)
-                database.commit()
-                database.refresh(job)
-
-                # Start background sync task
-                safe_create_task(
-                    run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
-                    name=f"sync:node:{job.id}"
-                )
+        has_conflict, _ = has_conflicting_job(lab_id, "sync", session=database)
+        if not has_conflict and NodeStateMachine.needs_sync(state.actual_state, command):
+            _create_node_sync_job(database, lab, node_id, current_user)
 
     elif (
         state.desired_state == payload.state
@@ -921,32 +928,9 @@ async def set_node_desired_state(
         database.commit()
         database.refresh(state)
 
-        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        has_conflict, _ = has_conflicting_job(lab_id, "sync", session=database)
         if not has_conflict:
-            from app.utils.lab import get_node_provider
-            db_node = database.query(models.Node).filter(
-                models.Node.lab_id == lab.id,
-                models.Node.gui_id == node_id
-            ).first()
-            if db_node:
-                provider = get_node_provider(db_node, database)
-            else:
-                provider = get_lab_provider(lab)
-
-            job = models.Job(
-                lab_id=lab.id,
-                user_id=current_user.id,
-                action=f"sync:node:{node_id}",
-                status="queued",
-            )
-            database.add(job)
-            database.commit()
-            database.refresh(job)
-
-            safe_create_task(
-                run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
-                name=f"sync:node:{job.id}"
-            )
+            _create_node_sync_job(database, lab, node_id, current_user)
 
     return _enrich_node_state(state)
 
@@ -982,42 +966,39 @@ async def set_all_nodes_desired_state(
     )
 
     _ensure_node_states_exist(database, lab.id)
-
-    transitional_states = {"starting", "stopping", "pending"}
+    command = "start" if payload.state == "running" else "stop"
 
     states = (
         database.query(models.NodeState)
         .filter(models.NodeState.lab_id == lab_id)
+        .with_for_update()
         .all()
     )
 
-    # Selective processing: classify each node
+    # Selective processing: classify each node via centralized guards (6.1)
     affected_count = 0
     skipped_transitional_count = 0
     already_in_state_count = 0
     nodes_needing_sync: list[str] = []
 
     for state in states:
-        # Skip nodes in transitional states
-        if state.actual_state in transitional_states:
+        classification, _reason = NodeStateMachine.can_accept_bulk_command(
+            state.actual_state, state.desired_state, command
+        )
+
+        if classification == "skip_transitional":
             skipped_transitional_count += 1
             continue
 
-        # Check if already in desired state
-        if payload.state == "running":
-            already_there = state.actual_state in ("running",) and state.desired_state == "running"
-        else:  # stopped
-            already_there = state.actual_state in ("stopped", "undeployed") and state.desired_state == "stopped"
-
-        if already_there:
+        if classification == "already_in_state":
             already_in_state_count += 1
             continue
 
-        # This node can be processed
+        # This node can be processed (proceed or reset_and_proceed)
         state.desired_state = payload.state
 
         # Reset enforcement state for error nodes being retried
-        if state.actual_state == "error" and payload.state == "running":
+        if classification == "reset_and_proceed":
             state.enforcement_attempts = 0
             state.enforcement_failed_at = None
             state.last_enforcement_at = None
@@ -1025,12 +1006,7 @@ async def set_all_nodes_desired_state(
 
         affected_count += 1
 
-        # Check if this node needs sync
-        is_out_of_sync = (
-            (payload.state == "running" and state.actual_state not in ("running", "pending", "starting"))
-            or (payload.state == "stopped" and state.actual_state not in ("stopped", "undeployed", "stopping"))
-        )
-        if is_out_of_sync:
+        if NodeStateMachine.needs_sync(state.actual_state, command):
             nodes_needing_sync.append(state.node_id)
 
     database.commit()
@@ -1050,7 +1026,7 @@ async def set_all_nodes_desired_state(
 
     # Auto-sync: immediately trigger reconciliation for affected nodes
     if nodes_needing_sync:
-        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        has_conflict, _ = has_conflicting_job(lab_id, "sync", session=database)
         if not has_conflict:
             provider = get_lab_provider(lab)
             job = models.Job(

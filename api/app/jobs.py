@@ -26,12 +26,15 @@ CONFLICTING_ACTIONS = {
 }
 
 
-def has_conflicting_job(lab_id: str, action: str) -> tuple[bool, str | None]:
+def has_conflicting_job(lab_id: str, action: str, session=None) -> tuple[bool, str | None]:
     """Check if lab has a running/queued job that conflicts with new action.
 
     Args:
         lab_id: The lab ID to check
         action: The action being attempted (up, down, sync, etc.)
+        session: Optional SQLAlchemy session to use. If provided, uses that
+            session (important for transactional consistency with SELECT FOR UPDATE).
+            Otherwise creates a new SessionLocal().
 
     Returns:
         Tuple of (has_conflict, conflicting_action_name)
@@ -40,7 +43,9 @@ def has_conflicting_job(lab_id: str, action: str) -> tuple[bool, str | None]:
     if not conflicting_actions:
         return False, None
 
-    session = SessionLocal()
+    own_session = session is None
+    if own_session:
+        session = SessionLocal()
     try:
         active_job = (
             session.query(Job)
@@ -56,7 +61,8 @@ def has_conflicting_job(lab_id: str, action: str) -> tuple[bool, str | None]:
             return True, active_job.action
         return False, None
     finally:
-        session.close()
+        if own_session:
+            session.close()
 
 
 def _build_command(lab_id: str, action: str) -> list[list[str]]:

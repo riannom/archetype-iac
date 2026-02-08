@@ -463,3 +463,106 @@ class TestBulkIndividualConflict:
         """Unknown actions have no conflicts (fail-open)."""
         from app.jobs import CONFLICTING_ACTIONS
         assert CONFLICTING_ACTIONS.get("unknown_action", []) == []
+
+
+# ---------------------------------------------------------------------------
+# SELECT FOR UPDATE — Row Lock Tests (Phase 6.2)
+# ---------------------------------------------------------------------------
+
+class TestRowLevelLocking:
+    """Tests for row-level locking on desired state setters."""
+
+    def test_get_or_create_with_for_update(self, test_db) -> None:
+        """_get_or_create_node_state with for_update=True acquires row lock."""
+        from app.routers.labs import _get_or_create_node_state
+
+        lab = models.Lab(
+            name="Test", owner_id="user1", provider="docker",
+            state="stopped", workspace_path="/tmp/test",
+        )
+        test_db.add(lab)
+        test_db.commit()
+        test_db.refresh(lab)
+
+        # Create a node state
+        ns = models.NodeState(
+            lab_id=lab.id, node_id="r1", node_name="r1",
+            desired_state="stopped", actual_state="stopped",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        # for_update=True should succeed (SQLite doesn't enforce FOR UPDATE
+        # but the code path is exercised)
+        state = _get_or_create_node_state(test_db, lab.id, "r1", for_update=True)
+        assert state.node_id == "r1"
+        assert state.desired_state == "stopped"
+
+    def test_get_or_create_without_for_update(self, test_db) -> None:
+        """_get_or_create_node_state with for_update=False (default) works normally."""
+        from app.routers.labs import _get_or_create_node_state
+
+        lab = models.Lab(
+            name="Test", owner_id="user1", provider="docker",
+            state="stopped", workspace_path="/tmp/test",
+        )
+        test_db.add(lab)
+        test_db.commit()
+        test_db.refresh(lab)
+
+        # Create a node state
+        ns = models.NodeState(
+            lab_id=lab.id, node_id="r1", node_name="r1",
+            desired_state="stopped", actual_state="stopped",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        state = _get_or_create_node_state(test_db, lab.id, "r1")
+        assert state.node_id == "r1"
+
+    def test_has_conflicting_job_with_session(self, test_db) -> None:
+        """has_conflicting_job uses provided session instead of creating new one."""
+        from app.jobs import has_conflicting_job
+
+        lab = models.Lab(
+            name="Test", owner_id="user1", provider="docker",
+            state="running", workspace_path="/tmp/test",
+        )
+        test_db.add(lab)
+        test_db.commit()
+        test_db.refresh(lab)
+
+        # No conflicting job
+        has_conflict, _ = has_conflicting_job(lab.id, "sync", session=test_db)
+        assert has_conflict is False
+
+        # Add a conflicting job
+        job = models.Job(
+            lab_id=lab.id, action="up",
+            status="queued",
+        )
+        test_db.add(job)
+        test_db.commit()
+
+        # Now should detect conflict
+        has_conflict, action = has_conflicting_job(lab.id, "sync", session=test_db)
+        assert has_conflict is True
+        assert action == "up"
+
+    def test_has_conflicting_job_without_session(self, monkeypatch) -> None:
+        """has_conflicting_job creates SessionLocal when no session provided."""
+        from app.jobs import has_conflicting_job
+
+        # Mock SessionLocal to verify it's called
+        mock_session = MagicMock()
+        mock_query = MagicMock()
+        mock_query.filter.return_value = mock_query
+        mock_query.first.return_value = None
+        mock_session.query.return_value = mock_query
+
+        monkeypatch.setattr("app.jobs.SessionLocal", lambda: mock_session)
+
+        has_conflict, _ = has_conflicting_job("lab1", "sync")
+        assert has_conflict is False
+        mock_session.close.assert_called_once()

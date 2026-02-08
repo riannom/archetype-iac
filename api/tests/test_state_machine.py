@@ -677,3 +677,178 @@ def test_all_valid_transition_targets_are_valid_states() -> None:
             assert isinstance(target, NodeActualState), (
                 f"Invalid target {target} from {src.value}"
             )
+
+
+# ---------------------------------------------------------------------------
+# NodeStateMachine — can_accept_command (Phase 6.1)
+# ---------------------------------------------------------------------------
+
+class TestCanAcceptCommand:
+    """Test centralized command guard for single-node operations."""
+
+    # Blocked combinations
+    def test_start_blocked_while_stopping(self) -> None:
+        allowed, reason = NodeStateMachine.can_accept_command("stopping", "start")
+        assert not allowed
+        assert "stopping" in reason
+
+    def test_stop_blocked_while_starting(self) -> None:
+        allowed, reason = NodeStateMachine.can_accept_command("starting", "stop")
+        assert not allowed
+        assert "starting" in reason
+
+    # Allowed combinations — all 8 states × 2 commands except the 2 blocked
+    @pytest.mark.parametrize("actual,cmd", [
+        ("undeployed", "start"), ("undeployed", "stop"),
+        ("pending", "start"), ("pending", "stop"),
+        ("starting", "start"),  # starting + start = OK (already starting)
+        ("running", "start"), ("running", "stop"),
+        ("stopping", "stop"),  # stopping + stop = OK (already stopping)
+        ("stopped", "start"), ("stopped", "stop"),
+        ("exited", "start"), ("exited", "stop"),
+        ("error", "start"), ("error", "stop"),
+    ])
+    def test_allowed_combinations(self, actual: str, cmd: str) -> None:
+        allowed, reason = NodeStateMachine.can_accept_command(actual, cmd)
+        assert allowed
+        assert reason == ""
+
+
+# ---------------------------------------------------------------------------
+# NodeStateMachine — can_accept_bulk_command (Phase 6.1)
+# ---------------------------------------------------------------------------
+
+class TestCanAcceptBulkCommand:
+    """Test centralized bulk command classification."""
+
+    # Transitional states always skip
+    @pytest.mark.parametrize("actual", ["starting", "stopping", "pending"])
+    def test_skip_transitional(self, actual: str) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command(actual, "stopped", "start")
+        assert classification == "skip_transitional"
+
+    # Already in state
+    def test_already_running(self) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command("running", "running", "start")
+        assert classification == "already_in_state"
+
+    def test_already_stopped(self) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command("stopped", "stopped", "stop")
+        assert classification == "already_in_state"
+
+    def test_already_undeployed_stopped(self) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command("undeployed", "stopped", "stop")
+        assert classification == "already_in_state"
+
+    # Error retry
+    def test_error_retry_start(self) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command("error", "running", "start")
+        assert classification == "reset_and_proceed"
+
+    def test_error_stop_is_proceed(self) -> None:
+        """Stopping an error node is a normal proceed (not reset)."""
+        classification, _ = NodeStateMachine.can_accept_bulk_command("error", "running", "stop")
+        assert classification == "proceed"
+
+    # Normal proceed
+    def test_stopped_start_proceed(self) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command("stopped", "stopped", "start")
+        assert classification == "proceed"
+
+    def test_running_stop_proceed(self) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command("running", "running", "stop")
+        assert classification == "proceed"
+
+    def test_exited_start_proceed(self) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command("exited", "stopped", "start")
+        assert classification == "proceed"
+
+    def test_undeployed_start_proceed(self) -> None:
+        classification, _ = NodeStateMachine.can_accept_bulk_command("undeployed", "stopped", "start")
+        assert classification == "proceed"
+
+
+# ---------------------------------------------------------------------------
+# NodeStateMachine — needs_sync (Phase 6.1)
+# ---------------------------------------------------------------------------
+
+class TestNeedsSync:
+    """Test centralized out-of-sync detection."""
+
+    # Start command: needs sync when NOT in running/pending/starting
+    @pytest.mark.parametrize("actual,expected", [
+        ("undeployed", True), ("stopped", True), ("exited", True), ("error", True),
+        ("running", False), ("pending", False), ("starting", False),
+        ("stopping", True),
+    ])
+    def test_needs_sync_start(self, actual: str, expected: bool) -> None:
+        assert NodeStateMachine.needs_sync(actual, "start") == expected
+
+    # Stop command: needs sync when NOT in stopped/undeployed/stopping
+    @pytest.mark.parametrize("actual,expected", [
+        ("running", True), ("starting", True), ("pending", True),
+        ("error", True), ("exited", True),
+        ("stopped", False), ("undeployed", False), ("stopping", False),
+    ])
+    def test_needs_sync_stop(self, actual: str, expected: bool) -> None:
+        assert NodeStateMachine.needs_sync(actual, "stop") == expected
+
+
+# ---------------------------------------------------------------------------
+# NodeStateMachine — compute_display_state (Phase 6.3)
+# ---------------------------------------------------------------------------
+
+class TestComputeDisplayState:
+    """Test server-side display state computation."""
+
+    def test_running(self) -> None:
+        assert NodeStateMachine.compute_display_state("running", "running") == "running"
+
+    def test_starting(self) -> None:
+        assert NodeStateMachine.compute_display_state("starting", "running") == "starting"
+
+    def test_stopping(self) -> None:
+        assert NodeStateMachine.compute_display_state("stopping", "stopped") == "stopping"
+
+    def test_stopped(self) -> None:
+        assert NodeStateMachine.compute_display_state("stopped", "stopped") == "stopped"
+
+    def test_exited(self) -> None:
+        assert NodeStateMachine.compute_display_state("exited", "stopped") == "stopped"
+
+    def test_undeployed(self) -> None:
+        assert NodeStateMachine.compute_display_state("undeployed", "stopped") == "stopped"
+
+    def test_error(self) -> None:
+        assert NodeStateMachine.compute_display_state("error", "running") == "error"
+
+    def test_pending_desired_running(self) -> None:
+        assert NodeStateMachine.compute_display_state("pending", "running") == "starting"
+
+    def test_pending_desired_stopped(self) -> None:
+        assert NodeStateMachine.compute_display_state("pending", "stopped") == "stopped"
+
+    def test_unknown_state_defaults_to_error(self) -> None:
+        assert NodeStateMachine.compute_display_state("bogus", "running") == "error"
+
+    # Cross-product: verify all 8 actual × 2 desired combinations
+    @pytest.mark.parametrize("actual,desired,expected", [
+        ("undeployed", "stopped", "stopped"),
+        ("undeployed", "running", "stopped"),
+        ("pending", "running", "starting"),
+        ("pending", "stopped", "stopped"),
+        ("starting", "running", "starting"),
+        ("starting", "stopped", "starting"),
+        ("running", "running", "running"),
+        ("running", "stopped", "running"),
+        ("stopping", "running", "stopping"),
+        ("stopping", "stopped", "stopping"),
+        ("stopped", "running", "stopped"),
+        ("stopped", "stopped", "stopped"),
+        ("exited", "running", "stopped"),
+        ("exited", "stopped", "stopped"),
+        ("error", "running", "error"),
+        ("error", "stopped", "error"),
+    ])
+    def test_all_combinations(self, actual: str, desired: str, expected: str) -> None:
+        assert NodeStateMachine.compute_display_state(actual, desired) == expected

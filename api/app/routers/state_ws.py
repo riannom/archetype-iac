@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app import db, models
 from app.config import settings
 from app.services.broadcaster import get_broadcaster
+from app.services.state_machine import NodeStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,9 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str, database: Sessi
                 "image_sync_status": ns.image_sync_status,
                 "image_sync_message": ns.image_sync_message,
                 "will_retry": will_retry,
+                "display_state": NodeStateMachine.compute_display_state(
+                    ns.actual_state, ns.desired_state
+                ),
             })
 
         await websocket.send_json({

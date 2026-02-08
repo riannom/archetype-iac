@@ -1,7 +1,7 @@
 # State Management Overhaul — Implementation Plan
 
 **Created**: 2026-02-07
-**Status**: IN PROGRESS — Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 Complete
+**Status**: IN PROGRESS — Phases 0-5 Complete + Phase 6.1/6.2/6.3 Complete
 **Scope**: States, runtime control, transitions, placement enforcement, parallelization, logging, UI accuracy
 
 ## Design Principles
@@ -720,3 +720,129 @@ Phase 3 (Agent Per-Node Lifecycle) ───────────────
 8. **All state transitions are tested** — 100% valid transition coverage, concurrency guards, bulk operations, enforcement end-to-end
 9. **Single enforcement path** — only state_enforcement.py triggers corrective actions; reconciliation is read-only
 10. **Realtime canvas operations are per-node** — no topology-level deploy required for individual nodes
+
+---
+
+## Phase 6: Second-Pass Hardening (Feb 7, 2026 Review)
+
+> Additional improvements identified during second architectural review. These address gaps not covered by Phases 0-5.
+
+### Approved Decisions (Second Review)
+
+| # | Decision | Summary |
+|---|----------|---------|
+| R-1A | **5-state API contract** | Server-side `display_state` field maps 8 internal states to 5 (stopped, starting, running, stopping, error). API/WS always includes this. Frontend prefers it over local mapping. |
+| R-2A | **Strict explicit placement enforcement** | If Node.host_id is set: ONLY that host, no fallback. Error if unavailable/at capacity. Soft fallback only for non-explicit (NodePlacement, lab.agent_id). Verify Phase 2.2 fully enforces this. |
+| R-3A | **Batch + parallel agent reconcile** | Agent's reconcile endpoint processes nodes in parallel within single lock acquisition (asyncio.gather). API sends one batch request per agent, not per-node. |
+| R-5A | **Centralize guards in state machine** | Add `can_accept_command(actual_state, command) -> (bool, reason)` and `can_accept_bulk_command()` to NodeStateMachine. All callers (router, enforcement, lifecycle) delegate to it. |
+| R-6A | **SELECT FOR UPDATE on NodeState** | Row-level DB lock in `set_node_desired_state()` and `set_all_nodes_desired_state()`. Eliminates race where concurrent requests both pass guards and create duplicate jobs. |
+| R-8B | **Retry transient, terminal after exhaustion** | Clarify: during retries show "Starting (attempt 2/5)" not error. After max retries: ERROR is terminal. Manual "Start" resets counters. |
+
+### 6.1 Centralize state transition guards (#R-5A) ✅ COMPLETE
+**File:** `api/app/services/state_machine.py`
+- [x] Add `can_accept_command(actual_state: str, command: str) -> tuple[bool, str]`
+- [x] Add `can_accept_bulk_command(actual_state: str, desired_state: str, command: str) -> tuple[str, str]`
+- [x] Add `needs_sync(actual_state: str, command: str) -> bool`
+
+**File:** `api/app/routers/labs.py`
+- [x] Replace inline transitional state checks in `set_node_desired_state()` with `can_accept_command()`
+- [x] Replace inline checks in `set_all_nodes_desired_state()` with `can_accept_bulk_command()` + `needs_sync()`
+- [x] Extract `_create_node_sync_job()` helper to eliminate duplicated sync job creation
+
+**File:** `api/app/routers/jobs.py`
+- [x] Replace inline guards in `node_action()` with `can_accept_command()` + `needs_sync()`
+
+- [x] Tests: All state × command combinations in test_state_machine.py (TestCanAcceptCommand, TestCanAcceptBulkCommand, TestNeedsSync)
+
+### 6.2 SELECT FOR UPDATE on desired state setter (#R-6A) ✅ COMPLETE
+**File:** `api/app/routers/labs.py`
+- [x] `_get_or_create_node_state()` accepts `for_update` parameter for `with_for_update()`
+- [x] `set_node_desired_state()` uses `for_update=True`
+- [x] `set_all_nodes_desired_state()` uses `.with_for_update()` on batch query
+- [x] `has_conflicting_job()` called with locked session parameter
+
+**File:** `api/app/jobs.py`
+- [x] `has_conflicting_job()` accepts optional `session` parameter; uses it instead of `SessionLocal()` when provided
+
+- [x] Tests in `api/tests/test_concurrency.py` (TestRowLevelLocking): for_update flag, session passthrough, conflict detection
+
+### 6.3 Server-side display_state (#R-1A) ✅ COMPLETE
+**File:** `api/app/services/state_machine.py`
+- [x] Add `compute_display_state(actual_state, desired_state) -> str`
+
+**File:** `api/app/schemas.py` (NodeStateOut)
+- [x] Add `display_state: str` field with `@model_validator` computing from actual_state + desired_state
+
+**File:** `api/app/services/broadcaster.py`
+- [x] Add `display_state` param to `publish_node_state()` and `broadcast_node_state_change()`
+- [x] Auto-compute display_state via `NodeStateMachine.compute_display_state()` when not provided
+
+**File:** `api/app/routers/state_ws.py`
+- [x] Include `display_state` in initial_state snapshot via `NodeStateMachine.compute_display_state()`
+
+**File:** `web/src/types/nodeState.ts`
+- [x] Add `display_state` to `NodeStateEntry` and `NodeStateData` interfaces
+- [x] `mapActualToRuntime()` prefers server's `display_state` when available, falls back to client-side mapping
+
+**File:** `web/src/studio/StudioPage.tsx`
+- [x] Pass `display_state` through WS handler and to `mapActualToRuntime()`
+
+- [x] Tests: 16 display_state combinations in test_state_machine.py (TestComputeDisplayState)
+- [x] Tests: 7 new frontend tests for display_state preference in nodeState.test.ts
+
+### 6.4 Batch + parallel agent reconcile (#R-3A)
+**File:** `api/app/tasks/node_lifecycle.py`
+- [ ] Group nodes by target agent
+- [ ] Send single batch reconcile request per agent (not per-node)
+
+**File:** `agent/main.py` (reconcile_nodes endpoint)
+- [ ] Process nodes in parallel within single lock:
+  ```python
+  async with lock_manager.acquire_with_heartbeat(lab_id):
+      results = await asyncio.gather(*[
+          process_single_node(target) for target in request.nodes
+      ], return_exceptions=True)
+  ```
+- [ ] Return per-node results with individual success/failure
+
+- [ ] Tests: Batch reconcile, partial failure, single lock acquisition
+
+### 6.5 Verify strict explicit placement (#R-2A)
+- [ ] Audit `get_agent_for_node()` in agent_client.py — confirm Node.host_id blocks fallback
+- [ ] Audit `_resolve_agents()` in node_lifecycle.py — confirm explicit host error, not fallback
+- [ ] Audit `_get_agent_for_node()` in state_enforcement.py — same check
+- [ ] Add tests if not already covered:
+  - Explicit host_id + host offline -> ERROR, no fallback
+  - Explicit host_id + host at capacity -> ERROR with resource info
+  - No host_id -> fallback chain intact
+
+### 6.6 Retry display refinement (#R-8B)
+**File:** `api/app/services/broadcaster.py`
+- [ ] Add `enforcement_attempt` and `max_enforcement_attempts` to publish_node_state()
+
+**File:** `web/src/types/nodeState.ts`
+- [ ] Add `enforcement_attempt` and `max_enforcement_attempts` to NodeStateData
+
+**File:** `web/src/studio/components/Canvas.tsx`
+- [ ] Status dot tooltip: "Starting (attempt 2/5)" when will_retry=true
+
+- [ ] Tests: retry info displayed correctly
+
+### 6.7 Containerlab reference cleanup
+- [ ] Remove backward compat aliases: `graph_to_containerlab_yaml` in topology.py
+- [ ] Remove backward compat aliases: `to_containerlab_yaml*` in services/topology.py
+- [ ] Update containerlab comment in node_lifecycle.py:69
+- [ ] Update `PROVIDER=clab` in docker-compose.gui.yml
+- [ ] Sweep for remaining clab/containerlab references
+
+---
+
+## Implementation Priority (Phase 6)
+
+1. **6.1** (Guards) — foundation for all callers
+2. **6.2** (SELECT FOR UPDATE) — small, targeted race fix
+3. **6.3** (display_state) — aligns API contract
+4. **6.5** (Verify placement) — audit + tests, may be already correct
+5. **6.4** (Batch parallel) — agent-side performance
+6. **6.6** (Retry display) — UI polish
+7. **6.7** (Containerlab cleanup) — housekeeping
