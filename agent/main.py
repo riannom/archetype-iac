@@ -146,6 +146,10 @@ from agent.schemas import (
     StartNodeResponse,
     StopNodeResponse,
     DestroyNodeResponse,
+    # Interface provisioning
+    InterfaceProvisionRequest,
+    InterfaceProvisionResponse,
+    TransportConfigResponse,
 )
 from agent.version import __version__, get_commit
 from agent.updater import (
@@ -588,6 +592,10 @@ def get_agent_info() -> AgentInfo:
 
     address = f"{advertise_host}:{settings.agent_port}"
 
+    # Get data plane IP if transport config is active
+    from agent.network.transport import get_data_plane_ip
+    dp_ip = get_data_plane_ip()
+
     return AgentInfo(
         agent_id=AGENT_ID,
         name=settings.agent_name,
@@ -596,6 +604,7 @@ def get_agent_info() -> AgentInfo:
         started_at=AGENT_STARTED_AT,
         is_local=settings.is_local,
         deployment_mode=detect_deployment_mode().value,
+        data_plane_ip=dp_ip,
     )
 
 
@@ -640,13 +649,119 @@ async def register_with_controller() -> bool:
         return False
 
 
+async def _bootstrap_transport_config() -> None:
+    """Phase 2 bootstrap: fetch transport config from controller and apply.
+
+    After registration, the agent fetches its transport configuration
+    from the controller. If a subinterface or dedicated interface is
+    configured, it provisions the interface locally and sets the
+    data_plane_ip for VXLAN operations.
+    """
+    import subprocess
+    from agent.network.transport import set_data_plane_ip
+
+    if not _registered:
+        return
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings.controller_url}/infrastructure/agents/{AGENT_ID}/transport-config",
+                timeout=10.0,
+            )
+            if response.status_code != 200:
+                logger.debug("No transport config from controller (not configured)")
+                return
+
+            config = response.json()
+            mode = config.get("transport_mode", "management")
+
+            if mode == "management":
+                logger.debug("Transport mode: management (no subinterface needed)")
+                return
+
+            if mode == "subinterface":
+                parent = config.get("parent_interface")
+                vlan_id = config.get("vlan_id")
+                ip_cidr = config.get("transport_ip")
+                mtu = config.get("desired_mtu", 9000)
+
+                if not parent or not vlan_id:
+                    logger.warning("Subinterface transport config missing parent_interface or vlan_id")
+                    return
+
+                iface_name = f"{parent}.{vlan_id}"
+                logger.info(f"Bootstrap: provisioning transport subinterface {iface_name}")
+
+                # Use the local provisioning endpoint logic directly
+                proc = subprocess.run(["ip", "link", "show", iface_name], capture_output=True)
+                if proc.returncode != 0:
+                    # Create the subinterface
+                    subprocess.run([
+                        "ip", "link", "add", "link", parent,
+                        "name", iface_name, "type", "vlan", "id", str(vlan_id),
+                    ], check=True)
+
+                # Set parent MTU if needed
+                try:
+                    with open(f"/sys/class/net/{parent}/mtu") as f:
+                        parent_mtu = int(f.read().strip())
+                    if parent_mtu < mtu:
+                        subprocess.run(["ip", "link", "set", parent, "mtu", str(mtu)], check=True)
+                except (FileNotFoundError, ValueError):
+                    pass
+
+                # Set MTU, IP, bring up
+                subprocess.run(["ip", "link", "set", iface_name, "mtu", str(mtu)], check=True)
+                if ip_cidr:
+                    subprocess.run(["ip", "addr", "flush", "dev", iface_name], check=True)
+                    subprocess.run(["ip", "addr", "add", ip_cidr, "dev", iface_name], check=True)
+                subprocess.run(["ip", "link", "set", iface_name, "up"], check=True)
+
+                # Extract IP and set as data plane IP
+                if ip_cidr:
+                    dp_ip = ip_cidr.split("/")[0]
+                    set_data_plane_ip(dp_ip)
+                    logger.info(f"Transport bootstrap complete: {iface_name} with IP {dp_ip}")
+
+            elif mode == "dedicated":
+                dp_iface = config.get("data_plane_interface")
+                ip_cidr = config.get("transport_ip")
+                mtu = config.get("desired_mtu", 9000)
+
+                if not dp_iface:
+                    logger.warning("Dedicated transport config missing data_plane_interface")
+                    return
+
+                logger.info(f"Bootstrap: configuring dedicated transport interface {dp_iface}")
+
+                # Configure existing interface
+                subprocess.run(["ip", "link", "set", dp_iface, "mtu", str(mtu)], check=True)
+                if ip_cidr:
+                    subprocess.run(["ip", "addr", "flush", "dev", dp_iface], check=True)
+                    subprocess.run(["ip", "addr", "add", ip_cidr, "dev", dp_iface], check=True)
+                subprocess.run(["ip", "link", "set", dp_iface, "up"], check=True)
+
+                if ip_cidr:
+                    dp_ip = ip_cidr.split("/")[0]
+                    set_data_plane_ip(dp_ip)
+                    logger.info(f"Transport bootstrap complete: {dp_iface} with IP {dp_ip}")
+
+    except httpx.ConnectError:
+        logger.debug("Cannot reach controller for transport config (will retry on next heartbeat)")
+    except Exception as e:
+        logger.warning(f"Transport bootstrap failed: {e}")
+
+
 async def send_heartbeat() -> HeartbeatResponse | None:
     """Send heartbeat to controller."""
+    from agent.network.transport import get_data_plane_ip
     request = HeartbeatRequest(
         agent_id=AGENT_ID,
         status=AgentStatus.ONLINE,
         active_jobs=get_active_jobs(),
         resource_usage=await get_resource_usage(),
+        data_plane_ip=get_data_plane_ip(),
     )
 
     try:
@@ -757,6 +872,9 @@ async def lifespan(app: FastAPI):
 
     # Try initial registration (will notify controller if this is a restart)
     await register_with_controller()
+
+    # Phase 2 bootstrap: fetch and apply transport config from controller
+    await _bootstrap_transport_config()
 
     # Start heartbeat background task
     _heartbeat_task = asyncio.create_task(heartbeat_loop())
@@ -2662,20 +2780,28 @@ async def test_mtu(request: MtuTestRequest) -> MtuTestResponse:
             error=f"MTU {mtu} too small (minimum 28 bytes for IP + ICMP headers)",
         )
 
-    logger.info(f"Testing MTU {mtu} to {target_ip} (payload size: {payload_size})")
+    source_ip = request.source_ip
+    logger.info(f"Testing MTU {mtu} to {target_ip} (payload size: {payload_size}, source: {source_ip or 'auto'})")
 
     try:
         # Run ping with DF bit set (-M do = don't fragment)
         # -c 3: send 3 pings
         # -W 5: 5 second timeout
         # -s: payload size
-        process = await asyncio.create_subprocess_exec(
+        # -I: source address (for data plane testing)
+        ping_args = [
             "ping",
             "-M", "do",  # Don't fragment
             "-c", "3",
             "-W", "5",
             "-s", str(payload_size),
-            target_ip,
+        ]
+        if source_ip:
+            ping_args.extend(["-I", source_ip])
+        ping_args.append(target_ip)
+
+        process = await asyncio.create_subprocess_exec(
+            *ping_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -5959,6 +6085,192 @@ async def _console_websocket_libvirt(
             await websocket.close()
         except Exception:
             pass
+
+
+# --- Interface Provisioning ---
+
+
+@app.post("/interfaces/provision")
+async def provision_interface(
+    request: InterfaceProvisionRequest,
+) -> InterfaceProvisionResponse:
+    """Provision, configure, or delete a network interface on this host.
+
+    Shared plumbing for transport subinterfaces and external connectivity.
+
+    Actions:
+    - create_subinterface: Create a VLAN subinterface on a parent interface
+    - configure: Set MTU/IP on an existing interface
+    - delete: Remove an interface (and detach from OVS if attached)
+    """
+    import subprocess
+
+    async def run_cmd(cmd: list[str], check: bool = False) -> tuple[int, str, str]:
+        proc = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: subprocess.run(cmd, capture_output=True, text=True)
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    try:
+        if request.action == "create_subinterface":
+            if not request.parent_interface:
+                return InterfaceProvisionResponse(
+                    success=False, error="parent_interface is required for create_subinterface"
+                )
+            if request.vlan_id is None:
+                return InterfaceProvisionResponse(
+                    success=False, error="vlan_id is required for create_subinterface"
+                )
+
+            iface_name = request.name or f"{request.parent_interface}.{request.vlan_id}"
+            mtu = request.mtu or 9000
+
+            # Check if interface already exists
+            rc, _, _ = await run_cmd(["ip", "link", "show", iface_name])
+            if rc == 0:
+                # Interface exists - verify config and update if needed
+                logger.info(f"Interface {iface_name} already exists, updating config")
+            else:
+                # Create VLAN subinterface
+                rc, _, stderr = await run_cmd([
+                    "ip", "link", "add", "link", request.parent_interface,
+                    "name", iface_name, "type", "vlan", "id", str(request.vlan_id),
+                ])
+                if rc != 0:
+                    return InterfaceProvisionResponse(
+                        success=False, error=f"Failed to create subinterface: {stderr.strip()}"
+                    )
+
+            # Bump parent MTU if needed (parent must be >= child)
+            rc, stdout, _ = await run_cmd(["cat", f"/sys/class/net/{request.parent_interface}/mtu"])
+            if rc == 0:
+                parent_mtu = int(stdout.strip())
+                if parent_mtu < mtu:
+                    logger.info(f"Bumping parent {request.parent_interface} MTU from {parent_mtu} to {mtu}")
+                    await run_cmd(["ip", "link", "set", request.parent_interface, "mtu", str(mtu)])
+
+            # Set MTU on subinterface
+            await run_cmd(["ip", "link", "set", iface_name, "mtu", str(mtu)])
+
+            # Set IP if provided
+            if request.ip_cidr:
+                # Flush existing IPs and set new one
+                await run_cmd(["ip", "addr", "flush", "dev", iface_name])
+                rc, _, stderr = await run_cmd(["ip", "addr", "add", request.ip_cidr, "dev", iface_name])
+                if rc != 0:
+                    return InterfaceProvisionResponse(
+                        success=False,
+                        interface_name=iface_name,
+                        error=f"Failed to set IP: {stderr.strip()}",
+                    )
+
+            # Bring interface up
+            await run_cmd(["ip", "link", "set", iface_name, "up"])
+
+            # Attach to OVS if requested
+            if request.attach_to_ovs:
+                bridge = settings.ovs_bridge_name
+                cmd = ["ovs-vsctl", "--may-exist", "add-port", bridge, iface_name]
+                if request.ovs_vlan_tag is not None:
+                    cmd.extend(["tag=" + str(request.ovs_vlan_tag)])
+                rc, _, stderr = await run_cmd(cmd)
+                if rc != 0:
+                    logger.warning(f"Failed to attach {iface_name} to OVS: {stderr.strip()}")
+
+            # Read back actual MTU
+            rc, stdout, _ = await run_cmd(["cat", f"/sys/class/net/{iface_name}/mtu"])
+            actual_mtu = int(stdout.strip()) if rc == 0 else mtu
+
+            # Read back IP
+            actual_ip = request.ip_cidr
+            if not actual_ip:
+                rc, stdout, _ = await run_cmd(["ip", "-4", "addr", "show", iface_name])
+                if rc == 0 and "inet " in stdout:
+                    # Parse first inet line
+                    for line in stdout.split("\n"):
+                        line = line.strip()
+                        if line.startswith("inet "):
+                            actual_ip = line.split()[1]
+                            break
+
+            return InterfaceProvisionResponse(
+                success=True,
+                interface_name=iface_name,
+                mtu=actual_mtu,
+                ip_address=actual_ip,
+            )
+
+        elif request.action == "configure":
+            if not request.name:
+                return InterfaceProvisionResponse(
+                    success=False, error="name is required for configure action"
+                )
+
+            iface_name = request.name
+
+            # Verify interface exists
+            rc, _, _ = await run_cmd(["ip", "link", "show", iface_name])
+            if rc != 0:
+                return InterfaceProvisionResponse(
+                    success=False, error=f"Interface {iface_name} does not exist"
+                )
+
+            # Set MTU if provided
+            if request.mtu:
+                await run_cmd(["ip", "link", "set", iface_name, "mtu", str(request.mtu)])
+
+            # Set IP if provided
+            if request.ip_cidr:
+                await run_cmd(["ip", "addr", "flush", "dev", iface_name])
+                await run_cmd(["ip", "addr", "add", request.ip_cidr, "dev", iface_name])
+
+            # Bring up
+            await run_cmd(["ip", "link", "set", iface_name, "up"])
+
+            rc, stdout, _ = await run_cmd(["cat", f"/sys/class/net/{iface_name}/mtu"])
+            actual_mtu = int(stdout.strip()) if rc == 0 else request.mtu
+
+            return InterfaceProvisionResponse(
+                success=True,
+                interface_name=iface_name,
+                mtu=actual_mtu,
+                ip_address=request.ip_cidr,
+            )
+
+        elif request.action == "delete":
+            if not request.name:
+                return InterfaceProvisionResponse(
+                    success=False, error="name is required for delete action"
+                )
+
+            iface_name = request.name
+
+            # Remove from OVS if attached
+            rc, stdout, _ = await run_cmd(["ovs-vsctl", "port-to-br", iface_name])
+            if rc == 0:
+                bridge = stdout.strip()
+                await run_cmd(["ovs-vsctl", "--if-exists", "del-port", bridge, iface_name])
+
+            # Delete the interface
+            rc, _, stderr = await run_cmd(["ip", "link", "delete", iface_name])
+            if rc != 0:
+                return InterfaceProvisionResponse(
+                    success=False, error=f"Failed to delete interface: {stderr.strip()}"
+                )
+
+            return InterfaceProvisionResponse(
+                success=True,
+                interface_name=iface_name,
+            )
+
+        else:
+            return InterfaceProvisionResponse(
+                success=False, error=f"Unknown action: {request.action}"
+            )
+
+    except Exception as e:
+        logger.error(f"Interface provisioning failed: {e}")
+        return InterfaceProvisionResponse(success=False, error=str(e))
 
 
 # --- Entry point ---

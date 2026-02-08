@@ -102,6 +102,12 @@ interface AgentNetworkConfig {
   last_sync_at: string | null;
   sync_status: string;
   sync_error: string | null;
+  // Transport configuration
+  transport_mode: string;  // "management" | "subinterface" | "dedicated"
+  parent_interface: string | null;
+  vlan_id: number | null;
+  transport_ip: string | null;
+  transport_subnet: string | null;
 }
 
 interface LabInfo {
@@ -177,6 +183,7 @@ interface HostDetailed {
   git_sha: string | null;
   last_error: string | null;
   error_since: string | null;
+  data_plane_address: string | null;
 }
 
 interface UpdateStatus {
@@ -190,7 +197,7 @@ interface UpdateStatus {
 }
 
 type SyncStrategy = 'push' | 'pull' | 'on_demand' | 'disabled';
-type TabType = 'hosts' | 'settings';
+type TabType = 'hosts' | 'settings' | 'network';
 
 const SYNC_STRATEGY_OPTIONS: { value: SyncStrategy; label: string; description: string }[] = [
   { value: 'on_demand', label: 'On Demand', description: 'Sync when deployment needs image' },
@@ -911,15 +918,15 @@ const InfrastructurePage: React.FC = () => {
               </span>
             </button>
             <button
-              onClick={() => setActiveTab('settings')}
+              onClick={() => setActiveTab('network')}
               className={`px-4 py-3 text-sm font-medium border-b-2 transition-all ${
-                activeTab === 'settings'
+                activeTab === 'network'
                   ? 'text-sage-600 dark:text-sage-400 border-sage-600 dark:border-sage-400'
                   : 'text-stone-500 dark:text-stone-400 border-transparent hover:text-stone-700 dark:hover:text-stone-300'
               }`}
             >
-              <i className="fa-solid fa-sliders mr-2"></i>
-              Settings & Mesh
+              <i className="fa-solid fa-network-wired mr-2"></i>
+              Network
             </button>
           </div>
         </div>
@@ -1429,7 +1436,7 @@ const InfrastructurePage: React.FC = () => {
             </div>
           ) : (
             // ================================================================
-            // SETTINGS TAB
+            // NETWORK TAB (transport config, mesh, settings)
             // ================================================================
             <div className="max-w-6xl mx-auto">
               {meshLoading && !mesh ? (
@@ -1581,8 +1588,8 @@ const InfrastructurePage: React.FC = () => {
                     </div>
 
                     <p className="text-sm text-stone-500 dark:text-stone-400 mb-4">
-                      Configure physical interface MTU on each agent host for optimal VXLAN overlay performance.
-                      Jumbo frames (MTU 9000) are recommended for production deployments.
+                      Configure transport mode and MTU for each agent. Separate data plane traffic (VXLAN tunnels)
+                      from management traffic using subinterfaces or dedicated NICs for jumbo frame support.
                     </p>
 
                     {hosts.length === 0 ? (
@@ -1596,9 +1603,9 @@ const InfrastructurePage: React.FC = () => {
                           <thead>
                             <tr className="border-b border-stone-200 dark:border-stone-700">
                               <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Agent</th>
-                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Interface</th>
-                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Current MTU</th>
-                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Desired MTU</th>
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Transport</th>
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Data Plane IP</th>
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">MTU</th>
                               <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Status</th>
                               <th className="text-right py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Action</th>
                             </tr>
@@ -1623,27 +1630,44 @@ const InfrastructurePage: React.FC = () => {
                                       <span className="font-medium text-stone-700 dark:text-stone-300">{host.name}</span>
                                     </div>
                                   </td>
-                                  <td className="py-2 px-3 text-stone-600 dark:text-stone-400 font-mono text-xs">
-                                    {config?.data_plane_interface || '-'}
+                                  <td className="py-2 px-3">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                                        config?.transport_mode === 'subinterface' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                                        : config?.transport_mode === 'dedicated' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
+                                        : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
+                                      }`}>
+                                        {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
+                                      </span>
+                                      {config?.transport_mode === 'subinterface' && config?.parent_interface && config?.vlan_id && (
+                                        <span className="text-xs text-stone-400 font-mono">{config.parent_interface}.{config.vlan_id}</span>
+                                      )}
+                                      {config?.transport_mode === 'dedicated' && config?.data_plane_interface && (
+                                        <span className="text-xs text-stone-400 font-mono">{config.data_plane_interface}</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
+                                    {host.data_plane_address || (config?.transport_ip ? config.transport_ip.split('/')[0] : '-')}
                                   </td>
                                   <td className="py-2 px-3">
-                                    {config?.current_mtu ? (
-                                      <span className={`font-mono ${
-                                        config.current_mtu >= (config.desired_mtu || 9000)
-                                          ? 'text-green-600 dark:text-green-400'
-                                          : 'text-amber-600 dark:text-amber-400'
-                                      }`}>
-                                        {config.current_mtu}
-                                        {config.current_mtu < (config.desired_mtu || 9000) && (
-                                          <i className="fa-solid fa-triangle-exclamation ml-1.5 text-[10px]" title="Below desired MTU"></i>
-                                        )}
+                                    <div className="flex items-center gap-1.5">
+                                      {config?.current_mtu ? (
+                                        <span className={`font-mono text-xs ${
+                                          config.current_mtu >= (config.desired_mtu || 9000)
+                                            ? 'text-green-600 dark:text-green-400'
+                                            : 'text-amber-600 dark:text-amber-400'
+                                        }`}>
+                                          {config.current_mtu}
+                                        </span>
+                                      ) : (
+                                        <span className="text-stone-400 text-xs">-</span>
+                                      )}
+                                      <span className="text-stone-300 dark:text-stone-600">/</span>
+                                      <span className="font-mono text-xs text-stone-500 dark:text-stone-400">
+                                        {config?.desired_mtu || 9000}
                                       </span>
-                                    ) : (
-                                      <span className="text-stone-400">-</span>
-                                    )}
-                                  </td>
-                                  <td className="py-2 px-3 text-stone-600 dark:text-stone-400 font-mono">
-                                    {config?.desired_mtu || 9000}
+                                    </div>
                                   </td>
                                   <td className="py-2 px-3">
                                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${statusBadge.color}`}>
@@ -1695,6 +1719,16 @@ const InfrastructurePage: React.FC = () => {
                         </div>
                       </div>
                     )}
+                  </div>
+
+                  {/* Manage Interfaces Link */}
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => navigate('/admin/interfaces')}
+                      className="text-sm text-sage-600 dark:text-sage-400 hover:text-sage-700 dark:hover:text-sage-300 font-medium transition-colors"
+                    >
+                      Manage Interfaces <i className="fa-solid fa-arrow-right ml-1"></i>
+                    </button>
                   </div>
 
                   {/* Agent Mesh */}
@@ -1752,18 +1786,28 @@ const InfrastructurePage: React.FC = () => {
                     ) : (
                       <>
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-6">
-                          {mesh?.agents.map((agent) => (
-                            <div
-                              key={agent.id}
-                              className="p-4 bg-stone-50 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-700 rounded-xl"
-                            >
-                              <div className="flex items-center gap-2 mb-2">
-                                <div className={`w-3 h-3 rounded-full ${agent.status === 'online' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                                <span className="font-medium text-stone-900 dark:text-white truncate">{agent.name}</span>
+                          {mesh?.agents.map((agent) => {
+                            const hostDetail = hosts.find(h => h.id === agent.id);
+                            return (
+                              <div
+                                key={agent.id}
+                                className="p-4 bg-stone-50 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-700 rounded-xl"
+                              >
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className={`w-3 h-3 rounded-full ${agent.status === 'online' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+                                  <span className="font-medium text-stone-900 dark:text-white truncate">{agent.name}</span>
+                                </div>
+                                <p className="text-xs text-stone-500 truncate">
+                                  <span className="text-stone-400">mgmt:</span> {agent.address}
+                                </p>
+                                {hostDetail?.data_plane_address && (
+                                  <p className="text-xs text-blue-500 dark:text-blue-400 truncate mt-0.5">
+                                    <span className="text-blue-400 dark:text-blue-500">data:</span> {hostDetail.data_plane_address}
+                                  </p>
+                                )}
                               </div>
-                              <p className="text-xs text-stone-500 truncate">{agent.address}</p>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
 
                         <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-300 mb-3">Link Details</h3>
@@ -1869,7 +1913,7 @@ const InfrastructurePage: React.FC = () => {
 
         <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
           <span>Archetype Infrastructure Management</span>
-          <span>Auto-refresh: {activeTab === 'hosts' ? '10s' : '30s'}</span>
+          <span>Auto-refresh: {activeTab === 'hosts' ? '10s' : '30s'}{activeTab === 'network' ? ' (network)' : ''}</span>
         </footer>
       </div>
 

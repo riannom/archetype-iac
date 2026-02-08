@@ -873,6 +873,7 @@ class MtuTestResponse(BaseModel):
     tested_mtu: int | None = None
     link_type: str | None = None  # "direct", "routed"
     latency_ms: float | None = None
+    test_path: str | None = None  # "data_plane" or "management"
     error: str | None = None
 
 
@@ -941,6 +942,12 @@ class AgentNetworkConfigOut(BaseModel):
     last_sync_at: datetime | None = None
     sync_status: str = "unknown"
     sync_error: str | None = None
+    # Transport configuration
+    transport_mode: str = "management"  # management, subinterface, dedicated
+    parent_interface: str | None = None
+    vlan_id: int | None = None
+    transport_ip: str | None = None
+    transport_subnet: str | None = None
 
     class Config:
         from_attributes = True
@@ -951,6 +958,12 @@ class AgentNetworkConfigUpdate(BaseModel):
 
     data_plane_interface: str | None = None
     desired_mtu: int | None = Field(default=None, ge=68, le=9216)
+    # Transport configuration
+    transport_mode: str | None = Field(default=None, pattern="^(management|subinterface|dedicated)$")
+    parent_interface: str | None = None
+    vlan_id: int | None = Field(default=None, ge=1, le=4094)
+    transport_ip: str | None = None
+    transport_subnet: str | None = None
 
 
 # =============================================================================
@@ -988,4 +1001,60 @@ class InterfaceMappingsResponse(BaseModel):
     """Response for listing interface mappings."""
 
     mappings: list[InterfaceMappingOut]
+    total: int
+
+
+# =============================================================================
+# Agent Managed Interface Schemas
+# =============================================================================
+
+
+class AgentManagedInterfaceOut(BaseModel):
+    """Output schema for a managed interface on an agent host."""
+
+    id: str
+    host_id: str
+    host_name: str | None = None
+    name: str
+    interface_type: str  # transport, external, custom
+    parent_interface: str | None = None
+    vlan_id: int | None = None
+    ip_address: str | None = None
+    desired_mtu: int = 9000
+    current_mtu: int | None = None
+    is_up: bool = False
+    sync_status: str = "unconfigured"
+    sync_error: str | None = None
+    last_sync_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AgentManagedInterfaceCreate(BaseModel):
+    """Request to create a managed interface on an agent host."""
+
+    name: str | None = None  # Auto-generated for subinterfaces if not provided
+    interface_type: str = Field(pattern="^(transport|external|custom)$")
+    parent_interface: str | None = None  # Required for subinterface creation
+    vlan_id: int | None = Field(default=None, ge=1, le=4094)
+    ip_address: str | None = None  # IP/CIDR format
+    desired_mtu: int = Field(default=9000, ge=68, le=9216)
+    attach_to_ovs: bool = False
+    ovs_vlan_tag: int | None = None
+
+
+class AgentManagedInterfaceUpdate(BaseModel):
+    """Request to update a managed interface."""
+
+    desired_mtu: int | None = Field(default=None, ge=68, le=9216)
+    ip_address: str | None = None
+
+
+class AgentManagedInterfacesResponse(BaseModel):
+    """Response for listing managed interfaces."""
+
+    interfaces: list[AgentManagedInterfaceOut]
     total: int

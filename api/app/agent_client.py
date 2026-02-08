@@ -1347,9 +1347,9 @@ async def setup_cross_host_link_v2(
     """
     from app.services.link_manager import allocate_vni
 
-    # Resolve agent IPs (handles hostnames like "local-agent")
-    agent_ip_a = await resolve_agent_ip(agent_a.address)
-    agent_ip_b = await resolve_agent_ip(agent_b.address)
+    # Prefer data plane addresses for VXLAN tunnels, fall back to management address
+    agent_ip_a = agent_a.data_plane_address or await resolve_agent_ip(agent_a.address)
+    agent_ip_b = agent_b.data_plane_address or await resolve_agent_ip(agent_b.address)
 
     # Allocate deterministic per-link VNI
     vni = allocate_vni(lab_id, link_id)
@@ -1970,6 +1970,7 @@ async def test_mtu_on_agent(
     agent: models.Host,
     target_ip: str,
     mtu: int,
+    source_ip: str | None = None,
 ) -> dict:
     """Test MTU to a target IP from an agent.
 
@@ -1980,6 +1981,7 @@ async def test_mtu_on_agent(
         agent: The agent to run the test from
         target_ip: Target IP address to test connectivity to
         mtu: MTU size to test
+        source_ip: Optional source IP for bind address (data plane testing)
 
     Returns:
         Dict with 'success', 'tested_mtu', 'link_type', 'latency_ms', 'error' keys
@@ -1988,12 +1990,15 @@ async def test_mtu_on_agent(
 
     try:
         client = get_http_client()
+        payload: dict = {
+            "target_ip": target_ip,
+            "mtu": mtu,
+        }
+        if source_ip:
+            payload["source_ip"] = source_ip
         response = await client.post(
             url,
-            json={
-                "target_ip": target_ip,
-                "mtu": mtu,
-            },
+            json=payload,
             timeout=30.0,
         )
         response.raise_for_status()
@@ -2074,6 +2079,57 @@ async def set_agent_interface_mtu(
             "persisted": False,
             "error": str(e),
         }
+
+
+async def provision_interface_on_agent(
+    agent: models.Host,
+    action: str,
+    name: str | None = None,
+    parent_interface: str | None = None,
+    vlan_id: int | None = None,
+    ip_cidr: str | None = None,
+    mtu: int | None = None,
+    attach_to_ovs: bool = False,
+    ovs_vlan_tag: int | None = None,
+) -> dict:
+    """Provision, configure, or delete an interface on an agent host.
+
+    Args:
+        agent: The agent to configure
+        action: "create_subinterface", "configure", or "delete"
+        name: Interface name (auto-generated for subinterfaces)
+        parent_interface: Parent for subinterface creation
+        vlan_id: VLAN ID for subinterface
+        ip_cidr: IP/CIDR to assign
+        mtu: Desired MTU
+        attach_to_ovs: Whether to also add to OVS bridge
+        ovs_vlan_tag: VLAN tag for OVS attachment
+
+    Returns:
+        Dict with 'success', 'interface_name', 'mtu', 'ip_address', 'error' keys
+    """
+    url = f"{get_agent_url(agent)}/interfaces/provision"
+    payload = {
+        "action": action,
+        "name": name,
+        "parent_interface": parent_interface,
+        "vlan_id": vlan_id,
+        "ip_cidr": ip_cidr,
+        "mtu": mtu,
+        "attach_to_ovs": attach_to_ovs,
+        "ovs_vlan_tag": ovs_vlan_tag,
+    }
+    # Remove None values
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    try:
+        client = get_http_client()
+        response = await client.post(url, json=payload, timeout=60.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Failed to provision interface on agent {agent.id}: {e}")
+        return {"success": False, "error": str(e)}
 
 
 # --- Hot-Connect Link Management Functions ---
@@ -2304,9 +2360,9 @@ async def setup_cross_host_link(
     if not agent_supports_vxlan(agent_b):
         return {"success": False, "error": f"Agent {agent_b.id} does not support VXLAN"}
 
-    # Extract and resolve agent IP addresses (handles hostnames like "local-agent")
-    agent_ip_a = await resolve_agent_ip(agent_a.address)
-    agent_ip_b = await resolve_agent_ip(agent_b.address)
+    # Prefer data plane addresses for VXLAN tunnels, fall back to management address
+    agent_ip_a = agent_a.data_plane_address or await resolve_agent_ip(agent_a.address)
+    agent_ip_b = agent_b.data_plane_address or await resolve_agent_ip(agent_b.address)
 
     logger.info(f"Setting up cross-host link {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
 

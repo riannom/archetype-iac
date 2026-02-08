@@ -143,6 +143,8 @@ class Host(Base):
     # Error tracking: persists agent-level errors across operations
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Separate data plane address for VXLAN tunnels (vs management address)
+    data_plane_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -802,5 +804,65 @@ class AgentNetworkConfig(Base):
     sync_status: Mapped[str] = mapped_column(String(20), default="unconfigured")
     # Error message if sync failed
     sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Transport configuration: how VXLAN traffic reaches the data plane
+    # "management" = use management interface (default), "subinterface" = VLAN subinterface, "dedicated" = separate NIC
+    transport_mode: Mapped[str] = mapped_column(String(20), default="management")
+    # Parent interface for subinterface mode (e.g., "ens192", "eth0")
+    parent_interface: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # VLAN ID for subinterface mode
+    vlan_id: Mapped[int | None] = mapped_column(nullable=True)
+    # IP/CIDR for the transport interface (e.g., "10.100.0.1/24")
+    transport_ip: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Subnet for auto-assign pool (e.g., "10.100.0.0/24")
+    transport_subnet: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AgentManagedInterface(Base):
+    """Tracks provisioned interfaces on agent hosts.
+
+    Each record represents a managed interface (subinterface, dedicated NIC, etc.)
+    that the controller has provisioned or is tracking on an agent host.
+
+    Interface types:
+    - transport: Data plane interface for VXLAN tunnels (one per host max)
+    - external: Interface for external network connectivity
+    - custom: User-created interface for other purposes
+
+    Sync statuses:
+    - unconfigured: Interface not yet provisioned on host
+    - synced: Interface exists on host and matches desired config
+    - mismatch: Interface exists but config differs (needs sync)
+    - error: Last provisioning/sync attempt failed
+    - unknown: Unable to determine current state
+    """
+    __tablename__ = "agent_managed_interfaces"
+    __table_args__ = (UniqueConstraint("host_id", "name", name="uq_managed_interface_host_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    # Interface name on the host (e.g., "ens192.100", "eth1")
+    name: Mapped[str] = mapped_column(String(64))
+    # Type: "transport", "external", "custom"
+    interface_type: Mapped[str] = mapped_column(String(20))
+    # Parent interface (for VLAN subinterfaces)
+    parent_interface: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # VLAN ID (for VLAN subinterfaces)
+    vlan_id: Mapped[int | None] = mapped_column(nullable=True)
+    # IP address in CIDR format (e.g., "10.100.0.1/24")
+    ip_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Desired MTU for this interface
+    desired_mtu: Mapped[int] = mapped_column(default=9000)
+    # Last known actual MTU on the interface
+    current_mtu: Mapped[int | None] = mapped_column(nullable=True)
+    # Whether the interface is operationally up
+    is_up: Mapped[bool] = mapped_column(default=False)
+    # Sync status: unconfigured, synced, mismatch, error, unknown
+    sync_status: Mapped[str] = mapped_column(String(20), default="unconfigured")
+    # Error message if sync failed
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When the interface was last synced/checked
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

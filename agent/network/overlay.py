@@ -376,6 +376,10 @@ class OverlayManager:
         # Start high and work down - most infrastructure supports at least 1500
         test_mtus = [9000, 4000, 1500]
 
+        # Use data plane IP as source for MTU discovery pings when available
+        from agent.network.transport import get_data_plane_ip
+        dp_ip = get_data_plane_ip()
+
         async def test_mtu(mtu: int) -> bool:
             """Test if a specific MTU works."""
             # Payload = MTU - 20 (IP header) - 8 (ICMP header)
@@ -384,13 +388,19 @@ class OverlayManager:
                 return False
 
             try:
-                process = await asyncio.create_subprocess_exec(
+                ping_args = [
                     "ping",
                     "-M", "do",  # Don't fragment
                     "-c", "1",  # Single ping
                     "-W", "2",  # 2 second timeout
                     "-s", str(payload_size),
-                    remote_ip,
+                ]
+                if dp_ip:
+                    ping_args.extend(["-I", dp_ip])
+                ping_args.append(remote_ip)
+
+                process = await asyncio.create_subprocess_exec(
+                    *ping_args,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )

@@ -1400,3 +1400,58 @@ async def state_reconciliation_monitor():
         except Exception as e:
             logger.error(f"Error in state reconciliation monitor: {e}")
             # Continue running - don't let one error stop the monitor
+
+
+async def reconcile_managed_interfaces():
+    """Check managed interface status against actual host state.
+
+    For each AgentManagedInterface record, queries the agent for actual
+    interface state and updates sync_status/current_mtu accordingly.
+    Runs less frequently than state reconciliation (called externally).
+    """
+    from app import agent_client
+
+    session = db.SessionLocal()
+    try:
+        interfaces = session.query(models.AgentManagedInterface).all()
+        if not interfaces:
+            return
+
+        # Group by host
+        by_host: dict[str, list] = {}
+        for iface in interfaces:
+            by_host.setdefault(iface.host_id, []).append(iface)
+
+        for host_id, ifaces in by_host.items():
+            agent = session.get(models.Host, host_id)
+            if not agent or not agent_client.is_agent_online(agent):
+                continue
+
+            try:
+                # Get interface details from agent
+                details = await agent_client.get_agent_interface_details(agent)
+                if not details or not details.get("interfaces"):
+                    continue
+
+                actual_interfaces = {i["name"]: i for i in details["interfaces"]}
+
+                for iface in ifaces:
+                    actual = actual_interfaces.get(iface.name)
+                    if actual:
+                        iface.current_mtu = actual.get("mtu")
+                        iface.is_up = actual.get("state", "").lower() == "up"
+                        if iface.current_mtu == iface.desired_mtu and iface.is_up:
+                            iface.sync_status = "synced"
+                            iface.sync_error = None
+                        else:
+                            iface.sync_status = "mismatch"
+                    else:
+                        iface.sync_status = "mismatch"
+                        iface.is_up = False
+                    iface.last_sync_at = datetime.now(timezone.utc)
+
+                session.commit()
+            except Exception as e:
+                logger.warning(f"Failed to reconcile interfaces for host {host_id}: {e}")
+    finally:
+        session.close()

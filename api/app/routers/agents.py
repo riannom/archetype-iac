@@ -89,6 +89,7 @@ class HeartbeatRequest(BaseModel):
     status: str = "online"
     active_jobs: int = 0
     resource_usage: dict = Field(default_factory=dict)
+    data_plane_ip: str | None = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -111,6 +112,8 @@ class HostOut(BaseModel):
     # Error tracking fields
     last_error: str | None = None
     error_since: datetime | None = None
+    # Data plane address for VXLAN tunnels (separate from management address)
+    data_plane_address: str | None = None
     created_at: datetime
 
     class Config:
@@ -172,6 +175,7 @@ async def register_agent(
         existing.is_local = agent.is_local
         existing.deployment_mode = agent.deployment_mode or existing.deployment_mode
         existing.last_heartbeat = datetime.now(timezone.utc)
+        existing.data_plane_address = getattr(agent, "data_plane_ip", None)
         database.commit()
         host_id = agent.agent_id
 
@@ -209,6 +213,7 @@ async def register_agent(
             existing_duplicate.is_local = agent.is_local
             existing_duplicate.deployment_mode = agent.deployment_mode or existing_duplicate.deployment_mode
             existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
+            existing_duplicate.data_plane_address = getattr(agent, "data_plane_ip", None)
             database.commit()
             host_id = existing_duplicate.id
 
@@ -232,6 +237,7 @@ async def register_agent(
                 is_local=agent.is_local,
                 deployment_mode=agent.deployment_mode or "unknown",
                 last_heartbeat=datetime.now(timezone.utc),
+                data_plane_address=getattr(agent, "data_plane_ip", None),
             )
             database.add(host)
             database.commit()
@@ -453,6 +459,9 @@ def heartbeat(
     host.status = request.status
     host.resource_usage = json.dumps(request.resource_usage)
     host.last_heartbeat = datetime.now(timezone.utc)
+    # Update data plane address if agent reports one
+    if request.data_plane_ip is not None:
+        host.data_plane_address = request.data_plane_ip or None
     database.commit()
 
     # TODO: Check for pending jobs to dispatch
@@ -628,6 +637,8 @@ def list_agents_detailed(
             # Error tracking
             "last_error": host.last_error,
             "error_since": host.error_since.isoformat() if host.error_since else None,
+            # Data plane
+            "data_plane_address": host.data_plane_address,
         })
 
     return result

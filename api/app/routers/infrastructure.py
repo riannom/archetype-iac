@@ -23,6 +23,10 @@ from app.schemas import (
     SetMtuResponseOut,
     AgentNetworkConfigOut,
     AgentNetworkConfigUpdate,
+    AgentManagedInterfaceOut,
+    AgentManagedInterfaceCreate,
+    AgentManagedInterfaceUpdate,
+    AgentManagedInterfacesResponse,
 )
 
 
@@ -242,9 +246,18 @@ async def test_mtu_between_agents(
     # Get settings
     settings = get_or_create_settings(database)
 
-    # Extract and resolve target IP from agent address (handles hostnames)
+    # Prefer data plane addresses for MTU testing when both agents have them
     from app.agent_client import resolve_agent_ip
-    target_ip = await resolve_agent_ip(target_agent.address)
+    source_ip: str | None = None
+    if source_agent.data_plane_address and target_agent.data_plane_address:
+        # Both have data plane addresses — test on data plane path
+        target_ip = target_agent.data_plane_address
+        source_ip = source_agent.data_plane_address
+        test_path = "data_plane"
+    else:
+        # Fall back to management addresses
+        target_ip = await resolve_agent_ip(target_agent.address)
+        test_path = "management"
 
     # Get or create the link record
     link = (
@@ -276,6 +289,7 @@ async def test_mtu_between_agents(
             source_agent,
             target_ip,
             settings.overlay_mtu,
+            source_ip=source_ip,
         )
 
         # Update link record with results
@@ -301,6 +315,7 @@ async def test_mtu_between_agents(
             tested_mtu=result.get("tested_mtu"),
             link_type=result.get("link_type"),
             latency_ms=result.get("latency_ms"),
+            test_path=test_path,
             error=result.get("error"),
         )
 
@@ -549,32 +564,119 @@ async def update_agent_network_config(
         config.data_plane_interface = update.data_plane_interface
     if update.desired_mtu is not None:
         config.desired_mtu = update.desired_mtu
+    # Transport config fields
+    if update.transport_mode is not None:
+        config.transport_mode = update.transport_mode
+    if update.parent_interface is not None:
+        config.parent_interface = update.parent_interface
+    if update.vlan_id is not None:
+        config.vlan_id = update.vlan_id
+    if update.transport_ip is not None:
+        config.transport_ip = update.transport_ip
+    if update.transport_subnet is not None:
+        config.transport_subnet = update.transport_subnet
+
+    # Auto-assign IP from subnet if transport_ip not set but subnet is
+    if config.transport_mode == "subinterface" and not config.transport_ip and config.transport_subnet:
+        config.transport_ip = _next_available_transport_ip(database, config.transport_subnet, agent_id)
 
     database.commit()
     database.refresh(config)
 
-    # If agent is online and we have an interface configured, try to sync
-    if config.data_plane_interface and agent_client.is_agent_online(agent):
+    # If transport mode is subinterface and agent is online, provision the subinterface
+    if config.transport_mode == "subinterface" and agent_client.is_agent_online(agent):
         try:
-            result = await agent_client.set_agent_interface_mtu(
-                agent, config.data_plane_interface, config.desired_mtu, persist=True
+            result = await agent_client.provision_interface_on_agent(
+                agent,
+                action="create_subinterface",
+                parent_interface=config.parent_interface,
+                vlan_id=config.vlan_id,
+                ip_cidr=config.transport_ip,
+                mtu=config.desired_mtu,
             )
             config.last_sync_at = datetime.now(timezone.utc)
             if result.get("success"):
-                config.current_mtu = result.get("new_mtu")
+                config.current_mtu = result.get("mtu")
                 config.sync_status = "synced"
                 config.sync_error = None
+                # Update host data_plane_address with the IP (strip CIDR suffix)
+                if result.get("ip_address"):
+                    ip_only = result["ip_address"].split("/")[0]
+                    agent.data_plane_address = ip_only
+                # Auto-create managed interface record
+                _ensure_managed_interface(
+                    database, agent_id, result.get("interface_name", ""),
+                    "transport", config.parent_interface, config.vlan_id,
+                    config.transport_ip, config.desired_mtu, config.current_mtu,
+                )
             else:
                 config.sync_status = "error"
                 config.sync_error = result.get("error")
             database.commit()
             database.refresh(config)
         except Exception as e:
-            logger.warning(f"Failed to sync MTU to agent {agent_id}: {e}")
+            logger.warning(f"Failed to provision transport on agent {agent_id}: {e}")
             config.sync_status = "error"
             config.sync_error = str(e)
             database.commit()
             database.refresh(config)
+
+    elif config.transport_mode == "dedicated" and agent_client.is_agent_online(agent):
+        # For dedicated mode, just configure MTU on the existing interface
+        if config.data_plane_interface:
+            try:
+                result = await agent_client.provision_interface_on_agent(
+                    agent,
+                    action="configure",
+                    name=config.data_plane_interface,
+                    mtu=config.desired_mtu,
+                    ip_cidr=config.transport_ip,
+                )
+                config.last_sync_at = datetime.now(timezone.utc)
+                if result.get("success"):
+                    config.current_mtu = result.get("mtu")
+                    config.sync_status = "synced"
+                    config.sync_error = None
+                    if result.get("ip_address"):
+                        ip_only = result["ip_address"].split("/")[0]
+                        agent.data_plane_address = ip_only
+                else:
+                    config.sync_status = "error"
+                    config.sync_error = result.get("error")
+                database.commit()
+                database.refresh(config)
+            except Exception as e:
+                logger.warning(f"Failed to configure dedicated interface on agent {agent_id}: {e}")
+                config.sync_status = "error"
+                config.sync_error = str(e)
+                database.commit()
+                database.refresh(config)
+
+    elif config.transport_mode == "management":
+        # Management mode: clear data_plane_address, use default
+        agent.data_plane_address = None
+        # Still sync MTU if interface is configured (legacy behavior)
+        if config.data_plane_interface and agent_client.is_agent_online(agent):
+            try:
+                result = await agent_client.set_agent_interface_mtu(
+                    agent, config.data_plane_interface, config.desired_mtu, persist=True
+                )
+                config.last_sync_at = datetime.now(timezone.utc)
+                if result.get("success"):
+                    config.current_mtu = result.get("new_mtu")
+                    config.sync_status = "synced"
+                    config.sync_error = None
+                else:
+                    config.sync_status = "error"
+                    config.sync_error = result.get("error")
+                database.commit()
+                database.refresh(config)
+            except Exception as e:
+                logger.warning(f"Failed to sync MTU to agent {agent_id}: {e}")
+                config.sync_status = "error"
+                config.sync_error = str(e)
+                database.commit()
+                database.refresh(config)
 
     return AgentNetworkConfigOut(
         id=config.id,
@@ -586,6 +688,11 @@ async def update_agent_network_config(
         last_sync_at=config.last_sync_at,
         sync_status=config.sync_status,
         sync_error=config.sync_error,
+        transport_mode=config.transport_mode,
+        parent_interface=config.parent_interface,
+        vlan_id=config.vlan_id,
+        transport_ip=config.transport_ip,
+        transport_subnet=config.transport_subnet,
     )
 
 
@@ -621,6 +728,11 @@ async def list_agent_network_configs(
                 last_sync_at=config.last_sync_at,
                 sync_status=config.sync_status,
                 sync_error=config.sync_error,
+                transport_mode=config.transport_mode,
+                parent_interface=config.parent_interface,
+                vlan_id=config.vlan_id,
+                transport_ip=config.transport_ip,
+                transport_subnet=config.transport_subnet,
             ))
         else:
             # Return a placeholder for agents without config
@@ -637,3 +749,436 @@ async def list_agent_network_configs(
             ))
 
     return result
+
+
+# --- Transport Config Endpoints ---
+
+
+@router.get("/agents/{agent_id}/transport-config")
+async def get_transport_config(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+) -> dict:
+    """Get transport configuration for agent bootstrap.
+
+    Called by agents during two-phase bootstrap to fetch their
+    transport configuration from the controller.
+    """
+    agent = database.get(models.Host, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    config = (
+        database.query(models.AgentNetworkConfig)
+        .filter(models.AgentNetworkConfig.host_id == agent_id)
+        .first()
+    )
+
+    if not config or config.transport_mode == "management":
+        return {
+            "transport_mode": "management",
+        }
+
+    return {
+        "transport_mode": config.transport_mode,
+        "parent_interface": config.parent_interface,
+        "vlan_id": config.vlan_id,
+        "transport_ip": config.transport_ip,
+        "desired_mtu": config.desired_mtu,
+        "data_plane_interface": config.data_plane_interface,
+    }
+
+
+@router.post("/agents/{agent_id}/transport/apply")
+async def apply_transport_config(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Re-apply transport config to an agent (manual recovery).
+
+    Requires admin access. Useful when an agent's transport config
+    needs to be re-provisioned after manual intervention.
+    """
+    from app import agent_client
+
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    agent = database.get(models.Host, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if not agent_client.is_agent_online(agent):
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+    config = (
+        database.query(models.AgentNetworkConfig)
+        .filter(models.AgentNetworkConfig.host_id == agent_id)
+        .first()
+    )
+
+    if not config or config.transport_mode == "management":
+        return {"success": True, "message": "No transport config to apply (management mode)"}
+
+    if config.transport_mode == "subinterface":
+        result = await agent_client.provision_interface_on_agent(
+            agent,
+            action="create_subinterface",
+            parent_interface=config.parent_interface,
+            vlan_id=config.vlan_id,
+            ip_cidr=config.transport_ip,
+            mtu=config.desired_mtu,
+        )
+    elif config.transport_mode == "dedicated":
+        result = await agent_client.provision_interface_on_agent(
+            agent,
+            action="configure",
+            name=config.data_plane_interface,
+            mtu=config.desired_mtu,
+            ip_cidr=config.transport_ip,
+        )
+    else:
+        return {"success": False, "error": f"Unknown transport mode: {config.transport_mode}"}
+
+    if result.get("success"):
+        config.sync_status = "synced"
+        config.sync_error = None
+        config.current_mtu = result.get("mtu")
+        config.last_sync_at = datetime.now(timezone.utc)
+        if result.get("ip_address"):
+            agent.data_plane_address = result["ip_address"].split("/")[0]
+        database.commit()
+
+    return result
+
+
+# --- Managed Interface CRUD ---
+
+
+@router.get("/interfaces", response_model=AgentManagedInterfacesResponse)
+async def list_managed_interfaces(
+    host_id: str | None = None,
+    interface_type: str | None = None,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> AgentManagedInterfacesResponse:
+    """List all managed interfaces, optionally filtered by host or type."""
+    query = database.query(models.AgentManagedInterface)
+    if host_id:
+        query = query.filter(models.AgentManagedInterface.host_id == host_id)
+    if interface_type:
+        query = query.filter(models.AgentManagedInterface.interface_type == interface_type)
+
+    interfaces = query.all()
+
+    # Build host name lookup
+    host_ids = {i.host_id for i in interfaces}
+    hosts = database.query(models.Host).filter(models.Host.id.in_(host_ids)).all() if host_ids else []
+    host_names = {h.id: h.name for h in hosts}
+
+    result = []
+    for iface in interfaces:
+        out = AgentManagedInterfaceOut.model_validate(iface)
+        out.host_name = host_names.get(iface.host_id)
+        result.append(out)
+
+    return AgentManagedInterfacesResponse(interfaces=result, total=len(result))
+
+
+@router.get("/agents/{agent_id}/managed-interfaces", response_model=AgentManagedInterfacesResponse)
+async def list_agent_managed_interfaces(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> AgentManagedInterfacesResponse:
+    """List managed interfaces for a specific agent."""
+    agent = database.get(models.Host, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    interfaces = (
+        database.query(models.AgentManagedInterface)
+        .filter(models.AgentManagedInterface.host_id == agent_id)
+        .all()
+    )
+
+    result = []
+    for iface in interfaces:
+        out = AgentManagedInterfaceOut.model_validate(iface)
+        out.host_name = agent.name
+        result.append(out)
+
+    return AgentManagedInterfacesResponse(interfaces=result, total=len(result))
+
+
+@router.post("/agents/{agent_id}/managed-interfaces", response_model=AgentManagedInterfaceOut)
+async def create_managed_interface(
+    agent_id: str,
+    request: AgentManagedInterfaceCreate,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> AgentManagedInterfaceOut:
+    """Create and provision a managed interface on an agent host."""
+    from app import agent_client
+
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    agent = database.get(models.Host, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Determine interface name
+    iface_name = request.name
+    if not iface_name and request.parent_interface and request.vlan_id:
+        iface_name = f"{request.parent_interface}.{request.vlan_id}"
+    if not iface_name:
+        raise HTTPException(status_code=400, detail="Interface name required (or provide parent_interface + vlan_id)")
+
+    # Check for duplicates
+    existing = (
+        database.query(models.AgentManagedInterface)
+        .filter(
+            models.AgentManagedInterface.host_id == agent_id,
+            models.AgentManagedInterface.name == iface_name,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Interface {iface_name} already managed on this host")
+
+    # Provision on agent if online
+    sync_status = "unconfigured"
+    current_mtu = None
+    actual_ip = request.ip_address
+    is_up = False
+
+    if agent_client.is_agent_online(agent):
+        if request.parent_interface and request.vlan_id:
+            result = await agent_client.provision_interface_on_agent(
+                agent,
+                action="create_subinterface",
+                parent_interface=request.parent_interface,
+                vlan_id=request.vlan_id,
+                ip_cidr=request.ip_address,
+                mtu=request.desired_mtu,
+                attach_to_ovs=request.attach_to_ovs,
+                ovs_vlan_tag=request.ovs_vlan_tag,
+            )
+        else:
+            result = await agent_client.provision_interface_on_agent(
+                agent,
+                action="configure",
+                name=iface_name,
+                ip_cidr=request.ip_address,
+                mtu=request.desired_mtu,
+            )
+
+        if result.get("success"):
+            sync_status = "synced"
+            current_mtu = result.get("mtu")
+            actual_ip = result.get("ip_address") or request.ip_address
+            is_up = True
+        else:
+            sync_status = "error"
+
+    iface = _ensure_managed_interface(
+        database, agent_id, iface_name, request.interface_type,
+        request.parent_interface, request.vlan_id, actual_ip,
+        request.desired_mtu, current_mtu,
+    )
+    iface.is_up = is_up
+    iface.sync_status = sync_status
+    if sync_status == "error":
+        iface.sync_error = result.get("error", "Unknown error") if agent_client.is_agent_online(agent) else "Agent offline"
+    database.commit()
+    database.refresh(iface)
+
+    out = AgentManagedInterfaceOut.model_validate(iface)
+    out.host_name = agent.name
+    return out
+
+
+@router.patch("/interfaces/{interface_id}", response_model=AgentManagedInterfaceOut)
+async def update_managed_interface(
+    interface_id: str,
+    update: AgentManagedInterfaceUpdate,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> AgentManagedInterfaceOut:
+    """Update a managed interface (MTU, IP)."""
+    from app import agent_client
+
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    iface = database.get(models.AgentManagedInterface, interface_id)
+    if not iface:
+        raise HTTPException(status_code=404, detail="Interface not found")
+
+    agent = database.get(models.Host, iface.host_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if update.desired_mtu is not None:
+        iface.desired_mtu = update.desired_mtu
+    if update.ip_address is not None:
+        iface.ip_address = update.ip_address
+
+    # Apply to agent if online
+    if agent_client.is_agent_online(agent):
+        result = await agent_client.provision_interface_on_agent(
+            agent,
+            action="configure",
+            name=iface.name,
+            mtu=iface.desired_mtu,
+            ip_cidr=iface.ip_address,
+        )
+        iface.last_sync_at = datetime.now(timezone.utc)
+        if result.get("success"):
+            iface.current_mtu = result.get("mtu")
+            iface.sync_status = "synced"
+            iface.sync_error = None
+        else:
+            iface.sync_status = "error"
+            iface.sync_error = result.get("error")
+
+    database.commit()
+    database.refresh(iface)
+
+    out = AgentManagedInterfaceOut.model_validate(iface)
+    out.host_name = agent.name
+    return out
+
+
+@router.delete("/interfaces/{interface_id}")
+async def delete_managed_interface(
+    interface_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Delete a managed interface from the agent and remove the record."""
+    from app import agent_client
+
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    iface = database.get(models.AgentManagedInterface, interface_id)
+    if not iface:
+        raise HTTPException(status_code=404, detail="Interface not found")
+
+    agent = database.get(models.Host, iface.host_id)
+
+    # Delete from agent if online
+    if agent and agent_client.is_agent_online(agent):
+        result = await agent_client.provision_interface_on_agent(
+            agent, action="delete", name=iface.name,
+        )
+        if not result.get("success"):
+            logger.warning(f"Failed to delete interface {iface.name} from agent: {result.get('error')}")
+
+    database.delete(iface)
+    database.commit()
+
+    return {"success": True, "message": f"Interface {iface.name} deleted"}
+
+
+# --- Helper Functions ---
+
+
+def _next_available_transport_ip(database: Session, subnet: str, exclude_host_id: str) -> str | None:
+    """Auto-assign next available IP from a transport subnet.
+
+    Scans existing transport_ip assignments in the same subnet and
+    returns the next available host address.
+    """
+    import ipaddress
+
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+    except ValueError:
+        return None
+
+    # Get all existing transport IPs in this subnet
+    configs = (
+        database.query(models.AgentNetworkConfig)
+        .filter(
+            models.AgentNetworkConfig.transport_subnet == subnet,
+            models.AgentNetworkConfig.transport_ip.isnot(None),
+            models.AgentNetworkConfig.host_id != exclude_host_id,
+        )
+        .all()
+    )
+
+    used_ips = set()
+    for c in configs:
+        if c.transport_ip:
+            try:
+                used_ips.add(ipaddress.ip_address(c.transport_ip.split("/")[0]))
+            except ValueError:
+                continue
+
+    # Find next available host address (skip network and broadcast)
+    prefix_len = network.prefixlen
+    for addr in network.hosts():
+        if addr not in used_ips:
+            return f"{addr}/{prefix_len}"
+
+    return None
+
+
+def _ensure_managed_interface(
+    database: Session,
+    host_id: str,
+    name: str,
+    interface_type: str,
+    parent_interface: str | None,
+    vlan_id: int | None,
+    ip_address: str | None,
+    desired_mtu: int,
+    current_mtu: int | None,
+) -> models.AgentManagedInterface:
+    """Create or update a managed interface record."""
+    import uuid
+
+    existing = (
+        database.query(models.AgentManagedInterface)
+        .filter(
+            models.AgentManagedInterface.host_id == host_id,
+            models.AgentManagedInterface.name == name,
+        )
+        .first()
+    )
+
+    if existing:
+        existing.interface_type = interface_type
+        existing.parent_interface = parent_interface
+        existing.vlan_id = vlan_id
+        existing.ip_address = ip_address
+        existing.desired_mtu = desired_mtu
+        existing.current_mtu = current_mtu
+        existing.is_up = True
+        existing.sync_status = "synced"
+        existing.sync_error = None
+        existing.last_sync_at = datetime.now(timezone.utc)
+        database.commit()
+        return existing
+
+    iface = models.AgentManagedInterface(
+        id=str(uuid.uuid4()),
+        host_id=host_id,
+        name=name,
+        interface_type=interface_type,
+        parent_interface=parent_interface,
+        vlan_id=vlan_id,
+        ip_address=ip_address,
+        desired_mtu=desired_mtu,
+        current_mtu=current_mtu,
+        is_up=True,
+        sync_status="synced",
+        last_sync_at=datetime.now(timezone.utc),
+    )
+    database.add(iface)
+    database.commit()
+    return iface
