@@ -57,11 +57,11 @@ def _normalize_interface_name(iface_name: str) -> str:
     match = re.match(r'^[Ee]thernet(\d+)$', iface_name)
     if match:
         return f"eth{match.group(1)}"
-    # Convert GigabitEthernet1 -> eth0, GigabitEthernet2 -> eth1, etc.
-    # GigabitEthernet is 1-indexed; eth is 0-indexed for libvirt VMs.
+    # Convert GigabitEthernet0 -> eth0, GigabitEthernet1 -> eth1, etc.
+    # Cisco uses GigabitEthernet with 0-indexed numbering.
     match = re.match(r'^GigabitEthernet(\d+)$', iface_name, re.IGNORECASE)
     if match:
-        return f"eth{int(match.group(1)) - 1}"
+        return f"eth{int(match.group(1))}"
     # Already in eth format or other format, return as-is
     return iface_name
 

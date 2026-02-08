@@ -974,11 +974,11 @@ class OVSNetworkManager:
         if await self._ip_link_exists(port_name):
             await self._run_cmd(["ip", "link", "delete", port_name])
 
-        # Create Linux VXLAN device with nopmtudisc
+        # Create Linux VXLAN device with df unset to allow outer fragmentation
         code, _, stderr = await self._run_cmd([
             "ip", "link", "add", port_name, "type", "vxlan",
             "id", str(vni), "local", local_ip, "remote", remote_ip,
-            "dstport", "4789", "df", "unset", "nopmtudisc",
+            "dstport", "4789", "df", "unset",
         ])
         if code != 0:
             raise RuntimeError(f"Failed to create VXLAN device: {stderr}")

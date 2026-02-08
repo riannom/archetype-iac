@@ -309,11 +309,11 @@ class OverlayManager:
         Raises:
             RuntimeError: If device creation fails
         """
-        # Create Linux VXLAN device with nopmtudisc to disable PMTUD
+        # Create Linux VXLAN device with df unset to allow outer fragmentation
         code, _, stderr = await self._run_cmd([
             "ip", "link", "add", name, "type", "vxlan",
             "id", str(vni), "local", local_ip, "remote", remote_ip,
-            "dstport", str(VXLAN_PORT), "df", "unset", "nopmtudisc",
+            "dstport", str(VXLAN_PORT), "df", "unset",
         ])
         if code != 0:
             raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
