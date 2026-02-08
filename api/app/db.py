@@ -16,6 +16,7 @@ engine = create_engine(
     max_overflow=20,        # Additional connections when pool is exhausted
     pool_recycle=300,       # Recycle connections after 5 minutes
     pool_timeout=30,        # Wait max 30s for connection
+    connect_args={"options": "-c statement_timeout=30000"},  # 30s max per SQL statement
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 

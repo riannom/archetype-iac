@@ -2,8 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import logging
+import signal
+import sys
 import traceback
+
+# Enable faulthandler for SIGUSR1 stack dumps
+faulthandler.enable()
+faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4

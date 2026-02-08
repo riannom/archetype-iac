@@ -125,6 +125,7 @@ class Host(Base):
     status: Mapped[str] = mapped_column(String(50), default="offline")  # online/offline/degraded
     capabilities: Mapped[str] = mapped_column(Text, default="{}")  # JSON: providers, features
     version: Mapped[str] = mapped_column(String(50), default="")
+    git_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
     resource_usage: Mapped[str] = mapped_column(Text, default="{}")  # JSON: cpu_percent, memory_percent, etc.
     # Image sync strategy: push, pull, on_demand, disabled
     # - push: Receive images immediately when uploaded to controller
