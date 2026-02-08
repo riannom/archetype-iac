@@ -312,6 +312,30 @@ install_base_deps() {
     mkdir -p /run/docker/plugins /etc/docker/plugins
 }
 
+disable_auto_suspend() {
+    log_info "Disabling auto-suspend (prevents GDM from suspending headless servers)..."
+
+    # Mask systemd suspend/sleep targets
+    systemctl mask suspend.target sleep.target 2>/dev/null || true
+
+    # Configure GDM greeter to never auto-suspend on AC power
+    if [ -f /etc/gdm3/greeter.dconf-defaults ]; then
+        if grep -q "^sleep-inactive-ac-type=" /etc/gdm3/greeter.dconf-defaults; then
+            sed -i "s/^sleep-inactive-ac-type=.*/sleep-inactive-ac-type='nothing'/" /etc/gdm3/greeter.dconf-defaults
+        else
+            sed -i "s/^# sleep-inactive-ac-type=.*/sleep-inactive-ac-type='nothing'/" /etc/gdm3/greeter.dconf-defaults
+        fi
+        if grep -q "^sleep-inactive-ac-timeout=" /etc/gdm3/greeter.dconf-defaults; then
+            sed -i "s/^sleep-inactive-ac-timeout=.*/sleep-inactive-ac-timeout=0/" /etc/gdm3/greeter.dconf-defaults
+        else
+            sed -i "s/^# sleep-inactive-ac-timeout=.*/sleep-inactive-ac-timeout=0/" /etc/gdm3/greeter.dconf-defaults
+        fi
+        dpkg-reconfigure gdm3 2>/dev/null || true
+    fi
+
+    log_info "Auto-suspend disabled"
+}
+
 install_agent_deps() {
     log_info "Installing agent dependencies..."
     case $OS in
@@ -342,6 +366,7 @@ install_agent_deps() {
 
 install_base_deps
 install_docker
+disable_auto_suspend
 
 # Clone vrnetlab for VM image building (needed by worker container)
 VRNETLAB_DIR="/opt/vrnetlab"
