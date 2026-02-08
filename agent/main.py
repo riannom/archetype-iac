@@ -150,6 +150,7 @@ from agent.schemas import (
 from agent.version import __version__, get_commit
 from agent.updater import (
     DeploymentMode,
+    check_and_rollback,
     detect_deployment_mode,
     perform_docker_update,
     perform_systemd_update,
@@ -687,6 +688,10 @@ async def lifespan(app: FastAPI):
     global _heartbeat_task, _event_listener_task, _lock_manager
 
     logger.info(f"Agent {AGENT_ID} starting...")
+
+    # Check for pending rollback from a failed update
+    check_and_rollback()
+
     logger.info(f"Controller URL: {settings.controller_url}")
     logger.info(f"Capabilities: {get_capabilities()}")
     logger.info(f"Network backend: {get_network_backend().name}")

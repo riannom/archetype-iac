@@ -1246,6 +1246,24 @@ async def _create_cross_host_links_if_ready(
     """
     from app.tasks.link_orchestration import create_deployment_links
 
+    # Skip if there's an active deploy/destroy job — it handles cross-host links itself.
+    # Without this guard, NLM and deploy can deadlock on the same link_states rows.
+    active_deploy = (
+        session.query(models.Job)
+        .filter(
+            models.Job.lab_id == lab_id,
+            models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+            models.Job.action.in_(["up", "down"]),
+        )
+        .first()
+    )
+    if active_deploy:
+        logger.debug(
+            f"Skipping cross-host link creation for lab {lab_id}: "
+            f"active deploy/destroy job {active_deploy.id}"
+        )
+        return
+
     # Check if there are any cross-host links that need creation
     # First, check if any link_states exist with is_cross_host=True and actual_state != "up"
     pending_cross_host = (

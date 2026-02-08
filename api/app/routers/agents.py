@@ -63,6 +63,8 @@ class AgentInfo(BaseModel):
     address: str
     capabilities: AgentCapabilities
     version: str = "0.1.0"
+    commit: str = ""
+    deployment_mode: str = "unknown"
     started_at: datetime | None = None  # When the agent process started
     is_local: bool = False  # True if co-located with controller (enables rebuild)
 
@@ -102,6 +104,7 @@ class HostOut(BaseModel):
     status: str
     capabilities: dict
     version: str
+    git_sha: str | None = None
     image_sync_strategy: str = "on_demand"
     last_heartbeat: datetime | None
     # Error tracking fields
@@ -163,9 +166,10 @@ async def register_agent(
         existing.status = "online"
         existing.capabilities = json.dumps(agent.capabilities.model_dump())
         existing.version = agent.version
+        existing.git_sha = agent.commit or existing.git_sha
         existing.started_at = agent.started_at
         existing.is_local = agent.is_local
-        existing.deployment_mode = getattr(agent, 'deployment_mode', None) or existing.deployment_mode
+        existing.deployment_mode = agent.deployment_mode or existing.deployment_mode
         existing.last_heartbeat = datetime.now(timezone.utc)
         database.commit()
         host_id = agent.agent_id
@@ -199,9 +203,10 @@ async def register_agent(
             existing_duplicate.status = "online"
             existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
             existing_duplicate.version = agent.version
+            existing_duplicate.git_sha = agent.commit or existing_duplicate.git_sha
             existing_duplicate.started_at = agent.started_at
             existing_duplicate.is_local = agent.is_local
-            existing_duplicate.deployment_mode = getattr(agent, 'deployment_mode', None) or existing_duplicate.deployment_mode
+            existing_duplicate.deployment_mode = agent.deployment_mode or existing_duplicate.deployment_mode
             existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
             database.commit()
             host_id = existing_duplicate.id
@@ -221,9 +226,10 @@ async def register_agent(
                 status="online",
                 capabilities=json.dumps(agent.capabilities.model_dump()),
                 version=agent.version,
+                git_sha=agent.commit or None,
                 started_at=agent.started_at,
                 is_local=agent.is_local,
-                deployment_mode=getattr(agent, 'deployment_mode', None) or "unknown",
+                deployment_mode=agent.deployment_mode or "unknown",
                 last_heartbeat=datetime.now(timezone.utc),
             )
             database.add(host)
@@ -240,6 +246,10 @@ async def register_agent(
     # Handle agent restart: mark stale jobs as failed
     if is_restart and host_id:
         await _handle_agent_restart_cleanup(database, host_id)
+
+    # Check if re-registration completes an in-progress update job
+    if host_id:
+        _check_update_completion(database, host_id, agent.version, agent.commit)
 
     # Trigger image reconciliation in background
     if host_id and settings.image_sync_enabled:
@@ -366,6 +376,66 @@ async def _mark_links_for_recovery(database: Session, agent_id: str) -> None:
     )
 
 
+def _check_update_completion(
+    database: Session,
+    agent_id: str,
+    new_version: str,
+    new_commit: str,
+) -> None:
+    """Check if agent re-registration completes an in-progress update job.
+
+    When an agent re-registers after an update, its new version/commit should
+    match the update job target. If so, mark the job as completed.
+    Also sweeps any stuck "restarting" jobs older than 10 minutes.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    active_statuses = ("pending", "downloading", "installing", "restarting")
+    active_jobs = (
+        database.query(models.AgentUpdateJob)
+        .filter(
+            models.AgentUpdateJob.host_id == agent_id,
+            models.AgentUpdateJob.status.in_(active_statuses),
+        )
+        .order_by(models.AgentUpdateJob.created_at.desc())
+        .all()
+    )
+
+    now = datetime.now(timezone.utc)
+    for job in active_jobs:
+        # Check version match: exact version match or commit SHA prefix match
+        version_match = new_version == job.to_version
+        commit_match = (
+            new_commit
+            and new_commit != "unknown"
+            and job.to_version
+            and new_commit.startswith(job.to_version)
+        )
+
+        if version_match or commit_match:
+            job.status = "completed"
+            job.progress_percent = 100
+            job.completed_at = now
+            logger.info(
+                f"Update job {job.id} completed: agent re-registered with "
+                f"version={new_version} commit={new_commit[:8] if new_commit else 'N/A'}"
+            )
+        elif job.status == "restarting":
+            # Agent restarted but version doesn't match - check if timed out
+            if job.started_at and (now - job.started_at).total_seconds() > 600:
+                job.status = "failed"
+                job.error_message = "Agent did not re-register with expected version after update"
+                job.completed_at = now
+                logger.warning(
+                    f"Update job {job.id} failed: agent re-registered with "
+                    f"version={new_version} but expected {job.to_version}"
+                )
+
+    if active_jobs:
+        database.commit()
+
+
 @router.post("/{agent_id}/heartbeat", response_model=HeartbeatResponse)
 def heartbeat(
     agent_id: str,
@@ -414,6 +484,7 @@ def list_agents(
             status=host.status,
             capabilities=capabilities,
             version=host.version,
+            git_sha=host.git_sha,
             image_sync_strategy=host.image_sync_strategy or "on_demand",
             last_heartbeat=host.last_heartbeat,
             last_error=host.last_error,
@@ -521,6 +592,7 @@ def list_agents_detailed(
             "address": host.address,
             "status": host.status,
             "version": host.version,
+            "git_sha": host.git_sha,
             "role": role,
             "capabilities": capabilities,
             "resource_usage": {
@@ -583,6 +655,7 @@ def get_agent(
         status=host.status,
         capabilities=capabilities,
         version=host.version,
+        git_sha=host.git_sha,
         image_sync_strategy=host.image_sync_strategy or "on_demand",
         last_heartbeat=host.last_heartbeat,
         last_error=host.last_error,
@@ -1000,6 +1073,28 @@ async def trigger_agent_update(
     if host.status != "online":
         raise HTTPException(status_code=503, detail="Agent is offline")
 
+    # Docker agents use rebuild, not update
+    if host.deployment_mode == "docker":
+        raise HTTPException(
+            status_code=400,
+            detail="Docker agents use rebuild, not update. Use POST /agents/{agent_id}/rebuild"
+        )
+
+    # Check for concurrent update
+    active_job = (
+        database.query(models.AgentUpdateJob)
+        .filter(
+            models.AgentUpdateJob.host_id == agent_id,
+            models.AgentUpdateJob.status.in_(("pending", "downloading", "installing", "restarting")),
+        )
+        .first()
+    )
+    if active_job:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Update already in progress (job {active_job.id})"
+        )
+
     # Determine target version
     target_version = (request.target_version if request else None) or get_latest_agent_version()
 
@@ -1093,55 +1188,116 @@ async def trigger_bulk_update(
 ) -> dict:
     """Trigger updates for multiple agents.
 
-    Returns a list of update jobs created or errors for each agent.
+    Creates DB jobs sequentially (shared session), then fires HTTP requests
+    to agents in parallel via asyncio.gather for faster bulk updates.
     """
-    target_version = request.target_version or get_latest_agent_version()
-    results = []
+    import httpx
+    import logging
+    bulk_logger = logging.getLogger(__name__)
 
+    target_version = request.target_version or get_latest_agent_version()
+    results: list[dict] = []
+    # Jobs to dispatch: list of (agent_id, job_id, host_address)
+    pending_dispatches: list[tuple[str, str, str]] = []
+
+    # Phase 1: Create DB jobs sequentially
     for agent_id in request.agent_ids:
         host = database.get(models.Host, agent_id)
         if not host:
-            results.append({
-                "agent_id": agent_id,
-                "success": False,
-                "error": "Agent not found",
-            })
+            results.append({"agent_id": agent_id, "success": False, "error": "Agent not found"})
             continue
-
         if host.status != "online":
-            results.append({
-                "agent_id": agent_id,
-                "success": False,
-                "error": "Agent is offline",
-            })
+            results.append({"agent_id": agent_id, "success": False, "error": "Agent is offline"})
             continue
-
+        if host.deployment_mode == "docker":
+            results.append({"agent_id": agent_id, "success": False, "error": "Docker agents use rebuild"})
+            continue
         if host.version == target_version:
-            results.append({
-                "agent_id": agent_id,
-                "success": False,
-                "error": f"Already at version {target_version}",
-            })
+            results.append({"agent_id": agent_id, "success": False, "error": f"Already at version {target_version}"})
             continue
 
-        try:
-            # Trigger individual update
-            response = await trigger_agent_update(
-                agent_id,
-                TriggerUpdateRequest(target_version=target_version),
-                database,
+        # Check concurrent update
+        active_job = (
+            database.query(models.AgentUpdateJob)
+            .filter(
+                models.AgentUpdateJob.host_id == agent_id,
+                models.AgentUpdateJob.status.in_(("pending", "downloading", "installing", "restarting")),
             )
-            results.append({
-                "agent_id": agent_id,
-                "success": True,
-                "job_id": response.job_id,
-            })
-        except HTTPException as e:
-            results.append({
-                "agent_id": agent_id,
-                "success": False,
-                "error": e.detail,
-            })
+            .first()
+        )
+        if active_job:
+            results.append({"agent_id": agent_id, "success": False, "error": "Update already in progress"})
+            continue
+
+        job_id = str(uuid4())
+        update_job = models.AgentUpdateJob(
+            id=job_id,
+            host_id=agent_id,
+            from_version=host.version or "unknown",
+            to_version=target_version,
+            status="pending",
+        )
+        database.add(update_job)
+        pending_dispatches.append((agent_id, job_id, host.address))
+
+    if pending_dispatches:
+        database.commit()
+
+    # Phase 2: Dispatch HTTP requests in parallel
+    async def _dispatch_update(agent_id: str, job_id: str, address: str) -> dict:
+        callback_url = f"{settings.internal_url}/callbacks/update/{job_id}"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"http://{address}/update",
+                    json={
+                        "job_id": job_id,
+                        "target_version": target_version,
+                        "callback_url": callback_url,
+                    },
+                )
+                resp.raise_for_status()
+                result = resp.json()
+
+                if result.get("accepted"):
+                    return {"agent_id": agent_id, "success": True, "job_id": job_id, "_status": "downloading"}
+                else:
+                    return {
+                        "agent_id": agent_id, "success": False,
+                        "error": result.get("message", "Agent rejected update"),
+                        "job_id": job_id, "_status": "failed",
+                        "_error": result.get("message", "Agent rejected update"),
+                    }
+        except Exception as e:
+            return {
+                "agent_id": agent_id, "success": False,
+                "error": str(e), "job_id": job_id,
+                "_status": "failed", "_error": str(e),
+            }
+
+    if pending_dispatches:
+        dispatch_results = await asyncio.gather(
+            *[_dispatch_update(aid, jid, addr) for aid, jid, addr in pending_dispatches]
+        )
+
+        # Phase 3: Update DB job statuses based on dispatch results
+        now = datetime.now(timezone.utc)
+        for dr in dispatch_results:
+            job = database.get(models.AgentUpdateJob, dr.get("job_id"))
+            if job:
+                if dr.get("_status") == "downloading":
+                    job.status = "downloading"
+                    job.started_at = now
+                elif dr.get("_status") == "failed":
+                    job.status = "failed"
+                    job.error_message = dr.get("_error", "Unknown error")
+                    job.completed_at = now
+
+            # Clean internal keys before adding to results
+            clean = {k: v for k, v in dr.items() if not k.startswith("_")}
+            results.append(clean)
+
+        database.commit()
 
     return {
         "target_version": target_version,

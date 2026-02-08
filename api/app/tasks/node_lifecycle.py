@@ -1785,16 +1785,16 @@ class NodeLifecycleManager:
                     self.agent,
                     self.lab.id,
                     node_a,
-                    ep_a.interface,
+                    ep_a.ifname,
                     node_b,
-                    ep_b.interface,
+                    ep_b.ifname,
                 )
                 if result.get("success"):
                     links_connected += 1
                 else:
                     logger.warning(
-                        f"Failed to connect link {node_a}:{ep_a.interface} <-> "
-                        f"{node_b}:{ep_b.interface}: {result.get('error')}"
+                        f"Failed to connect link {node_a}:{ep_a.ifname} <-> "
+                        f"{node_b}:{ep_b.ifname}: {result.get('error')}"
                     )
             except Exception as e:
                 logger.warning(f"Failed to connect link: {e}")
