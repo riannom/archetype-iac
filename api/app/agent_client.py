@@ -1566,13 +1566,14 @@ async def create_node_on_agent(
     binds: list[str] | None = None,
     env: dict[str, str] | None = None,
     startup_config: str | None = None,
+    provider: str = "docker",
 ) -> dict:
     """Create a single node container on an agent without starting it.
 
     Returns:
         Dict with 'success', 'container_name', 'status', and optionally 'error' keys.
     """
-    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/create"
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/create?provider={provider}"
     logger.info(
         "Agent request",
         extra={
@@ -1646,6 +1647,7 @@ async def start_node_on_agent(
     *,
     repair_endpoints: bool = True,
     fix_interfaces: bool = True,
+    provider: str = "docker",
 ) -> dict:
     """Start a node on an agent with optional veth repair.
 
@@ -1653,7 +1655,7 @@ async def start_node_on_agent(
         Dict with 'success', 'status', 'endpoints_repaired', 'interfaces_fixed',
         and optionally 'error' keys.
     """
-    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/start"
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/start?provider={provider}"
     logger.info(
         "Agent request",
         extra={
@@ -1717,13 +1719,15 @@ async def stop_node_on_agent(
     agent: models.Host,
     lab_id: str,
     node_name: str,
+    *,
+    provider: str = "docker",
 ) -> dict:
     """Stop a node on an agent.
 
     Returns:
         Dict with 'success', 'status', and optionally 'error' keys.
     """
-    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/stop"
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/stop?provider={provider}"
     logger.info(
         "Agent request",
         extra={
@@ -1780,13 +1784,15 @@ async def destroy_node_on_agent(
     agent: models.Host,
     lab_id: str,
     node_name: str,
+    *,
+    provider: str = "docker",
 ) -> dict:
     """Destroy a node container on an agent.
 
     Returns:
         Dict with 'success', 'container_removed', and optionally 'error' keys.
     """
-    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}"
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}?provider={provider}"
     logger.info(
         "Agent request",
         extra={

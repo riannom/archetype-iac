@@ -1201,6 +1201,195 @@ class LibvirtProvider(Provider):
                 error=str(e),
             )
 
+    async def create_node(
+        self,
+        lab_id: str,
+        node_name: str,
+        kind: str,
+        workspace: Path,
+        *,
+        image: str | None = None,
+        display_name: str | None = None,
+        interface_count: int | None = None,
+        binds: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        startup_config: str | None = None,
+    ) -> NodeActionResult:
+        """Create (define) a single VM without starting it."""
+        domain_name = self._domain_name(lab_id, node_name)
+
+        try:
+            # Check if domain already exists
+            try:
+                existing = self.conn.lookupByName(domain_name)
+                if existing:
+                    state = self._get_domain_status(existing)
+                    return NodeActionResult(
+                        success=True,
+                        node_name=node_name,
+                        new_status=state,
+                        stdout=f"Domain {domain_name} already exists",
+                    )
+            except libvirt.libvirtError:
+                pass  # Domain doesn't exist, we'll create it
+
+            # Build node_config from vendor registry
+            libvirt_config = get_libvirt_config(kind)
+            node_config: dict[str, Any] = {
+                "image": image,
+                "memory": libvirt_config.memory_mb,
+                "cpu": libvirt_config.cpu_count,
+                "disk_driver": libvirt_config.disk_driver,
+                "nic_driver": libvirt_config.nic_driver,
+                "data_volume_gb": libvirt_config.data_volume_gb,
+                "interface_count": interface_count or 1,
+                "_display_name": display_name or node_name,
+            }
+
+            disks_dir = self._disks_dir(workspace)
+
+            # Get base image
+            base_image = self._get_base_image(node_config)
+            if not base_image:
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=f"No base image found for node {node_name} (image={image})",
+                )
+
+            # Create overlay disk
+            overlay_path = disks_dir / f"{node_name}.qcow2"
+            if not await self._create_overlay_disk(base_image, overlay_path):
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=f"Failed to create overlay disk for {node_name}",
+                )
+
+            # Create data volume if needed
+            data_volume_path = None
+            data_volume_size = node_config.get("data_volume_gb")
+            if data_volume_size:
+                data_volume_path = disks_dir / f"{node_name}-data.qcow2"
+                if not await self._create_data_volume(data_volume_path, data_volume_size):
+                    return NodeActionResult(
+                        success=False,
+                        node_name=node_name,
+                        error=f"Failed to create data volume for {node_name}",
+                    )
+
+            # Allocate VLAN tags for OVS isolation
+            iface_count = node_config.get("interface_count", 1)
+            vlan_tags = self._allocate_vlans(lab_id, node_name, iface_count, workspace)
+
+            # Generate domain XML
+            xml = self._generate_domain_xml(
+                domain_name,
+                node_config,
+                overlay_path,
+                data_volume_path,
+                interface_count=iface_count,
+                vlan_tags=vlan_tags,
+                kind=kind,
+            )
+
+            # Define but do NOT start
+            domain = self.conn.defineXML(xml)
+            if not domain:
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=f"Failed to define domain {domain_name}",
+                )
+
+            logger.info(f"Defined domain {domain_name} (not started)")
+
+            return NodeActionResult(
+                success=True,
+                node_name=node_name,
+                new_status=NodeStatus.STOPPED,
+                stdout=f"Defined domain {domain_name}",
+            )
+
+        except libvirt.libvirtError as e:
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"Libvirt error: {e}",
+            )
+        except Exception as e:
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=str(e),
+            )
+
+    async def destroy_node(
+        self,
+        lab_id: str,
+        node_name: str,
+        workspace: Path,
+    ) -> NodeActionResult:
+        """Destroy a single VM and clean up its resources."""
+        domain_name = self._domain_name(lab_id, node_name)
+
+        try:
+            domain = self.conn.lookupByName(domain_name)
+
+            # Stop if running
+            state, _ = domain.state()
+            if state == libvirt.VIR_DOMAIN_RUNNING:
+                domain.destroy()
+
+            # Undefine
+            domain.undefine()
+            logger.info(f"Destroyed domain {domain_name}")
+
+            # Clean up disk overlays for this node
+            disks_dir = self._disks_dir(workspace)
+            for suffix in ("", "-data"):
+                disk_path = disks_dir / f"{node_name}{suffix}.qcow2"
+                if disk_path.exists():
+                    try:
+                        disk_path.unlink()
+                        logger.info(f"Removed disk: {disk_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove disk {disk_path}: {e}")
+
+            # Clean up VLAN allocations for this specific node
+            lab_allocs = self._vlan_allocations.get(lab_id, {})
+            if node_name in lab_allocs:
+                del lab_allocs[node_name]
+                # Persist updated allocations
+                self._save_vlan_allocations(lab_id, workspace)
+
+            return NodeActionResult(
+                success=True,
+                node_name=node_name,
+                new_status=NodeStatus.STOPPED,
+                stdout=f"Destroyed domain {domain_name}",
+            )
+
+        except libvirt.libvirtError as e:
+            if "domain not found" in str(e).lower():
+                return NodeActionResult(
+                    success=True,
+                    node_name=node_name,
+                    new_status=NodeStatus.STOPPED,
+                    stdout="Domain already absent",
+                )
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"Libvirt error: {e}",
+            )
+        except Exception as e:
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=str(e),
+            )
+
     async def get_console_command(
         self,
         lab_id: str,

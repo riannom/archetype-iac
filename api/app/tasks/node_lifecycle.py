@@ -22,6 +22,7 @@ from app.agent_client import AgentUnavailableError
 from app.config import settings
 from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
 from app.services.state_machine import NodeStateMachine
+from app.image_store import get_image_provider
 from app.services.topology import TopologyService, graph_to_deploy_topology, resolve_node_image
 from app.state import (
     HostStatus,
@@ -1509,13 +1510,16 @@ class NodeLifecycleManager:
                 self.log_parts.append(f"  {ns.node_name}: ERROR - no image available")
                 continue
 
+            # Determine provider from image type (qcow2 → libvirt, else docker)
+            node_provider = get_image_provider(image)
+
             # cEOS stagger: wait between starts
             if _is_ceos_kind(kind) and ceos_started:
                 logger.info(f"Waiting 5s before starting {ns.node_name} (cEOS stagger)")
                 await asyncio.sleep(5)
 
             try:
-                # Create container
+                # Create container/VM
                 create_result = await agent_client.create_node_on_agent(
                     self.agent,
                     self.lab.id,
@@ -1525,6 +1529,7 @@ class NodeLifecycleManager:
                     display_name=db_node.display_name,
                     interface_count=iface_count,
                     startup_config=startup_config,
+                    provider=node_provider,
                 )
 
                 if not create_result.get("success"):
@@ -1534,11 +1539,12 @@ class NodeLifecycleManager:
                     self.log_parts.append(f"  {ns.node_name}: CREATE FAILED - {error_msg}")
                     continue
 
-                # Start container (with veth repair and interface fixing)
+                # Start container/VM
                 start_result = await agent_client.start_node_on_agent(
                     self.agent,
                     self.lab.id,
                     ns.node_name,
+                    provider=node_provider,
                 )
 
                 if start_result.get("success"):
@@ -1625,6 +1631,12 @@ class NodeLifecycleManager:
             db_node = self.db_nodes_map.get(ns.node_name)
             kind = db_node.device if db_node else "linux"
 
+            # Determine provider from image type
+            image = resolve_node_image(
+                db_node.device, kind, db_node.image, db_node.version
+            ) if db_node else None
+            node_provider = get_image_provider(image)
+
             # cEOS stagger
             if _is_ceos_kind(kind) and ceos_started:
                 logger.info(f"Waiting 5s before starting {ns.node_name} (cEOS stagger)")
@@ -1635,6 +1647,7 @@ class NodeLifecycleManager:
                     self.agent,
                     self.lab.id,
                     ns.node_name,
+                    provider=node_provider,
                 )
 
                 if result.get("success"):

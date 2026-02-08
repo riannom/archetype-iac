@@ -2916,15 +2916,16 @@ async def create_node(
     lab_id: str,
     node_name: str,
     request: CreateNodeRequest,
+    provider: str = "docker",
 ) -> CreateNodeResponse:
     """Create a single node container without starting it."""
     import time as _time
     _t0 = _time.monotonic()
 
-    provider = get_provider_for_request()
+    provider_instance = get_provider_for_request(provider)
     workspace = get_workspace(lab_id)
 
-    result = await provider.create_node(
+    result = await provider_instance.create_node(
         lab_id=lab_id,
         node_name=node_name,
         kind=request.kind,
@@ -2945,6 +2946,7 @@ async def create_node(
             "operation": "create",
             "lab_id": lab_id,
             "node_name": node_name,
+            "provider": provider,
             "result": "success" if result.success else "error",
             "duration_ms": elapsed_ms,
             "error": result.error if not result.success else None,
@@ -2953,7 +2955,7 @@ async def create_node(
 
     return CreateNodeResponse(
         success=result.success,
-        container_name=provider.get_container_name(lab_id, node_name) if hasattr(provider, "get_container_name") else f"archetype-{lab_id}-{node_name}",
+        container_name=provider_instance.get_container_name(lab_id, node_name) if hasattr(provider_instance, "get_container_name") else f"archetype-{lab_id}-{node_name}",
         status=result.new_status.value if result.new_status else "unknown",
         error=result.error,
     )
@@ -2964,24 +2966,26 @@ async def start_node(
     lab_id: str,
     node_name: str,
     request: StartNodeRequest | None = None,
+    provider: str = "docker",
 ) -> StartNodeResponse:
     """Start a node with optional veth repair and interface fixing."""
     import time as _time
     _t0 = _time.monotonic()
 
-    provider = get_provider_for_request()
+    provider_instance = get_provider_for_request(provider)
     workspace = get_workspace(lab_id)
 
-    repair = request.repair_endpoints if request else True
-    fix = request.fix_interfaces if request else True
+    # repair_endpoints and fix_interfaces are Docker-specific kwargs
+    kwargs: dict = {
+        "lab_id": lab_id,
+        "node_name": node_name,
+        "workspace": workspace,
+    }
+    if provider == "docker":
+        kwargs["repair_endpoints"] = request.repair_endpoints if request else True
+        kwargs["fix_interfaces"] = request.fix_interfaces if request else True
 
-    result = await provider.start_node(
-        lab_id=lab_id,
-        node_name=node_name,
-        workspace=workspace,
-        repair_endpoints=repair,
-        fix_interfaces=fix,
-    )
+    result = await provider_instance.start_node(**kwargs)
 
     # Parse repair/fix counts from stdout if available
     endpoints_repaired = 0
@@ -3003,6 +3007,7 @@ async def start_node(
             "operation": "start",
             "lab_id": lab_id,
             "node_name": node_name,
+            "provider": provider,
             "result": "success" if result.success else "error",
             "duration_ms": elapsed_ms,
             "error": result.error if not result.success else None,
@@ -3019,15 +3024,15 @@ async def start_node(
 
 
 @app.post("/labs/{lab_id}/nodes/{node_name}/stop")
-async def stop_node(lab_id: str, node_name: str) -> StopNodeResponse:
+async def stop_node(lab_id: str, node_name: str, provider: str = "docker") -> StopNodeResponse:
     """Stop a running node."""
     import time as _time
     _t0 = _time.monotonic()
 
-    provider = get_provider_for_request()
+    provider_instance = get_provider_for_request(provider)
     workspace = get_workspace(lab_id)
 
-    result = await provider.stop_node(
+    result = await provider_instance.stop_node(
         lab_id=lab_id,
         node_name=node_name,
         workspace=workspace,
@@ -3041,6 +3046,7 @@ async def stop_node(lab_id: str, node_name: str) -> StopNodeResponse:
             "operation": "stop",
             "lab_id": lab_id,
             "node_name": node_name,
+            "provider": provider,
             "result": "success" if result.success else "error",
             "duration_ms": elapsed_ms,
             "error": result.error if not result.success else None,
@@ -3055,15 +3061,15 @@ async def stop_node(lab_id: str, node_name: str) -> StopNodeResponse:
 
 
 @app.delete("/labs/{lab_id}/nodes/{node_name}")
-async def destroy_node(lab_id: str, node_name: str) -> DestroyNodeResponse:
+async def destroy_node(lab_id: str, node_name: str, provider: str = "docker") -> DestroyNodeResponse:
     """Destroy a node container and clean up resources."""
     import time as _time
     _t0 = _time.monotonic()
 
-    provider = get_provider_for_request()
+    provider_instance = get_provider_for_request(provider)
     workspace = get_workspace(lab_id)
 
-    result = await provider.destroy_node(
+    result = await provider_instance.destroy_node(
         lab_id=lab_id,
         node_name=node_name,
         workspace=workspace,
@@ -3077,6 +3083,7 @@ async def destroy_node(lab_id: str, node_name: str) -> DestroyNodeResponse:
             "operation": "destroy",
             "lab_id": lab_id,
             "node_name": node_name,
+            "provider": provider,
             "result": "success" if result.success else "error",
             "duration_ms": elapsed_ms,
             "error": result.error if not result.success else None,
@@ -5380,9 +5387,14 @@ async def console_websocket(
 
             if method == "ssh":
                 # SSH-based console for vrnetlab/VM containers
-                await _console_websocket_ssh(
+                # Falls back to docker exec if SSH fails (e.g. device still booting)
+                ssh_ok = await _console_websocket_ssh(
                     websocket, container_name, node_name, username, password
                 )
+                if not ssh_ok:
+                    await _console_websocket_docker(
+                        websocket, container_name, node_name, shell_cmd
+                    )
             else:
                 # Docker exec-based console for native containers
                 await _console_websocket_docker(websocket, container_name, node_name, shell_cmd)
@@ -5420,8 +5432,12 @@ async def _console_websocket_ssh(
     node_name: str,
     username: str,
     password: str,
-):
-    """Handle console via SSH to container IP (for vrnetlab containers)."""
+) -> bool:
+    """Handle console via SSH to container IP (for vrnetlab containers).
+
+    Returns True if SSH session was established (even if it later ended),
+    False if SSH connection failed (caller should fall back to docker exec).
+    """
     from agent.console.ssh_console import SSHConsole
 
     # Send boot logs before connecting to CLI
@@ -5435,19 +5451,15 @@ async def _console_websocket_ssh(
     # Get container IP
     container_ip = await _get_container_ip(container_name)
     if not container_ip:
-        await websocket.send_text(f"\r\nError: Could not get IP for {node_name}\r\n")
-        await websocket.send_text(f"Container '{container_name}' may not be running.\r\n")
-        await websocket.close(code=1011)
-        return
+        await websocket.send_text(f"\r\n\x1b[33mSSH unavailable for {node_name}, falling back to shell...\x1b[0m\r\n")
+        return False
 
     console = SSHConsole(container_ip, username, password)
 
     # Try to start SSH console session
     if not await console.start():
-        await websocket.send_text(f"\r\nError: Could not SSH to {node_name}\r\n")
-        await websocket.send_text(f"Device may still be booting or credentials may be incorrect.\r\n")
-        await websocket.close(code=1011)
-        return
+        await websocket.send_text(f"\r\n\x1b[33mSSH unavailable for {node_name}, falling back to shell...\x1b[0m\r\n")
+        return False
 
     # Set initial terminal size
     await console.resize(rows=24, cols=80)
@@ -5536,6 +5548,8 @@ async def _console_websocket_ssh(
             await websocket.close()
         except Exception:
             pass
+
+    return True
 
 
 async def _console_websocket_docker(
