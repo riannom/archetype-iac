@@ -28,6 +28,7 @@ from app.services.broadcaster import broadcast_node_state_change, get_broadcaste
 from app.services.topology import TopologyService, graph_to_deploy_topology
 from app.utils.lab import update_lab_state
 from app.utils.async_tasks import safe_create_task
+from app.events.publisher import emit_deploy_finished, emit_destroy_finished, emit_job_failed
 from app.state import (
     HostStatus,
     JobStatus,
@@ -599,10 +600,12 @@ async def run_agent_job(
                         await _capture_node_ips(session, lab_id, agent)
                         # Dispatch webhook for successful deploy
                         await _dispatch_webhook("lab.deploy_complete", lab, job, session)
+                        asyncio.create_task(emit_deploy_finished(lab_id, agent_id=agent.id, job_id=job_id))
                     elif action == "down":
                         update_lab_state(session, lab_id, LabState.STOPPED.value)
                         # Dispatch webhook for destroy complete
                         await _dispatch_webhook("lab.destroy_complete", lab, job, session)
+                        asyncio.create_task(emit_destroy_finished(lab_id, agent_id=agent.id, job_id=job_id))
 
                 else:
                     job.status = JobStatus.FAILED.value
@@ -623,6 +626,7 @@ async def run_agent_job(
                         await _dispatch_webhook("lab.deploy_failed", lab, job, session)
                     else:
                         await _dispatch_webhook("job.failed", lab, job, session)
+                    asyncio.create_task(emit_job_failed(lab_id, job_id=job_id, job_action=action))
 
                 # Append stdout/stderr if present
                 stdout = result.get("stdout", "").strip()
@@ -990,6 +994,7 @@ async def run_multihost_deploy(
 
             # Dispatch webhook for successful deploy
             await _dispatch_webhook("lab.deploy_complete", lab, job, session)
+            asyncio.create_task(emit_deploy_finished(lab_id, job_id=job_id))
 
             logger.info(f"Job {job_id} completed: multi-host deployment successful")
 
@@ -1152,6 +1157,7 @@ async def run_multihost_destroy(
 
             # Dispatch webhook for destroy complete
             await _dispatch_webhook("lab.destroy_complete", lab, job, session)
+            asyncio.create_task(emit_destroy_finished(lab_id, job_id=job_id))
 
             logger.info(f"Job {job_id} completed: multi-host destroy {'successful' if all_success else 'with warnings'}")
 

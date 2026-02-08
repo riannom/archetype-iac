@@ -119,6 +119,8 @@ class Settings(BaseSettings):
     feature_vxlan_overlay: bool = True
     # Auto-extract configs before destroy operations
     feature_auto_extract_on_destroy: bool = True
+    # Auto-extract configs before enforcement restart of crashed/exited nodes
+    feature_auto_extract_on_enforcement: bool = True
     # Per-node lifecycle: create/start/stop/destroy individual containers
     # When False, falls back to full topology deploy via agent
     per_node_lifecycle_enabled: bool = True
@@ -202,6 +204,27 @@ class Settings(BaseSettings):
     cleanup_docker_dangling_images: bool = True
     cleanup_docker_build_cache: bool = True
     cleanup_docker_unused_volumes: bool = False  # Conservative - may have data
+
+    # Event-driven cleanup
+    cleanup_event_driven_enabled: bool = True
+    reconciliation_interval_extended: int = 120     # 2 min (safety-net when events active)
+    state_enforcement_interval_extended: int = 120  # 2 min
+    cleanup_interval_extended: int = 3600           # 1 hour (safety-net for lost events)
+
+    def get_interval(self, name: str) -> int:
+        """Get monitor interval, using extended value when event-driven cleanup is active.
+
+        State intervals (reconciliation, enforcement) never extend — they are
+        the safety net for state convergence.  Only cleanup intervals extend
+        when event-driven mode is active.
+        """
+        intervals = {
+            "reconciliation": (self.reconciliation_interval, self.reconciliation_interval),
+            "state_enforcement": (self.state_enforcement_interval, self.state_enforcement_interval),
+            "cleanup": (self.cleanup_interval, self.cleanup_interval_extended),
+        }
+        normal, extended = intervals[name]
+        return extended if self.cleanup_event_driven_enabled else normal
 
     # Version checking
     github_repo: str = "riannom/archetype-iac"

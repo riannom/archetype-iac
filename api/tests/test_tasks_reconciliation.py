@@ -756,3 +756,728 @@ class TestLinkStateCarrierReconciliation:
                         test_db.refresh(link)
                         # Link should be error because tunnel is not active
                         assert link.actual_state == "error"
+
+
+# ---------------------------------------------------------------------------
+# Phase B.2: Reconciliation-Enforcement Interaction Tests
+# ---------------------------------------------------------------------------
+
+class TestReconciliationEnforcementInteraction:
+    """Tests for enforcement_failed_at guard in reconciliation (Phase A.3).
+
+    When enforcement permanently fails on a node, reconciliation must NOT
+    overwrite the error state — doing so would cause an infinite retry
+    oscillation (error → undeployed → retry → error).
+    """
+
+    @pytest.mark.asyncio
+    async def test_skips_enforcement_failed_nodes(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Nodes with enforcement_failed_at set are not updated by reconciliation."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        # Create node with enforcement_failed_at set
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="error",  # Set by enforcement
+            enforcement_failed_at=datetime.now(timezone.utc),
+            error_message="Enforcement failed after 3 attempts",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        # Agent reports the node as "running" — reconciliation should NOT overwrite
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "running"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        # State should NOT have been overwritten to "running"
+        assert ns.actual_state == "error"
+        assert ns.enforcement_failed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_does_not_overwrite_error_message(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Error message from enforcement is preserved during reconciliation."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        error_msg = "Enforcement exception after 3 attempts: agent timeout"
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="error",
+            enforcement_failed_at=datetime.now(timezone.utc),
+            error_message=error_msg,
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "running"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.error_message == error_msg
+
+    @pytest.mark.asyncio
+    async def test_normal_nodes_still_updated(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Nodes WITHOUT enforcement_failed_at are still reconciled normally."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        # Failed node
+        ns_failed = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="error",
+            enforcement_failed_at=datetime.now(timezone.utc),
+        )
+        # Normal node
+        ns_normal = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n2",
+            node_name="R2",
+            desired_state="running",
+            actual_state="stopped",
+        )
+        test_db.add_all([ns_failed, ns_normal])
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [
+                        {"name": "R1", "status": "running"},
+                        {"name": "R2", "status": "running"},
+                    ],
+                }
+                with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                    mock_ready.return_value = {"is_ready": False}
+                    await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns_failed)
+        test_db.refresh(ns_normal)
+
+        # Failed node preserved
+        assert ns_failed.actual_state == "error"
+        # Normal node updated
+        assert ns_normal.actual_state == "running"
+
+    @pytest.mark.asyncio
+    async def test_user_reset_allows_reconciliation(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """After clearing enforcement_failed_at, reconciliation resumes for that node."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="error",
+            enforcement_failed_at=None,  # User cleared it
+            enforcement_attempts=0,      # Reset by user action
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "running"}],
+                }
+                with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                    mock_ready.return_value = {"is_ready": True}
+                    await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        # Should be updated normally since enforcement_failed_at is cleared
+        assert ns.actual_state == "running"
+        assert ns.is_ready is True
+
+
+# ---------------------------------------------------------------------------
+# Phase B.3: Targeted Reconciliation Edge Case Tests
+# ---------------------------------------------------------------------------
+
+class TestReconciliationTransitionalStates:
+    """Tests for reconciliation behavior with transitional states."""
+
+    def _add_node_def(self, test_db, lab_id, node_name):
+        """Create a Node definition to prevent orphan detection."""
+        node_def = models.Node(
+            lab_id=lab_id, gui_id=node_name.lower(),
+            display_name=node_name, container_name=node_name,
+            node_type="device", device="linux",
+        )
+        test_db.add(node_def)
+
+    @pytest.mark.asyncio
+    async def test_stopping_node_with_timestamp_skipped(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Node with recent stopping_started_at is skipped during reconciliation."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        self._add_node_def(test_db, sample_lab.id, "R1")
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="stopped",
+            actual_state="stopping",
+            stopping_started_at=datetime.now(timezone.utc),  # Just started
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "running"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        # Should NOT have been overwritten to "running"
+        assert ns.actual_state == "stopping"
+
+    @pytest.mark.asyncio
+    async def test_starting_node_with_timestamp_skipped(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Node with recent starting_started_at is skipped during reconciliation."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        self._add_node_def(test_db, sample_lab.id, "R1")
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="starting",
+            starting_started_at=datetime.now(timezone.utc),  # Just started
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "stopped"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        # Should NOT have been overwritten to "stopped"
+        assert ns.actual_state == "starting"
+
+    @pytest.mark.asyncio
+    async def test_stale_stopping_without_timestamp_recovers(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Node in 'stopping' state without timestamp and no active job recovers."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        # Create a Node definition so it's not treated as orphan
+        node_def = models.Node(
+            lab_id=sample_lab.id, gui_id="n1", display_name="R1",
+            container_name="R1", node_type="device", device="linux",
+        )
+        test_db.add(node_def)
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="stopped",
+            actual_state="stopping",
+            stopping_started_at=None,  # No timestamp — reconciliation should recover
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "running"}],
+                }
+                with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                    mock_ready.return_value = {"is_ready": True}
+                    await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        # Without timestamp or job, reconciliation should recover from stale stopping state
+        assert ns.actual_state == "running"
+
+    @pytest.mark.asyncio
+    async def test_stale_starting_without_timestamp_recovers(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Node in 'starting' state without timestamp and no active job recovers."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        node_def = models.Node(
+            lab_id=sample_lab.id, gui_id="n1", display_name="R1",
+            container_name="R1", node_type="device", device="linux",
+        )
+        test_db.add(node_def)
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="starting",
+            starting_started_at=None,  # No timestamp — reconciliation should recover
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "stopped"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == "stopped"
+
+
+class TestReconciliationIdempotency:
+    """Tests for idempotent reconciliation behavior."""
+
+    @pytest.mark.asyncio
+    async def test_idempotent_same_result(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Running reconciliation twice on same state produces same result."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        node_def = models.Node(
+            lab_id=sample_lab.id, gui_id="n1", display_name="R1",
+            container_name="R1", node_type="device", device="linux",
+        )
+        test_db.add(node_def)
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="running",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        mock_status = {
+            "nodes": [{"name": "R1", "status": "running"}],
+        }
+
+        for _ in range(2):
+            with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+                with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_get:
+                    mock_get.return_value = mock_status
+                    with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                        mock_ready.return_value = {"is_ready": True}
+                        await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == "running"
+        assert ns.is_ready is True
+
+
+class TestReconciliationAgentFailures:
+    """Tests for reconciliation behavior when agents are unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_agent_unreachable_preserves_state(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """When agent query fails, node state is preserved (not marked undeployed)."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        # Create placement so the node has an expected agent
+        placement = models.NodePlacement(
+            lab_id=sample_lab.id,
+            node_name="R1",
+            host_id=sample_host.id,
+            status="deployed",
+        )
+        test_db.add(placement)
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="running",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.side_effect = Exception("Connection refused")
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        # Should NOT be marked as undeployed since agent query failed
+        assert ns.actual_state == "running"
+
+    @pytest.mark.asyncio
+    async def test_no_agents_available(
+        self, test_db: Session, sample_lab: models.Lab,
+    ):
+        """Reconciliation handles case where no agents are available."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.state = "running"
+        test_db.commit()
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="running",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = None
+            await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        # State should be preserved
+        assert ns.actual_state == "running"
+
+
+class TestReconciliationWithActiveJobs:
+    """Tests for reconciliation behavior when jobs are active."""
+
+    def _add_node_def(self, test_db, lab_id, node_name):
+        node_def = models.Node(
+            lab_id=lab_id, gui_id=node_name.lower(),
+            display_name=node_name, container_name=node_name,
+            node_type="device", device="linux",
+        )
+        test_db.add(node_def)
+
+    @pytest.mark.asyncio
+    async def test_stopping_node_with_active_job_skipped(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Node in 'stopping' state with active job is skipped."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        self._add_node_def(test_db, sample_lab.id, "R1")
+
+        # Create active job
+        job = models.Job(
+            lab_id=sample_lab.id,
+            action="node:stop:n1",
+            status="running",
+        )
+        test_db.add(job)
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="stopped",
+            actual_state="stopping",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "running"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == "stopping"  # Not overwritten
+
+    @pytest.mark.asyncio
+    async def test_starting_node_with_active_job_skipped(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Node in 'starting' state with active job is skipped."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        self._add_node_def(test_db, sample_lab.id, "R1")
+
+        job = models.Job(
+            lab_id=sample_lab.id,
+            action="node:start:n1",
+            status="running",
+        )
+        test_db.add(job)
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="starting",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "stopped"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == "starting"  # Not overwritten
+
+
+class TestReconciliationStateUpdates:
+    """Tests for correct state mapping from container status to node state."""
+
+    def _add_node_def(self, test_db, lab_id, node_name):
+        """Create a Node definition to prevent orphan detection."""
+        node_def = models.Node(
+            lab_id=lab_id, gui_id=node_name.lower(),
+            display_name=node_name, container_name=node_name,
+            node_type="device", device="linux",
+        )
+        test_db.add(node_def)
+
+    @pytest.mark.asyncio
+    async def test_container_running_sets_running(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Container 'running' → NodeState actual_state='running'."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        self._add_node_def(test_db, sample_lab.id, "R1")
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="stopped",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "running"}],
+                }
+                with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                    mock_ready.return_value = {"is_ready": False}
+                    await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == "running"
+
+    @pytest.mark.asyncio
+    async def test_container_stopped_sets_stopped(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Container 'stopped' → NodeState actual_state='stopped'."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        self._add_node_def(test_db, sample_lab.id, "R1")
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="stopped",
+            actual_state="running",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "stopped"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == "stopped"
+        assert ns.is_ready is False
+
+    @pytest.mark.asyncio
+    async def test_container_error_sets_error(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Container 'error'/'dead' → NodeState actual_state='error'."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        self._add_node_def(test_db, sample_lab.id, "R1")
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="running",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "error"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == "error"
+        assert ns.is_ready is False
+
+    @pytest.mark.asyncio
+    async def test_container_not_found_marks_undeployed(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Container not in agent response → NodeState actual_state='undeployed'."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        sample_lab.state = "running"
+        test_db.commit()
+
+        self._add_node_def(test_db, sample_lab.id, "R1")
+
+        # Create placement so the agent is considered "queried successfully"
+        placement = models.NodePlacement(
+            lab_id=sample_lab.id,
+            node_name="R1",
+            host_id=sample_host.id,
+            status="deployed",
+        )
+        test_db.add(placement)
+
+        ns = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="running",
+        )
+        test_db.add(ns)
+        test_db.commit()
+
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                # Agent responds but R1 not in the list
+                mock_status.return_value = {"nodes": []}
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == "undeployed"
