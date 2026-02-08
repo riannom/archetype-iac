@@ -1599,8 +1599,9 @@ class DockerOVSPlugin:
 
             vxlan_port = f"vx{vni}"
 
-            # Create VXLAN interface
-            # df unset: clear DF bit on outer packets to allow underlay fragmentation
+            # Create VXLAN interface with nopmtudisc to disable all PMTUD checking.
+            # This allows inner packets at full MTU while the kernel handles
+            # outer packet fragmentation transparently.
             code, _, stderr = await self._run_cmd([
                 "ip", "link", "add", vxlan_port,
                 "type", "vxlan",
@@ -1609,6 +1610,7 @@ class DockerOVSPlugin:
                 "remote", remote_ip,
                 "dstport", str(settings.plugin_vxlan_dst_port),
                 "df", "unset",
+                "nopmtudisc",
             ])
             if code != 0 and "File exists" not in stderr:
                 raise RuntimeError(f"Failed to create VXLAN interface: {stderr}")

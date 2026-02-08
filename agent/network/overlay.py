@@ -2,7 +2,7 @@
 
 This module provides VXLAN tunnel management for connecting lab nodes
 across multiple hosts. It handles:
-- VXLAN tunnel creation via OVS
+- VXLAN tunnel creation via Linux VXLAN devices + OVS
 - OVS bridge port management with VLAN isolation
 - Attaching container interfaces to overlay
 - Tunnel establishment between hosts
@@ -13,10 +13,10 @@ VXLAN Overview:
 - Each cross-host link gets a unique VNI
 - Point-to-point tunnels between agent hosts
 
-OVS Implementation:
-- Uses a single OVS bridge (arch-ovs) for all overlay traffic
+Implementation:
+- Uses Linux VXLAN devices with `nopmtudisc` for MTU transparency
+- Devices added to OVS bridge (arch-ovs) as system ports
 - VLAN tags isolate traffic between different links
-- VXLAN ports created on OVS for cross-host tunneling
 - Standalone fail-mode for normal L2 switching behavior
 """
 
@@ -282,6 +282,73 @@ class OverlayManager:
         ports = stdout.strip().split("\n")
         return port_name in ports
 
+    async def _create_vxlan_device(
+        self,
+        name: str,
+        vni: int,
+        local_ip: str,
+        remote_ip: str,
+        bridge: str,
+        vlan_tag: int | None = None,
+    ) -> None:
+        """Create a Linux VXLAN device with nopmtudisc and add it to OVS.
+
+        Uses Linux VXLAN devices instead of OVS-managed VXLAN ports so that
+        nopmtudisc disables all PMTUD checking on the tunnel. This allows
+        inner packets to pass through at full MTU while the kernel handles
+        outer packet fragmentation transparently.
+
+        Args:
+            name: Interface name for the VXLAN device
+            vni: VXLAN Network Identifier
+            local_ip: Local IP for VXLAN endpoint
+            remote_ip: Remote IP for VXLAN endpoint
+            bridge: OVS bridge name to add the port to
+            vlan_tag: Optional VLAN tag (access mode) or None (trunk mode)
+
+        Raises:
+            RuntimeError: If device creation fails
+        """
+        # Create Linux VXLAN device with nopmtudisc to disable PMTUD
+        code, _, stderr = await self._run_cmd([
+            "ip", "link", "add", name, "type", "vxlan",
+            "id", str(vni), "local", local_ip, "remote", remote_ip,
+            "dstport", str(VXLAN_PORT), "nopmtudisc",
+        ])
+        if code != 0:
+            raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
+
+        # Set MTU to match local physical MTU
+        await self._run_cmd(["ip", "link", "set", name, "mtu", str(settings.local_mtu)])
+
+        # Bring device up
+        await self._run_cmd(["ip", "link", "set", name, "up"])
+
+        # Add to OVS bridge as a system port
+        if vlan_tag is not None:
+            code, _, stderr = await self._ovs_vsctl(
+                "add-port", bridge, name, f"tag={vlan_tag}",
+            )
+        else:
+            code, _, stderr = await self._ovs_vsctl(
+                "add-port", bridge, name,
+            )
+        if code != 0:
+            # Clean up the device on failure
+            await self._run_cmd(["ip", "link", "delete", name])
+            raise RuntimeError(f"Failed to add VXLAN device {name} to OVS: {stderr}")
+
+    async def _delete_vxlan_device(self, name: str, bridge: str) -> None:
+        """Remove a VXLAN device from OVS and delete the Linux interface.
+
+        Args:
+            name: Interface name of the VXLAN device
+            bridge: OVS bridge name to remove the port from
+        """
+        await self._ovs_vsctl("--if-exists", "del-port", bridge, name)
+        # Linux VXLAN devices added as system ports aren't auto-deleted
+        await self._run_cmd(["ip", "link", "delete", name])
+
     async def _discover_path_mtu(self, remote_ip: str) -> int:
         """Discover the path MTU to a remote IP address.
 
@@ -440,23 +507,24 @@ class OverlayManager:
         safe_ip = remote_ip.replace(".", "-")
         interface_name = f"vtep-{safe_ip}"[:15]  # OVS port names max 15 chars
 
-        # Delete existing OVS port if present (from previous run)
+        # Delete existing port if present (from previous run)
         if await self._ovs_port_exists(interface_name):
             logger.warning(f"VTEP port {interface_name} already exists, deleting")
-            await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, interface_name)
+            await self._delete_vxlan_device(interface_name, self._bridge_name)
 
-        # Create VXLAN port on OVS in TRUNK mode (no tag parameter)
-        # This allows all VLANs to pass through the tunnel
-        code, _, stderr = await self._ovs_vsctl(
-            "--", "add-port", self._bridge_name, interface_name,
-            "--", "set", "interface", interface_name, "type=vxlan",
-            f"options:remote_ip={remote_ip}",
-            f"options:local_ip={local_ip}",
-            f"options:key={vni}",
-            "options:df_default=false",
+        # Also clean up any leftover Linux interface
+        if await self._ip_link_exists(interface_name):
+            await self._run_cmd(["ip", "link", "delete", interface_name])
+
+        # Create Linux VXLAN device in TRUNK mode (no tag)
+        await self._create_vxlan_device(
+            name=interface_name,
+            vni=vni,
+            local_ip=local_ip,
+            remote_ip=remote_ip,
+            bridge=self._bridge_name,
+            vlan_tag=None,
         )
-        if code != 0:
-            raise RuntimeError(f"Failed to create VTEP port on OVS: {stderr}")
 
         vtep = Vtep(
             interface_name=interface_name,
@@ -489,12 +557,8 @@ class OverlayManager:
             return False
 
         try:
-            # Delete OVS VXLAN port
-            code, _, stderr = await self._ovs_vsctl(
-                "--if-exists", "del-port", self._bridge_name, vtep.interface_name
-            )
-            if code != 0:
-                logger.warning(f"Failed to delete VTEP port {vtep.interface_name}: {stderr}")
+            # Delete OVS port and Linux VXLAN device
+            await self._delete_vxlan_device(vtep.interface_name, self._bridge_name)
 
             # Remove from tracking
             del self._vteps[remote_ip]
@@ -564,28 +628,25 @@ class OverlayManager:
         interface_name = f"vxlan{vni}"
         vlan_tag = self._vni_to_vlan(vni)
 
-        # Delete existing OVS port if present (from previous run)
+        # Delete existing port if present (from previous run)
         if await self._ovs_port_exists(interface_name):
             logger.warning(f"VXLAN port {interface_name} already exists, deleting")
-            await self._ovs_vsctl("--if-exists", "del-port", self._bridge_name, interface_name)
+            await self._delete_vxlan_device(interface_name, self._bridge_name)
 
-        # Also clean up any Linux VXLAN interface with same name
+        # Also clean up any leftover Linux VXLAN interface
         if await self._ip_link_exists(interface_name):
             logger.warning(f"Linux VXLAN interface {interface_name} exists, deleting")
             await self._run_cmd(["ip", "link", "delete", interface_name])
 
-        # Create VXLAN port on OVS
-        # Format: ovs-vsctl -- add-port br vxlan123 tag=500 -- set interface vxlan123 type=vxlan options:...
-        code, _, stderr = await self._ovs_vsctl(
-            "--", "add-port", self._bridge_name, interface_name, f"tag={vlan_tag}",
-            "--", "set", "interface", interface_name, "type=vxlan",
-            f"options:remote_ip={remote_ip}",
-            f"options:local_ip={local_ip}",
-            f"options:key={vni}",
-            "options:df_default=false",
+        # Create Linux VXLAN device with access-mode VLAN tag
+        await self._create_vxlan_device(
+            name=interface_name,
+            vni=vni,
+            local_ip=local_ip,
+            remote_ip=remote_ip,
+            bridge=self._bridge_name,
+            vlan_tag=vlan_tag,
         )
-        if code != 0:
-            raise RuntimeError(f"Failed to create VXLAN port on OVS: {stderr}")
 
         tunnel = VxlanTunnel(
             vni=vni,
@@ -615,12 +676,8 @@ class OverlayManager:
             True if deleted successfully, False otherwise
         """
         try:
-            # Delete OVS VXLAN port
-            code, _, stderr = await self._ovs_vsctl(
-                "--if-exists", "del-port", self._bridge_name, tunnel.interface_name
-            )
-            if code != 0:
-                logger.warning(f"Failed to delete OVS VXLAN port {tunnel.interface_name}: {stderr}")
+            # Delete OVS port and Linux VXLAN device
+            await self._delete_vxlan_device(tunnel.interface_name, self._bridge_name)
 
             # Release VNI
             self._vni_allocator.release(tunnel.lab_id, tunnel.link_id)
@@ -797,8 +854,10 @@ class OverlayManager:
             if code != 0:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
 
-            # Set MTU for overlay link (optionally preserve container MTU)
-            mtu_to_use = bridge.tenant_mtu if bridge.tenant_mtu > 0 else settings.overlay_mtu
+            # Set MTU for overlay link
+            # Use local_mtu (jumbo frames) since VXLAN devices now handle
+            # fragmentation transparently via nopmtudisc
+            mtu_to_use = settings.local_mtu
             if mtu_to_use > 0 and settings.overlay_clamp_host_mtu:
                 await self._run_cmd([
                     "ip", "link", "set", veth_host, "mtu", str(mtu_to_use)
@@ -986,8 +1045,8 @@ class OverlayManager:
             if code != 0:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
 
-            # Set MTU
-            mtu_to_use = tenant_mtu if tenant_mtu > 0 else settings.overlay_mtu
+            # Set MTU - use local_mtu since VXLAN handles fragmentation via nopmtudisc
+            mtu_to_use = settings.local_mtu
             if mtu_to_use > 0:
                 await self._run_cmd(["ip", "link", "set", veth_host, "mtu", str(mtu_to_use)])
                 await self._run_cmd(["ip", "link", "set", veth_cont, "mtu", str(mtu_to_use)])
@@ -1103,7 +1162,7 @@ class OverlayManager:
         return result
 
     async def delete_vtep(self, remote_ip: str) -> bool:
-        """Delete a VTEP and its OVS port.
+        """Delete a VTEP and its Linux VXLAN device.
 
         This should only be called when no links are using the VTEP.
         Use detach_overlay_interface for safe reference-counted deletion.
@@ -1126,13 +1185,8 @@ class OverlayManager:
             )
 
         try:
-            # Delete OVS port
-            code, _, stderr = await self._ovs_vsctl(
-                "--if-exists", "del-port", self._bridge_name, vtep.interface_name
-            )
-            if code != 0:
-                logger.error(f"Failed to delete VTEP port {vtep.interface_name}: {stderr}")
-                return False
+            # Delete OVS port and Linux VXLAN device
+            await self._delete_vxlan_device(vtep.interface_name, self._bridge_name)
 
             # Remove from tracking
             del self._vteps[remote_ip]
@@ -1216,27 +1270,25 @@ class OverlayManager:
 
         interface_name = self._link_tunnel_interface_name(lab_id, link_id)
 
-        # Delete existing OVS port if present (from previous run / recovery)
+        # Delete existing port if present (from previous run / recovery)
         if await self._ovs_port_exists(interface_name):
             logger.warning(f"Link tunnel port {interface_name} already exists, replacing")
-            await self._ovs_vsctl(
-                "--if-exists", "del-port", self._bridge_name, interface_name
-            )
+            await self._delete_vxlan_device(interface_name, self._bridge_name)
 
-        # Create access-mode VXLAN port on OVS
+        # Also clean up any leftover Linux interface
+        if await self._ip_link_exists(interface_name):
+            await self._run_cmd(["ip", "link", "delete", interface_name])
+
+        # Create access-mode Linux VXLAN device
         # tag= makes it an access port: strips VLAN on egress, adds on ingress
-        code, _, stderr = await self._ovs_vsctl(
-            "--", "add-port", self._bridge_name, interface_name, f"tag={local_vlan}",
-            "--", "set", "interface", interface_name, "type=vxlan",
-            f"options:remote_ip={remote_ip}",
-            f"options:local_ip={local_ip}",
-            f"options:key={vni}",
-            "options:df_default=false",
+        await self._create_vxlan_device(
+            name=interface_name,
+            vni=vni,
+            local_ip=local_ip,
+            remote_ip=remote_ip,
+            bridge=self._bridge_name,
+            vlan_tag=local_vlan,
         )
-        if code != 0:
-            raise RuntimeError(
-                f"Failed to create link tunnel {interface_name}: {stderr}"
-            )
 
         tunnel = LinkTunnel(
             link_id=link_id,
@@ -1272,13 +1324,8 @@ class OverlayManager:
             return False
 
         try:
-            code, _, stderr = await self._ovs_vsctl(
-                "--if-exists", "del-port", self._bridge_name, tunnel.interface_name
-            )
-            if code != 0:
-                logger.warning(
-                    f"Failed to delete link tunnel port {tunnel.interface_name}: {stderr}"
-                )
+            # Delete OVS port and Linux VXLAN device
+            await self._delete_vxlan_device(tunnel.interface_name, self._bridge_name)
 
             del self._link_tunnels[link_id]
             logger.info(f"Deleted link tunnel {tunnel.interface_name} for {link_id}")
