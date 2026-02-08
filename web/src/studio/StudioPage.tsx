@@ -195,7 +195,7 @@ const StudioPage: React.FC = () => {
   const runtimeStates = useMemo(() => {
     const result: Record<string, RuntimeStatus> = {};
     for (const [nodeId, state] of Object.entries(nodeStates)) {
-      const status = mapActualToRuntime(state.actual_state, state.desired_state, state.will_retry);
+      const status = mapActualToRuntime(state.actual_state, state.desired_state, state.will_retry, state.display_state);
       if (status !== null) result[nodeId] = status;
     }
     return result;
@@ -300,6 +300,7 @@ const StudioPage: React.FC = () => {
         image_sync_status: wsState.image_sync_status,
         image_sync_message: wsState.image_sync_message,
         will_retry: wsState.will_retry,
+        display_state: wsState.display_state,
         created_at: prev[nodeId]?.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } as NodeStateEntry,

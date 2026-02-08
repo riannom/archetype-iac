@@ -22,6 +22,7 @@ from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.utils.lab import get_lab_or_404, get_lab_provider
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
+from app.services.state_machine import NodeStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -521,49 +522,44 @@ async def node_action(
 
     node_id = node_state.node_id
     desired_state = "running" if action == "start" else "stopped"
+    command = "start" if action == "start" else "stop"
 
-    # Transitional state guards (matching set_node_desired_state)
-    if desired_state == "running" and node_state.actual_state == "stopping":
-        raise HTTPException(status_code=409, detail="Cannot start: node is currently stopping")
-    if desired_state == "stopped" and node_state.actual_state == "starting":
-        raise HTTPException(status_code=409, detail="Cannot stop: node is currently starting")
+    # Centralized guard check (6.1)
+    allowed, reason = NodeStateMachine.can_accept_command(node_state.actual_state, command)
+    if not allowed:
+        raise HTTPException(status_code=409, detail=reason)
 
-    needs_sync = node_state.desired_state != desired_state
+    desired_changed = node_state.desired_state != desired_state
 
-    if needs_sync:
+    if desired_changed:
         node_state.desired_state = desired_state
         database.commit()
         database.refresh(node_state)
 
         has_conflict, _ = has_conflicting_job(lab_id, "sync")
-        if not has_conflict:
-            is_out_of_sync = (
-                (desired_state == "running" and node_state.actual_state not in ("running", "pending", "starting"))
-                or (desired_state == "stopped" and node_state.actual_state not in ("stopped", "undeployed", "stopping"))
+        if not has_conflict and NodeStateMachine.needs_sync(node_state.actual_state, command):
+            from app.utils.lab import get_node_provider
+            db_node = database.query(models.Node).filter(
+                models.Node.lab_id == lab.id,
+                models.Node.gui_id == node_id
+            ).first()
+            provider = get_node_provider(db_node, database) if db_node else get_lab_provider(lab)
+
+            job = models.Job(
+                lab_id=lab.id,
+                user_id=current_user.id,
+                action=f"sync:node:{node_id}",
+                status="queued",
             )
-            if is_out_of_sync:
-                from app.utils.lab import get_node_provider
-                db_node = database.query(models.Node).filter(
-                    models.Node.lab_id == lab.id,
-                    models.Node.gui_id == node_id
-                ).first()
-                provider = get_node_provider(db_node, database) if db_node else get_lab_provider(lab)
+            database.add(job)
+            database.commit()
+            database.refresh(job)
 
-                job = models.Job(
-                    lab_id=lab.id,
-                    user_id=current_user.id,
-                    action=f"sync:node:{node_id}",
-                    status="queued",
-                )
-                database.add(job)
-                database.commit()
-                database.refresh(job)
-
-                safe_create_task(
-                    run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
-                    name=f"sync:node:{job.id}"
-                )
-                return schemas.JobOut.model_validate(job)
+            safe_create_task(
+                run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
+                name=f"sync:node:{job.id}"
+            )
+            return schemas.JobOut.model_validate(job)
 
     elif (
         node_state.desired_state == desired_state

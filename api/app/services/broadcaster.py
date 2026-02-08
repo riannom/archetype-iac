@@ -77,6 +77,7 @@ class StateBroadcaster:
         image_sync_status: str | None = None,
         image_sync_message: str | None = None,
         will_retry: bool = False,
+        display_state: str | None = None,
     ) -> int:
         """Publish a node state change event.
 
@@ -93,11 +94,17 @@ class StateBroadcaster:
             image_sync_status: Image sync status (checking/syncing/synced/failed)
             image_sync_message: Image sync progress or error message
             will_retry: Whether enforcement will automatically retry after error
+            display_state: Server-computed display state (running/starting/stopping/stopped/error)
 
         Returns:
             Number of subscribers that received the message
         """
         try:
+            # Auto-compute display_state if not provided
+            if display_state is None:
+                from app.services.state_machine import NodeStateMachine
+                display_state = NodeStateMachine.compute_display_state(actual_state, desired_state)
+
             redis = await self._get_redis()
             message = {
                 "type": "node_state",
@@ -114,6 +121,7 @@ class StateBroadcaster:
                     "image_sync_status": image_sync_status,
                     "image_sync_message": image_sync_message,
                     "will_retry": will_retry,
+                    "display_state": display_state,
                 },
             }
             channel = self._channel_name(lab_id)
@@ -323,6 +331,7 @@ async def broadcast_node_state_change(
     image_sync_status: str | None = None,
     image_sync_message: str | None = None,
     will_retry: bool = False,
+    display_state: str | None = None,
 ) -> None:
     """Convenience function to broadcast a node state change.
 
@@ -342,6 +351,7 @@ async def broadcast_node_state_change(
         image_sync_status=image_sync_status,
         image_sync_message=image_sync_message,
         will_retry=will_retry,
+        display_state=display_state,
     )
 
 

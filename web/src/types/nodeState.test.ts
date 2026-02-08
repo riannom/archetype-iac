@@ -53,4 +53,33 @@ describe('mapActualToRuntime', () => {
   it('maps unknown state to null', () => {
     expect(mapActualToRuntime('some_unknown_state')).toBeNull();
   });
+
+  // Server-computed display_state tests (Phase 6.3)
+  it('prefers server display_state "running"', () => {
+    expect(mapActualToRuntime('running', 'running', false, 'running')).toBe('running');
+  });
+
+  it('prefers server display_state "starting" -> booting', () => {
+    expect(mapActualToRuntime('pending', 'running', false, 'starting')).toBe('booting');
+  });
+
+  it('prefers server display_state "stopping"', () => {
+    expect(mapActualToRuntime('stopping', 'stopped', false, 'stopping')).toBe('stopping');
+  });
+
+  it('prefers server display_state "stopped"', () => {
+    expect(mapActualToRuntime('exited', 'stopped', false, 'stopped')).toBe('stopped');
+  });
+
+  it('prefers server display_state "error"', () => {
+    expect(mapActualToRuntime('error', 'running', false, 'error')).toBe('error');
+  });
+
+  it('server display_state "error" with willRetry shows booting', () => {
+    expect(mapActualToRuntime('error', 'running', true, 'error')).toBe('booting');
+  });
+
+  it('falls back to client-side when displayState is undefined', () => {
+    expect(mapActualToRuntime('starting', 'running', false, undefined)).toBe('booting');
+  });
 });
