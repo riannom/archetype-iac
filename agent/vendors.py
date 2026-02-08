@@ -807,6 +807,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         memory=2048,  # 2GB required
         cpu=1,
         nic_driver="e1000",  # ASAv works better with e1000
+        machine_type="pc-i440fx-6.2",  # e1000 TX hangs on Q35; i440fx is reliable
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/security/asa/",
