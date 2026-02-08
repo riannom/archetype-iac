@@ -75,7 +75,6 @@ describe("Dashboard", () => {
   const mockOnSelect = vi.fn();
   const mockOnCreate = vi.fn();
   const mockOnDelete = vi.fn();
-  const mockOnRefresh = vi.fn();
   const mockOnRename = vi.fn();
 
   const defaultProps = {
@@ -85,7 +84,6 @@ describe("Dashboard", () => {
     onSelect: mockOnSelect,
     onCreate: mockOnCreate,
     onDelete: mockOnDelete,
-    onRefresh: mockOnRefresh,
     onRename: mockOnRename,
   };
 
@@ -160,34 +158,6 @@ describe("Dashboard", () => {
     await user.click(screen.getByRole("button", { name: /create new lab/i }));
 
     expect(mockOnCreate).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows Refresh button", () => {
-    render(
-      <TestWrapper>
-        <Dashboard {...defaultProps} />
-      </TestWrapper>
-    );
-
-    // Find by text since FontAwesome is mocked
-    expect(screen.getByText("Refresh")).toBeInTheDocument();
-  });
-
-  it("calls onRefresh when Refresh is clicked", async () => {
-    const user = userEvent.setup();
-
-    render(
-      <TestWrapper>
-        <Dashboard {...defaultProps} />
-      </TestWrapper>
-    );
-
-    const refreshButton = screen.getByText("Refresh").closest("button");
-    if (refreshButton) {
-      await user.click(refreshButton);
-    }
-
-    expect(mockOnRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("shows empty state when no labs exist", () => {

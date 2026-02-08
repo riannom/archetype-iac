@@ -1748,10 +1748,6 @@ const StudioPage: React.FC = () => {
         onCreate={handleCreateLab}
         onDelete={handleDeleteLab}
         onRename={handleRenameLab}
-        onRefresh={() => {
-          loadLabs();
-          loadSystemMetrics();
-        }}
       />
     );
   }
