@@ -10,6 +10,7 @@ import os
 
 import pytest
 
+from app.tasks.cleanup_base import CleanupResult
 from app.tasks.disk_cleanup import (
     cleanup_orphaned_upload_files,
     cleanup_stale_upload_sessions,
@@ -55,12 +56,11 @@ class TestCleanupOrphanedUploadFiles:
             os.utime(old_file, (old_time, old_time))
 
             # Mock the upload sessions to have no active uploads
-            # The function imports from app.routers.iso inside
             with patch("app.routers.iso._upload_sessions", {}), \
                  patch("app.routers.iso._upload_lock", MagicMock()):
                 result = await cleanup_orphaned_upload_files()
 
-            assert result["deleted_count"] == 1
+            assert result.deleted == 1
             assert not old_file.exists()
 
     @pytest.mark.asyncio
@@ -79,7 +79,7 @@ class TestCleanupOrphanedUploadFiles:
                  patch("app.routers.iso._upload_lock", MagicMock()):
                 result = await cleanup_orphaned_upload_files()
 
-            assert result["deleted_count"] == 0
+            assert result.deleted == 0
             assert recent_file.exists()
 
     @pytest.mark.asyncio
@@ -107,7 +107,7 @@ class TestCleanupOrphanedUploadFiles:
                  patch("app.routers.iso._upload_lock", MagicMock()):
                 result = await cleanup_orphaned_upload_files()
 
-            assert result["deleted_count"] == 0
+            assert result.deleted == 0
             assert active_file.exists()
 
     @pytest.mark.asyncio
@@ -129,7 +129,7 @@ class TestCleanupOrphanedUploadFiles:
                  patch("app.routers.iso._upload_lock", MagicMock()):
                 result = await cleanup_orphaned_upload_files()
 
-            assert result["deleted_count"] == 0
+            assert result.deleted == 0
             assert iso_file.exists()
 
 
@@ -155,7 +155,7 @@ class TestCleanupStaleUploadSessions:
                  patch("app.routers.iso._upload_lock", MagicMock()):
                 result = await cleanup_stale_upload_sessions()
 
-            assert result["expired_count"] == 1
+            assert result.deleted == 1
 
     @pytest.mark.asyncio
     async def test_keeps_recent_sessions(self):
@@ -175,7 +175,7 @@ class TestCleanupStaleUploadSessions:
                  patch("app.routers.iso._upload_lock", MagicMock()):
                 result = await cleanup_stale_upload_sessions()
 
-            assert result["expired_count"] == 0
+            assert result.deleted == 0
 
     @pytest.mark.asyncio
     async def test_keeps_completed_sessions(self):
@@ -195,7 +195,7 @@ class TestCleanupStaleUploadSessions:
                  patch("app.routers.iso._upload_lock", MagicMock()):
                 result = await cleanup_stale_upload_sessions()
 
-            assert result["expired_count"] == 0
+            assert result.deleted == 0
 
 
 class TestCleanupStaleISOSessions:
@@ -218,7 +218,7 @@ class TestCleanupStaleISOSessions:
                  patch("app.routers.iso._session_lock", MagicMock()):
                 result = await cleanup_stale_iso_sessions()
 
-            assert result["expired_count"] == 1
+            assert result.deleted == 1
 
     @pytest.mark.asyncio
     async def test_keeps_importing_sessions(self):
@@ -236,7 +236,7 @@ class TestCleanupStaleISOSessions:
                  patch("app.routers.iso._session_lock", MagicMock()):
                 result = await cleanup_stale_iso_sessions()
 
-            assert result["expired_count"] == 0
+            assert result.deleted == 0
 
 
 class TestCleanupOldJobRecords:
@@ -244,19 +244,15 @@ class TestCleanupOldJobRecords:
 
     @pytest.mark.asyncio
     async def test_deletes_old_completed_jobs(self):
-        """Test that old completed jobs are deleted."""
+        """Test that old completed jobs are deleted via bulk query."""
         from contextlib import contextmanager
 
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_job_retention_days = 30
 
-            # Mock job query
-            old_job = MagicMock()
-            old_job.id = "old-job-123"
-
             mock_query = MagicMock()
             mock_query.filter.return_value = mock_query
-            mock_query.all.return_value = [old_job]
+            mock_query.delete.return_value = 3  # 3 jobs deleted in bulk
 
             mock_session = MagicMock()
             mock_session.query.return_value = mock_query
@@ -268,8 +264,7 @@ class TestCleanupOldJobRecords:
             with patch("app.tasks.disk_cleanup.get_session", fake_get_session):
                 result = await cleanup_old_job_records()
 
-            assert result["deleted_count"] == 1
-            mock_session.delete.assert_called_once_with(old_job)
+            assert result.deleted == 3
             mock_session.commit.assert_called()
 
 
@@ -298,7 +293,7 @@ class TestCleanupOldWebhookDeliveries:
             with patch("app.tasks.disk_cleanup.get_session", fake_get_session):
                 result = await cleanup_old_webhook_deliveries()
 
-            assert result["deleted_count"] == 5
+            assert result.deleted == 5
             mock_session.commit.assert_called()
 
 
@@ -313,8 +308,8 @@ class TestCleanupDockerOnAgents:
 
             result = await cleanup_docker_on_agents()
 
-            assert result["skipped"] == "disabled"
-            assert result["agents_cleaned"] == 0
+            assert result.details["skipped"] == "disabled"
+            assert result.deleted == 0
 
     @pytest.mark.asyncio
     async def test_calls_prune_on_online_agents(self):
@@ -332,23 +327,23 @@ class TestCleanupDockerOnAgents:
             mock_agent.name = "agent-1"
             mock_agent.status = "online"
 
-            mock_lab = MagicMock()
-            mock_lab.id = "lab-1"
-
             mock_session = MagicMock()
             mock_host_query = MagicMock()
             mock_host_query.filter.return_value = mock_host_query
             mock_host_query.all.return_value = [mock_agent]
 
-            mock_lab_query = MagicMock()
-            mock_lab_query.all.return_value = [mock_lab]
+            # For get_valid_lab_ids — returns Lab.id column query
+            mock_lab_id_query = MagicMock()
+            mock_lab_id_query.all.return_value = [("lab-1",)]
 
+            call_count = [0]
             def query_side_effect(model):
-                if model.__name__ == "Host":
+                if hasattr(model, 'property') or hasattr(model, 'key'):
+                    # This is Lab.id column query from get_valid_lab_ids
+                    return mock_lab_id_query
+                if hasattr(model, '__name__') and model.__name__ == "Host":
                     return mock_host_query
-                elif model.__name__ == "Lab":
-                    return mock_lab_query
-                return MagicMock()
+                return mock_lab_id_query
 
             mock_session.query.side_effect = query_side_effect
 
@@ -368,8 +363,8 @@ class TestCleanupDockerOnAgents:
                  patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune):
                 result = await cleanup_docker_on_agents()
 
-            assert result["agents_cleaned"] == 1
-            assert result["space_reclaimed"] == 1000000
+            assert result.deleted == 1  # 1 agent cleaned
+            assert result.details["space_reclaimed"] == 1000000
             mock_prune.assert_called_once()
 
 
@@ -378,34 +373,20 @@ class TestCleanupOldConfigSnapshots:
 
     @pytest.mark.asyncio
     async def test_deletes_orphaned_snapshots(self):
-        """Test that snapshots for deleted labs are removed."""
+        """Test that snapshots for deleted labs are removed via bulk NOT IN."""
         from contextlib import contextmanager
 
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_config_snapshot_retention_days = 90
 
-            # Mock valid lab IDs (none - all snapshots are orphaned)
-            mock_lab_query = MagicMock()
-            mock_lab_query.all.return_value = []
-
-            # Mock orphaned snapshot
-            mock_snapshot = MagicMock()
-            mock_snapshot.lab_id = "deleted-lab-id"
-
-            mock_snapshot_query = MagicMock()
-            mock_snapshot_query.all.return_value = [mock_snapshot]
-            mock_snapshot_query.filter.return_value = mock_snapshot_query
-            mock_snapshot_query.delete.return_value = 0
+            mock_query = MagicMock()
+            mock_query.filter.return_value = mock_query
+            # First call: orphaned delete returns 2
+            # Second call: aged delete returns 0
+            mock_query.delete.side_effect = [2, 0]
 
             mock_session = MagicMock()
-            def query_side_effect(model):
-                if model.__name__ == "Lab":
-                    return mock_lab_query
-                elif model.__name__ == "ConfigSnapshot":
-                    return mock_snapshot_query
-                return MagicMock()
-
-            mock_session.query.side_effect = query_side_effect
+            mock_session.query.return_value = mock_query
 
             @contextmanager
             def fake_get_session():
@@ -414,8 +395,8 @@ class TestCleanupOldConfigSnapshots:
             with patch("app.tasks.disk_cleanup.get_session", fake_get_session):
                 result = await cleanup_old_config_snapshots()
 
-            assert result["orphaned_count"] == 1
-            mock_session.delete.assert_called_once_with(mock_snapshot)
+            assert result.details["orphaned"] == 2
+            assert result.deleted == 2
 
 
 class TestCleanupOldImageSyncJobs:
@@ -423,32 +404,20 @@ class TestCleanupOldImageSyncJobs:
 
     @pytest.mark.asyncio
     async def test_deletes_orphaned_and_old_jobs(self):
-        """Test that orphaned and old jobs are deleted."""
+        """Test that orphaned and old jobs are deleted via bulk NOT IN."""
         from contextlib import contextmanager
 
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.cleanup_image_sync_job_retention_days = 30
 
-            mock_host_query = MagicMock()
-            mock_host_query.all.return_value = []  # No valid hosts
-
-            mock_job = MagicMock()
-            mock_job.host_id = "deleted-host-id"
-
-            mock_job_query = MagicMock()
-            mock_job_query.all.return_value = [mock_job]
-            mock_job_query.filter.return_value = mock_job_query
-            mock_job_query.delete.return_value = 2  # 2 aged jobs
+            mock_query = MagicMock()
+            mock_query.filter.return_value = mock_query
+            # First call: orphaned delete returns 1
+            # Second call: aged delete returns 2
+            mock_query.delete.side_effect = [1, 2]
 
             mock_session = MagicMock()
-            def query_side_effect(model):
-                if model.__name__ == "Host":
-                    return mock_host_query
-                elif model.__name__ == "ImageSyncJob":
-                    return mock_job_query
-                return MagicMock()
-
-            mock_session.query.side_effect = query_side_effect
+            mock_session.query.return_value = mock_query
 
             @contextmanager
             def fake_get_session():
@@ -457,9 +426,9 @@ class TestCleanupOldImageSyncJobs:
             with patch("app.tasks.disk_cleanup.get_session", fake_get_session):
                 result = await cleanup_old_image_sync_jobs()
 
-            assert result["orphaned_count"] == 1
-            assert result["aged_count"] == 2
-            assert result["deleted_count"] == 3
+            assert result.details["orphaned"] == 1
+            assert result.details["aged"] == 2
+            assert result.deleted == 3
 
 
 class TestCleanupOrphanedLabWorkspaces:
@@ -485,12 +454,12 @@ class TestCleanupOrphanedLabWorkspaces:
             orphan_dir.mkdir()
             (orphan_dir / "topology.yml").write_text("test")
 
-            # Mock database query returning no labs
-            mock_lab_query = MagicMock()
-            mock_lab_query.all.return_value = []
+            # Mock database query returning no lab IDs
+            mock_lab_id_query = MagicMock()
+            mock_lab_id_query.all.return_value = []
 
             mock_session = MagicMock()
-            mock_session.query.return_value = mock_lab_query
+            mock_session.query.return_value = mock_lab_id_query
 
             @contextmanager
             def fake_get_session():
@@ -500,7 +469,7 @@ class TestCleanupOrphanedLabWorkspaces:
                  patch("app.storage.workspace_root", return_value=temp_workspace):
                 result = await cleanup_orphaned_lab_workspaces()
 
-            assert result["deleted_count"] == 1
+            assert result.deleted == 1
             assert not orphan_dir.exists()
 
     @pytest.mark.asyncio
@@ -517,15 +486,12 @@ class TestCleanupOrphanedLabWorkspaces:
             valid_dir.mkdir()
             (valid_dir / "topology.yml").write_text("test")
 
-            # Mock database query returning the lab
-            mock_lab = MagicMock()
-            mock_lab.id = valid_lab_id
-
-            mock_lab_query = MagicMock()
-            mock_lab_query.all.return_value = [mock_lab]
+            # Mock database query returning the lab ID
+            mock_lab_id_query = MagicMock()
+            mock_lab_id_query.all.return_value = [(valid_lab_id,)]
 
             mock_session = MagicMock()
-            mock_session.query.return_value = mock_lab_query
+            mock_session.query.return_value = mock_lab_id_query
 
             @contextmanager
             def fake_get_session():
@@ -535,7 +501,7 @@ class TestCleanupOrphanedLabWorkspaces:
                  patch("app.storage.workspace_root", return_value=temp_workspace):
                 result = await cleanup_orphaned_lab_workspaces()
 
-            assert result["deleted_count"] == 0
+            assert result.deleted == 0
             assert valid_dir.exists()
 
     @pytest.mark.asyncio
@@ -550,11 +516,11 @@ class TestCleanupOrphanedLabWorkspaces:
             (temp_workspace / "images").mkdir()
             (temp_workspace / "uploads").mkdir()
 
-            mock_lab_query = MagicMock()
-            mock_lab_query.all.return_value = []
+            mock_lab_id_query = MagicMock()
+            mock_lab_id_query.all.return_value = []
 
             mock_session = MagicMock()
-            mock_session.query.return_value = mock_lab_query
+            mock_session.query.return_value = mock_lab_id_query
 
             @contextmanager
             def fake_get_session():
@@ -564,7 +530,7 @@ class TestCleanupOrphanedLabWorkspaces:
                  patch("app.storage.workspace_root", return_value=temp_workspace):
                 result = await cleanup_orphaned_lab_workspaces()
 
-            assert result["deleted_count"] == 0
+            assert result.deleted == 0
             assert (temp_workspace / "images").exists()
             assert (temp_workspace / "uploads").exists()
 
@@ -596,7 +562,7 @@ class TestCleanupOrphanedQcow2Images:
                  patch("app.image_store.load_manifest", return_value=mock_manifest):
                 result = await cleanup_orphaned_qcow2_images()
 
-            assert result["deleted_count"] == 1
+            assert result.deleted == 1
             assert not orphan_file.exists()
 
     @pytest.mark.asyncio
@@ -618,7 +584,7 @@ class TestCleanupOrphanedQcow2Images:
                  patch("app.image_store.load_manifest", return_value=mock_manifest):
                 result = await cleanup_orphaned_qcow2_images()
 
-            assert result["deleted_count"] == 0
+            assert result.deleted == 0
             assert valid_file.exists()
 
     @pytest.mark.asyncio
@@ -629,7 +595,7 @@ class TestCleanupOrphanedQcow2Images:
 
             result = await cleanup_orphaned_qcow2_images()
 
-            assert result["skipped"] == "disabled"
+            assert result.details["skipped"] == "disabled"
 
 
 class TestGetDiskUsage:
@@ -659,33 +625,33 @@ class TestRunDiskCleanup:
 
     @pytest.mark.asyncio
     async def test_runs_all_cleanup_tasks(self):
-        """Test that run_disk_cleanup runs all tasks."""
+        """Test that run_disk_cleanup runs all tasks and returns structured results."""
         with patch("app.tasks.disk_cleanup.settings") as mock_settings:
             mock_settings.workspace = "/tmp"
             mock_settings.iso_upload_dir = "/tmp"
 
-            mock_results = {
-                "deleted_count": 0,
-                "deleted_bytes": 0,
-                "expired_count": 0,
-                "errors": [],
-            }
+            mock_result = CleanupResult(task_name="test", deleted=0)
 
-            with patch("app.tasks.disk_cleanup.cleanup_orphaned_upload_files", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_stale_upload_sessions", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_stale_iso_sessions", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_docker_on_agents", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_old_job_records", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_old_webhook_deliveries", AsyncMock(return_value=mock_results)):
+            with patch("app.tasks.disk_cleanup.cleanup_orphaned_upload_files", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_stale_upload_sessions", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_stale_iso_sessions", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_docker_on_agents", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_job_records", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_webhook_deliveries", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_config_snapshots", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_image_sync_jobs", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_iso_import_jobs", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_agent_update_jobs", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_orphaned_image_host_records", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_orphaned_lab_workspaces", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_orphaned_qcow2_images", AsyncMock(return_value=mock_result)):
                 result = await run_disk_cleanup()
 
-            assert "upload_files" in result
-            assert "upload_sessions" in result
-            assert "iso_sessions" in result
-            assert "docker" in result
-            assert "jobs" in result
-            assert "webhooks" in result
+            assert "results" in result
+            assert "summary" in result
             assert "disk_usage" in result
+            assert result["summary"]["total_deleted"] == 0
+            assert result["summary"]["total_errors"] == 0
 
     @pytest.mark.asyncio
     async def test_continues_on_task_error(self):
@@ -694,16 +660,24 @@ class TestRunDiskCleanup:
             mock_settings.workspace = "/tmp"
             mock_settings.iso_upload_dir = "/tmp"
 
-            mock_results = {"deleted_count": 0, "errors": []}
+            mock_result = CleanupResult(task_name="test", deleted=0)
 
+            # First task raises, rest succeed
             with patch("app.tasks.disk_cleanup.cleanup_orphaned_upload_files", AsyncMock(side_effect=Exception("Test error"))), \
-                 patch("app.tasks.disk_cleanup.cleanup_stale_upload_sessions", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_stale_iso_sessions", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_docker_on_agents", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_old_job_records", AsyncMock(return_value=mock_results)), \
-                 patch("app.tasks.disk_cleanup.cleanup_old_webhook_deliveries", AsyncMock(return_value=mock_results)):
+                 patch("app.tasks.disk_cleanup.cleanup_stale_upload_sessions", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_stale_iso_sessions", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_docker_on_agents", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_job_records", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_webhook_deliveries", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_config_snapshots", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_image_sync_jobs", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_iso_import_jobs", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_old_agent_update_jobs", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_orphaned_image_host_records", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_orphaned_lab_workspaces", AsyncMock(return_value=mock_result)), \
+                 patch("app.tasks.disk_cleanup.cleanup_orphaned_qcow2_images", AsyncMock(return_value=mock_result)):
                 result = await run_disk_cleanup()
 
-            # Should have error but other tasks should have run
-            assert "error" in result["upload_files"]
-            assert "upload_sessions" in result
+            # Should have 1 error from the failed task, but other tasks ran
+            assert result["summary"]["total_errors"] == 1
+            assert len(result["results"]) == 13  # All 13 tasks attempted

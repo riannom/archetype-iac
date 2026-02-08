@@ -236,7 +236,7 @@ def _backfill_placement_node_ids(session, lab_id: str) -> int:
 
 
 _lab_orphan_check_counter = 0
-_LAB_ORPHAN_CHECK_INTERVAL = 10  # Every 10th reconciliation cycle (~5 min at 30s interval)
+_LAB_ORPHAN_CHECK_INTERVAL = settings.lab_orphan_check_multiplier
 
 
 async def _maybe_cleanup_labless_containers(session):
@@ -256,7 +256,8 @@ async def _maybe_cleanup_labless_containers(session):
     _lab_orphan_check_counter = 0
 
     try:
-        valid_lab_ids = [str(lab_id) for (lab_id,) in session.query(models.Lab.id).all()]
+        from app.tasks.cleanup_base import get_valid_lab_ids
+        valid_lab_ids = list(get_valid_lab_ids(session))
         all_agents = session.query(models.Host).all()
         for agent in all_agents:
             if not agent_client.is_agent_online(agent):
@@ -900,7 +901,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             # Check for active stop operation
             if ns.stopping_started_at:
                 stopping_duration = datetime.now(timezone.utc) - ns.stopping_started_at
-                if stopping_duration.total_seconds() < 360:  # 6 minutes
+                if stopping_duration.total_seconds() < settings.stale_stopping_threshold:
                     # Stop operation in progress - let the job handle it
                     stopped_count += 1
                     continue
@@ -915,7 +916,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             # Check for active start operation
             if ns.starting_started_at:
                 starting_duration = datetime.now(timezone.utc) - ns.starting_started_at
-                if starting_duration.total_seconds() < 360:  # 6 minutes
+                if starting_duration.total_seconds() < settings.stale_node_starting_threshold:
                     # Start operation in progress - let the job handle it
                     running_count += 1
                     continue
