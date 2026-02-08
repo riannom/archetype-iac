@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mapActualToRuntime } from './nodeState';
+import { mapActualToRuntime, type NodeStateData } from './nodeState';
 
 describe('mapActualToRuntime', () => {
   it('maps "running" to "running"', () => {
@@ -81,5 +81,36 @@ describe('mapActualToRuntime', () => {
 
   it('falls back to client-side when displayState is undefined', () => {
     expect(mapActualToRuntime('starting', 'running', false, undefined)).toBe('booting');
+  });
+});
+
+describe('NodeStateData retry fields', () => {
+  it('includes enforcement_attempts and max_enforcement_attempts', () => {
+    const data: NodeStateData = {
+      node_id: 'n1',
+      node_name: 'R1',
+      desired_state: 'running',
+      actual_state: 'error',
+      is_ready: false,
+      will_retry: true,
+      enforcement_attempts: 2,
+      max_enforcement_attempts: 5,
+      display_state: 'error',
+    };
+    expect(data.enforcement_attempts).toBe(2);
+    expect(data.max_enforcement_attempts).toBe(5);
+    expect(data.will_retry).toBe(true);
+  });
+
+  it('defaults enforcement fields to undefined when not provided', () => {
+    const data: NodeStateData = {
+      node_id: 'n1',
+      node_name: 'R1',
+      desired_state: 'running',
+      actual_state: 'running',
+      is_ready: true,
+    };
+    expect(data.enforcement_attempts).toBeUndefined();
+    expect(data.max_enforcement_attempts).toBeUndefined();
   });
 });

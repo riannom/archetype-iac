@@ -1688,7 +1688,7 @@ async def export_inventory(
                 node_name = node.container_name or node.name
                 device_info[node_name] = {
                     "device": node.device,
-                    "kind": node.device,  # In clab, device maps to kind
+                    "kind": node.device,
                 }
         except Exception:
             pass

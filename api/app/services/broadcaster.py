@@ -78,6 +78,8 @@ class StateBroadcaster:
         image_sync_message: str | None = None,
         will_retry: bool = False,
         display_state: str | None = None,
+        enforcement_attempts: int = 0,
+        max_enforcement_attempts: int = 0,
     ) -> int:
         """Publish a node state change event.
 
@@ -95,6 +97,8 @@ class StateBroadcaster:
             image_sync_message: Image sync progress or error message
             will_retry: Whether enforcement will automatically retry after error
             display_state: Server-computed display state (running/starting/stopping/stopped/error)
+            enforcement_attempts: Number of enforcement attempts so far
+            max_enforcement_attempts: Maximum enforcement attempts before giving up
 
         Returns:
             Number of subscribers that received the message
@@ -122,6 +126,8 @@ class StateBroadcaster:
                     "image_sync_message": image_sync_message,
                     "will_retry": will_retry,
                     "display_state": display_state,
+                    "enforcement_attempts": enforcement_attempts,
+                    "max_enforcement_attempts": max_enforcement_attempts,
                 },
             }
             channel = self._channel_name(lab_id)
@@ -332,6 +338,8 @@ async def broadcast_node_state_change(
     image_sync_message: str | None = None,
     will_retry: bool = False,
     display_state: str | None = None,
+    enforcement_attempts: int = 0,
+    max_enforcement_attempts: int = 0,
 ) -> None:
     """Convenience function to broadcast a node state change.
 
@@ -352,6 +360,8 @@ async def broadcast_node_state_change(
         image_sync_message=image_sync_message,
         will_retry=will_retry,
         display_state=display_state,
+        enforcement_attempts=enforcement_attempts,
+        max_enforcement_attempts=max_enforcement_attempts,
     )
 
 

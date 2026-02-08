@@ -41,6 +41,10 @@ export interface NodeStateEntry {
   management_ip?: string | null;
   all_ips?: string[];
   will_retry?: boolean;
+  /** Number of enforcement attempts so far */
+  enforcement_attempts?: number;
+  /** Maximum enforcement attempts before giving up */
+  max_enforcement_attempts?: number;
   /** Server-computed display state: running, starting, stopping, stopped, error */
   display_state?: string;
   created_at: string;
@@ -60,6 +64,10 @@ export interface NodeStateData {
   image_sync_status?: string | null;
   image_sync_message?: string | null;
   will_retry?: boolean;
+  /** Number of enforcement attempts so far */
+  enforcement_attempts?: number;
+  /** Maximum enforcement attempts before giving up */
+  max_enforcement_attempts?: number;
   /** Server-computed display state: running, starting, stopping, stopped, error */
   display_state?: string;
 }

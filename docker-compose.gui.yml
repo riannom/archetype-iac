@@ -28,7 +28,7 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       # Workspace
       - WORKSPACE=${WORKSPACE:-/var/lib/archetype}
-      - PROVIDER=${PROVIDER:-clab}
+      - PROVIDER=${PROVIDER:-docker}
       - QCOW2_STORE=${QCOW2_STORE:-/var/lib/archetype/images}
       # Auth
       - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
@@ -86,7 +86,7 @@ services:
       - DATABASE_URL=postgresql+psycopg://archetype:archetype@localhost:15432/archetype
       - REDIS_URL=redis://localhost:16379/0
       - WORKSPACE=${WORKSPACE:-/var/lib/archetype}
-      - PROVIDER=${PROVIDER:-clab}
+      - PROVIDER=${PROVIDER:-docker}
       - JWT_SECRET=${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

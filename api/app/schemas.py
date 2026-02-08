@@ -260,6 +260,8 @@ class NodeStateOut(BaseModel):
     host_name: str | None = None
     # Whether enforcement will automatically retry after an error
     will_retry: bool = False
+    # Number of enforcement attempts so far
+    enforcement_attempts: int = 0
     # Server-computed display state: running, starting, stopping, stopped, error
     display_state: str = "stopped"
     created_at: datetime

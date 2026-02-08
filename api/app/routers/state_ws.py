@@ -191,6 +191,8 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str, database: Sessi
                 "display_state": NodeStateMachine.compute_display_state(
                     ns.actual_state, ns.desired_state
                 ),
+                "enforcement_attempts": ns.enforcement_attempts,
+                "max_enforcement_attempts": settings.state_enforcement_max_retries,
             })
 
         await websocket.send_json({

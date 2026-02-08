@@ -898,9 +898,6 @@ def graph_to_topology_yaml(
     return yaml.dump(topology, Dumper=_BlockScalarDumper, sort_keys=False)
 
 
-# Backward compatibility alias
-graph_to_containerlab_yaml = graph_to_topology_yaml
-
 
 def split_topology_by_host(
     graph: TopologyGraph,

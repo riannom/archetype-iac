@@ -1012,9 +1012,6 @@ class TopologyService:
         graph = self.export_to_graph(lab_id)
         return graph_to_topology_yaml(graph, lab_id, reserved_interfaces)
 
-    # Backward compatibility alias
-    to_containerlab_yaml = to_topology_yaml
-
     def to_topology_yaml_for_host(
         self,
         lab_id: str,
@@ -1058,9 +1055,6 @@ class TopologyService:
         )
 
         return graph_to_topology_yaml(filtered_graph, lab_id, reserved_interfaces)
-
-    # Backward compatibility alias
-    to_containerlab_yaml_for_host = to_topology_yaml_for_host
 
     # =========================================================================
     # Helper Methods
