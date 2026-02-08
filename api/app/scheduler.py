@@ -28,7 +28,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from app import db, models
+from sqlalchemy import text
+
+from app import db
 from app.config import settings
 from app.logging_config import setup_logging
 from app.utils.async_tasks import setup_asyncio_exception_handler, safe_create_task
@@ -44,10 +46,6 @@ from app.tasks.state_enforcement import state_enforcement_monitor
 from app.tasks.link_reconciliation import link_reconciliation_monitor
 from app.tasks.cleanup_handler import cleanup_event_monitor
 from app.events.publisher import close_publisher
-
-# Migrations
-from alembic.config import Config as AlembicConfig
-from alembic import command as alembic_command
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -86,15 +84,20 @@ async def startup():
     logger.info("Starting Archetype Scheduler")
     setup_asyncio_exception_handler()
 
-    # Run migrations (same as API - ensures scheduler doesn't start before schema is ready)
-    logger.info("Running database migrations")
-    try:
-        alembic_cfg = AlembicConfig("alembic.ini")
-        alembic_command.upgrade(alembic_cfg, "head")
-        logger.info("Database migrations completed")
-    except Exception as e:
-        logger.error(f"Database migration failed: {e}")
-        models.Base.metadata.create_all(bind=db.engine)
+    # Wait for database to be ready (migrations are handled by the API)
+    logger.info("Verifying database connectivity")
+    for attempt in range(30):
+        try:
+            with db.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            logger.info("Database connection verified")
+            break
+        except Exception as e:
+            if attempt == 29:
+                logger.error(f"Database not reachable after 30 attempts: {e}")
+                raise
+            logger.warning(f"Database not ready (attempt {attempt + 1}/30), retrying in 2s...")
+            await asyncio.sleep(2)
 
     # Start all monitors wrapped in supervisors
     monitors = [

@@ -78,8 +78,10 @@ services:
         NETLAB_REF: ${NETLAB_REF:-release_26.01.01}
     command: ["python", "-m", "app.scheduler"]
     depends_on:
-      - postgres
-      - redis
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_started
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://archetype:archetype@postgres:5432/archetype}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
