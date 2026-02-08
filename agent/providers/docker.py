@@ -2447,14 +2447,22 @@ username admin privilege 15 role network-admin nopassword
         lab_id: str,
         node_name: str,
         workspace: Path,
+        *,
+        repair_endpoints: bool = True,
+        fix_interfaces: bool = True,
     ) -> NodeActionResult:
         """Start a specific node.
 
         If the container fails to start due to stale network references (e.g., after
         a lab redeploy), this method will attempt to recover by disconnecting from
         stale networks and reconnecting to current lab networks.
+
+        After starting, optionally repairs veth pairs and fixes interface names.
+        This enables per-node restart without full topology redeploy.
         """
         container_name = self._container_name(lab_id, node_name)
+        endpoints_repaired = 0
+        interfaces_fixed = 0
 
         try:
             container = await asyncio.to_thread(self.docker.containers.get, container_name)
@@ -2485,11 +2493,41 @@ username admin privilege 15 role network-admin nopassword
             await asyncio.sleep(1)
             await asyncio.to_thread(container.reload)
 
+            # Repair veth pairs that were lost on container stop/restart
+            if repair_endpoints and self.use_ovs_plugin:
+                try:
+                    plugin = get_docker_ovs_plugin()
+                    if plugin:
+                        repair_results = await plugin.repair_endpoints(lab_id, container_name)
+                        endpoints_repaired = sum(
+                            1 for r in repair_results if r.get("status") == "repaired"
+                        )
+                        if endpoints_repaired > 0:
+                            logger.info(
+                                f"Repaired {endpoints_repaired} endpoints for {container_name}"
+                            )
+                except Exception as e:
+                    logger.warning(f"Failed to repair endpoints for {container_name}: {e}")
+
+            # Fix interface names (Docker may assign them incorrectly)
+            if fix_interfaces and self.use_ovs_plugin:
+                try:
+                    fix_result = await self._fix_interface_names(container_name, lab_id)
+                    interfaces_fixed = fix_result.get("fixed", 0)
+                except Exception as e:
+                    logger.warning(f"Failed to fix interface names for {container_name}: {e}")
+
+            stdout_parts = [f"Started container {container_name}"]
+            if endpoints_repaired > 0:
+                stdout_parts.append(f"repaired {endpoints_repaired} endpoints")
+            if interfaces_fixed > 0:
+                stdout_parts.append(f"fixed {interfaces_fixed} interfaces")
+
             return NodeActionResult(
                 success=True,
                 node_name=node_name,
                 new_status=self._get_container_status(container),
-                stdout=f"Started container {container_name}",
+                stdout=", ".join(stdout_parts),
             )
 
         except NotFound:
@@ -2542,6 +2580,211 @@ username admin privilege 15 role network-admin nopassword
                 success=False,
                 node_name=node_name,
                 error=f"Docker API error: {e}",
+            )
+
+    async def create_node(
+        self,
+        lab_id: str,
+        node_name: str,
+        kind: str,
+        workspace: Path,
+        *,
+        image: str | None = None,
+        display_name: str | None = None,
+        interface_count: int | None = None,
+        binds: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        startup_config: str | None = None,
+    ) -> NodeActionResult:
+        """Create a single node container without starting it.
+
+        Extracts per-node logic from _create_containers() to allow
+        independent container creation without full topology deploy.
+        """
+        container_name = self._container_name(lab_id, node_name)
+        iface_count = interface_count or 4  # Minimum interfaces for flexibility
+
+        try:
+            # Build a TopologyNode for _create_container_config
+            node = TopologyNode(
+                name=node_name,
+                kind=kind,
+                display_name=display_name,
+                image=image,
+                interface_count=iface_count,
+                binds=binds or [],
+                env=env or {},
+                startup_config=startup_config,
+            )
+            log_name = node.log_name()
+
+            # Validate image exists
+            config = get_config_by_device(kind)
+            effective_image = image or (config.default_image if config else None)
+            if effective_image:
+                try:
+                    await asyncio.to_thread(self.docker.images.get, effective_image)
+                except ImageNotFound:
+                    return NodeActionResult(
+                        success=False,
+                        node_name=node_name,
+                        error=f"Docker image not found: {effective_image}",
+                    )
+
+            # Set up cEOS directories if needed
+            if is_ceos_kind(kind):
+                await asyncio.to_thread(
+                    self._setup_ceos_directories, node_name, node, workspace
+                )
+
+            # Ensure management network exists
+            try:
+                await self.local_network.create_management_network(lab_id)
+            except Exception as e:
+                logger.warning(f"Failed to create management network: {e}")
+
+            # Ensure lab Docker networks (idempotent)
+            if self.use_ovs_plugin:
+                await self._create_lab_networks(lab_id, max_interfaces=iface_count)
+
+            # Check if container already exists
+            try:
+                existing = await asyncio.to_thread(
+                    self.docker.containers.get, container_name
+                )
+                if existing.status == "running":
+                    logger.info(f"Container {log_name} already running, skipping create")
+                    return NodeActionResult(
+                        success=True,
+                        node_name=node_name,
+                        new_status=NodeStatus.RUNNING,
+                        stdout=f"Container {container_name} already running",
+                    )
+                else:
+                    logger.info(f"Removing stopped container {log_name}")
+                    await asyncio.to_thread(existing.remove, force=True)
+            except NotFound:
+                pass
+
+            # Build container config
+            container_config = self._create_container_config(
+                node, lab_id, workspace, interface_count=iface_count
+            )
+
+            if self.use_ovs_plugin:
+                # Attach to first OVS network during creation
+                first_network = f"{lab_id}-eth1"
+                container_config["network"] = first_network
+                logger.info(f"Creating container {log_name} with image {container_config['image']}")
+
+                container = await asyncio.to_thread(
+                    lambda cfg=container_config: self.docker.containers.create(**cfg)
+                )
+
+                # Attach to remaining interface networks (eth2, eth3, ...)
+                await self._attach_container_to_networks(
+                    container=container,
+                    lab_id=lab_id,
+                    interface_count=iface_count - 1,
+                    interface_prefix="eth",
+                    start_index=2,
+                )
+
+                await asyncio.sleep(0.5)
+            else:
+                container_config["network_mode"] = "none"
+                logger.info(f"Creating container {log_name} with image {container_config['image']}")
+
+                container = await asyncio.to_thread(
+                    lambda cfg=container_config: self.docker.containers.create(**cfg)
+                )
+
+            return NodeActionResult(
+                success=True,
+                node_name=node_name,
+                new_status=NodeStatus.STOPPED,
+                stdout=f"Created container {container_name} (id={container.short_id})",
+            )
+
+        except APIError as e:
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"Docker API error: {e}",
+            )
+        except Exception as e:
+            logger.exception(f"Failed to create container for {node_name}: {e}")
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"Container creation failed: {e}",
+            )
+
+    async def destroy_node(
+        self,
+        lab_id: str,
+        node_name: str,
+        workspace: Path,
+    ) -> NodeActionResult:
+        """Destroy a single node container and clean up resources."""
+        from agent.readiness import clear_post_boot_state
+
+        container_name = self._container_name(lab_id, node_name)
+
+        try:
+            try:
+                container = await asyncio.to_thread(
+                    self.docker.containers.get, container_name
+                )
+                await asyncio.to_thread(container.remove, force=True, v=True)
+                logger.info(f"Removed container {container_name}")
+            except NotFound:
+                logger.info(f"Container {container_name} not found, already removed")
+
+            # Clear post-boot state
+            clear_post_boot_state(container_name)
+
+            # Clean up VLAN allocations for this node
+            lab_vlans = self._vlan_allocations.get(lab_id, {})
+            lab_vlans.pop(node_name, None)
+
+            # Check if this was the last container in the lab
+            remaining = []
+            try:
+                all_containers = await asyncio.to_thread(self.docker.containers.list, all=True)
+                remaining = [
+                    c for c in all_containers
+                    if c.labels.get("archetype.lab_id") == lab_id
+                ]
+            except Exception as e:
+                logger.warning(f"Failed to check remaining containers: {e}")
+
+            if not remaining:
+                logger.info(f"Last container in lab {lab_id}, cleaning up networks")
+                await self._delete_lab_networks(lab_id)
+                # Clean up lab-level VLAN tracking
+                self._vlan_allocations.pop(lab_id, None)
+                self._next_vlan.pop(lab_id, None)
+
+            return NodeActionResult(
+                success=True,
+                node_name=node_name,
+                new_status=NodeStatus.STOPPED,
+                stdout=f"Destroyed container {container_name}",
+            )
+
+        except APIError as e:
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"Docker API error: {e}",
+            )
+        except Exception as e:
+            logger.exception(f"Failed to destroy container {node_name}: {e}")
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"Container destroy failed: {e}",
             )
 
     async def get_console_command(

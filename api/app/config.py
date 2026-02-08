@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     feature_vxlan_overlay: bool = True
     # Auto-extract configs before destroy operations
     feature_auto_extract_on_destroy: bool = True
+    # Per-node lifecycle: create/start/stop/destroy individual containers
+    # When False, falls back to full topology deploy via agent
+    per_node_lifecycle_enabled: bool = True
 
     # Logging configuration
     log_format: str = "json"  # "json" or "text"

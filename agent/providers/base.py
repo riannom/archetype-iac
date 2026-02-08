@@ -192,6 +192,44 @@ class Provider(ABC):
         """
         ...
 
+    async def create_node(
+        self,
+        lab_id: str,
+        node_name: str,
+        kind: str,
+        workspace: Path,
+        *,
+        image: str | None = None,
+        display_name: str | None = None,
+        interface_count: int | None = None,
+        binds: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        startup_config: str | None = None,
+    ) -> NodeActionResult:
+        """Create a single node container without starting it.
+
+        Default implementation raises NotImplementedError.
+        Providers that support per-node lifecycle should override this.
+        """
+        raise NotImplementedError(
+            f"Provider {self.name} does not support per-node create"
+        )
+
+    async def destroy_node(
+        self,
+        lab_id: str,
+        node_name: str,
+        workspace: Path,
+    ) -> NodeActionResult:
+        """Destroy a single node container and clean up resources.
+
+        Default implementation raises NotImplementedError.
+        Providers that support per-node lifecycle should override this.
+        """
+        raise NotImplementedError(
+            f"Provider {self.name} does not support per-node destroy"
+        )
+
     async def get_console_command(
         self,
         lab_id: str,

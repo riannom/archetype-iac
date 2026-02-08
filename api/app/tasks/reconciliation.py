@@ -733,47 +733,66 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             logger.warning(f"No agent available to reconcile lab {lab_id}")
             return
 
-        # Query actual container status from ALL agents
+        # Query actual container status from ALL agents (in parallel)
         # Track both status and which agent has each container
         container_status_map: dict[str, str] = {}
         container_agent_map: dict[str, str] = {}  # node_name -> agent_id
         agents_successfully_queried: set[str] = set()  # Track which agents responded
         host_to_agent: dict[str, models.Host] = {}  # For live link creation
+
+        # Build list of online agents to query
+        agents_to_query: list[tuple[str, models.Host]] = []
         for agent_id in agent_ids:
             agent = session.get(models.Host, agent_id)
             if not agent or not agent_client.is_agent_online(agent):
                 logger.debug(f"Agent {agent_id} is offline, skipping in reconciliation")
                 continue
             host_to_agent[agent_id] = agent
+            agents_to_query.append((agent_id, agent))
 
+        async def _query_agent(aid: str, ag: models.Host):
+            """Query a single agent for lab status."""
             try:
-                result = await agent_client.get_lab_status_from_agent(agent, lab_id)
+                result = await agent_client.get_lab_status_from_agent(ag, lab_id)
+                return aid, ag, result, None
+            except Exception as e:
+                return aid, ag, None, e
+
+        # Query all agents in parallel
+        if agents_to_query:
+            query_results = await asyncio.gather(
+                *[_query_agent(aid, ag) for aid, ag in agents_to_query],
+                return_exceptions=True,
+            )
+
+            for item in query_results:
+                if isinstance(item, Exception):
+                    logger.warning(f"Agent query failed with exception: {item}")
+                    continue
+
+                aid, ag, result, error = item
+                if error:
+                    logger.warning(f"Failed to query agent {ag.name} for lab {lab_id}: {error}")
+                    _set_agent_error(ag, f"Query failed: {error}")
+                    continue
+
                 nodes = result.get("nodes", [])
                 agent_error = result.get("error")
 
-                # Only count as successfully queried if no error in response
-                # An error (e.g., Docker state corruption) means we can't trust the results
                 if not agent_error:
-                    agents_successfully_queried.add(agent_id)
-                    # Clear any previous error state - agent responded successfully
-                    _clear_agent_error(agent)
+                    agents_successfully_queried.add(aid)
+                    _clear_agent_error(ag)
                 else:
                     logger.warning(
-                        f"Agent {agent.name} returned error for lab {lab_id}: {agent_error}"
+                        f"Agent {ag.name} returned error for lab {lab_id}: {agent_error}"
                     )
-                    # Persist the error for visibility in UI
-                    _set_agent_error(agent, agent_error)
+                    _set_agent_error(ag, agent_error)
 
-                # Still merge any nodes that were returned (partial success)
                 for n in nodes:
                     node_name = n.get("name", "")
                     if node_name:
                         container_status_map[node_name] = n.get("status", "unknown")
-                        container_agent_map[node_name] = agent_id
-            except Exception as e:
-                logger.warning(f"Failed to query agent {agent.name} for lab {lab_id}: {e}")
-                # Persist the error for visibility in UI
-                _set_agent_error(agent, f"Query failed: {e}")
+                        container_agent_map[node_name] = aid
 
         logger.debug(f"Lab {lab_id} container status: {container_status_map}")
 
@@ -1296,18 +1315,15 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
             if ls.desired_state == "deleted":
                 session.delete(ls)
 
-        # === ENFORCEMENT: Trigger sync for nodes where actual != desired ===
-        # This makes reconciliation actively enforce desired state, not just observe
-        out_of_sync_nodes = []
+        # === OBSERVATION ONLY: Log nodes where actual != desired ===
+        # Enforcement is handled solely by state_enforcement_monitor() —
+        # reconciliation is read-only and does not create jobs.
+        out_of_sync_count = 0
         for ns in node_states:
-            # Skip nodes in transitional states (being handled by active job)
             if ns.actual_state in (NodeActualState.STOPPING.value, NodeActualState.STARTING.value, NodeActualState.PENDING.value):
                 continue
-            # Skip if timestamps indicate active operation
             if ns.stopping_started_at or ns.starting_started_at:
                 continue
-
-            # Check for state mismatch using state machine
             needs_start = (
                 ns.desired_state == NodeDesiredState.RUNNING.value
                 and ns.actual_state in (NodeActualState.STOPPED.value, NodeActualState.UNDEPLOYED.value, NodeActualState.ERROR.value)
@@ -1317,51 +1333,13 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 and ns.actual_state == NodeActualState.RUNNING.value
             )
             if needs_start or needs_stop:
-                out_of_sync_nodes.append(ns)
+                out_of_sync_count += 1
 
-        if out_of_sync_nodes:
-            # Check for active job that might already be handling this
-            active_job = (
-                session.query(models.Job)
-                .filter(
-                    models.Job.lab_id == lab_id,
-                    models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-                )
-                .first()
+        if out_of_sync_count:
+            logger.debug(
+                f"Reconciliation: {out_of_sync_count} node(s) out of sync in lab {lab_id} "
+                f"(enforcement deferred to state_enforcement_monitor)"
             )
-
-            if not active_job:
-                # No active job - trigger sync to enforce desired state
-                node_ids = [ns.node_id for ns in out_of_sync_nodes]
-                node_names = [ns.node_name for ns in out_of_sync_nodes]
-                logger.info(
-                    f"Reconciliation enforcement: triggering sync for {len(out_of_sync_nodes)} "
-                    f"out-of-sync node(s) in lab {lab_id}: {node_names}"
-                )
-
-                from app.tasks.jobs import run_node_reconcile
-                from app.utils.lab import get_lab_provider
-                from app.utils.task import safe_create_task
-
-                provider = get_lab_provider(lab)
-                enforcement_job = models.Job(
-                    lab_id=lab_id,
-                    user_id=None,  # System-initiated
-                    action=f"reconcile:enforce:{','.join(node_ids[:5])}{'...' if len(node_ids) > 5 else ''}",
-                    status="queued",
-                )
-                session.add(enforcement_job)
-                session.flush()  # Get the job ID
-
-                safe_create_task(
-                    run_node_reconcile(enforcement_job.id, lab_id, node_ids, provider=provider),
-                    name=f"reconcile:enforce:{enforcement_job.id}"
-                )
-            else:
-                logger.debug(
-                    f"Reconciliation: {len(out_of_sync_nodes)} node(s) out of sync in lab {lab_id} "
-                    f"but active job {active_job.id} exists, skipping enforcement"
-                )
 
         session.commit()
 

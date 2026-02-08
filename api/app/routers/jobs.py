@@ -478,7 +478,8 @@ async def lab_restart(
     return schemas.JobOut.model_validate(down_job)
 
 
-@router.post("/labs/{lab_id}/nodes/{node}/{action}")
+@router.post("/labs/{lab_id}/nodes/{node}/{action}",
+              deprecated=True)
 async def node_action(
     lab_id: str,
     node: str,
@@ -488,24 +489,16 @@ async def node_action(
 ) -> schemas.JobOut:
     """Start or stop a specific node.
 
-    This endpoint sets the desired state and triggers a sync job.
-    The sync job handles transitional states (starting/stopping) properly.
+    Deprecated: Use PUT /labs/{lab_id}/nodes/{node_id}/desired-state instead.
+    This endpoint applies the same guards as set_node_desired_state:
+    transitional state rejection, conflicting job check, error retry.
     """
     if action not in ("start", "stop"):
         raise HTTPException(status_code=400, detail="Unsupported node action")
 
     lab = get_lab_or_404(lab_id, database, current_user)
 
-    # Get the provider for this lab
-    lab_provider = get_lab_provider(lab)
-
-    # Check for healthy agent
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
-    if not agent:
-        raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
-
-    # Set desired state for the node
-    desired_state = "running" if action == "start" else "stopped"
+    # Resolve node by id or name
     node_state = (
         database.query(models.NodeState)
         .filter(
@@ -515,7 +508,6 @@ async def node_action(
         .first()
     )
     if not node_state:
-        # Try by node_name (container name)
         node_state = (
             database.query(models.NodeState)
             .filter(
@@ -527,27 +519,101 @@ async def node_action(
     if not node_state:
         raise HTTPException(status_code=404, detail=f"Node '{node}' not found")
 
-    node_state.desired_state = desired_state
-    database.commit()
+    node_id = node_state.node_id
+    desired_state = "running" if action == "start" else "stopped"
 
-    # Create sync job (uses transitional states)
-    job = models.Job(
+    # Transitional state guards (matching set_node_desired_state)
+    if desired_state == "running" and node_state.actual_state == "stopping":
+        raise HTTPException(status_code=409, detail="Cannot start: node is currently stopping")
+    if desired_state == "stopped" and node_state.actual_state == "starting":
+        raise HTTPException(status_code=409, detail="Cannot stop: node is currently starting")
+
+    needs_sync = node_state.desired_state != desired_state
+
+    if needs_sync:
+        node_state.desired_state = desired_state
+        database.commit()
+        database.refresh(node_state)
+
+        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        if not has_conflict:
+            is_out_of_sync = (
+                (desired_state == "running" and node_state.actual_state not in ("running", "pending", "starting"))
+                or (desired_state == "stopped" and node_state.actual_state not in ("stopped", "undeployed", "stopping"))
+            )
+            if is_out_of_sync:
+                from app.utils.lab import get_node_provider
+                db_node = database.query(models.Node).filter(
+                    models.Node.lab_id == lab.id,
+                    models.Node.gui_id == node_id
+                ).first()
+                provider = get_node_provider(db_node, database) if db_node else get_lab_provider(lab)
+
+                job = models.Job(
+                    lab_id=lab.id,
+                    user_id=current_user.id,
+                    action=f"sync:node:{node_id}",
+                    status="queued",
+                )
+                database.add(job)
+                database.commit()
+                database.refresh(job)
+
+                safe_create_task(
+                    run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
+                    name=f"sync:node:{job.id}"
+                )
+                return schemas.JobOut.model_validate(job)
+
+    elif (
+        node_state.desired_state == desired_state
+        and desired_state == "running"
+        and node_state.actual_state == "error"
+    ):
+        # Retry: reset enforcement state
+        node_state.enforcement_attempts = 0
+        node_state.enforcement_failed_at = None
+        node_state.last_enforcement_at = None
+        node_state.error_message = None
+        database.commit()
+        database.refresh(node_state)
+
+        has_conflict, _ = has_conflicting_job(lab_id, "sync")
+        if not has_conflict:
+            from app.utils.lab import get_node_provider
+            db_node = database.query(models.Node).filter(
+                models.Node.lab_id == lab.id,
+                models.Node.gui_id == node_id
+            ).first()
+            provider = get_node_provider(db_node, database) if db_node else get_lab_provider(lab)
+
+            job = models.Job(
+                lab_id=lab.id,
+                user_id=current_user.id,
+                action=f"sync:node:{node_id}",
+                status="queued",
+            )
+            database.add(job)
+            database.commit()
+            database.refresh(job)
+
+            safe_create_task(
+                run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
+                name=f"sync:node:{job.id}"
+            )
+            return schemas.JobOut.model_validate(job)
+
+    # No sync needed — return a no-op job indicator
+    noop_job = models.Job(
         lab_id=lab.id,
         user_id=current_user.id,
-        action=f"sync:node:{node}",
-        status="queued",
+        action=f"sync:node:{node_id}",
+        status="completed",
     )
-    database.add(job)
+    database.add(noop_job)
     database.commit()
-    database.refresh(job)
-
-    # Start sync job
-    safe_create_task(
-        run_node_reconcile(job.id, lab.id, [node], provider=lab_provider),
-        name=f"sync:node:{job.id}"
-    )
-
-    return schemas.JobOut.model_validate(job)
+    database.refresh(noop_job)
+    return schemas.JobOut.model_validate(noop_job)
 
 
 @router.get("/labs/{lab_id}/status")
