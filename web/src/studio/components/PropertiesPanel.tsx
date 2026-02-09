@@ -428,7 +428,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             <div className="space-y-2">
               <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Image Version</label>
               <select value={node.version} onChange={(e) => onUpdateNode(node.id, { version: e.target.value })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500 appearance-none">
-                {(model?.versions || [node.version]).map(v => <option key={v} value={v}>{v}</option>)}
+                {(model?.versions?.length ? model.versions : [node.version]).map(v => <option key={v} value={v}>{v}</option>)}
               </select>
             </div>
             <div className="pt-4 space-y-3">
