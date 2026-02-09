@@ -351,17 +351,20 @@ const StudioPage: React.FC = () => {
 
   // Handle WebSocket job progress - show toast for job failures/completions
   const handleWSJobProgress = useCallback((job: JobProgressData) => {
+    const prefix = job.action.startsWith('sync:') ? 'sync-' : '';
     if (job.status === 'failed' && job.error_message) {
       addNotification(
         'error',
         `Job Failed: ${job.action}`,
-        job.error_message
+        job.error_message,
+        { jobId: job.job_id, category: `${prefix}job-failed` }
       );
     } else if (job.status === 'completed') {
       addNotification(
         'success',
         `Job Completed: ${job.action}`,
-        job.progress_message || 'Operation completed successfully'
+        job.progress_message || 'Operation completed successfully',
+        { jobId: job.job_id, category: `${prefix}job-complete` }
       );
     }
   }, [addNotification]);
