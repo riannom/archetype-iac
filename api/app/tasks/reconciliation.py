@@ -1040,8 +1040,10 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                 )
 
                 if agent_was_queried:
-                    # Agent responded but container not found - safe to mark undeployed
-                    if ns.actual_state not in ("undeployed", "stopped"):
+                    # Agent responded but container/domain not found — it truly doesn't exist.
+                    # Both Docker (ps -a) and libvirt (virsh list --all) include stopped
+                    # instances in status, so absence means the node is gone.
+                    if ns.actual_state != "undeployed":
                         ns.actual_state = NodeActualState.UNDEPLOYED.value
                         ns.error_message = None
                     ns.is_ready = False
