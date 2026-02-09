@@ -98,7 +98,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
   // Loading state (before node selection)
   if (loading && !selectedNodeName) {
     return (
-      <div className="flex-1 flex flex-col bg-stone-900 border-l border-r border-stone-800">
+      <div className="w-72 shrink-0 flex flex-col bg-stone-900 border-l border-r border-stone-800">
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-stone-500">
             <i className="fas fa-spinner fa-spin mr-2"></i>
@@ -112,7 +112,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
   // Empty state: no node selected
   if (!selectedNodeName) {
     return (
-      <div className="flex-1 flex flex-col bg-stone-900 border-l border-r border-stone-800">
+      <div className="w-72 shrink-0 flex flex-col bg-stone-900 border-l border-r border-stone-800">
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center text-stone-500">
             <i className="fas fa-arrow-left text-4xl mb-4 opacity-50"></i>
@@ -124,7 +124,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-stone-900 border-l border-r border-stone-800">
+    <div className="w-72 shrink-0 flex flex-col bg-stone-900 border-l border-r border-stone-800">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-stone-800 bg-stone-900/50">
         <div className="flex items-center gap-2">

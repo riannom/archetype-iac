@@ -36,7 +36,7 @@ const ConfigViewer: React.FC<ConfigViewerProps> = ({
   // Error state
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center bg-stone-950">
+      <div className="flex-1 h-full flex items-center justify-center bg-stone-950">
         <div className="flex items-center gap-3 text-red-400">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -51,7 +51,7 @@ const ConfigViewer: React.FC<ConfigViewerProps> = ({
   if (viewMode === 'compare') {
     if (!comparisonSnapshots || comparisonSnapshots.length !== 2) {
       return (
-        <div className="h-full flex items-center justify-center bg-stone-950">
+        <div className="flex-1 h-full flex items-center justify-center bg-stone-950">
           <div className="text-stone-500 text-sm">
             Select 2 snapshots to compare
           </div>
@@ -60,7 +60,7 @@ const ConfigViewer: React.FC<ConfigViewerProps> = ({
     }
 
     return (
-      <div className="h-full flex flex-col bg-stone-950">
+      <div className="flex-1 h-full flex flex-col bg-stone-950">
         <div className="flex items-center justify-between px-4 py-3 border-b border-stone-800">
           <div className="text-sm text-stone-400">
             Comparing 2 snapshots
@@ -81,7 +81,7 @@ const ConfigViewer: React.FC<ConfigViewerProps> = ({
   // View mode - empty state
   if (!selectedSnapshot) {
     return (
-      <div className="h-full flex items-center justify-center bg-stone-950">
+      <div className="flex-1 h-full flex items-center justify-center bg-stone-950">
         <div className="text-stone-500 text-sm">
           Select a snapshot to view
         </div>
@@ -91,7 +91,7 @@ const ConfigViewer: React.FC<ConfigViewerProps> = ({
 
   // View mode - with content
   return (
-    <div className="h-full flex flex-col bg-stone-950">
+    <div className="flex-1 h-full flex flex-col bg-stone-950">
       <div className="flex items-center justify-between px-4 py-3 border-b border-stone-800">
         <div className="text-sm text-stone-400">
           {new Date(selectedSnapshot.created_at).toLocaleString()}
