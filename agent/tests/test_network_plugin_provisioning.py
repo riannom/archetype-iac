@@ -155,6 +155,7 @@ def test_hot_connect_rejects_cross_lab_endpoints():
     plugin.endpoints["ep-b"] = ep_b
 
     plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))  # should not be called
+    plugin._validate_endpoint_exists = AsyncMock(return_value=True)
     plugin._mark_dirty_and_save = AsyncMock()
 
     result = asyncio.run(
@@ -175,6 +176,7 @@ def test_hot_connect_rejects_missing_networks():
     plugin.endpoints["ep-b"] = ep_b
 
     plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))  # should not be called
+    plugin._validate_endpoint_exists = AsyncMock(return_value=True)
 
     result = asyncio.run(
         plugin.hot_connect("lab-a", "a", "eth1", "b", "eth1")

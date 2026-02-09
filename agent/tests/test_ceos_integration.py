@@ -146,7 +146,7 @@ def get_platform(container_name: str) -> str | None:
     return None
 
 
-def test_cli(container_name: str) -> bool:
+def check_cli(container_name: str) -> bool:
     """Test if CLI is accessible in a cEOS container."""
     code, stdout, stderr = exec_in_container(
         container_name,
@@ -204,7 +204,7 @@ class TestCeosPlatformDetection:
         time.sleep(60)
 
         # Test CLI
-        assert test_cli(container_name), "CLI not accessible"
+        assert check_cli(container_name), "CLI not accessible"
 
 
 class TestMultipleCeosNodes:
@@ -263,7 +263,7 @@ class TestMultipleCeosNodes:
         # Check CLI on all nodes
         for node in ["eos_1", "eos_2", "eos_3"]:
             container_name = f"archetype-{TEST_LAB_ID[:20]}-{node}"
-            assert test_cli(container_name), f"{node}: CLI not accessible"
+            assert check_cli(container_name), f"{node}: CLI not accessible"
 
 
 class TestDeployPerformance:
