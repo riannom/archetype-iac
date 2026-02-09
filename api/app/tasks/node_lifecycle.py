@@ -668,7 +668,7 @@ class NodeLifecycleManager:
                 elif ns.actual_state in ("stopped", "error", "starting"):
                     nodes_need_start.append(ns)
             elif ns.desired_state == NodeDesiredState.STOPPED.value:
-                if ns.actual_state in ("running", "stopping"):
+                if ns.actual_state in ("running", "stopping", "starting"):
                     nodes_need_stop.append(ns)
 
         logger.info(

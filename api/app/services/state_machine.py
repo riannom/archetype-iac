@@ -148,12 +148,12 @@ class NodeStateMachine:
         """Check if a node can accept a start/stop command.
 
         Returns (True, "") if allowed, (False, reason) if blocked.
-        Blocks: start while stopping, stop while starting.
+        Blocks: start while stopping.
         """
         if command == "start" and actual_state == "stopping":
             return False, "Cannot start: node is currently stopping"
-        if command == "stop" and actual_state == "starting":
-            return False, "Cannot stop: node is currently starting"
+        # Allow stop for "starting" nodes — VMs can take minutes to boot
+        # and users should be able to abort a slow start.
         return True, ""
 
     @classmethod
@@ -166,8 +166,11 @@ class NodeStateMachine:
             ("reset_and_proceed", "") — error node needing retry
             ("proceed", "") — actionable
         """
-        # Skip transitional
+        # Skip transitional — but allow stop for "starting" nodes
+        # (VMs can take minutes to boot; users should be able to abort)
         if actual_state in ("starting", "stopping", "pending"):
+            if command == "stop" and actual_state == "starting":
+                return "proceed", ""
             return "skip_transitional", f"Node in transitional state: {actual_state}"
 
         # Already in desired state

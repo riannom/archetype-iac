@@ -692,16 +692,17 @@ class TestCanAcceptCommand:
         assert not allowed
         assert "stopping" in reason
 
-    def test_stop_blocked_while_starting(self) -> None:
+    def test_stop_allowed_while_starting(self) -> None:
+        """Stop should be allowed for starting nodes (VMs can take minutes to boot)."""
         allowed, reason = NodeStateMachine.can_accept_command("starting", "stop")
-        assert not allowed
-        assert "starting" in reason
+        assert allowed
 
-    # Allowed combinations — all 8 states × 2 commands except the 2 blocked
+    # Allowed combinations — all 8 states × 2 commands except start-while-stopping
     @pytest.mark.parametrize("actual,cmd", [
         ("undeployed", "start"), ("undeployed", "stop"),
         ("pending", "start"), ("pending", "stop"),
         ("starting", "start"),  # starting + start = OK (already starting)
+        ("starting", "stop"),   # starting + stop = OK (abort slow boot)
         ("running", "start"), ("running", "stop"),
         ("stopping", "stop"),  # stopping + stop = OK (already stopping)
         ("stopped", "start"), ("stopped", "stop"),
@@ -726,6 +727,11 @@ class TestCanAcceptBulkCommand:
     def test_skip_transitional(self, actual: str) -> None:
         classification, _ = NodeStateMachine.can_accept_bulk_command(actual, "stopped", "start")
         assert classification == "skip_transitional"
+
+    def test_stop_starting_node_proceeds(self) -> None:
+        """Stopping a starting node should proceed (VMs can take minutes to boot)."""
+        classification, _ = NodeStateMachine.can_accept_bulk_command("starting", "running", "stop")
+        assert classification == "proceed"
 
     # Already in state
     def test_already_running(self) -> None:
