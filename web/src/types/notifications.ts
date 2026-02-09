@@ -22,12 +22,19 @@ export interface ToastSettings {
   showJobFailed: boolean;
   showJobRetry: boolean;
   showImageSync: boolean;
+  showSyncJobs: boolean;
 }
 
 export interface BellSettings {
   enabled: boolean;
   maxHistory: number;
   soundEnabled: boolean;
+  showJobStart: boolean;
+  showJobComplete: boolean;
+  showJobFailed: boolean;
+  showJobRetry: boolean;
+  showImageSync: boolean;
+  showSyncJobs: boolean;
 }
 
 export interface NotificationSettings {
@@ -70,12 +77,19 @@ export const DEFAULT_TOAST_SETTINGS: ToastSettings = {
   showJobFailed: true,
   showJobRetry: true,
   showImageSync: true,
+  showSyncJobs: false,
 };
 
 export const DEFAULT_BELL_SETTINGS: BellSettings = {
   enabled: true,
   maxHistory: 50,
   soundEnabled: false,
+  showJobStart: false,
+  showJobComplete: false,
+  showJobFailed: true,
+  showJobRetry: false,
+  showImageSync: false,
+  showSyncJobs: false,
 };
 
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {

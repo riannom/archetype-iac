@@ -110,6 +110,21 @@ export function NotificationSettingsPanel({ isOpen, onClose }: NotificationSetti
                       Image sync events
                     </span>
                   </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={toasts.showSyncJobs ?? false}
+                      onChange={(e) =>
+                        updateNotificationSettings({
+                          toasts: { ...toasts, showSyncJobs: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                    />
+                    <span className="text-sm text-stone-600 dark:text-stone-400">
+                      State sync jobs
+                    </span>
+                  </label>
 
                   <div className="pt-2">
                     <label className="text-xs font-medium text-stone-500 dark:text-stone-400">
@@ -172,6 +187,82 @@ export function NotificationSettingsPanel({ isOpen, onClose }: NotificationSetti
                   Enable notification center (bell icon)
                 </span>
               </label>
+
+              {bell.enabled && (
+                <div className="ml-7 space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={bell.showJobStart ?? false}
+                      onChange={(e) =>
+                        updateNotificationSettings({
+                          bell: { ...bell, showJobStart: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                    />
+                    <span className="text-sm text-stone-600 dark:text-stone-400">Job started</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={bell.showJobComplete ?? false}
+                      onChange={(e) =>
+                        updateNotificationSettings({
+                          bell: { ...bell, showJobComplete: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                    />
+                    <span className="text-sm text-stone-600 dark:text-stone-400">
+                      Job completed
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={bell.showJobFailed ?? true}
+                      onChange={(e) =>
+                        updateNotificationSettings({
+                          bell: { ...bell, showJobFailed: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                    />
+                    <span className="text-sm text-stone-600 dark:text-stone-400">Job failed</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={bell.showImageSync ?? false}
+                      onChange={(e) =>
+                        updateNotificationSettings({
+                          bell: { ...bell, showImageSync: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                    />
+                    <span className="text-sm text-stone-600 dark:text-stone-400">
+                      Image sync events
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={bell.showSyncJobs ?? false}
+                      onChange={(e) =>
+                        updateNotificationSettings({
+                          bell: { ...bell, showSyncJobs: e.target.checked },
+                        })
+                      }
+                      className="w-4 h-4 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+                    />
+                    <span className="text-sm text-stone-600 dark:text-stone-400">
+                      State sync jobs
+                    </span>
+                  </label>
+                </div>
+              )}
             </div>
           </div>
 

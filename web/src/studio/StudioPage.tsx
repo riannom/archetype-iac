@@ -825,7 +825,6 @@ const StudioPage: React.FC = () => {
   useEffect(() => {
     const prevStatuses = prevJobsRef.current;
     const newStatuses = new Map<string, string>();
-    const toastSettings = preferences?.notification_settings.toasts;
 
     // On initial load, just populate the ref without logging
     // This prevents re-logging all existing jobs on page refresh
@@ -838,18 +837,14 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    // Helper to check if job is a sync job (internal operation, no toast notifications)
-    // sync:node:xxx, sync:lab:xxx, sync:agent:xxx are internal state sync operations
-    const isSyncJob = (action: string) => action.startsWith('sync:');
+    // Determine notification category prefix based on job action
+    const categoryPrefix = (action: string) => action.startsWith('sync:') ? 'sync-' : '';
 
     for (const job of jobs) {
       const jobKey = job.id;
       const prevStatus = prevStatuses.get(jobKey);
       newStatuses.set(jobKey, job.status);
-
-      // Skip notifications for sync jobs - they're internal operations
-      // Still log them to the task log for debugging, but no toast spam
-      const skipNotifications = isSyncJob(job.action);
+      const prefix = categoryPrefix(job.action);
 
       if (prevStatus && prevStatus !== job.status) {
         const actionLabel = job.action.startsWith('node:')
@@ -858,27 +853,20 @@ const StudioPage: React.FC = () => {
 
         if (job.status === 'running') {
           addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
-          // Trigger notification if enabled (skip for sync jobs)
-          if (!skipNotifications && toastSettings?.showJobStart) {
-            addNotification('info', `${actionLabel} started`, undefined, { jobId: job.id, labId: job.lab_id });
-          }
+          addNotification('info', `${actionLabel} started`, undefined, {
+            jobId: job.id, labId: job.lab_id, category: `${prefix}job-start`,
+          });
         } else if (job.status === 'completed') {
           addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
-          // Trigger notification if enabled (skip for sync jobs)
-          if (!skipNotifications && toastSettings?.showJobComplete) {
-            addNotification('success', `${actionLabel} completed`, undefined, { jobId: job.id, labId: job.lab_id });
-          }
+          addNotification('success', `${actionLabel} completed`, undefined, {
+            jobId: job.id, labId: job.lab_id, category: `${prefix}job-complete`,
+          });
         } else if (job.status === 'failed') {
           const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
           addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
-          // Trigger notification if enabled (skip for sync jobs unless they fail)
-          // Note: We still show failed sync job notifications since failures need attention
-          if (toastSettings?.showJobFailed) {
-            addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
-              jobId: job.id,
-              labId: job.lab_id,
-            });
-          }
+          addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
+            jobId: job.id, labId: job.lab_id, category: `${prefix}job-failed`,
+          });
         }
       } else if (!prevStatus) {
         // New job - log based on its initial status
@@ -890,29 +878,26 @@ const StudioPage: React.FC = () => {
           addTaskLogEntry('info', `Job queued: ${actionLabel}`, job.id);
         } else if (job.status === 'running') {
           addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
-          if (!skipNotifications && toastSettings?.showJobStart) {
-            addNotification('info', `${actionLabel} started`, undefined, { jobId: job.id, labId: job.lab_id });
-          }
+          addNotification('info', `${actionLabel} started`, undefined, {
+            jobId: job.id, labId: job.lab_id, category: `${prefix}job-start`,
+          });
         } else if (job.status === 'completed') {
           addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
-          if (!skipNotifications && toastSettings?.showJobComplete) {
-            addNotification('success', `${actionLabel} completed`, undefined, { jobId: job.id, labId: job.lab_id });
-          }
+          addNotification('success', `${actionLabel} completed`, undefined, {
+            jobId: job.id, labId: job.lab_id, category: `${prefix}job-complete`,
+          });
         } else if (job.status === 'failed') {
           const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
           addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
-          if (toastSettings?.showJobFailed) {
-            addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
-              jobId: job.id,
-              labId: job.lab_id,
-            });
-          }
+          addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
+            jobId: job.id, labId: job.lab_id, category: `${prefix}job-failed`,
+          });
         }
       }
     }
 
     prevJobsRef.current = newStatuses;
-  }, [jobs, addTaskLogEntry, addNotification, preferences]);
+  }, [jobs, addTaskLogEntry, addNotification]);
 
   const handleCreateLab = async () => {
     const name = `Project_${labs.length + 1}`;

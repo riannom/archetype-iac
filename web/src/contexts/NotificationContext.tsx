@@ -111,8 +111,34 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         ...options,
       };
 
-      // Add to bell history if enabled
-      if (preferences?.notification_settings.bell.enabled) {
+      const category = notification.category;
+
+      // Check if a notification category passes filter settings
+      const passesFilter = (settings: {
+        showJobStart: boolean;
+        showJobComplete: boolean;
+        showJobFailed: boolean;
+        showJobRetry: boolean;
+        showImageSync: boolean;
+        showSyncJobs: boolean;
+      }) => {
+        if (!category) return true;
+        const isSync = category.startsWith('sync-');
+        if (isSync && !settings.showSyncJobs) return false;
+        const baseCategory = isSync ? category.replace('sync-', 'job-') : category;
+        switch (baseCategory) {
+          case 'job-start': return settings.showJobStart;
+          case 'job-complete': return settings.showJobComplete;
+          case 'job-failed': return settings.showJobFailed;
+          case 'job-retry': return settings.showJobRetry;
+          case 'image-sync': return settings.showImageSync;
+          default: return true;
+        }
+      };
+
+      // Add to bell history if enabled and passes filters
+      if (preferences?.notification_settings.bell.enabled &&
+          passesFilter(preferences.notification_settings.bell)) {
         setNotifications((prev) => {
           const maxHistory = preferences.notification_settings.bell.maxHistory;
           const updated = [notification, ...prev];
@@ -120,8 +146,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         });
       }
 
-      // Add to toast queue if enabled
-      if (preferences?.notification_settings.toasts.enabled) {
+      // Add to toast queue if enabled and passes filters
+      if (preferences?.notification_settings.toasts.enabled &&
+          passesFilter(preferences.notification_settings.toasts)) {
         setToasts((prev) => [...prev, notification]);
 
         // Auto-dismiss after duration
