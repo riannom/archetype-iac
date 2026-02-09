@@ -129,46 +129,67 @@ async def get_agent_mesh(
     # Get settings
     settings = get_or_create_settings(database)
 
-    # Get or create agent links for all pairs
+    # Pre-load data plane addresses and network configs
+    # First check hosts.data_plane_address, then fall back to transport managed interfaces
+    agent_dp_map: dict[str, str | None] = {a.id: a.data_plane_address for a in agents}
+    transport_ifaces = (
+        database.query(models.AgentManagedInterface)
+        .filter(
+            models.AgentManagedInterface.interface_type == "transport",
+            models.AgentManagedInterface.sync_status == "synced",
+            models.AgentManagedInterface.ip_address.isnot(None),
+        )
+        .all()
+    )
+    # Also build a map of transport interface MTUs for data plane testing
+    transport_mtu_map: dict[str, int] = {}
+    for iface in transport_ifaces:
+        if not agent_dp_map.get(iface.host_id):
+            # Use transport interface IP (strip CIDR suffix)
+            agent_dp_map[iface.host_id] = iface.ip_address.split("/")[0] if iface.ip_address else None
+        transport_mtu_map[iface.host_id] = iface.desired_mtu
+    net_configs = {
+        c.host_id: c
+        for c in database.query(models.AgentNetworkConfig).all()
+    }
+
+    # Get or create agent links for all pairs (both management and data_plane)
     agent_ids = [a.id for a in agents]
     links = []
 
-    # Create missing agent link records
+    def _ensure_link(src_id: str, tgt_id: str, path: str, mtu: int) -> None:
+        """Create a link record if it doesn't exist for this (src, tgt, path) triple."""
+        existing = (
+            database.query(models.AgentLink)
+            .filter(
+                models.AgentLink.source_agent_id == src_id,
+                models.AgentLink.target_agent_id == tgt_id,
+                models.AgentLink.test_path == path,
+            )
+            .first()
+        )
+        if not existing:
+            database.add(models.AgentLink(
+                source_agent_id=src_id,
+                target_agent_id=tgt_id,
+                configured_mtu=mtu,
+                test_path=path,
+            ))
+
     for i, source_id in enumerate(agent_ids):
         for target_id in agent_ids[i + 1:]:
-            # Check for existing link A->B
-            link_ab = (
-                database.query(models.AgentLink)
-                .filter(
-                    models.AgentLink.source_agent_id == source_id,
-                    models.AgentLink.target_agent_id == target_id,
-                )
-                .first()
-            )
-            if not link_ab:
-                link_ab = models.AgentLink(
-                    source_agent_id=source_id,
-                    target_agent_id=target_id,
-                    configured_mtu=settings.overlay_mtu,
-                )
-                database.add(link_ab)
+            # Always create management path links (A->B and B->A)
+            _ensure_link(source_id, target_id, "management", settings.overlay_mtu)
+            _ensure_link(target_id, source_id, "management", settings.overlay_mtu)
 
-            # Check for existing link B->A
-            link_ba = (
-                database.query(models.AgentLink)
-                .filter(
-                    models.AgentLink.source_agent_id == target_id,
-                    models.AgentLink.target_agent_id == source_id,
-                )
-                .first()
-            )
-            if not link_ba:
-                link_ba = models.AgentLink(
-                    source_agent_id=target_id,
-                    target_agent_id=source_id,
-                    configured_mtu=settings.overlay_mtu,
-                )
-                database.add(link_ba)
+            # Create data_plane path links if both agents have data_plane_address
+            if agent_dp_map.get(source_id) and agent_dp_map.get(target_id):
+                # Resolve MTU: prefer network config, fall back to transport managed interface
+                src_mtu = (net_configs.get(source_id).desired_mtu if net_configs.get(source_id) and net_configs[source_id].desired_mtu > settings.overlay_mtu else None) or transport_mtu_map.get(source_id)
+                tgt_mtu = (net_configs.get(target_id).desired_mtu if net_configs.get(target_id) and net_configs[target_id].desired_mtu > settings.overlay_mtu else None) or transport_mtu_map.get(target_id)
+                dp_mtu = min(src_mtu, tgt_mtu) if src_mtu and tgt_mtu else (src_mtu or tgt_mtu or settings.overlay_mtu)
+                _ensure_link(source_id, target_id, "data_plane", dp_mtu)
+                _ensure_link(target_id, source_id, "data_plane", dp_mtu)
 
     database.commit()
 
@@ -192,6 +213,7 @@ async def get_agent_mesh(
                 test_status=link.test_status,
                 test_error=link.test_error,
                 latency_ms=link.latency_ms,
+                test_path=link.test_path,
             )
         )
 
@@ -246,25 +268,93 @@ async def test_mtu_between_agents(
     # Get settings
     settings = get_or_create_settings(database)
 
-    # Prefer data plane addresses for MTU testing when both agents have them
+    # Resolve data plane addresses: check host field first, then transport managed interfaces
     from app.agent_client import resolve_agent_ip
+
+    def _resolve_dp_address(agent: models.Host) -> str | None:
+        if agent.data_plane_address:
+            return agent.data_plane_address
+        iface = (
+            database.query(models.AgentManagedInterface)
+            .filter(
+                models.AgentManagedInterface.host_id == agent.id,
+                models.AgentManagedInterface.interface_type == "transport",
+                models.AgentManagedInterface.sync_status == "synced",
+                models.AgentManagedInterface.ip_address.isnot(None),
+            )
+            .first()
+        )
+        if iface and iface.ip_address:
+            return iface.ip_address.split("/")[0]
+        return None
+
+    source_dp = _resolve_dp_address(source_agent)
+    target_dp = _resolve_dp_address(target_agent)
     source_ip: str | None = None
-    if source_agent.data_plane_address and target_agent.data_plane_address:
-        # Both have data plane addresses — test on data plane path
-        target_ip = target_agent.data_plane_address
-        source_ip = source_agent.data_plane_address
+
+    # Determine test path: use explicit path if provided, otherwise auto-detect
+    if request.test_path is not None:
+        # Explicit path requested
+        test_path = request.test_path
+    elif source_dp and target_dp:
+        # Auto-detect: both have data plane addresses — test on data plane path
         test_path = "data_plane"
     else:
-        # Fall back to management addresses
-        target_ip = await resolve_agent_ip(target_agent.address)
+        # Auto-detect: fall back to management
         test_path = "management"
 
-    # Get or create the link record
+    if test_path == "data_plane":
+        if not source_dp or not target_dp:
+            return MtuTestResponse(
+                success=False,
+                source_agent_id=request.source_agent_id,
+                target_agent_id=request.target_agent_id,
+                configured_mtu=0,
+                test_path=test_path,
+                error="Both agents must have data plane addresses for data plane testing",
+            )
+        target_ip = target_dp
+        source_ip = source_dp
+    else:
+        target_ip = await resolve_agent_ip(target_agent.address)
+
+    # Determine test MTU: use transport MTU on data plane, overlay MTU on management
+    test_mtu = settings.overlay_mtu
+    if test_path == "data_plane":
+        def _resolve_dp_mtu(host_id: str) -> int | None:
+            """Get data plane MTU: prefer network config if > overlay, else transport managed interface."""
+            cfg = (
+                database.query(models.AgentNetworkConfig)
+                .filter(models.AgentNetworkConfig.host_id == host_id)
+                .first()
+            )
+            if cfg and cfg.desired_mtu and cfg.desired_mtu > settings.overlay_mtu:
+                return cfg.desired_mtu
+            iface = (
+                database.query(models.AgentManagedInterface)
+                .filter(
+                    models.AgentManagedInterface.host_id == host_id,
+                    models.AgentManagedInterface.interface_type == "transport",
+                    models.AgentManagedInterface.sync_status == "synced",
+                )
+                .first()
+            )
+            if iface:
+                return iface.desired_mtu
+            return cfg.desired_mtu if cfg and cfg.desired_mtu else None
+
+        src_mtu = _resolve_dp_mtu(request.source_agent_id)
+        tgt_mtu = _resolve_dp_mtu(request.target_agent_id)
+        if src_mtu and tgt_mtu:
+            test_mtu = min(src_mtu, tgt_mtu)
+
+    # Get or create the link record (filtered by test_path)
     link = (
         database.query(models.AgentLink)
         .filter(
             models.AgentLink.source_agent_id == request.source_agent_id,
             models.AgentLink.target_agent_id == request.target_agent_id,
+            models.AgentLink.test_path == test_path,
         )
         .first()
     )
@@ -272,7 +362,8 @@ async def test_mtu_between_agents(
         link = models.AgentLink(
             source_agent_id=request.source_agent_id,
             target_agent_id=request.target_agent_id,
-            configured_mtu=settings.overlay_mtu,
+            configured_mtu=test_mtu,
+            test_path=test_path,
         )
         database.add(link)
         database.commit()
@@ -280,7 +371,8 @@ async def test_mtu_between_agents(
 
     # Update link to pending status
     link.test_status = "pending"
-    link.configured_mtu = settings.overlay_mtu
+    link.configured_mtu = test_mtu
+    link.test_path = test_path
     database.commit()
 
     try:
@@ -288,7 +380,7 @@ async def test_mtu_between_agents(
         result = await agent_client.test_mtu_on_agent(
             source_agent,
             target_ip,
-            settings.overlay_mtu,
+            test_mtu,
             source_ip=source_ip,
         )
 
@@ -296,7 +388,7 @@ async def test_mtu_between_agents(
         link.last_test_at = datetime.now(timezone.utc)
         if result.get("success"):
             link.test_status = "success"
-            link.tested_mtu = result.get("tested_mtu", settings.overlay_mtu)
+            link.tested_mtu = result.get("tested_mtu", test_mtu)
             link.link_type = result.get("link_type", "unknown")
             link.latency_ms = result.get("latency_ms")
             link.test_error = None
@@ -311,7 +403,7 @@ async def test_mtu_between_agents(
             success=result.get("success", False),
             source_agent_id=request.source_agent_id,
             target_agent_id=request.target_agent_id,
-            configured_mtu=settings.overlay_mtu,
+            configured_mtu=test_mtu,
             tested_mtu=result.get("tested_mtu"),
             link_type=result.get("link_type"),
             latency_ms=result.get("latency_ms"),
@@ -330,7 +422,7 @@ async def test_mtu_between_agents(
             success=False,
             source_agent_id=request.source_agent_id,
             target_agent_id=request.target_agent_id,
-            configured_mtu=settings.overlay_mtu,
+            configured_mtu=test_mtu,
             error=str(e),
         )
 
@@ -365,37 +457,62 @@ async def test_all_agent_pairs(
             results=[],
         )
 
-    settings = get_or_create_settings(database)
     results = []
     successful = 0
     failed = 0
 
-    # Test all pairs in both directions
+    # Build set of agent IDs that have data plane addresses (host field or transport interfaces)
+    dp_agent_ids: set[str] = set()
+    for a in online_agents:
+        if a.data_plane_address:
+            dp_agent_ids.add(a.id)
+    transport_ifaces = (
+        database.query(models.AgentManagedInterface.host_id)
+        .filter(
+            models.AgentManagedInterface.interface_type == "transport",
+            models.AgentManagedInterface.sync_status == "synced",
+            models.AgentManagedInterface.ip_address.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+    for (host_id,) in transport_ifaces:
+        dp_agent_ids.add(host_id)
+
+    # Test all pairs in both directions, testing both paths when applicable
     for i, source_agent in enumerate(online_agents):
         for target_agent in online_agents[i + 1:]:
-            # Test A -> B
-            request_ab = MtuTestRequest(
-                source_agent_id=source_agent.id,
-                target_agent_id=target_agent.id,
-            )
-            result_ab = await test_mtu_between_agents(request_ab, database, current_user)
-            results.append(result_ab)
-            if result_ab.success:
-                successful += 1
-            else:
-                failed += 1
+            # Determine which paths to test for this pair
+            paths_to_test = ["management"]
+            if source_agent.id in dp_agent_ids and target_agent.id in dp_agent_ids:
+                paths_to_test.append("data_plane")
 
-            # Test B -> A
-            request_ba = MtuTestRequest(
-                source_agent_id=target_agent.id,
-                target_agent_id=source_agent.id,
-            )
-            result_ba = await test_mtu_between_agents(request_ba, database, current_user)
-            results.append(result_ba)
-            if result_ba.success:
-                successful += 1
-            else:
-                failed += 1
+            for path in paths_to_test:
+                # Test A -> B
+                request_ab = MtuTestRequest(
+                    source_agent_id=source_agent.id,
+                    target_agent_id=target_agent.id,
+                    test_path=path,
+                )
+                result_ab = await test_mtu_between_agents(request_ab, database, current_user)
+                results.append(result_ab)
+                if result_ab.success:
+                    successful += 1
+                else:
+                    failed += 1
+
+                # Test B -> A
+                request_ba = MtuTestRequest(
+                    source_agent_id=target_agent.id,
+                    target_agent_id=source_agent.id,
+                    test_path=path,
+                )
+                result_ba = await test_mtu_between_agents(request_ba, database, current_user)
+                results.append(result_ba)
+                if result_ba.success:
+                    successful += 1
+                else:
+                    failed += 1
 
     return MtuTestAllResponse(
         total_pairs=len(results),
@@ -992,6 +1109,11 @@ async def create_managed_interface(
     iface.sync_status = sync_status
     if sync_status == "error":
         iface.sync_error = result.get("error", "Unknown error") if agent_client.is_agent_online(agent) else "Agent offline"
+
+    # Set host data_plane_address when a transport interface is successfully provisioned
+    if request.interface_type == "transport" and sync_status == "synced" and actual_ip:
+        agent.data_plane_address = actual_ip.split("/")[0]
+
     database.commit()
     database.refresh(iface)
 
@@ -1089,6 +1211,24 @@ async def delete_managed_interface(
         )
         if not result.get("success"):
             logger.warning(f"Failed to delete interface {iface.name} from agent: {result.get('error')}")
+
+    # Clear data_plane_address if this was the transport interface providing it
+    if iface.interface_type == "transport" and agent:
+        remaining = (
+            database.query(models.AgentManagedInterface)
+            .filter(
+                models.AgentManagedInterface.host_id == iface.host_id,
+                models.AgentManagedInterface.interface_type == "transport",
+                models.AgentManagedInterface.id != iface.id,
+                models.AgentManagedInterface.sync_status == "synced",
+                models.AgentManagedInterface.ip_address.isnot(None),
+            )
+            .first()
+        )
+        if remaining:
+            agent.data_plane_address = remaining.ip_address.split("/")[0]
+        else:
+            agent.data_plane_address = None
 
     database.delete(iface)
     database.commit()

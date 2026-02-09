@@ -755,7 +755,7 @@ class AgentLink(Base):
     - unknown: Not yet tested or unable to determine
     """
     __tablename__ = "agent_links"
-    __table_args__ = (UniqueConstraint("source_agent_id", "target_agent_id", name="uq_agent_link_pair"),)
+    __table_args__ = (UniqueConstraint("source_agent_id", "target_agent_id", "test_path", name="uq_agent_link_pair_path"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     source_agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
@@ -774,6 +774,8 @@ class AgentLink(Base):
     test_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Measured latency in milliseconds
     latency_ms: Mapped[float | None] = mapped_column(nullable=True)
+    # Which network path was tested: "data_plane" or "management"
+    test_path: Mapped[str] = mapped_column(String(20), default="management", server_default="management")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

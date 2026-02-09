@@ -50,6 +50,7 @@ interface AgentLinkOut {
   test_status: string;
   test_error: string | null;
   latency_ms: number | null;
+  test_path: string;
 }
 
 interface AgentMeshResponse {
@@ -66,6 +67,7 @@ interface MtuTestResponse {
   tested_mtu: number | null;
   link_type: string | null;
   latency_ms: number | null;
+  test_path: string | null;
   error: string | null;
 }
 
@@ -108,6 +110,30 @@ interface AgentNetworkConfig {
   vlan_id: number | null;
   transport_ip: string | null;
   transport_subnet: string | null;
+}
+
+interface ManagedInterface {
+  id: string;
+  host_id: string;
+  host_name: string | null;
+  name: string;
+  interface_type: string;
+  parent_interface: string | null;
+  vlan_id: number | null;
+  ip_address: string | null;
+  desired_mtu: number;
+  current_mtu: number | null;
+  is_up: boolean;
+  sync_status: string;
+  sync_error: string | null;
+  last_sync_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ManagedInterfacesResponse {
+  interfaces: ManagedInterface[];
+  total: number;
 }
 
 interface LabInfo {
@@ -230,11 +256,12 @@ const InfrastructurePage: React.FC = () => {
 
   // Settings form state
   const [mtuValue, setMtuValue] = useState<number>(1450);
-  const [verificationEnabled, setVerificationEnabled] = useState<boolean>(true);
-  const [preserveContainerMtu, setPreserveContainerMtu] = useState<boolean>(false);
-  const [clampHostMtu, setClampHostMtu] = useState<boolean>(true);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
+
+  // Managed interfaces state
+  const [managedInterfaces, setManagedInterfaces] = useState<ManagedInterface[]>([]);
+  const [managedInterfacesLoading, setManagedInterfacesLoading] = useState(false);
 
   // Testing state
   const [testingAll, setTestingAll] = useState(false);
@@ -294,9 +321,6 @@ const InfrastructurePage: React.FC = () => {
       const data = await apiRequest<AgentMeshResponse>('/infrastructure/mesh');
       setMesh(data);
       setMtuValue(data.settings.overlay_mtu);
-      setVerificationEnabled(data.settings.mtu_verification_enabled);
-      setPreserveContainerMtu(data.settings.overlay_preserve_container_mtu);
-      setClampHostMtu(data.settings.overlay_clamp_host_mtu);
       setSettingsDirty(false);
       setMeshError(null);
     } catch (err) {
@@ -339,20 +363,35 @@ const InfrastructurePage: React.FC = () => {
     }
   }, []);
 
+  const loadManagedInterfaces = useCallback(async () => {
+    setManagedInterfacesLoading(true);
+    try {
+      const data = await apiRequest<ManagedInterfacesResponse>('/infrastructure/interfaces');
+      setManagedInterfaces(data.interfaces);
+    } catch (err) {
+      console.error('Failed to load managed interfaces:', err);
+    } finally {
+      setManagedInterfacesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadMesh();
     loadHosts();
     loadLatestVersion();
     loadNetworkConfigs();
+    loadManagedInterfaces();
     const meshInterval = setInterval(loadMesh, 30000);
     const hostsInterval = setInterval(loadHosts, 10000);
     const networkConfigsInterval = setInterval(loadNetworkConfigs, 30000);
+    const managedIfacesInterval = setInterval(loadManagedInterfaces, 30000);
     return () => {
       clearInterval(meshInterval);
       clearInterval(hostsInterval);
       clearInterval(networkConfigsInterval);
+      clearInterval(managedIfacesInterval);
     };
-  }, [loadMesh, loadHosts, loadLatestVersion, loadNetworkConfigs]);
+  }, [loadMesh, loadHosts, loadLatestVersion, loadNetworkConfigs, loadManagedInterfaces]);
 
   // Poll update status for agents being updated
   useEffect(() => {
@@ -413,42 +452,7 @@ const InfrastructurePage: React.FC = () => {
 
   const handleMtuChange = (value: number) => {
     setMtuValue(value);
-    setSettingsDirty(
-      value !== mesh?.settings.overlay_mtu ||
-      verificationEnabled !== mesh?.settings.mtu_verification_enabled ||
-      preserveContainerMtu !== mesh?.settings.overlay_preserve_container_mtu ||
-      clampHostMtu !== mesh?.settings.overlay_clamp_host_mtu
-    );
-  };
-
-  const handleVerificationChange = (value: boolean) => {
-    setVerificationEnabled(value);
-    setSettingsDirty(
-      mtuValue !== mesh?.settings.overlay_mtu ||
-      value !== mesh?.settings.mtu_verification_enabled ||
-      preserveContainerMtu !== mesh?.settings.overlay_preserve_container_mtu ||
-      clampHostMtu !== mesh?.settings.overlay_clamp_host_mtu
-    );
-  };
-
-  const handlePreserveContainerMtuChange = (value: boolean) => {
-    setPreserveContainerMtu(value);
-    setSettingsDirty(
-      mtuValue !== mesh?.settings.overlay_mtu ||
-      verificationEnabled !== mesh?.settings.mtu_verification_enabled ||
-      value !== mesh?.settings.overlay_preserve_container_mtu ||
-      clampHostMtu !== mesh?.settings.overlay_clamp_host_mtu
-    );
-  };
-
-  const handleClampHostMtuChange = (value: boolean) => {
-    setClampHostMtu(value);
-    setSettingsDirty(
-      mtuValue !== mesh?.settings.overlay_mtu ||
-      verificationEnabled !== mesh?.settings.mtu_verification_enabled ||
-      preserveContainerMtu !== mesh?.settings.overlay_preserve_container_mtu ||
-      value !== mesh?.settings.overlay_clamp_host_mtu
-    );
+    setSettingsDirty(value !== mesh?.settings.overlay_mtu);
   };
 
   const saveSettings = async () => {
@@ -458,9 +462,6 @@ const InfrastructurePage: React.FC = () => {
         method: 'PATCH',
         body: JSON.stringify({
           overlay_mtu: mtuValue,
-          mtu_verification_enabled: verificationEnabled,
-          overlay_preserve_container_mtu: preserveContainerMtu,
-          overlay_clamp_host_mtu: clampHostMtu,
         }),
       });
       setSettingsDirty(false);
@@ -489,8 +490,8 @@ const InfrastructurePage: React.FC = () => {
     }
   };
 
-  const testLink = async (sourceId: string, targetId: string) => {
-    const linkKey = `${sourceId}-${targetId}`;
+  const testLink = async (sourceId: string, targetId: string, testPath: string) => {
+    const linkKey = `${sourceId}-${targetId}-${testPath}`;
     setTestingLink(linkKey);
     try {
       await apiRequest<MtuTestResponse>('/infrastructure/mesh/test-mtu', {
@@ -498,6 +499,7 @@ const InfrastructurePage: React.FC = () => {
         body: JSON.stringify({
           source_agent_id: sourceId,
           target_agent_id: targetId,
+          test_path: testPath,
         }),
       });
       await loadMesh();
@@ -829,16 +831,50 @@ const InfrastructurePage: React.FC = () => {
     }
   };
 
-  const getLinkTypeBadge = (linkType: string): string => {
-    switch (linkType) {
-      case 'direct':
-        return 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400';
-      case 'routed':
-        return 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400';
+  const getPathBadge = (testPath: string): { color: string; label: string } => {
+    if (testPath === 'data_plane') {
+      return { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', label: 'Transport' };
+    }
+    return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', label: 'Management' };
+  };
+
+  const getInterfaceTypeBadge = (type: string): { color: string; text: string } => {
+    switch (type) {
+      case 'transport':
+        return { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', text: 'Transport' };
+      case 'external':
+        return { color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400', text: 'External' };
       default:
-        return 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400';
+        return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', text: type };
     }
   };
+
+  const getManagedIfaceSyncBadge = (status: string): { color: string; icon: string; text: string } => {
+    switch (status) {
+      case 'synced':
+        return { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: 'fa-check', text: 'Synced' };
+      case 'provisioning':
+        return { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', icon: 'fa-spinner fa-spin', text: 'Provisioning' };
+      case 'error':
+        return { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400', icon: 'fa-times-circle', text: 'Error' };
+      case 'unconfigured':
+        return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', icon: 'fa-minus', text: 'Pending' };
+      default:
+        return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', icon: 'fa-question', text: status };
+    }
+  };
+
+  // Compute MTU recommendation from data plane test results
+  const mtuRecommendation = (() => {
+    if (!mesh?.links.length) return null;
+    const dpLinks = mesh.links.filter(l => l.test_path === 'data_plane' && l.test_status === 'success' && l.tested_mtu);
+    if (dpLinks.length === 0) return null;
+    const failedDpLinks = mesh.links.filter(l => l.test_path === 'data_plane' && l.test_status === 'failed');
+    if (failedDpLinks.length > 0) return null;
+    const minTestedMtu = Math.min(...dpLinks.map(l => l.tested_mtu!));
+    const recommended = minTestedMtu - 50; // Account for VXLAN overhead
+    return recommended > mtuValue ? recommended : null;
+  })();
 
   const outdatedCount = hosts.filter(
     h => h.status === 'online' && isUpdateAvailable(h)
@@ -1458,85 +1494,46 @@ const InfrastructurePage: React.FC = () => {
                       Global Settings
                     </h2>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
-                          Overlay MTU
-                          <span className="text-stone-400 font-normal ml-2">(VXLAN tunnel MTU)</span>
-                        </label>
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="number"
-                            min={68}
-                            max={9000}
-                            value={mtuValue}
-                            onChange={(e) => handleMtuChange(parseInt(e.target.value) || 1450)}
-                            className="w-32 px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
-                          />
-                          <span className="text-xs text-stone-500">bytes (68-9000)</span>
+                    <div>
+                      <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                        Overlay MTU
+                        <span className="text-stone-400 font-normal ml-2">(VXLAN tunnel MTU)</span>
+                      </label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="number"
+                          min={68}
+                          max={9000}
+                          value={mtuValue}
+                          onChange={(e) => handleMtuChange(parseInt(e.target.value) || 1450)}
+                          className="w-32 px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                        />
+                        <span className="text-xs text-stone-500">bytes (68-9000)</span>
+                      </div>
+                      <p className="text-xs text-stone-400 mt-1">
+                        Default is 1450 to account for ~50 byte VXLAN overhead on 1500 MTU networks.
+                        Use 8950 for jumbo frame networks.
+                      </p>
+
+                      {mtuRecommendation && (
+                        <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-start gap-2">
+                              <i className="fa-solid fa-lightbulb text-blue-500 mt-0.5"></i>
+                              <div className="text-xs text-blue-700 dark:text-blue-300">
+                                <strong>Recommended: {mtuRecommendation}</strong>
+                                <span className="ml-1">— All data plane links support jumbo frames. Overlay MTU can be increased.</span>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleMtuChange(mtuRecommendation)}
+                              className="ml-3 px-2 py-1 text-xs font-medium bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-400 rounded transition-colors"
+                            >
+                              Apply
+                            </button>
+                          </div>
                         </div>
-                        <p className="text-xs text-stone-400 mt-1">
-                          Default is 1450 to account for ~50 byte VXLAN overhead on 1500 MTU networks.
-                          Use 8950 for jumbo frame networks.
-                        </p>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
-                          MTU Verification
-                        </label>
-                        <label className="flex items-center gap-3 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={verificationEnabled}
-                            onChange={(e) => handleVerificationChange(e.target.checked)}
-                            className="w-5 h-5 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
-                          />
-                          <span className="text-sm text-stone-600 dark:text-stone-400">
-                            Enable automatic MTU verification between agents
-                          </span>
-                        </label>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
-                          Preserve Container MTU
-                        </label>
-                        <label className="flex items-center gap-3 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={preserveContainerMtu}
-                            onChange={(e) => handlePreserveContainerMtuChange(e.target.checked)}
-                            className="w-5 h-5 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
-                          />
-                          <span className="text-sm text-stone-600 dark:text-stone-400">
-                            Keep container MTU unchanged on overlay links
-                          </span>
-                        </label>
-                        <p className="text-xs text-stone-400 mt-1">
-                          When enabled, containers keep their configured MTU and oversized packets may fragment.
-                        </p>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
-                          Clamp Host MTU
-                        </label>
-                        <label className="flex items-center gap-3 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={clampHostMtu}
-                            onChange={(e) => handleClampHostMtuChange(e.target.checked)}
-                            className="w-5 h-5 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
-                          />
-                          <span className="text-sm text-stone-600 dark:text-stone-400">
-                            Clamp host-side veth MTU to overlay MTU
-                          </span>
-                        </label>
-                        <p className="text-xs text-stone-400 mt-1">
-                          Recommended when preserving container MTU to avoid oversize frames on the host bridge.
-                        </p>
-                      </div>
+                      )}
                     </div>
 
                     <div className="mt-6 flex items-center gap-4">
@@ -1577,14 +1574,22 @@ const InfrastructurePage: React.FC = () => {
                         <i className="fa-solid fa-ethernet text-sage-600 dark:text-sage-400"></i>
                         Host Network
                       </h2>
-                      <button
-                        onClick={loadNetworkConfigs}
-                        disabled={networkConfigsLoading}
-                        className="flex items-center gap-2 px-2 py-1 text-xs text-stone-500 hover:text-stone-700 dark:hover:text-stone-300 transition-colors"
-                      >
-                        <i className={`fa-solid fa-sync ${networkConfigsLoading ? 'fa-spin' : ''}`}></i>
-                        Refresh
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => navigate('/admin/interfaces')}
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-sage-700 dark:text-sage-400 border border-stone-200 dark:border-stone-700 rounded-lg transition-colors"
+                        >
+                          <i className="fa-solid fa-network-wired"></i>
+                          Manage Interfaces
+                        </button>
+                        <button
+                          onClick={loadNetworkConfigs}
+                          disabled={networkConfigsLoading}
+                          className="flex items-center gap-2 px-2 py-1.5 text-xs text-stone-500 hover:text-stone-700 dark:hover:text-stone-300 transition-colors"
+                        >
+                          <i className={`fa-solid fa-sync ${networkConfigsLoading ? 'fa-spin' : ''}`}></i>
+                        </button>
+                      </div>
                     </div>
 
                     <p className="text-sm text-stone-500 dark:text-stone-400 mb-4">
@@ -1604,6 +1609,7 @@ const InfrastructurePage: React.FC = () => {
                             <tr className="border-b border-stone-200 dark:border-stone-700">
                               <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Agent</th>
                               <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Transport</th>
+                              <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Interface</th>
                               <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Data Plane IP</th>
                               <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">MTU</th>
                               <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Status</th>
@@ -1631,21 +1637,20 @@ const InfrastructurePage: React.FC = () => {
                                     </div>
                                   </td>
                                   <td className="py-2 px-3">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
-                                        config?.transport_mode === 'subinterface' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                                        : config?.transport_mode === 'dedicated' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
-                                        : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
-                                      }`}>
-                                        {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
-                                      </span>
-                                      {config?.transport_mode === 'subinterface' && config?.parent_interface && config?.vlan_id && (
-                                        <span className="text-xs text-stone-400 font-mono">{config.parent_interface}.{config.vlan_id}</span>
-                                      )}
-                                      {config?.transport_mode === 'dedicated' && config?.data_plane_interface && (
-                                        <span className="text-xs text-stone-400 font-mono">{config.data_plane_interface}</span>
-                                      )}
-                                    </div>
+                                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                                      config?.transport_mode === 'subinterface' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                                      : config?.transport_mode === 'dedicated' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
+                                      : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
+                                    }`}>
+                                      {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
+                                    {config?.transport_mode === 'subinterface' && config?.parent_interface && config?.vlan_id
+                                      ? `${config.parent_interface}.${config.vlan_id}`
+                                      : config?.data_plane_interface
+                                        ? config.data_plane_interface
+                                        : '-'}
                                   </td>
                                   <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
                                     {host.data_plane_address || (config?.transport_ip ? config.transport_ip.split('/')[0] : '-')}
@@ -1719,16 +1724,99 @@ const InfrastructurePage: React.FC = () => {
                         </div>
                       </div>
                     )}
-                  </div>
 
-                  {/* Manage Interfaces Link */}
-                  <div className="flex justify-end">
-                    <button
-                      onClick={() => navigate('/admin/interfaces')}
-                      className="text-sm text-sage-600 dark:text-sage-400 hover:text-sage-700 dark:hover:text-sage-300 font-medium transition-colors"
-                    >
-                      Manage Interfaces <i className="fa-solid fa-arrow-right ml-1"></i>
-                    </button>
+                    {/* Managed Interfaces subsection - same columns as Host Network table */}
+                    {managedInterfaces.length > 0 && (
+                      <div className="mt-6 pt-6 border-t border-stone-200 dark:border-stone-800">
+                        <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-300 mb-3 flex items-center gap-2">
+                          <i className="fa-solid fa-plug text-stone-400 text-xs"></i>
+                          Managed Interfaces
+                          <span className="text-xs font-normal text-stone-400">({managedInterfaces.length})</span>
+                        </h3>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b border-stone-200 dark:border-stone-700">
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Agent</th>
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Transport</th>
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Interface</th>
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Data Plane IP</th>
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">MTU</th>
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Status</th>
+                                <th className="text-right py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {managedInterfaces.map((iface) => {
+                                const typeBadge = getInterfaceTypeBadge(iface.interface_type);
+                                const syncBadge = getManagedIfaceSyncBadge(iface.sync_status);
+                                return (
+                                  <tr key={iface.id} className="border-b border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/30">
+                                    <td className="py-2 px-3">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium text-stone-700 dark:text-stone-300">
+                                          {iface.host_name || iface.host_id.slice(0, 8)}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="py-2 px-3">
+                                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${typeBadge.color}`}>
+                                        {typeBadge.text}
+                                      </span>
+                                    </td>
+                                    <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
+                                      {iface.name}
+                                    </td>
+                                    <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
+                                      {iface.ip_address || '-'}
+                                    </td>
+                                    <td className="py-2 px-3">
+                                      <div className="flex items-center gap-1.5">
+                                        {iface.current_mtu ? (
+                                          <span className={`font-mono text-xs ${
+                                            iface.current_mtu >= iface.desired_mtu
+                                              ? 'text-green-600 dark:text-green-400'
+                                              : 'text-amber-600 dark:text-amber-400'
+                                          }`}>
+                                            {iface.current_mtu}
+                                          </span>
+                                        ) : (
+                                          <span className="text-stone-400 text-xs">-</span>
+                                        )}
+                                        <span className="text-stone-300 dark:text-stone-600">/</span>
+                                        <span className="font-mono text-xs text-stone-500 dark:text-stone-400">
+                                          {iface.desired_mtu}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="py-2 px-3">
+                                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${syncBadge.color}`}>
+                                        <i className={`fa-solid ${syncBadge.icon} text-[10px]`}></i>
+                                        {syncBadge.text}
+                                      </span>
+                                      {iface.sync_error && (
+                                        <span className="ml-2 text-xs text-red-500" title={iface.sync_error}>
+                                          <i className="fa-solid fa-circle-exclamation"></i>
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="py-2 px-3 text-right">
+                                      <button
+                                        onClick={() => navigate('/admin/interfaces')}
+                                        className="px-2 py-1 rounded text-xs font-medium transition-all bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400"
+                                      >
+                                        <i className="fa-solid fa-pen-to-square mr-1"></i>
+                                        Edit
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Agent Mesh */}
@@ -1788,27 +1876,100 @@ const InfrastructurePage: React.FC = () => {
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-6">
                           {mesh?.agents.map((agent) => {
                             const hostDetail = hosts.find(h => h.id === agent.id);
+                            const netConfig = networkConfigs.find(c => c.host_id === agent.id);
+                            const transportIfaces = managedInterfaces.filter(i => i.host_id === agent.id && i.interface_type === 'transport');
+                            const hasTransport = netConfig?.transport_mode !== 'management' && netConfig?.transport_mode;
                             return (
                               <div
                                 key={agent.id}
-                                className="p-4 bg-stone-50 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-700 rounded-xl"
+                                className={`p-4 border rounded-xl ${
+                                  hasTransport
+                                    ? 'bg-blue-50/50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800/50'
+                                    : 'bg-stone-50 dark:bg-stone-800/50 border-stone-200 dark:border-stone-700'
+                                }`}
                               >
                                 <div className="flex items-center gap-2 mb-2">
                                   <div className={`w-3 h-3 rounded-full ${agent.status === 'online' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
                                   <span className="font-medium text-stone-900 dark:text-white truncate">{agent.name}</span>
                                 </div>
                                 <p className="text-xs text-stone-500 truncate">
-                                  <span className="text-stone-400">mgmt:</span> {agent.address}
+                                  <span className="text-stone-400">management:</span> {agent.address}
                                 </p>
                                 {hostDetail?.data_plane_address && (
                                   <p className="text-xs text-blue-500 dark:text-blue-400 truncate mt-0.5">
                                     <span className="text-blue-400 dark:text-blue-500">data:</span> {hostDetail.data_plane_address}
                                   </p>
                                 )}
+                                {hasTransport && (
+                                  <div className="mt-2 pt-2 border-t border-blue-200/50 dark:border-blue-800/30">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className={`px-1 py-0.5 rounded text-[9px] font-bold uppercase ${
+                                        netConfig?.transport_mode === 'subinterface'
+                                          ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                                          : 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400'
+                                      }`}>
+                                        {netConfig?.transport_mode === 'subinterface' ? 'VLAN' : 'NIC'}
+                                      </span>
+                                      {transportIfaces.length > 0 ? (
+                                        <span className="text-[10px] font-mono text-stone-500 dark:text-stone-400 truncate">
+                                          {transportIfaces[0].name}
+                                        </span>
+                                      ) : netConfig?.data_plane_interface && (
+                                        <span className="text-[10px] font-mono text-stone-500 dark:text-stone-400 truncate">
+                                          {netConfig.data_plane_interface}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-1 mt-1">
+                                      <span className="text-[10px] text-stone-400">MTU:</span>
+                                      <span className={`text-[10px] font-mono ${
+                                        netConfig?.current_mtu && netConfig.current_mtu >= netConfig.desired_mtu
+                                          ? 'text-green-600 dark:text-green-400'
+                                          : 'text-stone-500 dark:text-stone-400'
+                                      }`}>
+                                        {netConfig?.current_mtu || '?'}/{netConfig?.desired_mtu || '?'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
                         </div>
+
+                        {/* Transport readiness summary */}
+                        {(() => {
+                          const totalAgents = mesh?.agents.length ?? 0;
+                          const transportAgents = (mesh?.agents ?? []).filter(a => {
+                            const nc = networkConfigs.find(c => c.host_id === a.id);
+                            return nc?.transport_mode && nc.transport_mode !== 'management';
+                          }).length;
+                          const dpLinks = mesh?.links.filter(l => l.test_path === 'data_plane') ?? [];
+                          const dpPassed = dpLinks.filter(l => l.test_status === 'success').length;
+
+                          if (transportAgents === 0) return null;
+
+                          return (
+                            <div className={`mb-4 px-4 py-2.5 rounded-lg border text-xs flex items-center gap-3 ${
+                              transportAgents === totalAgents && dpPassed === dpLinks.length && dpLinks.length > 0
+                                ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800/50 text-green-700 dark:text-green-400'
+                                : 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800/50 text-blue-700 dark:text-blue-400'
+                            }`}>
+                              <i className={`fa-solid ${
+                                transportAgents === totalAgents && dpPassed === dpLinks.length && dpLinks.length > 0
+                                  ? 'fa-circle-check' : 'fa-info-circle'
+                              }`}></i>
+                              <span>
+                                <strong>{transportAgents}/{totalAgents}</strong> agents have data plane transport
+                                {dpLinks.length > 0 && (
+                                  <span className="ml-2">
+                                    &middot; <strong>{dpPassed}/{dpLinks.length}</strong> data plane links verified
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          );
+                        })()}
 
                         <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-300 mb-3">Link Details</h3>
                         <div className="overflow-x-auto">
@@ -1826,8 +1987,9 @@ const InfrastructurePage: React.FC = () => {
                             </thead>
                             <tbody>
                               {mesh?.links.map((link) => {
-                                const linkKey = `${link.source_agent_id}-${link.target_agent_id}`;
+                                const linkKey = `${link.source_agent_id}-${link.target_agent_id}-${link.test_path}`;
                                 const isTesting = testingLink === linkKey;
+                                const pathBadge = getPathBadge(link.test_path);
 
                                 return (
                                   <tr key={link.id} className="border-b border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/30">
@@ -1839,19 +2001,21 @@ const InfrastructurePage: React.FC = () => {
                                       </div>
                                     </td>
                                     <td className="py-2 px-3">
-                                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${getLinkTypeBadge(link.link_type)}`}>
-                                        {link.link_type}
+                                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${pathBadge.color}`}>
+                                        {pathBadge.label}
                                       </span>
                                     </td>
                                     <td className="py-2 px-3 text-stone-600 dark:text-stone-400">
-                                      {link.tested_mtu ? (
-                                        <span className={link.tested_mtu >= link.configured_mtu ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}>
-                                          {link.tested_mtu}
-                                        </span>
-                                      ) : (
-                                        <span className="text-stone-400">-</span>
-                                      )}
-                                      <span className="text-stone-400 text-xs ml-1">/ {link.configured_mtu}</span>
+                                      <div className="flex items-center gap-1.5">
+                                        {link.tested_mtu ? (
+                                          <span className={link.tested_mtu >= link.configured_mtu ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}>
+                                            {link.tested_mtu}
+                                          </span>
+                                        ) : (
+                                          <span className="text-stone-400">-</span>
+                                        )}
+                                        <span className="text-stone-400 text-xs">/ {link.configured_mtu}</span>
+                                      </div>
                                     </td>
                                     <td className="py-2 px-3 text-stone-600 dark:text-stone-400">
                                       {link.latency_ms !== null ? (
@@ -1875,7 +2039,7 @@ const InfrastructurePage: React.FC = () => {
                                     </td>
                                     <td className="py-2 px-3 text-right">
                                       <button
-                                        onClick={() => testLink(link.source_agent_id, link.target_agent_id)}
+                                        onClick={() => testLink(link.source_agent_id, link.target_agent_id, link.test_path)}
                                         disabled={isTesting || testingAll}
                                         className={`px-2 py-1 rounded text-xs font-medium transition-all ${
                                           !isTesting && !testingAll

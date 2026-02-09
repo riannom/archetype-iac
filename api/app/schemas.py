@@ -840,6 +840,7 @@ class AgentLinkOut(BaseModel):
     test_status: str  # "pending", "success", "failed", "untested"
     test_error: str | None = None
     latency_ms: float | None = None
+    test_path: str = "management"  # "data_plane" or "management"
 
     class Config:
         from_attributes = True
@@ -867,6 +868,7 @@ class MtuTestRequest(BaseModel):
 
     source_agent_id: str
     target_agent_id: str
+    test_path: str | None = None  # None = auto-detect, "data_plane" or "management"
 
 
 class MtuTestResponse(BaseModel):
