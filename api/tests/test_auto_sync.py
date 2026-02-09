@@ -179,10 +179,14 @@ class TestAutoSyncConditions:
                     mock_deploy.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_sync_when_lab_starting(
+    async def test_no_auto_deploy_when_lab_starting(
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
-        """Should auto-sync when lab is in 'starting' state."""
+        """New nodes are added in stopped state even when lab is starting.
+
+        The process_node_changes function no longer auto-deploys nodes.
+        New nodes are always added in stopped state for the user to start manually.
+        """
         starting_lab = models.Lab(
             name="Starting Lab",
             owner_id=test_user.id,
@@ -217,7 +221,9 @@ class TestAutoSyncConditions:
                     await process_node_changes(starting_lab.id, ["n1"], [])
                     await asyncio.sleep(1)
 
-                    mock_deploy.assert_called_once()
+                    # deploy_node_immediately is no longer called by process_node_changes;
+                    # nodes are added in stopped state for manual start
+                    mock_deploy.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_sync_for_already_running_node(

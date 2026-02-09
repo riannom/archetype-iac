@@ -99,10 +99,13 @@ async def test_deliver_webhook_success(monkeypatch) -> None:
 async def test_dispatch_webhook_event_filters_and_logs(
     test_db, test_engine, sample_lab: models.Lab, test_user: models.User, monkeypatch
 ) -> None:
-    from sqlalchemy.orm import sessionmaker
+    from contextlib import contextmanager
 
-    session_factory = sessionmaker(bind=test_engine, autoflush=False, autocommit=False)
-    monkeypatch.setattr("app.webhooks.SessionLocal", session_factory)
+    @contextmanager
+    def override_get_session():
+        yield test_db
+
+    monkeypatch.setattr("app.webhooks.get_session", override_get_session)
 
     webhook_ok = models.Webhook(
         id="wh-ok",

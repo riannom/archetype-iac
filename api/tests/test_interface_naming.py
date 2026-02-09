@@ -27,14 +27,14 @@ NORMALIZE_CASES = [
     # SONiC: Ethernet, start=0
     ("sonic-vs", "Ethernet0", "eth0"),
     ("sonic-vs", "Ethernet3", "eth3"),
-    # Cisco IOS-XR: GigabitEthernet, start=0
-    ("cisco_iosxr", "GigabitEthernet0", "eth0"),
-    ("cisco_iosxr", "GigabitEthernet3", "eth3"),
-    # Cisco XRd: GigabitEthernet, start=0
-    ("cisco_xrd", "GigabitEthernet0", "eth0"),
-    # Cisco IOSv: GigabitEthernet, start=0
-    ("cisco_iosv", "GigabitEthernet0", "eth0"),
-    ("cisco_iosv", "GigabitEthernet2", "eth2"),
+    # Cisco IOS-XR: GigabitEthernet0/0/0/{index}, start=0
+    ("cisco_iosxr", "GigabitEthernet0/0/0/0", "eth0"),
+    ("cisco_iosxr", "GigabitEthernet0/0/0/3", "eth3"),
+    # Cisco XRd: GigabitEthernet0/0/0/{index}, start=0
+    ("cisco_xrd", "GigabitEthernet0/0/0/0", "eth0"),
+    # Cisco IOSv: GigabitEthernet0/{index}, start=0
+    ("cisco_iosv", "GigabitEthernet0/0", "eth0"),
+    ("cisco_iosv", "GigabitEthernet0/2", "eth2"),
     # Cisco CSR1000v / C8000v: GigabitEthernet, start=1
     ("cisco_csr1000v", "GigabitEthernet1", "eth1"),
     ("c8000v", "GigabitEthernet1", "eth1"),

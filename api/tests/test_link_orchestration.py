@@ -1,7 +1,7 @@
 """Tests for app/tasks/link_orchestration.py - Link creation during deployment."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -314,7 +314,7 @@ class TestCreateCrossHostLinkNormalization:
                 "success": True,
                 "vni": 3884,
             })
-            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
 
             await create_cross_host_link(test_db, sample_lab.id, link_state, host_to_agent, [])
 
@@ -398,7 +398,7 @@ class TestCreateCrossHostLink:
                 "success": True,
                 "vni": 200,
             })
-            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await create_cross_host_link(
                 test_db, sample_lab.id, link_state, host_to_agent, log_parts
@@ -647,33 +647,33 @@ class TestTeardownDeploymentLinks:
 class TestResolveAgentIp:
     """Tests for the resolve_agent_ip helper function in agent_client."""
 
-    def test_extracts_ip_from_address(self):
+    async def test_extracts_ip_from_address(self):
         """Should extract IP from host:port format."""
         from app.agent_client import resolve_agent_ip
 
-        ip = resolve_agent_ip("192.168.1.100:8080")
+        ip = await resolve_agent_ip("192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
-    def test_handles_http_prefix(self):
+    async def test_handles_http_prefix(self):
         """Should strip http:// prefix."""
         from app.agent_client import resolve_agent_ip
 
-        ip = resolve_agent_ip("http://192.168.1.100:8080")
+        ip = await resolve_agent_ip("http://192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
-    def test_handles_https_prefix(self):
+    async def test_handles_https_prefix(self):
         """Should strip https:// prefix."""
         from app.agent_client import resolve_agent_ip
 
-        ip = resolve_agent_ip("https://192.168.1.100:8080")
+        ip = await resolve_agent_ip("https://192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
-    def test_handles_hostname(self):
+    async def test_handles_hostname(self):
         """Should resolve or return hostname."""
         from app.agent_client import resolve_agent_ip
 
         # resolve_agent_ip will attempt DNS resolution; if it fails, it returns the hostname as-is
-        ip = resolve_agent_ip("agent1.local:8080")
+        ip = await resolve_agent_ip("agent1.local:8080")
         # Either resolved to an IP or returned hostname as-is
         assert ip is not None
         assert len(ip) > 0

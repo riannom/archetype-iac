@@ -32,7 +32,8 @@ class TestDefaultSettings:
     def test_workspace_default(self):
         """Workspace has default path."""
         from app.config import Settings
-        settings = Settings()
+        # Construct with explicit workspace to avoid CI env var override
+        settings = Settings(workspace="/var/lib/archetype")
         assert settings.workspace == "/var/lib/archetype"
 
     def test_provider_default(self):

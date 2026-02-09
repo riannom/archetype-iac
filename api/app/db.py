@@ -9,16 +9,23 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 
-engine = create_engine(
-    settings.database_url,
+_engine_kwargs: dict = dict(
     pool_pre_ping=True,
     future=True,
-    pool_size=settings.db_pool_size,
-    max_overflow=settings.db_max_overflow,
-    pool_recycle=300,       # Recycle connections after 5 minutes
-    pool_timeout=settings.db_pool_timeout,
-    connect_args={"options": "-c statement_timeout=30000"},  # 30s max per SQL statement
 )
+
+if settings.database_url.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    _engine_kwargs.update(
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_recycle=300,       # Recycle connections after 5 minutes
+        pool_timeout=settings.db_pool_timeout,
+        connect_args={"options": "-c statement_timeout=30000"},  # 30s max per SQL statement
+    )
+
+engine = create_engine(settings.database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 # Shared Redis client for distributed locking and caching

@@ -11,8 +11,6 @@ from app import models
 
 
 def test_has_conflicting_job(test_db, monkeypatch) -> None:
-    monkeypatch.setattr(jobs_module, "SessionLocal", lambda: test_db)
-
     job = models.Job(
         lab_id="lab",
         user_id=None,
@@ -22,7 +20,8 @@ def test_has_conflicting_job(test_db, monkeypatch) -> None:
     test_db.add(job)
     test_db.commit()
 
-    has_conflict, action = jobs_module.has_conflicting_job("lab", "down")
+    # Pass session directly (has_conflicting_job accepts optional session param)
+    has_conflict, action = jobs_module.has_conflicting_job("lab", "down", session=test_db)
     assert has_conflict
     assert action == "up"
 

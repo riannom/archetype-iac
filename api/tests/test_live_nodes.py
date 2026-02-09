@@ -181,7 +181,7 @@ class TestDestroyNodeImmediately:
         }
 
         with patch("app.tasks.live_nodes.agent_client") as mock_agent:
-            mock_agent.destroy_container_on_agent = AsyncMock(return_value={"success": True})
+            mock_agent.destroy_node_on_agent = AsyncMock(return_value={"success": True})
             mock_agent.is_agent_online = MagicMock(return_value=True)
 
             result = await destroy_node_immediately(
@@ -189,8 +189,8 @@ class TestDestroyNodeImmediately:
             )
 
             assert result is True
-            mock_agent.destroy_container_on_agent.assert_called_once_with(
-                sample_host, running_lab.id, deployed_node_state.node_name
+            mock_agent.destroy_node_on_agent.assert_called_once_with(
+                sample_host, running_lab.id, deployed_node_state.node_name, provider="docker"
             )
 
     @pytest.mark.asyncio
@@ -207,7 +207,7 @@ class TestDestroyNodeImmediately:
         }
 
         with patch("app.tasks.live_nodes.agent_client") as mock_agent:
-            mock_agent.destroy_container_on_agent = AsyncMock()
+            mock_agent.destroy_node_on_agent = AsyncMock()
             mock_agent.is_agent_online = MagicMock(return_value=True)
 
             result = await destroy_node_immediately(
@@ -215,7 +215,7 @@ class TestDestroyNodeImmediately:
             )
 
             assert result is True
-            mock_agent.destroy_container_on_agent.assert_not_called()
+            mock_agent.destroy_node_on_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_returns_false_when_no_agent(self, test_db: Session, running_lab: models.Lab):
@@ -256,7 +256,7 @@ class TestDestroyNodeImmediately:
         }
 
         with patch("app.tasks.live_nodes.agent_client") as mock_agent:
-            mock_agent.destroy_container_on_agent = AsyncMock(return_value={"success": True})
+            mock_agent.destroy_node_on_agent = AsyncMock(return_value={"success": True})
             mock_agent.is_agent_online = MagicMock(return_value=True)
 
             await destroy_node_immediately(
@@ -382,10 +382,14 @@ class TestProcessNodeChanges:
                     mock_deploy.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_auto_deploys_when_running(
+    async def test_no_auto_deploy_when_running(
         self, test_db: Session, running_lab: models.Lab, sample_host: models.Host
     ):
-        """Should auto-deploy when lab is running."""
+        """Should not auto-deploy new nodes even when lab is running.
+
+        New nodes are added in stopped/undeployed state. Users start them
+        manually via the play button.
+        """
         running_lab.agent_id = sample_host.id
         test_db.commit()
 
@@ -414,7 +418,8 @@ class TestProcessNodeChanges:
                     # Wait for debounced processing to complete
                     await asyncio.sleep(1)
 
-                    mock_deploy.assert_called_once()
+                    # Deploy should not be called - new nodes stay in stopped state
+                    mock_deploy.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_handles_missing_lab(self, test_db: Session):

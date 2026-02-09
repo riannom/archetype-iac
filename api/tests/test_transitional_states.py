@@ -418,12 +418,17 @@ class TestCategorizationMatchesTransitionalStates:
         test_db.commit()
         test_db.refresh(job)
 
+        container_name = f"archetype-{lab.id[:20]}-router1"
+
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
             with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
                  patch("app.tasks.node_lifecycle.settings") as mock_settings:
                 mock_ac.is_agent_online = MagicMock(return_value=True)
                 mock_ac.get_healthy_agent = AsyncMock(return_value=None)
                 mock_ac.container_action = AsyncMock(return_value={"success": True})
+                mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+                    "results": [{"container_name": container_name, "success": True}]
+                })
                 mock_settings.resource_validation_enabled = False
                 mock_settings.image_sync_enabled = False
                 mock_settings.image_sync_pre_deploy_check = False
@@ -444,7 +449,8 @@ class TestCategorizationMatchesTransitionalStates:
 
         This test verifies categorization logic - a node in "starting" state
         (set by early transitional state logic) should be picked up for start action.
-        The actual start may fail due to agent unavailability in tests.
+        We verify by checking that deploy_to_agent was called (the start path
+        uses topology redeploy) or that the node ended up running.
         """
         lab, node, host = lab_with_node
 
@@ -478,40 +484,28 @@ class TestCategorizationMatchesTransitionalStates:
         test_db.commit()
         test_db.refresh(job)
 
-        # Track that the node was categorized for start
-        categorized_for_start = False
-        original_info = None
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
+            with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+                 patch("app.tasks.node_lifecycle.settings") as mock_settings:
+                mock_ac.is_agent_online = MagicMock(return_value=True)
+                mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+                mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+                mock_ac.container_action = AsyncMock(return_value={"success": True})
+                mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+                mock_ac.get_lab_status_from_agent = AsyncMock(return_value={"nodes": []})
+                mock_settings.resource_validation_enabled = False
+                mock_settings.image_sync_enabled = False
+                mock_settings.image_sync_pre_deploy_check = False
+                mock_settings.per_node_lifecycle_enabled = False
+                await run_node_reconcile(job.id, lab.id, ["node-1"])
 
-        import logging
-        class StartCaptureHandler(logging.Handler):
-            def emit(self, record):
-                nonlocal categorized_for_start
-                msg = record.getMessage()
-                if "start=1" in msg or "start=" in msg:
-                    categorized_for_start = True
-
-        handler = StartCaptureHandler()
-        # Categorization is logged from node_lifecycle module
-        logging.getLogger("app.tasks.node_lifecycle").addHandler(handler)
-
-        try:
-            with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-                with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-                     patch("app.tasks.node_lifecycle.settings") as mock_settings:
-                    mock_ac.is_agent_online = MagicMock(return_value=True)
-                    mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-                    mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
-                    mock_ac.container_action = AsyncMock(return_value={"success": True})
-                    mock_settings.resource_validation_enabled = False
-                    mock_settings.image_sync_enabled = False
-                    mock_settings.image_sync_pre_deploy_check = False
-                    mock_settings.per_node_lifecycle_enabled = False
-                    await run_node_reconcile(job.id, lab.id, ["node-1"])
-        finally:
-            logging.getLogger("app.tasks.node_lifecycle").removeHandler(handler)
-
-        # Verify node was categorized for start action
-        assert categorized_for_start, "Node in 'starting' state should be categorized for start"
+        # Verify node was categorized for start action:
+        # deploy_to_agent is called by _start_nodes_topology when nodes are
+        # categorized as needing start
+        assert mock_ac.deploy_to_agent.called, (
+            "Node in 'starting' state should be categorized for start "
+            "(deploy_to_agent should be called)"
+        )
 
 
 class TestExplicitPlacementFailure:
@@ -937,6 +931,12 @@ class TestEarlyPlacementUpdate:
                 mock_ac.start_node_on_agent = AsyncMock(
                     return_value={"success": True}
                 )
+                mock_ac.deploy_to_agent = AsyncMock(
+                    return_value={"status": "completed"}
+                )
+                mock_ac.get_lab_status_from_agent = AsyncMock(
+                    return_value={"nodes": []}
+                )
                 mock_settings.resource_validation_enabled = False
                 mock_settings.image_sync_enabled = False
                 mock_settings.image_sync_pre_deploy_check = False
@@ -1004,20 +1004,22 @@ class TestNodeActionEndpointJobAction:
         """Verify that node_action endpoint creates sync: jobs, not node: jobs.
 
         This is a source inspection test to verify the change was made correctly.
+        The node_action endpoint delegates to _create_node_sync_job which
+        internally calls run_node_reconcile.
         """
         import inspect
         from app.routers import jobs as jobs_router
 
         source = inspect.getsource(jobs_router.node_action)
 
-        # Should create sync:node: jobs
+        # Should create sync:node: jobs (either directly or via helper)
         assert "sync:node:" in source, (
             "node_action endpoint should create 'sync:node:' jobs"
         )
 
-        # Should call run_node_reconcile
-        assert "run_node_reconcile" in source, (
-            "node_action endpoint should call run_node_reconcile"
+        # Should call _create_node_sync_job (which wraps run_node_reconcile)
+        assert "_create_node_sync_job" in source, (
+            "node_action endpoint should call _create_node_sync_job"
         )
 
         # Should NOT create legacy node:start/stop jobs

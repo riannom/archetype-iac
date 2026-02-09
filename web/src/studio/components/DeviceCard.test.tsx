@@ -193,7 +193,7 @@ describe("DeviceCard", () => {
       const { container } = render(<DeviceCard {...defaultProps} isSelected={true} />);
       const card = container.firstChild as HTMLElement;
       expect(card).toHaveClass("bg-sage-50");
-      expect(card).toHaveClass("border-sage-500");
+      expect(card).toHaveClass("border-l-sage-500");
     });
 
     it("applies default styling when isSelected is false", () => {

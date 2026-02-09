@@ -37,6 +37,23 @@ interface InterfaceDetail {
   state: string;
 }
 
+const CIDR_REGEX = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
+
+function isValidCidr(value: string): boolean {
+  if (!CIDR_REGEX.test(value)) return false;
+  const [ip, prefixStr] = value.split('/');
+  const prefix = parseInt(prefixStr);
+  if (prefix < 0 || prefix > 32) return false;
+  const octets = ip.split('.').map(Number);
+  return octets.every(o => o >= 0 && o <= 255);
+}
+
+const TYPE_DESCRIPTIONS: Record<string, string> = {
+  transport: 'Routed subinterface for VXLAN tunnel underlay',
+  external: 'L2 pass-through to OVS bridge for external network access',
+  custom: 'General-purpose managed interface',
+};
+
 function getSyncBadge(status: string): { text: string; color: string; icon: string } {
   switch (status) {
     case 'synced': return { text: 'Synced', color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: 'fa-check' };
@@ -79,7 +96,6 @@ export default function InterfaceManagerPage() {
     vlan_id: '' as string,
     ip_address: '',
     desired_mtu: 9000,
-    attach_to_ovs: false,
   });
   const [agentInterfaces, setAgentInterfaces] = useState<InterfaceDetail[]>([]);
   const [loadingAgentInterfaces, setLoadingAgentInterfaces] = useState(false);
@@ -92,6 +108,12 @@ export default function InterfaceManagerPage() {
   // Inline edit
   const [editingMtu, setEditingMtu] = useState<string | null>(null);
   const [editMtuValue, setEditMtuValue] = useState('');
+
+  // Edit modal
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingInterface, setEditingInterface] = useState<AgentManagedInterface | null>(null);
+  const [editForm, setEditForm] = useState({ ip_address: '', desired_mtu: 9000 });
+  const [saving, setSaving] = useState(false);
 
   if (!user?.is_admin) return <Navigate to="/infrastructure" replace />;
 
@@ -153,11 +175,11 @@ export default function InterfaceManagerPage() {
           vlan_id: createForm.vlan_id ? parseInt(createForm.vlan_id) : undefined,
           ip_address: createForm.ip_address || undefined,
           desired_mtu: createForm.desired_mtu,
-          attach_to_ovs: createForm.attach_to_ovs,
+          attach_to_ovs: createForm.interface_type === 'external',
         }),
       });
       setShowCreateModal(false);
-      setCreateForm({ host_id: '', interface_type: 'custom', parent_interface: '', vlan_id: '', ip_address: '', desired_mtu: 9000, attach_to_ovs: false });
+      setCreateForm({ host_id: '', interface_type: 'custom', parent_interface: '', vlan_id: '', ip_address: '', desired_mtu: 9000 });
       await loadInterfaces();
     } catch (err) {
       console.error('Failed to create interface:', err);
@@ -176,6 +198,36 @@ export default function InterfaceManagerPage() {
       console.error('Failed to delete interface:', err);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleEdit = (iface: AgentManagedInterface) => {
+    setEditingInterface(iface);
+    setEditForm({
+      ip_address: iface.ip_address || '',
+      desired_mtu: iface.desired_mtu,
+    });
+    setShowEditModal(true);
+  };
+
+  const handleEditSave = async () => {
+    if (!editingInterface) return;
+    try {
+      setSaving(true);
+      await apiRequest(`/infrastructure/interfaces/${editingInterface.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          desired_mtu: editForm.desired_mtu,
+          ip_address: editForm.ip_address || null,
+        }),
+      });
+      setShowEditModal(false);
+      setEditingInterface(null);
+      await loadInterfaces();
+    } catch (err) {
+      console.error('Failed to update interface:', err);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -361,7 +413,7 @@ export default function InterfaceManagerPage() {
                                     }}
                                     onBlur={() => setEditingMtu(null)}
                                     autoFocus
-                                    className="w-20 px-1 py-0.5 text-xs font-mono rounded border border-sage-400 dark:border-sage-600 bg-white dark:bg-stone-800"
+                                    className="w-20 px-1 py-0.5 text-xs font-mono rounded border border-sage-400 dark:border-sage-600 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
                                     min={68} max={9216}
                                   />
                                 ) : (
@@ -379,15 +431,17 @@ export default function InterfaceManagerPage() {
                                 )}
                               </td>
                               <td className="py-2 px-3">
-                                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${syncBadge.color}`}>
-                                  <i className={`fa-solid ${syncBadge.icon} text-[9px]`}></i>
-                                  {syncBadge.text}
-                                </span>
-                                {iface.sync_error && (
-                                  <span className="ml-1 text-red-500 cursor-help" title={iface.sync_error}>
-                                    <i className="fa-solid fa-circle-exclamation text-[10px]"></i>
+                                <div className="flex flex-col gap-0.5">
+                                  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium w-fit ${syncBadge.color}`}>
+                                    <i className={`fa-solid ${syncBadge.icon} text-[9px]`}></i>
+                                    {syncBadge.text}
                                   </span>
-                                )}
+                                  {iface.sync_error && (
+                                    <span className="text-[11px] text-red-500 dark:text-red-400 max-w-[200px] truncate" title={iface.sync_error}>
+                                      {iface.sync_error}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="py-2 px-3 text-right">
                                 {confirmDelete === iface.id ? (
@@ -407,13 +461,22 @@ export default function InterfaceManagerPage() {
                                     </button>
                                   </div>
                                 ) : (
-                                  <button
-                                    onClick={() => setConfirmDelete(iface.id)}
-                                    className="px-2 py-0.5 text-xs rounded text-stone-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                                    title="Delete interface"
-                                  >
-                                    <i className="fa-solid fa-trash"></i>
-                                  </button>
+                                  <div className="flex items-center gap-1 justify-end">
+                                    <button
+                                      onClick={() => handleEdit(iface)}
+                                      className="px-2 py-0.5 text-xs rounded text-stone-400 hover:text-sage-600 hover:bg-sage-50 dark:hover:bg-sage-900/20 transition-colors"
+                                      title="Edit interface"
+                                    >
+                                      <i className="fa-solid fa-pen-to-square"></i>
+                                    </button>
+                                    <button
+                                      onClick={() => setConfirmDelete(iface.id)}
+                                      className="px-2 py-0.5 text-xs rounded text-stone-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                                      title="Delete interface"
+                                    >
+                                      <i className="fa-solid fa-trash"></i>
+                                    </button>
+                                  </div>
                                 )}
                               </td>
                             </tr>
@@ -428,6 +491,80 @@ export default function InterfaceManagerPage() {
           )}
         </div>
       </main>
+
+      {/* Edit Modal */}
+      {showEditModal && editingInterface && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 w-full max-w-lg shadow-xl">
+            <div className="px-6 py-4 border-b border-stone-200 dark:border-stone-800">
+              <h3 className="text-lg font-semibold text-stone-900 dark:text-white">Edit Interface</h3>
+              <p className="text-sm text-stone-500 dark:text-stone-400 mt-0.5 font-mono">{editingInterface.name}</p>
+            </div>
+            <div className="px-6 py-4 space-y-4">
+              {/* IP Address */}
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">IP Address (CIDR)</label>
+                <input
+                  type="text"
+                  value={editForm.ip_address}
+                  onChange={e => setEditForm(f => ({ ...f, ip_address: e.target.value }))}
+                  placeholder="e.g. 10.100.0.1/24"
+                  className={`w-full px-3 py-2 text-sm rounded-lg border bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300 ${
+                    editForm.ip_address && !isValidCidr(editForm.ip_address)
+                      ? 'border-amber-400 dark:border-amber-600'
+                      : 'border-stone-300 dark:border-stone-700'
+                  }`}
+                />
+                {editForm.ip_address && !isValidCidr(editForm.ip_address) && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                    Must be valid CIDR notation (e.g. 10.100.0.1/24)
+                  </p>
+                )}
+              </div>
+              {/* MTU */}
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Desired MTU</label>
+                <input
+                  type="number"
+                  value={editForm.desired_mtu}
+                  onChange={e => setEditForm(f => ({ ...f, desired_mtu: parseInt(e.target.value) || 9000 }))}
+                  min={68} max={9216}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+                />
+              </div>
+              {/* Current status info */}
+              {editingInterface.sync_error && (
+                <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                  <div className="flex items-start gap-2">
+                    <i className="fa-solid fa-circle-exclamation text-red-500 text-xs mt-0.5"></i>
+                    <div>
+                      <p className="text-xs font-medium text-red-700 dark:text-red-400">Last sync error</p>
+                      <p className="text-xs text-red-600 dark:text-red-400/80 mt-0.5">{editingInterface.sync_error}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowEditModal(false); setEditingInterface(null); }}
+                className="px-4 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEditSave}
+                disabled={saving || (!!editForm.ip_address && !isValidCidr(editForm.ip_address))}
+                className="px-4 py-2 text-sm rounded-lg bg-sage-600 hover:bg-sage-700 text-white font-medium disabled:opacity-50 transition-colors"
+              >
+                {saving ? <i className="fa-solid fa-spinner fa-spin mr-1.5"></i> : <i className="fa-solid fa-check mr-1.5"></i>}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Modal */}
       {showCreateModal && (
@@ -457,13 +594,17 @@ export default function InterfaceManagerPage() {
                 <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Type</label>
                 <select
                   value={createForm.interface_type}
-                  onChange={e => setCreateForm(f => ({ ...f, interface_type: e.target.value }))}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800"
+                  onChange={e => {
+                    const type = e.target.value;
+                    setCreateForm(f => ({ ...f, interface_type: type, ...(type === 'external' ? { ip_address: '' } : {}) }));
+                  }}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
                 >
                   <option value="transport">Transport (data plane)</option>
                   <option value="external">External (connectivity)</option>
                   <option value="custom">Custom</option>
                 </select>
+                <p className="text-xs text-stone-400 dark:text-stone-500 mt-1">{TYPE_DESCRIPTIONS[createForm.interface_type]}</p>
               </div>
 
               {/* Parent Interface */}
@@ -473,7 +614,7 @@ export default function InterfaceManagerPage() {
                   value={createForm.parent_interface}
                   onChange={e => setCreateForm(f => ({ ...f, parent_interface: e.target.value }))}
                   disabled={!createForm.host_id || loadingAgentInterfaces}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 disabled:opacity-50"
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300 disabled:opacity-50"
                 >
                   <option value="">{loadingAgentInterfaces ? 'Loading...' : 'Select interface...'}</option>
                   {agentInterfaces.map(i => (
@@ -492,7 +633,7 @@ export default function InterfaceManagerPage() {
                     onChange={e => setCreateForm(f => ({ ...f, vlan_id: e.target.value }))}
                     placeholder="e.g. 100"
                     min={1} max={4094}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
                   />
                 </div>
                 <div>
@@ -502,33 +643,35 @@ export default function InterfaceManagerPage() {
                     value={createForm.desired_mtu}
                     onChange={e => setCreateForm(f => ({ ...f, desired_mtu: parseInt(e.target.value) || 9000 }))}
                     min={68} max={9216}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
                   />
                 </div>
               </div>
 
-              {/* IP */}
-              <div>
-                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">IP Address (CIDR)</label>
-                <input
-                  type="text"
-                  value={createForm.ip_address}
-                  onChange={e => setCreateForm(f => ({ ...f, ip_address: e.target.value }))}
-                  placeholder="e.g. 10.100.0.1/24"
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800"
-                />
-              </div>
+              {/* IP - hidden for external type */}
+              {createForm.interface_type !== 'external' && (
+                <div>
+                  <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">IP Address (CIDR)</label>
+                  <input
+                    type="text"
+                    value={createForm.ip_address}
+                    onChange={e => setCreateForm(f => ({ ...f, ip_address: e.target.value }))}
+                    placeholder="e.g. 10.100.0.1/24"
+                    className={`w-full px-3 py-2 text-sm rounded-lg border bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300 ${
+                      createForm.ip_address && !isValidCidr(createForm.ip_address)
+                        ? 'border-amber-400 dark:border-amber-600'
+                        : 'border-stone-300 dark:border-stone-700'
+                    }`}
+                  />
+                  {createForm.ip_address && !isValidCidr(createForm.ip_address) && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                      <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                      Must be valid CIDR notation (e.g. 10.100.0.1/24)
+                    </p>
+                  )}
+                </div>
+              )}
 
-              {/* OVS attach */}
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={createForm.attach_to_ovs}
-                  onChange={e => setCreateForm(f => ({ ...f, attach_to_ovs: e.target.checked }))}
-                  className="rounded border-stone-300 dark:border-stone-700"
-                />
-                <span className="text-sm text-stone-600 dark:text-stone-400">Attach to OVS bridge</span>
-              </label>
             </div>
 
             <div className="px-6 py-4 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
@@ -540,7 +683,7 @@ export default function InterfaceManagerPage() {
               </button>
               <button
                 onClick={handleCreate}
-                disabled={!createForm.host_id || creating}
+                disabled={!createForm.host_id || creating || (createForm.interface_type !== 'external' && !!createForm.ip_address && !isValidCidr(createForm.ip_address))}
                 className="px-4 py-2 text-sm rounded-lg bg-sage-600 hover:bg-sage-700 text-white font-medium disabled:opacity-50 transition-colors"
               >
                 {creating ? <i className="fa-solid fa-spinner fa-spin mr-1.5"></i> : <i className="fa-solid fa-plus mr-1.5"></i>}

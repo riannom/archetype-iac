@@ -197,8 +197,8 @@ def _setup_lab_and_node(test_db, actual_state="stopped", desired_state="running"
 
 def _stub_enforcement_deps(monkeypatch, max_retries=5, auto_restart=True):
     """Stub Redis, agent lookup, and settings for enforcement tests."""
-    monkeypatch.setattr(state_enforcement, "_is_on_cooldown", lambda *a: False)
-    monkeypatch.setattr(state_enforcement, "_set_cooldown", lambda *a: None)
+    monkeypatch.setattr(state_enforcement, "_is_on_cooldown", AsyncMock(return_value=False))
+    monkeypatch.setattr(state_enforcement, "_set_cooldown", AsyncMock(return_value=None))
     monkeypatch.setattr(state_enforcement.settings, "state_enforcement_max_retries", max_retries)
     monkeypatch.setattr(state_enforcement.settings, "state_enforcement_auto_restart_enabled", auto_restart)
     monkeypatch.setattr(state_enforcement.settings, "state_enforcement_retry_backoff", 5)
@@ -271,9 +271,12 @@ class TestEnforceNodeStateE2E:
         lab, ns = _setup_lab_and_node(test_db)
         cooldown_calls = []
 
-        monkeypatch.setattr(state_enforcement, "_is_on_cooldown", lambda *a: False)
-        monkeypatch.setattr(state_enforcement, "_set_cooldown",
-                          lambda lab_id, node: cooldown_calls.append((lab_id, node)))
+        monkeypatch.setattr(state_enforcement, "_is_on_cooldown", AsyncMock(return_value=False))
+
+        async def _track_cooldown(lab_id, node):
+            cooldown_calls.append((lab_id, node))
+
+        monkeypatch.setattr(state_enforcement, "_set_cooldown", _track_cooldown)
         monkeypatch.setattr(state_enforcement.settings, "state_enforcement_max_retries", 5)
         monkeypatch.setattr(state_enforcement.settings, "state_enforcement_auto_restart_enabled", True)
         monkeypatch.setattr(state_enforcement.settings, "state_enforcement_retry_backoff", 5)
@@ -359,8 +362,8 @@ class TestEnforcementNoAgent:
     async def test_no_agent_returns_false(self, test_db, monkeypatch) -> None:
         lab, ns = _setup_lab_and_node(test_db)
 
-        monkeypatch.setattr(state_enforcement, "_is_on_cooldown", lambda *a: False)
-        monkeypatch.setattr(state_enforcement, "_set_cooldown", lambda *a: None)
+        monkeypatch.setattr(state_enforcement, "_is_on_cooldown", AsyncMock(return_value=False))
+        monkeypatch.setattr(state_enforcement, "_set_cooldown", AsyncMock(return_value=None))
         monkeypatch.setattr(state_enforcement.settings, "state_enforcement_max_retries", 5)
         monkeypatch.setattr(state_enforcement.settings, "state_enforcement_auto_restart_enabled", True)
         monkeypatch.setattr(state_enforcement.settings, "state_enforcement_retry_backoff", 5)
@@ -680,7 +683,7 @@ class TestEnforcementExceptionHandling:
 
         call_count = 0
 
-        def enforceable_first_fails(session, node_state):
+        async def enforceable_first_fails(session, node_state, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -690,7 +693,7 @@ class TestEnforcementExceptionHandling:
         monkeypatch.setattr(state_enforcement, "_is_enforceable", enforceable_first_fails)
         # Mock out batch job creation path
         monkeypatch.setattr(state_enforcement, "_has_lab_wide_active_job", lambda *a: False)
-        monkeypatch.setattr(state_enforcement, "_set_cooldown", lambda *a: None)
+        monkeypatch.setattr(state_enforcement, "_set_cooldown", AsyncMock(return_value=None))
 
         await state_enforcement.enforce_lab_states()
 

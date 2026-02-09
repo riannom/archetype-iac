@@ -173,16 +173,20 @@ class TestSingleNodeGuards:
         assert resp.status_code == 409
         assert "stopping" in resp.json()["detail"].lower()
 
-    def test_409_stop_while_starting(
+    def test_stop_while_starting_is_allowed(
         self, test_client: TestClient, auth_headers: dict,
         sample_lab: models.Lab, test_db,
     ) -> None:
-        """Stopping a node that is currently starting must return 409."""
+        """Stopping a node that is currently starting is allowed.
+
+        VMs can take minutes to boot, so users should be able to abort
+        a slow start by issuing a stop command.
+        """
         ns = models.NodeState(
             lab_id=sample_lab.id,
             node_id="r1",
             node_name="r1",
-            desired_state="stopped",
+            desired_state="running",
             actual_state="starting",
         )
         test_db.add(ns)
@@ -193,8 +197,8 @@ class TestSingleNodeGuards:
             json={"state": "stopped"},
             headers=auth_headers,
         )
-        assert resp.status_code == 409
-        assert "starting" in resp.json()["detail"].lower()
+        # Stop while starting is allowed (abort slow boot)
+        assert resp.status_code == 200
 
     def test_start_already_running_is_noop(
         self, test_client: TestClient, auth_headers: dict,
@@ -366,9 +370,9 @@ class TestDualEnforcement:
         test_db.add(active_job)
         test_db.commit()
 
-        # Stub out Redis and agent lookups
-        monkeypatch.setattr(se, "_is_on_cooldown", lambda *a: False)
-        monkeypatch.setattr(se, "_set_cooldown", lambda *a: None)
+        # Stub out Redis and agent lookups (must be async since source awaits them)
+        monkeypatch.setattr(se, "_is_on_cooldown", AsyncMock(return_value=False))
+        monkeypatch.setattr(se, "_set_cooldown", AsyncMock(return_value=None))
 
         mock_agent = MagicMock()
         mock_agent.id = "agent-1"
@@ -404,8 +408,8 @@ class TestDualEnforcement:
         monkeypatch.setattr(se.settings, "state_enforcement_max_retries", 10)
         monkeypatch.setattr(se.settings, "state_enforcement_auto_restart_enabled", True)
 
-        # Simulate: cooldown is active
-        monkeypatch.setattr(se, "_is_on_cooldown", lambda *a: True)
+        # Simulate: cooldown is active (must be async since source awaits it)
+        monkeypatch.setattr(se, "_is_on_cooldown", AsyncMock(return_value=True))
 
         mock_agent = MagicMock()
         mock_agent.id = "agent-1"
@@ -551,18 +555,24 @@ class TestRowLevelLocking:
         assert action == "up"
 
     def test_has_conflicting_job_without_session(self, monkeypatch) -> None:
-        """has_conflicting_job creates SessionLocal when no session provided."""
+        """has_conflicting_job uses get_session when no session provided."""
+        from contextlib import contextmanager
         from app.jobs import has_conflicting_job
 
-        # Mock SessionLocal to verify it's called
+        # Mock get_session context manager to verify it's used
         mock_session = MagicMock()
         mock_query = MagicMock()
         mock_query.filter.return_value = mock_query
         mock_query.first.return_value = None
         mock_session.query.return_value = mock_query
 
-        monkeypatch.setattr("app.jobs.SessionLocal", lambda: mock_session)
+        @contextmanager
+        def mock_get_session():
+            yield mock_session
+
+        monkeypatch.setattr("app.jobs.get_session", mock_get_session)
 
         has_conflict, _ = has_conflicting_job("lab1", "sync")
         assert has_conflict is False
-        mock_session.close.assert_called_once()
+        # Verify the session was used (query was called)
+        mock_session.query.assert_called()

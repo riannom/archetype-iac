@@ -159,7 +159,7 @@ class TestLinkManagerConnectLink:
                 "success": True,
                 "vlan_tag": 200,
             })
-            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await link_manager.connect_link(cross_host_link_state, agents)
 
@@ -457,7 +457,7 @@ class TestLinkManagerCreateCrossHostLink:
                 "success": True,
                 "vni": 200,
             })
-            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await link_manager.create_cross_host_link(
                 cross_host_link_state, agent_a, agent_b
@@ -490,7 +490,7 @@ class TestLinkManagerCreateCrossHostLink:
                 "success": False,
                 "error": "VXLAN port creation failed",
             })
-            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await link_manager.create_cross_host_link(
                 cross_host_link_state, agent_a, agent_b
@@ -563,7 +563,7 @@ class TestLinkManagerTeardownCrossHostLink:
             mock_client.detach_overlay_interface_on_agent = AsyncMock(return_value={
                 "success": True,
             })
-            mock_client.resolve_agent_ip = MagicMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
 
             result = await link_manager.teardown_cross_host_link(
                 active_vxlan_link, agent_a, agent_b
@@ -725,23 +725,26 @@ class TestLookupEndpointHosts:
 class TestResolveAgentIp:
     """Tests for agent_client.resolve_agent_ip function."""
 
-    def test_extract_ip_from_address(self):
+    @pytest.mark.asyncio
+    async def test_extract_ip_from_address(self):
         """Should extract IP from host:port format."""
         from app.agent_client import resolve_agent_ip
 
-        ip = resolve_agent_ip("192.168.1.100:8080")
+        ip = await resolve_agent_ip("192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
-    def test_extract_ip_with_http_prefix(self):
+    @pytest.mark.asyncio
+    async def test_extract_ip_with_http_prefix(self):
         """Should handle http:// prefix."""
         from app.agent_client import resolve_agent_ip
 
-        ip = resolve_agent_ip("http://192.168.1.100:8080")
+        ip = await resolve_agent_ip("http://192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
-    def test_extract_ip_with_https_prefix(self):
+    @pytest.mark.asyncio
+    async def test_extract_ip_with_https_prefix(self):
         """Should handle https:// prefix."""
         from app.agent_client import resolve_agent_ip
 
-        ip = resolve_agent_ip("https://192.168.1.100:8080")
+        ip = await resolve_agent_ip("https://192.168.1.100:8080")
         assert ip == "192.168.1.100"

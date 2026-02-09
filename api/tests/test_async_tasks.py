@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -12,11 +13,15 @@ async def test_safe_create_task_logs_exception(caplog) -> None:
     async def boom():
         raise ValueError("boom")
 
-    with caplog.at_level("ERROR", logger="app.utils.async_tasks"):
+    with caplog.at_level(logging.ERROR):
         task = async_tasks.safe_create_task(boom(), name="boom-task")
 
         with pytest.raises(ValueError):
             await task
+
+        # Yield to the event loop so the done_callback (scheduled via
+        # call_soon) has a chance to execute and log the error.
+        await asyncio.sleep(0)
 
     assert any("boom-task" in record.message for record in caplog.records)
 
@@ -32,7 +37,7 @@ def test_setup_asyncio_exception_handler_logs(caplog) -> None:
     async_tasks.setup_asyncio_exception_handler(loop=loop)
 
     handler = captured["handler"]
-    with caplog.at_level("ERROR", logger="app.utils.async_tasks"):
+    with caplog.at_level(logging.ERROR):
         handler(loop, {"message": "oops"})
 
     assert any("oops" in record.message for record in caplog.records)
@@ -52,7 +57,7 @@ def test_setup_asyncio_exception_handler_with_exception(caplog) -> None:
         raise RuntimeError("bad")
     except RuntimeError as exc:
         handler = captured["handler"]
-        with caplog.at_level("ERROR", logger="app.utils.async_tasks"):
+        with caplog.at_level(logging.ERROR):
             handler(loop, {"message": "fail", "exception": exc})
 
     assert any("RuntimeError" in record.message for record in caplog.records)

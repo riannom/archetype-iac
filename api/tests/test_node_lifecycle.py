@@ -779,6 +779,7 @@ class TestStopNodes:
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -786,7 +787,9 @@ class TestStopNodes:
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.container_action = AsyncMock(return_value={"success": True})
+            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+                "results": [{"container_name": container_name, "success": True}]
+            })
             await manager._stop_nodes([ns])
 
         assert ns.actual_state == NodeActualState.STOPPED.value
@@ -800,6 +803,7 @@ class TestStopNodes:
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -807,9 +811,9 @@ class TestStopNodes:
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.container_action = AsyncMock(
-                return_value={"success": False, "error": "Container busy"}
-            )
+            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+                "results": [{"container_name": container_name, "success": False, "error": "Container busy"}]
+            })
             await manager._stop_nodes([ns])
 
         assert ns.actual_state == NodeActualState.ERROR.value
@@ -824,6 +828,7 @@ class TestStopNodes:
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         _make_placement(test_db, lab, "R1", actual_host.id)
+        container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=main_host)
         manager.node_states = [ns]
@@ -831,11 +836,13 @@ class TestStopNodes:
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.container_action = AsyncMock(return_value={"success": True})
+            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+                "results": [{"container_name": container_name, "success": True}]
+            })
             await manager._stop_nodes([ns])
 
-        # Should have called container_action on actual_host, not main_host
-        call_args = mock_ac.container_action.call_args
+        # Should have called reconcile_nodes_on_agent on actual_host, not main_host
+        call_args = mock_ac.reconcile_nodes_on_agent.call_args
         assert call_args[0][0].id == actual_host.id
 
     @pytest.mark.asyncio
@@ -854,7 +861,7 @@ class TestStopNodes:
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.container_action = AsyncMock(
+            mock_ac.reconcile_nodes_on_agent = AsyncMock(
                 side_effect=AgentUnavailableError("Agent timeout")
             )
             await manager._stop_nodes([ns])
@@ -1190,6 +1197,7 @@ class TestExecuteOrchestration:
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+        container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, ["n1"])
 
@@ -1202,7 +1210,9 @@ class TestExecuteOrchestration:
             mock_settings.image_sync_pre_deploy_check = False
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-            mock_ac.container_action = AsyncMock(return_value={"success": True})
+            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+                "results": [{"container_name": container_name, "success": True}]
+            })
 
             result = await manager.execute()
 
@@ -1220,6 +1230,7 @@ class TestExecuteOrchestration:
         ns_stop = _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
         node_def1 = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
         node_def2 = _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host.id)
+        container_name_r2 = _get_container_name(lab.id, "R2")
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2"])
 
@@ -1258,7 +1269,9 @@ class TestExecuteOrchestration:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
-            mock_ac.container_action = AsyncMock(return_value={"success": True})
+            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+                "results": [{"container_name": container_name_r2, "success": True}]
+            })
 
             result = await manager.execute()
 
@@ -1314,6 +1327,7 @@ class TestExecuteOrchestration:
         ns_stop = _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
         node_def1 = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
         node_def2 = _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host.id)
+        container_name_r2 = _get_container_name(lab.id, "R2")
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2"])
 
@@ -1348,8 +1362,10 @@ class TestExecuteOrchestration:
             mock_ac.deploy_to_agent = AsyncMock(
                 return_value={"status": "failed", "error_message": "Deploy error"}
             )
-            # Stop succeeds
-            mock_ac.container_action = AsyncMock(return_value={"success": True})
+            # Stop succeeds (via batch reconcile)
+            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+                "results": [{"container_name": container_name_r2, "success": True}]
+            })
 
             result = await manager.execute()
 

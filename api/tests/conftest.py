@@ -41,7 +41,7 @@ def test_db(test_engine):
 
 
 @pytest.fixture(scope="function")
-def test_client(test_db: Session, monkeypatch, tmp_path):
+def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
     """Create a FastAPI test client with database override."""
     # Save originals for manual cleanup (object.__setattr__ bypasses pydantic)
     _originals = {
@@ -58,6 +58,17 @@ def test_client(test_db: Session, monkeypatch, tmp_path):
     object.__setattr__(settings, "workspace", str(tmp_path / "workspace"))
     object.__setattr__(settings, "iso_upload_dir", str(tmp_path / "uploads"))
 
+    # Prevent app lifespan from connecting to real PostgreSQL.
+    # Tables are already created by the test_engine fixture.
+    # Patch alembic to no-op and db.engine to use the test engine.
+    from alembic import command as alembic_command
+    monkeypatch.setattr(alembic_command, "upgrade", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "engine", test_engine)
+
+    # Clear admin credentials so lifespan doesn't try to seed via get_session
+    object.__setattr__(settings, "admin_email", None)
+    _originals["admin_email"] = None
+
     def override_get_db():
         try:
             yield test_db
@@ -71,6 +82,11 @@ def test_client(test_db: Session, monkeypatch, tmp_path):
         yield test_db
 
     monkeypatch.setattr(db, "get_session", override_get_session)
+
+    # Also patch get_session where it's imported directly by other modules
+    # (e.g., middleware imports it as `from app.db import get_session`)
+    import app.middleware as _middleware_mod
+    monkeypatch.setattr(_middleware_mod, "get_session", override_get_session)
 
     app.dependency_overrides[db.get_db] = override_get_db
     try:
