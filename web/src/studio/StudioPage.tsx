@@ -1244,6 +1244,35 @@ const StudioPage: React.FC = () => {
     setConsoleWindows((prev) => prev.filter((w) => w.id !== windowId));
   }, [consoleWindows, nodes, dockedConsoles]);
 
+  // Close a floating console window
+  const handleCloseConsoleWindow = useCallback((id: string) => {
+    setConsoleWindows((prev) => prev.filter((win) => win.id !== id));
+  }, []);
+
+  // Close a tab within a console window
+  const handleCloseConsoleTab = useCallback((winId: string, nodeId: string) => {
+    setConsoleWindows((prev) =>
+      prev
+        .map((win) => {
+          if (win.id !== winId) return win;
+          const nextIds = win.deviceIds.filter((did) => did !== nodeId);
+          const nextActive = win.activeDeviceId === nodeId ? nextIds[0] || '' : win.activeDeviceId;
+          return { ...win, deviceIds: nextIds, activeDeviceId: nextActive };
+        })
+        .filter((win) => win.deviceIds.length > 0)
+    );
+  }, []);
+
+  // Set active tab in a console window
+  const handleSetActiveConsoleTab = useCallback((winId: string, nodeId: string) => {
+    setConsoleWindows((prev) => prev.map((win) => (win.id === winId ? { ...win, activeDeviceId: nodeId } : win)));
+  }, []);
+
+  // Update console window position
+  const handleUpdateConsoleWindowPos = useCallback((id: string, x: number, y: number) => {
+    setConsoleWindows((prev) => prev.map((win) => (win.id === id ? { ...win, x, y } : win)));
+  }, []);
+
   // Close a docked console tab
   const handleCloseDockedConsole = useCallback((nodeId: string) => {
     setDockedConsoles((prev) => prev.filter((c) => c.nodeId !== nodeId));
@@ -1792,21 +1821,10 @@ const StudioPage: React.FC = () => {
           windows={consoleWindows}
           nodes={nodes}
           nodeStates={nodeStates}
-          onCloseWindow={(id) => setConsoleWindows((prev) => prev.filter((win) => win.id !== id))}
-          onCloseTab={(winId, nodeId) =>
-            setConsoleWindows((prev) =>
-              prev
-                .map((win) => {
-                  if (win.id !== winId) return win;
-                  const nextIds = win.deviceIds.filter((did) => did !== nodeId);
-                  const nextActive = win.activeDeviceId === nodeId ? nextIds[0] || '' : win.activeDeviceId;
-                  return { ...win, deviceIds: nextIds, activeDeviceId: nextActive };
-                })
-                .filter((win) => win.deviceIds.length > 0)
-            )
-          }
-          onSetActiveTab={(winId, nodeId) => setConsoleWindows((prev) => prev.map((win) => (win.id === winId ? { ...win, activeDeviceId: nodeId } : win)))}
-          onUpdateWindowPos={(id, x, y) => setConsoleWindows((prev) => prev.map((win) => (win.id === id ? { ...win, x, y } : win)))}
+          onCloseWindow={handleCloseConsoleWindow}
+          onCloseTab={handleCloseConsoleTab}
+          onSetActiveTab={handleSetActiveConsoleTab}
+          onUpdateWindowPos={handleUpdateConsoleWindowPos}
           onMergeWindows={handleMergeWindows}
           onSplitTab={handleSplitTab}
           onReorderTab={handleReorderTab}

@@ -42,8 +42,14 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   onToggleMinimize,
   onDockWindow,
 }) => {
-  const [dragState, setDragState] = useState<{ id: string; startX: number; startY: number } | null>(null);
-  const [resizeState, setResizeState] = useState<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
+  // Ref-based drag/resize tracking (no re-renders during movement)
+  const dragRef = useRef<{ id: string; startX: number; startY: number } | null>(null);
+  const resizeRef = useRef<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
+
+  // Boolean state for CSS shadow (only changes on start/end)
+  const [isDragging, setIsDragging] = useState<string | null>(null);
+  const [isResizing, setIsResizing] = useState<string | null>(null);
+
   const [winSizes, setWinSizes] = useState<Record<string, { w: number; h: number }>>({});
 
   // Drop target detection state
@@ -67,6 +73,23 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
 
   // Refs to track tab elements for calculating drop positions
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // rAF gating ref
+  const rafRef = useRef<number | null>(null);
+
+  // Callback prop refs (avoid stale closures in global listeners)
+  const onUpdateWindowPosRef = useRef(onUpdateWindowPos);
+  useEffect(() => { onUpdateWindowPosRef.current = onUpdateWindowPos; }, [onUpdateWindowPos]);
+  const onMergeWindowsRef = useRef(onMergeWindows);
+  useEffect(() => { onMergeWindowsRef.current = onMergeWindows; }, [onMergeWindows]);
+  const onSplitTabRef = useRef(onSplitTab);
+  useEffect(() => { onSplitTabRef.current = onSplitTab; }, [onSplitTab]);
+  const onReorderTabRef = useRef(onReorderTab);
+  useEffect(() => { onReorderTabRef.current = onReorderTab; }, [onReorderTab]);
+  const onDockWindowRef = useRef(onDockWindow);
+  useEffect(() => { onDockWindowRef.current = onDockWindow; }, [onDockWindow]);
+  const windowsRef = useRef(windows);
+  useEffect(() => { windowsRef.current = windows; }, [windows]);
 
   // Store ref for a window element
   const setWindowRef = useCallback((windowId: string, element: HTMLDivElement | null) => {
@@ -95,7 +118,8 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   }, []);
 
   const handleMouseDown = (e: React.MouseEvent, win: ConsoleWindow) => {
-    setDragState({ id: win.id, startX: e.clientX - win.x, startY: e.clientY - win.y });
+    dragRef.current = { id: win.id, startX: e.clientX - win.x, startY: e.clientY - win.y };
+    setIsDragging(win.id);
   };
 
   const handleResizeMouseDown = (e: React.MouseEvent, win: ConsoleWindow) => {
@@ -103,13 +127,14 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     e.preventDefault();
     const currentW = winSizes[win.id]?.w || 520;
     const currentH = winSizes[win.id]?.h || 360;
-    setResizeState({
+    resizeRef.current = {
       id: win.id,
       startWidth: currentW,
       startHeight: currentH,
       startX: e.clientX,
       startY: e.clientY,
-    });
+    };
+    setIsResizing(win.id);
   };
 
   // Handle tab mousedown for potential split drag or reorder
@@ -132,8 +157,8 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   };
 
   // Calculate the target index for reordering based on cursor position
-  const calculateReorderIndex = useCallback((clientX: number, windowId: string, draggedId: string): number => {
-    const win = windows.find(w => w.id === windowId);
+  const calculateReorderIndex = useCallback((clientX: number, windowId: string): number => {
+    const win = windowsRef.current.find(w => w.id === windowId);
     if (!win) return 0;
 
     let targetIndex = 0;
@@ -145,147 +170,207 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       if (clientX > midpoint) targetIndex = i + 1;
     }
     return targetIndex;
-  }, [windows]);
+  }, []);
 
+  // Global mouse listeners — registered when any drag/resize is active
   useEffect(() => {
+    const isActive = isDragging || isResizing || tabDragState;
+    if (!isActive) return;
+
     const handleMouseMove = (e: MouseEvent) => {
-      // Handle window drag
-      if (dragState) {
-        onUpdateWindowPos(dragState.id, e.clientX - dragState.startX, e.clientY - dragState.startY);
+      // Gate all movement updates behind rAF
+      if (rafRef.current) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
 
-        // Check for drop target (for window merge)
-        if (onMergeWindows) {
-          const target = findDropTarget(e.clientX, e.clientY, dragState.id);
-          setDropTargetId(target);
+        // Handle window drag — direct DOM update
+        if (dragRef.current) {
+          const newX = e.clientX - dragRef.current.startX;
+          const newY = e.clientY - dragRef.current.startY;
+
+          // Direct DOM manipulation for smooth dragging
+          const el = windowRefs.current.get(dragRef.current.id);
+          if (el) {
+            el.style.left = `${newX}px`;
+            el.style.top = `${newY}px`;
+          }
+
+          // Store position for mouseup commit
+          (dragRef.current as any)._lastX = newX;
+          (dragRef.current as any)._lastY = newY;
+
+          // Check for drop target (for window merge)
+          if (onMergeWindowsRef.current) {
+            const target = findDropTarget(e.clientX, e.clientY, dragRef.current.id);
+            setDropTargetId(target);
+          }
+
+          // Check if near bottom of viewport for dock zone
+          if (onDockWindowRef.current) {
+            const viewportBottom = window.innerHeight;
+            const isNearBottom = e.clientY > viewportBottom - DOCK_ZONE_HEIGHT;
+            setShowDockZone(isNearBottom);
+          }
         }
 
-        // Check if near bottom of viewport for dock zone
-        if (onDockWindow) {
-          const viewportBottom = window.innerHeight;
-          const isNearBottom = e.clientY > viewportBottom - DOCK_ZONE_HEIGHT;
-          setShowDockZone(isNearBottom);
+        // Handle window resize — direct DOM update
+        if (resizeRef.current) {
+          const deltaX = e.clientX - resizeRef.current.startX;
+          const deltaY = e.clientY - resizeRef.current.startY;
+          const newW = Math.max(320, resizeRef.current.startWidth + deltaX);
+          const newH = Math.max(240, resizeRef.current.startHeight + deltaY);
+
+          // Direct DOM manipulation for smooth resizing
+          const el = windowRefs.current.get(resizeRef.current.id);
+          if (el) {
+            el.style.width = `${newW}px`;
+            el.style.height = `${newH}px`;
+          }
+
+          // Store for mouseup commit
+          (resizeRef.current as any)._lastW = newW;
+          (resizeRef.current as any)._lastH = newH;
         }
-      }
 
-      // Handle window resize
-      if (resizeState) {
-        const deltaX = e.clientX - resizeState.startX;
-        const deltaY = e.clientY - resizeState.startY;
-        setWinSizes((prev) => ({
-          ...prev,
-          [resizeState.id]: {
-            w: Math.max(320, resizeState.startWidth + deltaX),
-            h: Math.max(240, resizeState.startHeight + deltaY),
-          },
-        }));
-      }
+        // Handle tab drag for splitting OR reordering
+        if (tabDragState) {
+          const deltaX = e.clientX - tabDragState.startX;
+          const deltaY = e.clientY - tabDragState.startY;
+          const absX = Math.abs(deltaX);
+          const absY = Math.abs(deltaY);
 
-      // Handle tab drag for splitting OR reordering
-      if (tabDragState) {
-        const deltaX = e.clientX - tabDragState.startX;
-        const deltaY = e.clientY - tabDragState.startY;
-        const absX = Math.abs(deltaX);
-        const absY = Math.abs(deltaY);
+          setTabDragState((prev) => {
+            if (!prev) return null;
 
-        setTabDragState((prev) => {
-          if (!prev) return null;
+            // If vertical movement exceeds threshold → split mode (existing behavior)
+            if (absY >= TAB_DRAG_THRESHOLD && !prev.isReordering) {
+              return {
+                ...prev,
+                currentX: e.clientX,
+                currentY: e.clientY,
+                isDragging: true,
+                isReordering: false,
+                reorderTargetIndex: null,
+              };
+            }
 
-          // If vertical movement exceeds threshold → split mode (existing behavior)
-          if (absY >= TAB_DRAG_THRESHOLD && !prev.isReordering) {
+            // If already in split mode, continue tracking position
+            if (prev.isDragging) {
+              return {
+                ...prev,
+                currentX: e.clientX,
+                currentY: e.clientY,
+              };
+            }
+
+            // If horizontal movement detected and not in split mode → reorder mode
+            if (absX >= REORDER_THRESHOLD && !prev.isDragging) {
+              const targetIndex = calculateReorderIndex(e.clientX, prev.windowId);
+              return {
+                ...prev,
+                currentX: e.clientX,
+                currentY: e.clientY,
+                isReordering: true,
+                reorderTargetIndex: targetIndex,
+              };
+            }
+
+            // If already in reorder mode, update target index
+            if (prev.isReordering) {
+              const targetIndex = calculateReorderIndex(e.clientX, prev.windowId);
+              return {
+                ...prev,
+                currentX: e.clientX,
+                currentY: e.clientY,
+                reorderTargetIndex: targetIndex,
+              };
+            }
+
+            // Not enough movement yet
             return {
               ...prev,
               currentX: e.clientX,
               currentY: e.clientY,
-              isDragging: true,
-              isReordering: false,
-              reorderTargetIndex: null,
             };
-          }
-
-          // If already in split mode, continue tracking position
-          if (prev.isDragging) {
-            return {
-              ...prev,
-              currentX: e.clientX,
-              currentY: e.clientY,
-            };
-          }
-
-          // If horizontal movement detected and not in split mode → reorder mode
-          if (absX >= REORDER_THRESHOLD && !prev.isDragging) {
-            const targetIndex = calculateReorderIndex(e.clientX, prev.windowId, prev.deviceId);
-            return {
-              ...prev,
-              currentX: e.clientX,
-              currentY: e.clientY,
-              isReordering: true,
-              reorderTargetIndex: targetIndex,
-            };
-          }
-
-          // If already in reorder mode, update target index
-          if (prev.isReordering) {
-            const targetIndex = calculateReorderIndex(e.clientX, prev.windowId, prev.deviceId);
-            return {
-              ...prev,
-              currentX: e.clientX,
-              currentY: e.clientY,
-              reorderTargetIndex: targetIndex,
-            };
-          }
-
-          // Not enough movement yet
-          return {
-            ...prev,
-            currentX: e.clientX,
-            currentY: e.clientY,
-          };
-        });
-      }
+          });
+        }
+      });
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-      // Handle dock to bottom panel on drop (check this first, before merge)
-      if (dragState && showDockZone && onDockWindow) {
-        onDockWindow(dragState.id);
+      // Cancel any pending rAF
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
       }
-      // Handle window merge on drop
-      else if (dragState && dropTargetId && onMergeWindows) {
-        onMergeWindows(dragState.id, dropTargetId);
+
+      // Commit drag position to React state
+      if (dragRef.current) {
+        const lastX = (dragRef.current as any)._lastX;
+        const lastY = (dragRef.current as any)._lastY;
+        if (lastX !== undefined && lastY !== undefined) {
+          onUpdateWindowPosRef.current(dragRef.current.id, lastX, lastY);
+        }
+
+        // Handle dock to bottom panel on drop
+        if (showDockZone && onDockWindowRef.current) {
+          onDockWindowRef.current(dragRef.current.id);
+        }
+        // Handle window merge on drop
+        else if (dropTargetId && onMergeWindowsRef.current) {
+          onMergeWindowsRef.current(dragRef.current.id, dropTargetId);
+        }
+      }
+
+      // Commit resize to state
+      if (resizeRef.current) {
+        const resizeId = resizeRef.current.id;
+        const lastW = (resizeRef.current as any)._lastW;
+        const lastH = (resizeRef.current as any)._lastH;
+        if (lastW !== undefined && lastH !== undefined) {
+          setWinSizes((prev) => ({
+            ...prev,
+            [resizeId]: { w: lastW, h: lastH },
+          }));
+        }
       }
 
       // Handle tab reorder on drop
-      if (tabDragState?.isReordering && tabDragState.reorderTargetIndex !== null && onReorderTab) {
-        const win = windows.find(w => w.id === tabDragState.windowId);
+      if (tabDragState?.isReordering && tabDragState.reorderTargetIndex !== null && onReorderTabRef.current) {
+        const win = windowsRef.current.find(w => w.id === tabDragState.windowId);
         if (win) {
           const fromIndex = win.deviceIds.indexOf(tabDragState.deviceId);
           const toIndex = tabDragState.reorderTargetIndex;
           if (fromIndex !== -1 && fromIndex !== toIndex && fromIndex !== toIndex - 1) {
-            onReorderTab(tabDragState.windowId, fromIndex, toIndex);
+            onReorderTabRef.current(tabDragState.windowId, fromIndex, toIndex);
           }
         }
       }
       // Handle tab split on drop
-      else if (tabDragState?.isDragging && onSplitTab) {
-        onSplitTab(tabDragState.windowId, tabDragState.deviceId, e.clientX - 260, e.clientY - 50);
+      else if (tabDragState?.isDragging && onSplitTabRef.current) {
+        onSplitTabRef.current(tabDragState.windowId, tabDragState.deviceId, e.clientX - 260, e.clientY - 50);
       }
 
-      setDragState(null);
-      setResizeState(null);
+      dragRef.current = null;
+      resizeRef.current = null;
+      setIsDragging(null);
+      setIsResizing(null);
       setDropTargetId(null);
       setShowDockZone(false);
       setTabDragState(null);
     };
 
-    if (dragState || resizeState || tabDragState) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
-  }, [dragState, resizeState, tabDragState, dropTargetId, showDockZone, windows, onUpdateWindowPos, onMergeWindows, onSplitTab, onReorderTab, onDockWindow, findDropTarget, calculateReorderIndex]);
+  }, [isDragging, isResizing, tabDragState, dropTargetId, showDockZone, findDropTarget, calculateReorderIndex]);
 
   // Get the node being dragged as a tab (for ghost preview)
   const tabDragNode = tabDragState?.isDragging
@@ -298,7 +383,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         const size = winSizes[win.id] || { w: 520, h: 360 };
         const activeNode = nodes.find((n) => n.id === win.activeDeviceId);
         const isDropTarget = dropTargetId === win.id;
-        const isBeingDraggedOverTarget = dragState?.id === win.id && dropTargetId !== null;
+        const isBeingDraggedOverTarget = isDragging === win.id && dropTargetId !== null;
         const isMinimized = !win.isExpanded;
 
         return (
@@ -314,7 +399,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
               width: isMinimized ? 280 : size.w,
               height: isMinimized ? 36 : size.h,
               boxShadow:
-                dragState?.id === win.id || resizeState?.id === win.id
+                isDragging === win.id || isResizing === win.id
                   ? '0 25px 50px -12px rgba(0, 0, 0, 0.7)'
                   : '0 20px 25px -5px rgba(0, 0, 0, 0.4)',
             }}
@@ -492,7 +577,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       )}
 
       {/* Dock zone overlay at bottom of screen */}
-      {showDockZone && dragState && (
+      {showDockZone && isDragging && (
         <div
           className="fixed left-0 right-0 z-[99] flex items-center justify-center bg-sage-500/20 border-t-2 border-sage-500 backdrop-blur-sm transition-all animate-pulse"
           style={{
@@ -511,4 +596,4 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   );
 };
 
-export default ConsoleManager;
+export default React.memo(ConsoleManager);

@@ -21,6 +21,10 @@ vi.mock("./TerminalSession", () => ({
 // Mock window.open for pop-out functionality
 const mockWindowOpen = vi.fn();
 
+// Mock requestAnimationFrame to execute callback synchronously in tests
+const originalRAF = globalThis.requestAnimationFrame;
+const originalCAF = globalThis.cancelAnimationFrame;
+
 describe("ConsoleManager", () => {
   const mockNodes: Node[] = [
     {
@@ -91,10 +95,15 @@ describe("ConsoleManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (window as any).open = mockWindowOpen;
+    // Make rAF execute synchronously for test predictability
+    globalThis.requestAnimationFrame = (cb: FrameRequestCallback) => { cb(0); return 0; };
+    globalThis.cancelAnimationFrame = () => {};
   });
 
   afterEach(() => {
     delete (window as any).open;
+    globalThis.requestAnimationFrame = originalRAF;
+    globalThis.cancelAnimationFrame = originalCAF;
   });
 
   describe("Rendering", () => {
@@ -376,7 +385,7 @@ describe("ConsoleManager", () => {
   });
 
   describe("Dragging", () => {
-    it("updates window position on drag", async () => {
+    it("commits window position on drag end", async () => {
       const onUpdateWindowPos = vi.fn();
 
       const windows: ConsoleWindow[] = [
@@ -405,13 +414,13 @@ describe("ConsoleManager", () => {
       // Start drag
       fireEvent.mouseDown(header!, { clientX: 100, clientY: 100 });
 
-      // Move
+      // Move (position updated via DOM, not state)
       fireEvent.mouseMove(window, { clientX: 150, clientY: 120 });
 
-      expect(onUpdateWindowPos).toHaveBeenCalledWith("win-1", 100, 70);
-
-      // End drag
+      // End drag — position is committed to state on mouseup
       fireEvent.mouseUp(window);
+
+      expect(onUpdateWindowPos).toHaveBeenCalledWith("win-1", 100, 70);
     });
 
     it("applies shadow effect while dragging", async () => {
@@ -478,20 +487,21 @@ describe("ConsoleManager", () => {
       fireEvent.mouseDown(header!, { clientX: 100, clientY: 100 });
       fireEvent.mouseMove(window, { clientX: 150, clientY: 120 });
 
-      onUpdateWindowPos.mockClear();
-
-      // End drag
+      // End drag (this commits position)
       fireEvent.mouseUp(window);
+
+      onUpdateWindowPos.mockClear();
 
       // Move after mouseup - should not trigger updates
       fireEvent.mouseMove(window, { clientX: 200, clientY: 200 });
+      fireEvent.mouseUp(window);
 
       expect(onUpdateWindowPos).not.toHaveBeenCalled();
     });
   });
 
   describe("Resizing", () => {
-    it("resizes window when dragging resize handle", async () => {
+    it("commits resized window dimensions on mouseup", async () => {
       const windows: ConsoleWindow[] = [
         {
           id: "win-1",
@@ -503,7 +513,7 @@ describe("ConsoleManager", () => {
         },
       ];
 
-      const { container } = render(
+      const { container, rerender } = render(
         <ConsoleManager {...defaultProps} windows={windows} />
       );
 
@@ -517,10 +527,13 @@ describe("ConsoleManager", () => {
       // Resize
       fireEvent.mouseMove(window, { clientX: 670, clientY: 510 });
 
-      // End resize
+      // End resize — commits to React state
       fireEvent.mouseUp(window);
 
-      // Window should have new size
+      // Trigger re-render to apply committed sizes
+      rerender(<ConsoleManager {...defaultProps} windows={windows} />);
+
+      // Window should have new size after state commit
       const windowEl = container.querySelector(".fixed.z-\\[100\\]");
       expect(windowEl).toHaveStyle({
         width: "620px",
@@ -540,7 +553,7 @@ describe("ConsoleManager", () => {
         },
       ];
 
-      const { container } = render(
+      const { container, rerender } = render(
         <ConsoleManager {...defaultProps} windows={windows} />
       );
 
@@ -553,6 +566,7 @@ describe("ConsoleManager", () => {
       fireEvent.mouseMove(window, { clientX: 100, clientY: 410 });
 
       fireEvent.mouseUp(window);
+      rerender(<ConsoleManager {...defaultProps} windows={windows} />);
 
       const windowEl = container.querySelector(".fixed.z-\\[100\\]");
       expect(windowEl).toHaveStyle({ width: "320px" });
@@ -570,7 +584,7 @@ describe("ConsoleManager", () => {
         },
       ];
 
-      const { container } = render(
+      const { container, rerender } = render(
         <ConsoleManager {...defaultProps} windows={windows} />
       );
 
@@ -583,6 +597,7 @@ describe("ConsoleManager", () => {
       fireEvent.mouseMove(window, { clientX: 570, clientY: 100 });
 
       fireEvent.mouseUp(window);
+      rerender(<ConsoleManager {...defaultProps} windows={windows} />);
 
       const windowEl = container.querySelector(".fixed.z-\\[100\\]");
       expect(windowEl).toHaveStyle({ height: "240px" });
@@ -903,6 +918,9 @@ describe("ConsoleManager", () => {
       fireEvent.mouseDown(firstHeader, { clientX: 100, clientY: 100 });
       fireEvent.mouseMove(window, { clientX: 150, clientY: 150 });
 
+      // End drag - commits position
+      fireEvent.mouseUp(window);
+
       // Should only update first window
       expect(onUpdateWindowPos).toHaveBeenCalledWith("win-1", 100, 100);
       expect(onUpdateWindowPos).not.toHaveBeenCalledWith(
@@ -910,8 +928,6 @@ describe("ConsoleManager", () => {
         expect.any(Number),
         expect.any(Number)
       );
-
-      fireEvent.mouseUp(window);
     });
   });
 

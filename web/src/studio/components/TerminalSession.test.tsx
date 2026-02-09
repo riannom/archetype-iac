@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Use vi.hoisted to ensure these are available during mock initialization
@@ -132,6 +132,11 @@ class MockWebSocket {
       this.onerror(new Event("error"));
     }
   }
+
+  // Test helper: simulate close without triggering handler (for testing manual close)
+  simulateCloseNoHandler() {
+    this.readyState = MockWebSocket.CLOSED;
+  }
 }
 
 let mockWebSocketInstances: MockWebSocket[] = [];
@@ -142,6 +147,7 @@ const originalWebSocket = global.WebSocket;
 describe("TerminalSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
     mockWebSocketInstances = [];
 
     // Mock WebSocket globally
@@ -154,6 +160,7 @@ describe("TerminalSession", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     // Restore original WebSocket
     (global as unknown as { WebSocket: typeof WebSocket }).WebSocket = originalWebSocket;
   });
@@ -238,7 +245,7 @@ describe("TerminalSession", () => {
     });
 
     it("dismisses boot warning when Connect Anyway is clicked", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
       render(
         <TerminalSession labId="lab-1" nodeId="node-1" isReady={false} />
@@ -249,7 +256,7 @@ describe("TerminalSession", () => {
       expect(screen.queryByText("Device Booting")).not.toBeInTheDocument();
     });
 
-    it("hides boot warning when isReady changes to true", async () => {
+    it("hides boot warning when isReady changes to true", () => {
       const { rerender } = render(
         <TerminalSession labId="lab-1" nodeId="node-1" isReady={false} />
       );
@@ -260,13 +267,11 @@ describe("TerminalSession", () => {
         <TerminalSession labId="lab-1" nodeId="node-1" isReady={true} />
       );
 
-      await waitFor(() => {
-        expect(screen.queryByText("Device Booting")).not.toBeInTheDocument();
-      });
+      expect(screen.queryByText("Device Booting")).not.toBeInTheDocument();
     });
 
     it("does not re-show boot warning after dismissal even if isReady stays false", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
       const { rerender } = render(
         <TerminalSession labId="lab-1" nodeId="node-1" isReady={false} />
@@ -304,15 +309,6 @@ describe("TerminalSession", () => {
       ws.simulateOpen();
 
       expect(mockTerminalFocus).toHaveBeenCalled();
-    });
-
-    it("writes disconnect message when WebSocket closes", () => {
-      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
-
-      const ws = mockWebSocketInstances[0];
-      ws.close();
-
-      expect(mockTerminalWriteln).toHaveBeenCalledWith("\n[console disconnected]\n");
     });
 
     it("encodes nodeId in WebSocket URL", () => {
@@ -359,6 +355,8 @@ describe("TerminalSession", () => {
     });
 
     it("writes Blob data to terminal after converting to ArrayBuffer", async () => {
+      vi.useRealTimers(); // Blob async needs real timers
+
       render(<TerminalSession labId="lab-1" nodeId="node-1" />);
 
       const ws = mockWebSocketInstances[0];
@@ -378,6 +376,8 @@ describe("TerminalSession", () => {
       await waitFor(() => {
         expect(mockBlob.arrayBuffer).toHaveBeenCalled();
       });
+
+      vi.useFakeTimers(); // Restore for other tests
     });
 
     it("sends terminal input to WebSocket when open", () => {
@@ -541,6 +541,193 @@ describe("TerminalSession", () => {
       ws.simulateMessage("Line 3\n");
 
       expect(mockTerminalWrite).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe("Reconnection", () => {
+    it("writes connection lost message on first disconnect", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      // Simulate close (triggers reconnection)
+      act(() => {
+        ws.close();
+      });
+
+      // Should write amber connection lost message
+      expect(mockTerminalWrite).toHaveBeenCalledWith(
+        expect.stringContaining("[connection lost - reconnecting...]")
+      );
+    });
+
+    it("shows connection lost overlay when disconnected", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      act(() => {
+        ws.close();
+      });
+
+      expect(screen.getByText("Connection Lost")).toBeInTheDocument();
+    });
+
+    it("shows reconnect attempt counter in overlay", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      act(() => {
+        ws.close();
+      });
+
+      expect(screen.getByText(/attempt 1\/10/)).toBeInTheDocument();
+    });
+
+    it("attempts reconnection with exponential backoff", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      // First disconnect
+      act(() => {
+        ws.close();
+      });
+
+      // Should schedule reconnect after 1000ms (base delay * 2^0)
+      expect(mockWebSocketInstances).toHaveLength(1);
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // Should have created a new WebSocket
+      expect(mockWebSocketInstances).toHaveLength(2);
+
+      // Close second connection
+      act(() => {
+        mockWebSocketInstances[1].close();
+      });
+
+      // Second reconnect should be after 2000ms (base delay * 2^1)
+      act(() => {
+        vi.advanceTimersByTime(1999);
+      });
+      expect(mockWebSocketInstances).toHaveLength(2);
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(mockWebSocketInstances).toHaveLength(3);
+    });
+
+    it("resets attempt counter on successful reconnection", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      // Disconnect
+      act(() => {
+        ws.close();
+      });
+
+      // Wait for reconnect
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // Reconnect succeeds
+      act(() => {
+        mockWebSocketInstances[1].simulateOpen();
+      });
+
+      // Connection lost overlay should disappear
+      expect(screen.queryByText("Connection Lost")).not.toBeInTheDocument();
+    });
+
+    it("shows failure overlay after max attempts", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      // Exhaust all reconnect attempts
+      act(() => { ws.close(); });
+
+      for (let i = 0; i < 10; i++) {
+        act(() => {
+          vi.advanceTimersByTime(20000); // enough for any backoff delay
+        });
+        const nextWs = mockWebSocketInstances[mockWebSocketInstances.length - 1];
+        if (i < 9) {
+          act(() => { nextWs.close(); });
+        }
+      }
+
+      // Close the last attempt
+      act(() => {
+        mockWebSocketInstances[mockWebSocketInstances.length - 1].close();
+      });
+
+      // Should show reconnection failed
+      expect(screen.getByText("Reconnection Failed")).toBeInTheDocument();
+      expect(screen.getByText("Try Again")).toBeInTheDocument();
+    });
+
+    it("provides Reconnect Now button during auto-reconnect", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      act(() => {
+        ws.close();
+      });
+
+      expect(screen.getByText("Reconnect Now")).toBeInTheDocument();
+    });
+
+    it("does not reconnect on intentional unmount", () => {
+      const { unmount } = render(
+        <TerminalSession labId="lab-1" nodeId="node-1" />
+      );
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      unmount();
+
+      // No reconnect attempts should be made
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      // Only 1 WebSocket instance (the original one)
+      expect(mockWebSocketInstances).toHaveLength(1);
+    });
+
+    it("does not write disconnect message on intentional unmount", () => {
+      const { unmount } = render(
+        <TerminalSession labId="lab-1" nodeId="node-1" />
+      );
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      mockTerminalWrite.mockClear();
+
+      unmount();
+
+      // Should NOT write connection lost message (onclose is nulled before close)
+      expect(mockTerminalWrite).not.toHaveBeenCalledWith(
+        expect.stringContaining("[connection lost")
+      );
     });
   });
 });
