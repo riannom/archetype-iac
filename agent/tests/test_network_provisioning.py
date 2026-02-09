@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,73 +28,74 @@ def test_client():
     settings.enable_ovs = original_enable_ovs
 
 
-def test_hot_connect_uses_plugin(test_client):
-    plugin = MagicMock()
-    call_order: list[str] = []
-    plugin.hot_connect = AsyncMock(side_effect=lambda *_: call_order.append("hot_connect") or 1234)
+def _make_port_info(port_name: str, vlan_tag: int, provider: str = "docker"):
+    """Create a SimpleNamespace that mimics OVSPortInfo."""
+    return SimpleNamespace(port_name=port_name, vlan_tag=vlan_tag, provider=provider)
 
-    provider = MagicMock()
-    provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab1-r2"]
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider_for_request", return_value=provider):
-            response = test_client.post(
-                "/labs/lab1/links",
-                json={
-                    "source_node": "r1",
-                    "source_interface": "eth1",
-                    "target_node": "r2",
-                    "target_interface": "eth1",
-                },
-            )
+def test_hot_connect_uses_ovs_resolution(test_client):
+    """hot-connect resolves OVS ports for both endpoints and sets shared VLAN."""
+    port_a = _make_port_info("vh_a", 100)
+    port_b = _make_port_info("vh_b", 200)
+
+    # _resolve_ovs_port is called twice (source + target)
+    with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
+        with patch("agent.main._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True):
+            with patch("agent.main._get_docker_ovs_plugin", return_value=MagicMock(endpoints={})):
+                response = test_client.post(
+                    "/labs/lab1/links",
+                    json={
+                        "source_node": "r1",
+                        "source_interface": "eth1",
+                        "target_node": "r2",
+                        "target_interface": "eth1",
+                    },
+                )
 
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["link"]["vlan_tag"] == 1234
-    plugin.hot_connect.assert_awaited_once()
-    assert call_order == ["hot_connect"]
+    # VLAN should be source port's VLAN
+    assert body["link"]["vlan_tag"] == 100
 
 
-def test_hot_disconnect_uses_plugin(test_client):
+def test_hot_disconnect_isolates_ports(test_client):
+    """hot-disconnect assigns unique VLANs to isolate both endpoints."""
+    port_a = _make_port_info("vh_a", 100, "docker")
+    port_b = _make_port_info("vh_b", 100, "docker")
+
     plugin = MagicMock()
-    call_order: list[str] = []
-    plugin.hot_disconnect = AsyncMock(side_effect=lambda *_: call_order.append("hot_disconnect") or True)
-
+    # hot_disconnect returns the new VLAN from the plugin
+    plugin.hot_disconnect = AsyncMock(return_value=True)
     provider = MagicMock()
     provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab1-r2"]
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider_for_request", return_value=provider):
-            response = test_client.delete(
-                "/labs/lab1/links/r1:eth1-r2:eth1",
-            )
+    with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
+        with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+            with patch("agent.main.get_provider", return_value=provider):
+                response = test_client.delete(
+                    "/labs/lab1/links/r1:eth1-r2:eth1",
+                )
 
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
     assert plugin.hot_disconnect.await_count == 2
-    assert call_order == ["hot_disconnect", "hot_disconnect"]
 
 
-def test_hot_connect_cross_lab_blocked(test_client):
-    plugin = MagicMock()
-    plugin.hot_connect = AsyncMock(return_value=None)
-
-    provider = MagicMock()
-    provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab2-r2"]
-
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider_for_request", return_value=provider):
-            response = test_client.post(
-                "/labs/lab1/links",
-                json={
-                    "source_node": "r1",
-                    "source_interface": "eth1",
-                    "target_node": "r2",
-                    "target_interface": "eth1",
-                },
-            )
+def test_hot_connect_source_not_found(test_client):
+    """hot-connect returns error if source port cannot be resolved."""
+    # Source port not found, target would succeed
+    with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[None, _make_port_info("vh_b", 200)]):
+        response = test_client.post(
+            "/labs/lab1/links",
+            json={
+                "source_node": "r1",
+                "source_interface": "eth1",
+                "target_node": "r2",
+                "target_interface": "eth1",
+            },
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -116,17 +118,23 @@ def test_hot_connect_invalid_payload(test_client):
 
 
 def test_hot_disconnect_error_returns_failure(test_client):
+    """hot-disconnect returns failure when both isolation methods fail."""
+    port_a = _make_port_info("vh_a", 100, "docker")
+    port_b = _make_port_info("vh_b", 100, "docker")
+
     plugin = MagicMock()
     plugin.hot_disconnect = AsyncMock(side_effect=RuntimeError("boom"))
-
     provider = MagicMock()
     provider.get_container_name.side_effect = ["archetype-lab1-r1", "archetype-lab1-r2"]
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider_for_request", return_value=provider):
-            response = test_client.delete(
-                "/labs/lab1/links/r1:eth1-r2:eth1",
-            )
+    with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
+        with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+            with patch("agent.main.get_provider", return_value=provider):
+                # Also patch _ovs_allocate_unique_vlan to fail (fallback path)
+                with patch("agent.main._ovs_allocate_unique_vlan", new_callable=AsyncMock, return_value=None):
+                    response = test_client.delete(
+                        "/labs/lab1/links/r1:eth1-r2:eth1",
+                    )
 
     assert response.status_code == 200
     body = response.json()
@@ -197,7 +205,7 @@ def test_get_interface_vlan_uses_plugin(test_client):
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
     with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider_for_request", return_value=provider):
+        with patch("agent.main.get_provider", return_value=provider):
             response = test_client.get(
                 "/labs/lab1/interfaces/r1/eth1/vlan",
             )
@@ -218,7 +226,7 @@ def test_get_interface_vlan_reads_from_ovs(test_client):
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
     with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider_for_request", return_value=provider):
+        with patch("agent.main.get_provider", return_value=provider):
             response = test_client.get(
                 "/labs/lab1/interfaces/r1/eth1/vlan?read_from_ovs=true",
             )

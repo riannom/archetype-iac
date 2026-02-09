@@ -102,6 +102,9 @@ def _install_ovs_backend_dependencies(monkeypatch) -> None:
         async def recover_allocations(self):
             return 1
 
+        async def recover_link_tunnels(self):
+            return 0
+
         async def create_tunnel(self, **_):
             return "tunnel"
 
@@ -249,8 +252,8 @@ async def test_updater_report_progress(monkeypatch) -> None:
     import agent.updater as updater
 
     client = FakeAsyncClient()
-    monkeypatch.setattr(updater.httpx, "AsyncClient", lambda **_: client)
     await updater.report_progress(
+        client=client,
         callback_url="http://controller/update",
         job_id="job1",
         agent_id="agent1",

@@ -246,7 +246,8 @@ def test_logging_formatters(monkeypatch) -> None:
 
     text_formatter = logging_config.AgentTextFormatter(agent_id="agent-123")
     message = text_formatter.format(record)
-    assert "agent-123" in message
+    # AgentTextFormatter truncates agent_id to 8 characters
+    assert "agent-12" in message
     assert "hello world" in message
 
 

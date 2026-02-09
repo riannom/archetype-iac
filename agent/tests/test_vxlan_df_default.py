@@ -1,13 +1,15 @@
-"""Tests for VXLAN nopmtudisc on overlay tunnels.
+"""Tests for VXLAN df unset on overlay tunnels.
 
 Verifies that all VXLAN tunnel creation paths use Linux VXLAN devices
-with `nopmtudisc` instead of OVS-managed VXLAN ports. The `nopmtudisc`
-flag disables all PMTUD checking on the tunnel, allowing inner packets
-at full MTU while the kernel handles outer packet fragmentation.
+with `df unset` instead of OVS-managed VXLAN ports. The `df unset`
+flag tells the kernel to clear the DF bit on outer UDP packets,
+allowing the kernel to fragment oversized outer packets transparently.
+This lets inner packets pass at full MTU while the kernel handles
+outer packet fragmentation.
 
-Without nopmtudisc, the kernel's VXLAN xmit path checks the inner
-packet's DF bit against the tunnel PMTU (physical_mtu - 50), generating
-ICMP "Frag Needed" or silently dropping oversized inner packets.
+Without df unset, the kernel's VXLAN xmit path copies the inner
+packet's DF bit to the outer header, which can cause ICMP "Frag
+Needed" or silently dropped oversized inner packets.
 """
 
 from __future__ import annotations
@@ -82,6 +84,15 @@ def _find_ip_link_add_cmd(run_cmd_calls: list[list[str]]) -> list[str] | None:
     return None
 
 
+def _has_df_unset(cmd: list[str]) -> bool:
+    """Check if an ip link add command uses 'df unset' for VXLAN."""
+    try:
+        idx = cmd.index("df")
+        return idx + 1 < len(cmd) and cmd[idx + 1] == "unset"
+    except ValueError:
+        return False
+
+
 def _find_ip_link_delete_cmds(run_cmd_calls: list[list[str]], name: str) -> list[list[str]]:
     """Find 'ip link delete <name>' commands in run_cmd calls."""
     return [
@@ -98,10 +109,10 @@ def _find_ip_link_delete_cmds(run_cmd_calls: list[list[str]], name: str) -> list
 # OverlayManager.create_link_tunnel  (per-link VXLAN — active model)
 # ===========================================================================
 
-class TestCreateLinkTunnelNopmtudisc:
-    """Per-link VXLAN ports must use Linux VXLAN devices with nopmtudisc."""
+class TestCreateLinkTunnelDfUnset:
+    """Per-link VXLAN ports must use Linux VXLAN devices with df unset."""
 
-    def test_creates_linux_vxlan_device_with_nopmtudisc(self):
+    def test_creates_linux_vxlan_device_with_df_unset(self):
         mgr = _make_overlay_manager()
 
         _run_async(mgr.create_link_tunnel(
@@ -115,7 +126,7 @@ class TestCreateLinkTunnelNopmtudisc:
 
         cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
         assert cmd is not None, "Expected 'ip link add ... type vxlan' call"
-        assert "nopmtudisc" in cmd, f"nopmtudisc not found in: {cmd}"
+        assert _has_df_unset(cmd), f"'df unset' not found in: {cmd}"
         assert "100001" in cmd or str(100001) in cmd, f"VNI not found in: {cmd}"
 
     def test_no_ovs_managed_vxlan_type(self):
@@ -156,8 +167,8 @@ class TestCreateLinkTunnelNopmtudisc:
         add_call = _flatten_args(add_port_calls[0])
         assert "tag=3100" in add_call, f"VLAN tag not found in: {add_call}"
 
-    def test_nopmtudisc_with_auto_mtu_discovery(self):
-        """nopmtudisc should be set regardless of MTU discovery result."""
+    def test_df_unset_with_auto_mtu_discovery(self):
+        """df unset should be set regardless of MTU discovery result."""
         mgr = _make_overlay_manager()
         mgr._discover_path_mtu = AsyncMock(return_value=9000)
 
@@ -172,10 +183,10 @@ class TestCreateLinkTunnelNopmtudisc:
 
         cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
         assert cmd is not None
-        assert "nopmtudisc" in cmd
+        assert _has_df_unset(cmd), f"'df unset' not found in: {cmd}"
 
-    def test_nopmtudisc_with_failed_mtu_discovery(self):
-        """nopmtudisc should be set even when MTU discovery fails."""
+    def test_df_unset_with_failed_mtu_discovery(self):
+        """df unset should be set even when MTU discovery fails."""
         mgr = _make_overlay_manager()
         mgr._discover_path_mtu = AsyncMock(return_value=0)
 
@@ -190,17 +201,17 @@ class TestCreateLinkTunnelNopmtudisc:
 
         cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
         assert cmd is not None
-        assert "nopmtudisc" in cmd
+        assert _has_df_unset(cmd), f"'df unset' not found in: {cmd}"
 
 
 # ===========================================================================
 # OverlayManager.ensure_vtep  (trunk VTEP — legacy model)
 # ===========================================================================
 
-class TestEnsureVtepNopmtudisc:
-    """Trunk VTEP VXLAN ports must use Linux VXLAN devices with nopmtudisc."""
+class TestEnsureVtepDfUnset:
+    """Trunk VTEP VXLAN ports must use Linux VXLAN devices with df unset."""
 
-    def test_creates_linux_vxlan_device_with_nopmtudisc(self):
+    def test_creates_linux_vxlan_device_with_df_unset(self):
         mgr = _make_overlay_manager()
 
         _run_async(mgr.ensure_vtep(
@@ -210,7 +221,7 @@ class TestEnsureVtepNopmtudisc:
 
         cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
         assert cmd is not None, "Expected 'ip link add ... type vxlan' call"
-        assert "nopmtudisc" in cmd, f"nopmtudisc not found in: {cmd}"
+        assert _has_df_unset(cmd), f"'df unset' not found in: {cmd}"
 
     def test_vtep_added_to_ovs_without_vlan_tag(self):
         """Trunk VTEP should be added without VLAN tag (trunk mode)."""
@@ -250,10 +261,10 @@ class TestEnsureVtepNopmtudisc:
 # OverlayManager.create_tunnel  (legacy per-link VXLAN)
 # ===========================================================================
 
-class TestCreateTunnelLegacyNopmtudisc:
-    """Legacy per-link VXLAN tunnels must use Linux devices with nopmtudisc."""
+class TestCreateTunnelLegacyDfUnset:
+    """Legacy per-link VXLAN tunnels must use Linux devices with df unset."""
 
-    def test_creates_linux_vxlan_device_with_nopmtudisc(self):
+    def test_creates_linux_vxlan_device_with_df_unset(self):
         mgr = _make_overlay_manager()
 
         _run_async(mgr.create_tunnel(
@@ -266,7 +277,7 @@ class TestCreateTunnelLegacyNopmtudisc:
 
         cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
         assert cmd is not None, "Expected 'ip link add ... type vxlan' call"
-        assert "nopmtudisc" in cmd, f"nopmtudisc not found in: {cmd}"
+        assert _has_df_unset(cmd), f"'df unset' not found in: {cmd}"
 
 
 # ===========================================================================
@@ -342,10 +353,10 @@ class TestVxlanDeviceCleanup:
 # OVSNetworkManager.create_vxlan_tunnel
 # ===========================================================================
 
-class TestOVSManagerNopmtudisc:
-    """OVSNetworkManager VXLAN tunnels must use Linux devices with nopmtudisc."""
+class TestOVSManagerDfUnset:
+    """OVSNetworkManager VXLAN tunnels must use Linux devices with df unset."""
 
-    def test_creates_linux_vxlan_device_with_nopmtudisc(self):
+    def test_creates_linux_vxlan_device_with_df_unset(self):
         mgr = _make_ovs_manager()
 
         _run_async(mgr.create_vxlan_tunnel(
@@ -357,7 +368,7 @@ class TestOVSManagerNopmtudisc:
 
         cmd = _find_ip_link_add_cmd(_get_run_cmd_args(mgr._run_cmd))
         assert cmd is not None, "Expected 'ip link add ... type vxlan' call"
-        assert "nopmtudisc" in cmd, f"nopmtudisc not found in: {cmd}"
+        assert _has_df_unset(cmd), f"'df unset' not found in: {cmd}"
 
     def test_no_ovs_managed_vxlan_type(self):
         """Should NOT create OVS-managed VXLAN (type=vxlan in ovs-vsctl)."""
@@ -398,10 +409,10 @@ class TestOVSManagerNopmtudisc:
 # DockerOVSPlugin.create_vxlan_tunnel  (Linux VXLAN interface)
 # ===========================================================================
 
-class TestDockerPluginNopmtudisc:
-    """DockerOVSPlugin Linux VXLAN interfaces must use nopmtudisc."""
+class TestDockerPluginDfUnset:
+    """DockerOVSPlugin Linux VXLAN interfaces must use df unset."""
 
-    def test_nopmtudisc_in_ip_link_add(self):
+    def test_df_unset_in_ip_link_add(self):
         plugin = DockerOVSPlugin()
         plugin._run_cmd = AsyncMock(return_value=(0, "", ""))
         plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
@@ -429,8 +440,8 @@ class TestDockerPluginNopmtudisc:
         assert len(ip_link_calls) >= 1, "Expected an 'ip link add' call"
 
         ip_link_cmd = ip_link_calls[0]
-        assert "nopmtudisc" in ip_link_cmd, (
-            f"'nopmtudisc' not found in ip link add command: {ip_link_cmd}"
+        assert _has_df_unset(ip_link_cmd), (
+            f"'df unset' not found in ip link add command: {ip_link_cmd}"
         )
 
     def test_df_unset_still_present(self):
@@ -506,10 +517,10 @@ class TestDockerPluginNopmtudisc:
 # ===========================================================================
 
 class TestAllPathsConsistent:
-    """Verify all VXLAN creation paths use nopmtudisc consistently."""
+    """Verify all VXLAN creation paths use df unset consistently."""
 
-    def test_overlay_and_ovs_manager_both_use_nopmtudisc(self):
-        """Both overlay and OVS manager paths should use nopmtudisc."""
+    def test_overlay_and_ovs_manager_both_use_df_unset(self):
+        """Both overlay and OVS manager paths should use df unset."""
         overlay = _make_overlay_manager()
         ovs = _make_ovs_manager()
 
@@ -532,8 +543,10 @@ class TestAllPathsConsistent:
         overlay_cmd = _find_ip_link_add_cmd(_get_run_cmd_args(overlay._run_cmd))
         ovs_cmd = _find_ip_link_add_cmd(_get_run_cmd_args(ovs._run_cmd))
 
-        assert overlay_cmd is not None and "nopmtudisc" in overlay_cmd
-        assert ovs_cmd is not None and "nopmtudisc" in ovs_cmd
+        assert overlay_cmd is not None and _has_df_unset(overlay_cmd), \
+            f"overlay: 'df unset' not found in: {overlay_cmd}"
+        assert ovs_cmd is not None and _has_df_unset(ovs_cmd), \
+            f"ovs: 'df unset' not found in: {ovs_cmd}"
 
     def test_no_path_uses_ovs_managed_vxlan(self):
         """No path should use OVS-managed VXLAN (type=vxlan in ovs-vsctl)."""

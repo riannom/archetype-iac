@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -169,9 +170,11 @@ def test_bridge_patch_delete_order(test_client):
     backend._ovs_initialized = True
 
     with patch("agent.main.get_network_backend", return_value=backend):
-        response = test_client.delete(
+        response = test_client.request(
+            "DELETE",
             "/ovs/patch",
-            json={"target_bridge": "br-test"},
+            content=json.dumps({"target_bridge": "br-test"}),
+            headers={"Content-Type": "application/json"},
         )
 
     assert response.status_code == 200
@@ -203,9 +206,11 @@ def test_bridge_patch_delete_error(test_client):
     backend.delete_patch_to_bridge = AsyncMock(side_effect=RuntimeError("delete failed"))
 
     with patch("agent.main.get_network_backend", return_value=backend):
-        response = test_client.delete(
+        response = test_client.request(
+            "DELETE",
             "/ovs/patch",
-            json={"target_bridge": "br-test"},
+            content=json.dumps({"target_bridge": "br-test"}),
+            headers={"Content-Type": "application/json"},
         )
 
     assert response.status_code == 200

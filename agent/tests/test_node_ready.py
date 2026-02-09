@@ -25,10 +25,11 @@ def test_node_ready_docker_runs_post_boot():
     probe.check = AsyncMock(return_value=MagicMock(is_ready=True, message="ok", progress_percent=100))
 
     with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main.docker.from_env", return_value=mock_docker):
-            with patch("agent.main.get_probe_for_vendor", return_value=probe):
-                with patch("agent.main.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
-                    response = client.get("/labs/lab1/nodes/r1/ready")
+        with patch("docker.from_env", return_value=mock_docker):
+            with patch("agent.readiness.get_probe_for_vendor", return_value=probe):
+                with patch("agent.readiness.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
+                    with patch("agent.readiness.get_readiness_timeout", return_value=120):
+                        response = client.get("/labs/lab1/nodes/r1/ready")
 
     assert response.status_code == 200
     body = response.json()
@@ -70,7 +71,7 @@ def test_node_ready_docker_missing_falls_back_to_libvirt():
     mock_docker.containers.get.side_effect = Exception("missing")
 
     with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main.docker.from_env", return_value=mock_docker):
+        with patch("docker.from_env", return_value=mock_docker):
             with patch("agent.main._check_libvirt_readiness", new_callable=AsyncMock) as mock_libvirt:
                 mock_libvirt.return_value = {
                     "is_ready": False,
@@ -105,10 +106,11 @@ def test_node_ready_docker_not_ready_skips_post_boot():
     probe.check = AsyncMock(return_value=MagicMock(is_ready=False, message="booting", progress_percent=10))
 
     with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main.docker.from_env", return_value=mock_docker):
-            with patch("agent.main.get_probe_for_vendor", return_value=probe):
-                with patch("agent.main.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
-                    response = client.get("/labs/lab1/nodes/r1/ready")
+        with patch("docker.from_env", return_value=mock_docker):
+            with patch("agent.readiness.get_probe_for_vendor", return_value=probe):
+                with patch("agent.readiness.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
+                    with patch("agent.readiness.get_readiness_timeout", return_value=120):
+                        response = client.get("/labs/lab1/nodes/r1/ready")
 
     assert response.status_code == 200
     body = response.json()

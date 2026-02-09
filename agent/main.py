@@ -163,6 +163,12 @@ from agent.updater import (
 )
 from agent.logging_config import setup_agent_logging
 
+# Module-level imports for testability (patch targets need module-level attributes)
+import docker  # noqa: E402
+from agent.console.docker_exec import DockerConsole  # noqa: E402, F401
+from agent.console.ssh_console import SSHConsole  # noqa: E402, F401
+from agent.readiness import get_probe_for_vendor, run_post_boot_commands  # noqa: E402, F401
+
 # Generate agent ID if not configured
 AGENT_ID = settings.agent_id or str(uuid.uuid4())[:8]
 
@@ -3730,6 +3736,9 @@ def _get_docker_ovs_plugin():
     from agent.network.docker_plugin import get_docker_ovs_plugin
     return get_docker_ovs_plugin()
 
+# Alias for test patchability (tests use agent.main.get_docker_ovs_plugin)
+get_docker_ovs_plugin = _get_docker_ovs_plugin
+
 
 @app.get("/ovs-plugin/health")
 async def ovs_plugin_health() -> PluginHealthResponse:
@@ -5552,22 +5561,26 @@ async def console_websocket(
         # Check if Docker container exists
         container_exists = await _check_container_exists(container_name)
         if container_exists:
-            # Get console configuration based on node kind
-            method, shell_cmd, username, password = await _get_console_config(container_name)
+            try:
+                # Get console configuration based on node kind
+                method, shell_cmd, username, password = await _get_console_config(container_name)
 
-            if method == "ssh":
-                # SSH-based console for vrnetlab/VM containers
-                # Falls back to docker exec if SSH fails (e.g. device still booting)
-                ssh_ok = await _console_websocket_ssh(
-                    websocket, container_name, node_name, username, password
-                )
-                if not ssh_ok:
-                    await _console_websocket_docker(
-                        websocket, container_name, node_name, shell_cmd
+                if method == "ssh":
+                    # SSH-based console for vrnetlab/VM containers
+                    # Falls back to docker exec if SSH fails (e.g. device still booting)
+                    ssh_ok = await _console_websocket_ssh(
+                        websocket, container_name, node_name, username, password
                     )
-            else:
-                # Docker exec-based console for native containers
-                await _console_websocket_docker(websocket, container_name, node_name, shell_cmd)
+                    if not ssh_ok:
+                        await _console_websocket_docker(
+                            websocket, container_name, node_name, shell_cmd
+                        )
+                else:
+                    # Docker exec-based console for native containers
+                    await _console_websocket_docker(websocket, container_name, node_name, shell_cmd)
+            except Exception as e:
+                await websocket.send_text(f"\r\nError: {e}\r\n")
+                await websocket.close(code=1011)
             return
 
     # Docker container not found, try libvirt if no specific provider requested

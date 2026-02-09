@@ -377,7 +377,10 @@ class TestPostBootCommands:
             result = await run_post_boot_commands("test-ceos", "ceos")
             assert result is True
 
-        mock_container.exec_run.assert_any_call(config.post_boot_commands[0])
+        # run_post_boot_commands wraps each command in ["sh", "-c", cmd]
+        mock_container.exec_run.assert_any_call(
+            ["sh", "-c", config.post_boot_commands[0]], demux=False
+        )
 
     @pytest.mark.asyncio
     async def test_container_not_running(self):

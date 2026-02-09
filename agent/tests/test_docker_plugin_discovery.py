@@ -1,6 +1,11 @@
 """Tests for DockerOVSPlugin endpoint discovery logic."""
 from __future__ import annotations
 
+import asyncio
+import types
+import sys
+from unittest.mock import AsyncMock
+
 import pytest
 
 from agent.network.docker_plugin import DockerOVSPlugin, EndpointState, NetworkState
@@ -25,6 +30,13 @@ class _FakeDocker:
     @property
     def containers(self):
         return self._Containers(self._container)
+
+
+def _patch_docker_from_env(monkeypatch, networks: dict):
+    """Patch the docker module so local `import docker; docker.from_env()` returns our fake."""
+    import docker as real_docker
+
+    monkeypatch.setattr(real_docker, "from_env", lambda **kwargs: _FakeDocker(networks))
 
 
 @pytest.mark.asyncio
@@ -57,10 +69,9 @@ async def test_discover_endpoint_matches_by_endpoint_id(monkeypatch, tmp_path):
         }
     }
 
-    monkeypatch.setattr(
-        "agent.network.docker_plugin.docker.from_env",
-        lambda: _FakeDocker(networks),
-    )
+    _patch_docker_from_env(monkeypatch, networks)
+    # _validate_endpoint_exists checks OVS port; stub it to return True
+    monkeypatch.setattr(plugin, "_validate_endpoint_exists", AsyncMock(return_value=True))
 
     ep = await plugin._discover_endpoint("lab", "container-1", "eth1")
     assert ep is plugin.endpoints[endpoint_id]
@@ -97,10 +108,8 @@ async def test_discover_endpoint_matches_by_network_id(monkeypatch, tmp_path):
         }
     }
 
-    monkeypatch.setattr(
-        "agent.network.docker_plugin.docker.from_env",
-        lambda: _FakeDocker(networks),
-    )
+    _patch_docker_from_env(monkeypatch, networks)
+    monkeypatch.setattr(plugin, "_validate_endpoint_exists", AsyncMock(return_value=True))
 
     ep = await plugin._discover_endpoint("lab", "container-2", "eth2")
     assert ep is plugin.endpoints[endpoint_id]
@@ -128,10 +137,7 @@ async def test_discover_endpoint_reconstructs_from_ports(monkeypatch, tmp_path):
         }
     }
 
-    monkeypatch.setattr(
-        "agent.network.docker_plugin.docker.from_env",
-        lambda: _FakeDocker(networks),
-    )
+    _patch_docker_from_env(monkeypatch, networks)
 
     async def _ovs_vsctl(*args):
         if args == ("list-ports", "arch-ovs"):
@@ -166,10 +172,15 @@ async def test_discover_endpoint_returns_none_when_missing(monkeypatch, tmp_path
         }
     }
 
-    monkeypatch.setattr(
-        "agent.network.docker_plugin.docker.from_env",
-        lambda: _FakeDocker(networks),
-    )
+    _patch_docker_from_env(monkeypatch, networks)
+
+    # Also stub _ovs_vsctl for the reconstruction fallback (list-ports returns empty)
+    async def _ovs_vsctl(*args):
+        if args[0] == "list-ports":
+            return 0, "", ""
+        return 1, "", ""
+
+    monkeypatch.setattr(plugin, "_ovs_vsctl", _ovs_vsctl)
 
     ep = await plugin._discover_endpoint("lab", "container-3", "eth3")
     assert ep is None

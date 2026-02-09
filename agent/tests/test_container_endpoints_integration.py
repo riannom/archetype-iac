@@ -319,14 +319,17 @@ class TestFixInterfacesEndpoint:
     """Tests for fix-interfaces endpoint."""
 
     def test_fix_interfaces_no_provider(self, test_client):
-        """Should return error when provider not available."""
+        """Should return 503 when provider not available.
+
+        The fix-interfaces endpoint uses get_provider_for_request() which
+        raises HTTPException(503) when the requested provider is not available.
+        """
         with patch("agent.main.get_provider", return_value=None):
             response = test_client.post("/labs/test-lab/nodes/node1/fix-interfaces")
 
-        assert response.status_code == 200
+        assert response.status_code == 503
         result = response.json()
-        assert result["success"] is False
-        assert "No provider" in result.get("error", "") or "provider" in result.get("error", "").lower()
+        assert "provider" in result.get("detail", "").lower()
 
     def test_fix_interfaces_success(self, test_client):
         """Should fix interface names successfully."""

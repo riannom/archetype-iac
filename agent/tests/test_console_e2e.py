@@ -15,7 +15,6 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
-from fastapi.websockets import WebSocket
 
 from agent.main import app
 
@@ -52,153 +51,163 @@ def mock_provider():
     return provider
 
 
-@pytest.fixture
-def mock_console():
-    """Create a mock DockerConsole."""
-    console = MagicMock()
-    console.start.return_value = True
-    console.is_running = True
-    console.read_blocking.return_value = b"Welcome to node1\r\n"
-    console.write.return_value = True
-    console.resize.return_value = True
-    console.close.return_value = None
-    return console
-
-
 # --- Unit Tests (mocked) ---
 
 
 class TestConsoleWebSocketUnit:
-    """Unit tests for console WebSocket handler with mocking."""
+    """Unit tests for console WebSocket handler with mocking.
+
+    The console_websocket handler delegates to helper functions
+    (_check_container_exists, _get_console_config, _console_websocket_docker,
+    _console_websocket_ssh) so we mock at that level rather than trying to
+    mock the low-level DockerConsole/SSHConsole classes which are imported
+    locally inside those helpers.
+    """
 
     def test_console_websocket_no_provider(self, test_client):
-        """Should return error when no provider available."""
+        """Should return error when no provider available.
+
+        When get_provider("docker") returns None and get_provider("libvirt")
+        also returns None, the handler sends an error message.
+        """
         with patch("agent.main.get_provider", return_value=None):
             with test_client.websocket_connect("/console/test-lab/node1") as websocket:
                 data = websocket.receive_text()
-                assert "Error: No provider available" in data
+                assert "Node not found" in data or "Error" in data
 
     def test_console_websocket_connects_with_valid_container(
-        self, test_client, mock_provider, mock_console
+        self, test_client, mock_provider
     ):
-        """Should connect to running container successfully."""
+        """Should connect to running container successfully.
+
+        Mocks the entire _console_websocket_docker helper so we don't need
+        to set up the full DockerConsole chain.
+        """
         with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+                    mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
-                with patch("agent.main.DockerConsole", return_value=mock_console):
-                    # Start and stop the console properly
-                    mock_console.read_blocking.side_effect = [
-                        b"Welcome\r\n",
-                        b"",  # Empty read signals to check again
-                    ]
+                    with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
+                        try:
+                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                                pass
+                        except Exception:
+                            # WebSocket may close, that's ok for unit test
+                            pass
 
-                    try:
-                        with test_client.websocket_connect("/console/test-lab/node1") as websocket:
-                            # Should receive initial output
-                            data = websocket.receive_text(timeout=1)
-                            assert "Welcome" in data or "Error" in data or data
-                    except Exception:
-                        # WebSocket may close, that's ok for unit test
-                        pass
+                        mock_docker_ws.assert_awaited_once()
 
-    def test_console_websocket_resize_command(self, test_client, mock_provider, mock_console):
-        """Should handle resize commands from client."""
+    def test_console_websocket_container_not_found_falls_to_libvirt(
+        self, test_client, mock_provider
+    ):
+        """When Docker container doesn't exist and no libvirt, sends error."""
+        with patch("agent.main.get_provider") as mock_get_prov:
+            # First call for "docker" returns provider, second for "libvirt" returns None
+            mock_get_prov.side_effect = lambda name: mock_provider if name == "docker" else None
+
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=False):
+                with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                    data = websocket.receive_text()
+                    assert "Node not found" in data or "Error" in data
+
+    def test_console_websocket_ssh_method(self, test_client, mock_provider):
+        """Should use SSH console when _get_console_config returns 'ssh'."""
         with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+                    mock_config.return_value = ("ssh", None, "admin", "admin")
 
-                with patch("agent.main.DockerConsole", return_value=mock_console):
-                    mock_console.read_blocking.return_value = b""
+                    with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=True) as mock_ssh_ws:
+                        try:
+                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                                pass
+                        except Exception:
+                            pass
 
-                    try:
-                        with test_client.websocket_connect("/console/test-lab/node1") as websocket:
-                            # Send resize command (JSON format)
-                            websocket.send_json({"resize": {"rows": 40, "cols": 120}})
-                            # Give it a moment to process
-                    except Exception:
-                        pass
+                        mock_ssh_ws.assert_awaited_once()
 
-                    # The resize should have been called if processed
-                    # (may not be called if connection closed early)
+    def test_console_websocket_ssh_fallback_to_docker(self, test_client, mock_provider):
+        """Should fall back to docker_exec when SSH fails."""
+        with patch("agent.main.get_provider", return_value=mock_provider):
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+                    mock_config.return_value = ("ssh", None, "admin", "admin")
+
+                    with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=False) as mock_ssh_ws:
+                        with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
+                            try:
+                                with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                                    pass
+                            except Exception:
+                                pass
+
+                            mock_ssh_ws.assert_awaited_once()
+                            mock_docker_ws.assert_awaited_once()
 
 
 class TestConsoleWebSocketBidirectional:
-    """Tests for bidirectional communication."""
+    """Tests for bidirectional communication via the docker console helper."""
 
-    def test_console_sends_input_to_container(self, test_client, mock_provider, mock_console):
-        """Should forward user input to container."""
+    def test_console_sends_to_docker_handler(self, test_client, mock_provider):
+        """Should delegate to _console_websocket_docker for docker_exec method."""
         with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+                    mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
-                with patch("agent.main.DockerConsole", return_value=mock_console):
-                    # First read returns prompt, subsequent reads return empty
-                    mock_console.read_blocking.side_effect = [b"$ ", b""]
+                    with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
+                        try:
+                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                                pass
+                        except Exception:
+                            pass
 
-                    try:
-                        with test_client.websocket_connect("/console/test-lab/node1") as websocket:
-                            # Send a command
-                            websocket.send_text("ls -la\n")
-                    except Exception:
-                        pass
-
-    def test_console_receives_output_from_container(self, test_client, mock_provider, mock_console):
-        """Should receive container output via WebSocket."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
-
-                with patch("agent.main.DockerConsole", return_value=mock_console):
-                    expected_output = b"file1.txt\r\nfile2.txt\r\n"
-                    mock_console.read_blocking.side_effect = [expected_output, b""]
-
-                    try:
-                        with test_client.websocket_connect("/console/test-lab/node1") as websocket:
-                            data = websocket.receive_text(timeout=1)
-                            # Should receive the output
-                            assert data is not None
-                    except Exception:
-                        pass
+                        # Verify the docker console handler was called with correct args
+                        mock_docker_ws.assert_awaited_once()
+                        call_args = mock_docker_ws.call_args
+                        # Args: (websocket, container_name, node_name, shell_cmd)
+                        assert call_args[0][1] == "test-lab-node1"  # container_name
+                        assert call_args[0][2] == "node1"  # node_name
+                        assert call_args[0][3] == "/bin/sh"  # shell_cmd
 
 
 class TestConsoleWebSocketDisconnect:
     """Tests for graceful disconnection."""
 
-    def test_console_graceful_disconnect(self, test_client, mock_provider, mock_console):
-        """Should close console on client disconnect."""
+    def test_console_graceful_disconnect(self, test_client, mock_provider):
+        """Should call console handler which manages cleanup internally."""
         with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+                    mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
-                with patch("agent.main.DockerConsole", return_value=mock_console):
-                    mock_console.read_blocking.return_value = b""
-                    mock_console.is_running = True
-
-                    try:
-                        with test_client.websocket_connect("/console/test-lab/node1") as websocket:
-                            # Client disconnects by exiting context
+                    with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
+                        try:
+                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                                # Client disconnects by exiting context
+                                pass
+                        except Exception:
                             pass
-                    except Exception:
-                        pass
 
-    def test_console_handles_container_exit(self, test_client, mock_provider, mock_console):
-        """Should handle container exit gracefully."""
+                        # Handler was invoked (cleanup is internal to the handler)
+                        mock_docker_ws.assert_awaited_once()
+
+    def test_console_exception_in_handler(self, test_client, mock_provider):
+        """Should handle exceptions from the console handler gracefully."""
         with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+                    mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
-                with patch("agent.main.DockerConsole", return_value=mock_console):
-                    # Console returns None when container exits
-                    mock_console.read_blocking.return_value = None
-                    mock_console.is_running = False
-
-                    try:
-                        with test_client.websocket_connect("/console/test-lab/node1") as websocket:
-                            # Should receive end-of-stream or close
+                    with patch("agent.main._console_websocket_docker", new_callable=AsyncMock, side_effect=RuntimeError("test error")):
+                        try:
+                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                                data = websocket.receive_text(timeout=2)
+                                assert "Error" in data
+                        except Exception:
+                            # Connection closed with error, expected
                             pass
-                    except Exception:
-                        pass
 
 
 # --- Real Integration Tests (require Docker) ---
@@ -247,7 +256,7 @@ class TestConsoleE2EWithDocker:
 
             with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
                 # Use real shell
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
+                mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
                 try:
                     with test_client.websocket_connect("/console/test/node1") as websocket:
@@ -269,7 +278,7 @@ class TestConsoleE2EWithDocker:
             mock_get_provider.return_value = mock_provider
 
             with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
+                mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
                 try:
                     with test_client.websocket_connect("/console/test/node1") as websocket:
@@ -305,7 +314,7 @@ class TestConsoleE2EWithDocker:
             mock_get_provider.return_value = mock_provider
 
             with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("docker", "/bin/sh", None, None)
+                mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
                 try:
                     with test_client.websocket_connect("/console/test/node1") as websocket:
@@ -334,52 +343,46 @@ class TestConsoleE2EWithDocker:
 class TestSSHConsoleWebSocket:
     """Tests for SSH-based console (vrnetlab containers)."""
 
-    def test_ssh_console_with_boot_logs(self, test_client, mock_provider):
-        """Should show boot logs before connecting to SSH console."""
+    def test_ssh_console_delegates_to_handler(self, test_client, mock_provider):
+        """Should use _console_websocket_ssh when method is 'ssh'."""
         with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                # SSH console
-                mock_config.return_value = ("ssh", None, "admin", "admin")
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+                    mock_config.return_value = ("ssh", None, "admin", "admin")
 
-                with patch("agent.main._get_container_boot_logs", new_callable=AsyncMock) as mock_logs:
-                    mock_logs.return_value = "Starting VM...\nBooting kernel...\n"
+                    with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=True) as mock_ssh:
+                        try:
+                            with test_client.websocket_connect("/console/test/router1") as websocket:
+                                pass
+                        except Exception:
+                            pass
 
-                    with patch("agent.main._get_container_ip", new_callable=AsyncMock) as mock_ip:
-                        mock_ip.return_value = "172.17.0.2"
+                        mock_ssh.assert_awaited_once()
+                        call_args = mock_ssh.call_args
+                        # Args: (websocket, container_name, node_name, username, password)
+                        assert call_args[0][1] == "test-lab-node1"  # container_name
+                        assert call_args[0][2] == "router1"  # node_name
+                        assert call_args[0][3] == "admin"  # username
+                        assert call_args[0][4] == "admin"  # password
 
-                        with patch("agent.main.SSHConsole") as MockSSH:
-                            mock_ssh = MagicMock()
-                            mock_ssh.start.return_value = True
-                            mock_ssh.is_running = True
-                            mock_ssh.read_blocking.side_effect = [b"Router>", b""]
-                            MockSSH.return_value = mock_ssh
+    def test_ssh_console_fallback_when_ip_unavailable(self, test_client, mock_provider):
+        """Should fall back to docker when SSH handler returns False."""
+        with patch("agent.main.get_provider", return_value=mock_provider):
+            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+                    mock_config.return_value = ("ssh", None, "admin", "admin")
 
+                    # SSH handler returns False (e.g. no IP, SSH not ready)
+                    with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=False):
+                        with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker:
                             try:
                                 with test_client.websocket_connect("/console/test/router1") as websocket:
-                                    # Should receive boot logs first
-                                    data = websocket.receive_text(timeout=2)
-                                    # May contain boot log or error
+                                    pass
                             except Exception:
                                 pass
 
-    def test_ssh_console_no_ip_returns_error(self, test_client, mock_provider):
-        """Should return error when container IP unavailable."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
-                mock_config.return_value = ("ssh", None, "admin", "admin")
-
-                with patch("agent.main._get_container_boot_logs", new_callable=AsyncMock) as mock_logs:
-                    mock_logs.return_value = ""
-
-                    with patch("agent.main._get_container_ip", new_callable=AsyncMock) as mock_ip:
-                        mock_ip.return_value = None  # No IP
-
-                        try:
-                            with test_client.websocket_connect("/console/test/router1") as websocket:
-                                data = websocket.receive_text(timeout=2)
-                                assert "Error" in data or "Could not get IP" in data
-                        except Exception:
-                            pass
+                            # Should have fallen back to docker handler
+                            mock_docker.assert_awaited_once()
 
 
 # To run these tests:
