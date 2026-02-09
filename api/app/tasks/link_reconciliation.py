@@ -298,6 +298,95 @@ async def attempt_link_repair(
         return False
 
 
+async def cleanup_orphaned_link_states(session: Session) -> int:
+    """Clean up orphaned LinkState records and their VXLAN tunnels.
+
+    Orphaned LinkStates have link_definition_id IS NULL, meaning the Link
+    definition they referenced was deleted (e.g., interface rename from
+    eth to Ethernet). Their VXLAN ports persist on OVS until explicitly
+    torn down.
+
+    Only deletes non-"up" orphans — actively working links that just lost
+    their definition are left alone to avoid disruption.
+
+    Args:
+        session: Database session
+
+    Returns:
+        Number of orphaned LinkStates deleted
+    """
+    orphaned = (
+        session.query(models.LinkState)
+        .filter(
+            models.LinkState.link_definition_id == None,
+            models.LinkState.actual_state != "up",
+        )
+        .all()
+    )
+
+    if not orphaned:
+        return 0
+
+    # Build host_to_agent map for teardown calls
+    agents = (
+        session.query(models.Host)
+        .filter(models.Host.status == "online")
+        .all()
+    )
+    host_to_agent = {a.id: a for a in agents}
+
+    count = 0
+    for ls in orphaned:
+        # Check for associated VxlanTunnel and tear down on agents
+        tunnel = (
+            session.query(models.VxlanTunnel)
+            .filter(models.VxlanTunnel.link_state_id == ls.id)
+            .first()
+        )
+        if tunnel:
+            # Tear down VXLAN ports on both agents
+            for agent_id, node, iface in [
+                (tunnel.agent_a_id, ls.source_node, ls.source_interface),
+                (tunnel.agent_b_id, ls.target_node, ls.target_interface),
+            ]:
+                agent = host_to_agent.get(agent_id)
+                if agent:
+                    try:
+                        await agent_client.detach_overlay_interface_on_agent(
+                            agent,
+                            lab_id=ls.lab_id,
+                            container_name=node,
+                            interface_name=normalize_interface(iface) if iface else "",
+                            link_id=ls.link_name,
+                        )
+                        logger.info(
+                            f"Torn down VXLAN port for orphaned link {ls.link_name} "
+                            f"on agent {agent.name}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to tear down VXLAN port for orphaned link "
+                            f"{ls.link_name} on agent {agent_id}: {e}"
+                        )
+                else:
+                    logger.debug(
+                        f"Agent {agent_id} offline, skipping VXLAN teardown for "
+                        f"orphaned link {ls.link_name}"
+                    )
+
+        logger.info(
+            f"Deleting orphaned LinkState: {ls.link_name} "
+            f"(actual_state={ls.actual_state}, definition_id={ls.link_definition_id})"
+        )
+        session.delete(ls)
+        count += 1
+
+    if count > 0:
+        session.commit()
+
+    return count
+
+
 async def cleanup_orphaned_tunnels(session: Session) -> int:
     """Clean up orphaned VxlanTunnel records.
 
@@ -366,6 +455,11 @@ async def link_reconciliation_monitor():
                             f"recovered={results['recovered']}, "
                             f"errors={results['errors']}, skipped={results['skipped']}"
                         )
+
+                    # Clean up orphaned LinkState records (and their VXLAN ports)
+                    ls_deleted = await cleanup_orphaned_link_states(session)
+                    if ls_deleted > 0:
+                        logger.info(f"Cleaned up {ls_deleted} orphaned LinkState records")
 
                     # Clean up orphaned VxlanTunnel records
                     orphans_deleted = await cleanup_orphaned_tunnels(session)

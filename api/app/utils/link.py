@@ -87,7 +87,8 @@ def links_needing_reconciliation_filter():
 
     This includes:
     - Links marked as "up" (for verification)
-    - Cross-host links in "error" with partial VXLAN attachment (for recovery)
+    - Cross-host links in "error" with desired_state "up" (for recovery,
+      including both partial attachment and VLAN tag mismatch cases)
 
     Returns:
         SQLAlchemy filter expression
@@ -97,15 +98,12 @@ def links_needing_reconciliation_filter():
 
     return or_(
         models.LinkState.actual_state == "up",
-        # Error links needing recovery (at least one side needs re-attachment)
+        # All cross-host error links that should be up need attention —
+        # includes both partial attachment AND VLAN tag mismatch cases
         (
             (models.LinkState.actual_state == "error") &
             (models.LinkState.is_cross_host == True) &
-            (models.LinkState.desired_state == "up") &
-            (
-                (models.LinkState.source_vxlan_attached == False) |
-                (models.LinkState.target_vxlan_attached == False)
-            )
+            (models.LinkState.desired_state == "up")
         ),
     )
 

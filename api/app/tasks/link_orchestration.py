@@ -89,6 +89,37 @@ async def create_deployment_links(
         if ls.link_name not in current_link_names
     ]
     for ls in orphaned_states:
+        # Tear down VXLAN ports on agents before deleting the DB record
+        tunnel = (
+            session.query(models.VxlanTunnel)
+            .filter(models.VxlanTunnel.link_state_id == ls.id)
+            .first()
+        )
+        if tunnel:
+            for agent_id, node, iface in [
+                (tunnel.agent_a_id, ls.source_node, ls.source_interface),
+                (tunnel.agent_b_id, ls.target_node, ls.target_interface),
+            ]:
+                agent = host_to_agent.get(agent_id)
+                if agent:
+                    try:
+                        await agent_client.detach_overlay_interface_on_agent(
+                            agent,
+                            lab_id=lab_id,
+                            container_name=node,
+                            interface_name=normalize_interface(iface) if iface else "",
+                            link_id=ls.link_name,
+                        )
+                        logger.info(
+                            f"Torn down VXLAN port for orphaned link {ls.link_name} "
+                            f"on agent {agent.name}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to tear down VXLAN port for orphaned link "
+                            f"{ls.link_name} on agent {agent_id}: {e}"
+                        )
+
         logger.info(f"Cleaning up orphaned LinkState: {ls.link_name}")
         session.delete(ls)
     if orphaned_states:
