@@ -117,7 +117,6 @@ const Dashboard: React.FC<DashboardProps> = ({
             <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
             <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Network Studio</p>
           </div>
-          <VersionBadge />
         </div>
 
         <div className="flex items-center gap-3">
@@ -274,6 +273,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
       <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
         <span>© 2026 Archetype Network Studio</span>
+        <VersionBadge />
       </footer>
     </div>
 

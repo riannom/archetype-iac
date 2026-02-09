@@ -25,6 +25,11 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
+// Mock VersionBadge
+vi.mock("../../components/VersionBadge", () => ({
+  VersionBadge: () => <span data-testid="version-badge" />,
+}));
+
 // Mock useNotifications to avoid needing NotificationProvider
 vi.mock("../../contexts/NotificationContext", () => ({
   useNotifications: () => ({

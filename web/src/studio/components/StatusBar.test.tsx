@@ -2,10 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import StatusBar from "./StatusBar";
 
-// Mock config
-vi.mock("../../config", () => ({
-  APP_VERSION: "1.2.3",
-  APP_VERSION_LABEL: "TEST",
+// Mock VersionBadge
+vi.mock("../../components/VersionBadge", () => ({
+  VersionBadge: () => <span data-testid="version-badge">v1.2.3</span>,
 }));
 
 // Mock formatUptime
@@ -62,9 +61,9 @@ describe("StatusBar", () => {
       expect(screen.getByText(/UPTIME:/)).toBeInTheDocument();
     });
 
-    it("displays version information", () => {
+    it("displays version badge", () => {
       render(<StatusBar nodeStates={{}} />);
-      expect(screen.getByText("v1.2.3-TEST")).toBeInTheDocument();
+      expect(screen.getByTestId("version-badge")).toBeInTheDocument();
     });
 
     it("shows default uptime when no running nodes", () => {

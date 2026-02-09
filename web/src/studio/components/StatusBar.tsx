@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { APP_VERSION, APP_VERSION_LABEL } from '../../config';
 import { formatUptime } from '../../utils/format';
 import { NodeStateEntry } from '../../types/nodeState';
+import { VersionBadge } from '../../components/VersionBadge';
 
 interface StatusBarProps {
   nodeStates: Record<string, NodeStateEntry>;
@@ -85,10 +85,7 @@ const StatusBar: React.FC<StatusBarProps> = ({ nodeStates, wsConnected, reconnec
 
         <div className="h-3 w-px bg-stone-200 dark:bg-stone-800"></div>
 
-        <div className="flex items-center gap-1.5 bg-stone-100 dark:bg-stone-800 px-2 py-0.5 rounded border border-stone-200 dark:border-stone-700 text-sage-600 dark:text-sage-400 uppercase">
-          <i className="fa-solid fa-code-branch text-[8px]"></i>
-          <span>v{APP_VERSION}-{APP_VERSION_LABEL}</span>
-        </div>
+        <VersionBadge />
       </div>
     </div>
   );
