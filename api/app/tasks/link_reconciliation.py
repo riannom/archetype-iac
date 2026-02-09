@@ -169,10 +169,10 @@ async def attempt_partial_recovery(
         return False
 
     # Get agent IPs and VNI
-    from app.agent_client import resolve_agent_ip
+    from app.agent_client import resolve_data_plane_ip
     from app.services.link_manager import allocate_vni
-    agent_ip_a = await resolve_agent_ip(agent_a.address)
-    agent_ip_b = await resolve_agent_ip(agent_b.address)
+    agent_ip_a = await resolve_data_plane_ip(session, agent_a)
+    agent_ip_b = await resolve_data_plane_ip(session, agent_b)
 
     # Ensure VNI is set (agent discovers local VLANs independently)
     if not link.vni:

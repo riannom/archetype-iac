@@ -55,6 +55,37 @@ async def resolve_agent_ip(address: str) -> str:
         logger.warning(f"Failed to resolve hostname {host}: {e}, using as-is")
         return host
 
+
+async def resolve_data_plane_ip(session: Session, agent: models.Host) -> str:
+    """Resolve the best IP for VXLAN tunnel endpoints.
+
+    Fallback chain:
+    1. agent.data_plane_address (explicitly configured)
+    2. Transport managed interface IP (synced from agent)
+    3. Management address (resolve_agent_ip fallback)
+    """
+    if agent.data_plane_address:
+        return agent.data_plane_address
+
+    # Check transport managed interfaces
+    iface = (
+        session.query(models.AgentManagedInterface)
+        .filter(
+            models.AgentManagedInterface.host_id == agent.id,
+            models.AgentManagedInterface.interface_type == "transport",
+            models.AgentManagedInterface.sync_status == "synced",
+            models.AgentManagedInterface.ip_address.isnot(None),
+        )
+        .first()
+    )
+    if iface and iface.ip_address:
+        ip = iface.ip_address.split("/")[0]
+        logger.info(f"Using transport interface IP {ip} for agent {agent.id}")
+        return ip
+
+    return await resolve_agent_ip(agent.address)
+
+
 # Retry configuration (exported for backward compatibility)
 MAX_RETRIES = settings.agent_max_retries
 
@@ -1332,7 +1363,7 @@ async def setup_cross_host_link_v2(
     with tag=<local_vlan> and options:key=<vni>. No VLAN coordination needed.
 
     Args:
-        database: Database session (unused, kept for compatibility)
+        database: Database session (used for transport interface IP lookup)
         lab_id: Lab identifier
         link_id: Link identifier
         agent_a: First agent
@@ -1348,8 +1379,8 @@ async def setup_cross_host_link_v2(
     from app.services.link_manager import allocate_vni
 
     # Prefer data plane addresses for VXLAN tunnels, fall back to management address
-    agent_ip_a = agent_a.data_plane_address or await resolve_agent_ip(agent_a.address)
-    agent_ip_b = agent_b.data_plane_address or await resolve_agent_ip(agent_b.address)
+    agent_ip_a = await resolve_data_plane_ip(database, agent_a)
+    agent_ip_b = await resolve_data_plane_ip(database, agent_b)
 
     # Allocate deterministic per-link VNI
     vni = allocate_vni(lab_id, link_id)
@@ -2394,8 +2425,8 @@ async def setup_cross_host_link(
         return {"success": False, "error": f"Agent {agent_b.id} does not support VXLAN"}
 
     # Prefer data plane addresses for VXLAN tunnels, fall back to management address
-    agent_ip_a = agent_a.data_plane_address or await resolve_agent_ip(agent_a.address)
-    agent_ip_b = agent_b.data_plane_address or await resolve_agent_ip(agent_b.address)
+    agent_ip_a = await resolve_data_plane_ip(database, agent_a)
+    agent_ip_b = await resolve_data_plane_ip(database, agent_b)
 
     logger.info(f"Setting up cross-host link {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
 
