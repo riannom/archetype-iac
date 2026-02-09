@@ -137,10 +137,15 @@ def offline_host(test_db: Session) -> models.Host:
 
 
 def _mock_agent_update_response(accepted=True, message="Update initiated", deployment_mode="systemd"):
-    """Create a mock httpx response for agent update requests."""
-    mock_response = AsyncMock()
+    """Create a mock httpx response for agent update requests.
+
+    Uses MagicMock (not AsyncMock) because httpx.Response.json() is sync.
+    """
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.raise_for_status = lambda: None
+    mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = {
         "accepted": accepted,
         "message": message,

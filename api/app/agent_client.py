@@ -44,7 +44,8 @@ async def resolve_agent_ip(address: str) -> str:
 
     # Resolve hostname to IP (non-blocking)
     try:
-        results = await asyncio.getaddrinfo(host, None, family=socket.AF_INET)
+        loop = asyncio.get_running_loop()
+        results = await loop.getaddrinfo(host, None, family=socket.AF_INET)
         if results:
             ip = results[0][4][0]
             logger.debug(f"Resolved hostname {host} to IP {ip}")

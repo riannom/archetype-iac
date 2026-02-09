@@ -88,6 +88,10 @@ def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
     import app.middleware as _middleware_mod
     monkeypatch.setattr(_middleware_mod, "get_session", override_get_session)
 
+    # Patch console router which also imports get_session directly
+    import app.routers.console as _console_mod
+    monkeypatch.setattr(_console_mod, "get_session", override_get_session)
+
     app.dependency_overrides[db.get_db] = override_get_db
     try:
         with TestClient(app) as client:
