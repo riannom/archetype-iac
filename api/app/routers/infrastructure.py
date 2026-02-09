@@ -179,8 +179,8 @@ async def get_agent_mesh(
     for i, source_id in enumerate(agent_ids):
         for target_id in agent_ids[i + 1:]:
             # Always create management path links (A->B and B->A)
-            _ensure_link(source_id, target_id, "management", settings.overlay_mtu)
-            _ensure_link(target_id, source_id, "management", settings.overlay_mtu)
+            _ensure_link(source_id, target_id, "management", 1500)
+            _ensure_link(target_id, source_id, "management", 1500)
 
             # Create data_plane path links if both agents have data_plane_address
             if agent_dp_map.get(source_id) and agent_dp_map.get(target_id):
@@ -318,8 +318,8 @@ async def test_mtu_between_agents(
     else:
         target_ip = await resolve_agent_ip(target_agent.address)
 
-    # Determine test MTU: use transport MTU on data plane, overlay MTU on management
-    test_mtu = settings.overlay_mtu
+    # Determine test MTU: use transport MTU on data plane, 1500 on management
+    test_mtu = 1500 if test_path == "management" else settings.overlay_mtu
     if test_path == "data_plane":
         def _resolve_dp_mtu(host_id: str) -> int | None:
             """Get data plane MTU: prefer network config if > overlay, else transport managed interface."""
