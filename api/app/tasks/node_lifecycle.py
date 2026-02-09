@@ -1904,28 +1904,58 @@ class NodeLifecycleManager:
                 stop_agent.id, (stop_agent, [])
             )[1].append((ns, container_name))
 
-        # Send one batch reconcile per agent
-        # Track nodes that need fallback retry on default agent
-        fallback_nodes: list[tuple[models.NodeState, str]] = []
-
-        for agent_id, (stop_agent, node_list) in agent_groups.items():
+        # Send batch reconcile to all agents in parallel
+        # Each coroutine returns (stop_agent, node_list, response_or_error)
+        async def _stop_on_agent(
+            stop_agent: models.Host,
+            node_list: list[tuple[models.NodeState, str]],
+        ) -> tuple[models.Host, list[tuple[models.NodeState, str]], dict | Exception]:
             batch = [
                 {"container_name": cn, "desired_state": "stopped"}
                 for _, cn in node_list
             ]
-            # Build lookup: container_name -> ns
-            ns_by_container = {cn: ns for ns, cn in node_list}
-
             try:
                 response = await agent_client.reconcile_nodes_on_agent(
                     stop_agent, self.lab.id, batch
                 )
-                results = response.get("results", [])
-                # Build results lookup
+                return (stop_agent, node_list, response)
+            except Exception as e:
+                return (stop_agent, node_list, e)
+
+        agent_results = await asyncio.gather(*[
+            _stop_on_agent(stop_agent, node_list)
+            for stop_agent, node_list in agent_groups.values()
+        ])
+
+        # Process results and collect fallback nodes
+        fallback_nodes: list[tuple[models.NodeState, str]] = []
+
+        for stop_agent, node_list, response_or_error in agent_results:
+            if isinstance(response_or_error, AgentUnavailableError):
+                error_msg = f"Agent unreachable (transient): {response_or_error.message}"
+                for ns, container_name in node_list:
+                    ns.error_message = error_msg
+                    self.log_parts.append(
+                        f"  {ns.node_name}: FAILED (transient) - {error_msg}"
+                    )
+                    logger.warning(
+                        f"Stop {ns.node_name} in job {self.job.id} failed due "
+                        f"to agent unavailability"
+                    )
+            elif isinstance(response_or_error, Exception):
+                for ns, container_name in node_list:
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.stopping_started_at = None
+                    ns.error_message = str(response_or_error)
+                    ns.boot_started_at = None
+                    ns.is_ready = False
+                    self.log_parts.append(f"  {ns.node_name}: FAILED - {response_or_error}")
+                    self._broadcast_state(ns, name_suffix="error")
+            else:
+                results = response_or_error.get("results", [])
                 results_by_name = {
                     r.get("container_name"): r for r in results
                 }
-
                 for ns, container_name in node_list:
                     result = results_by_name.get(container_name, {})
                     # Check for "not found" on non-default agent -> queue fallback
@@ -1942,27 +1972,6 @@ class NodeLifecycleManager:
                         continue
 
                     self._apply_stop_result(ns, result, stop_agent)
-
-            except AgentUnavailableError as e:
-                error_msg = f"Agent unreachable (transient): {e.message}"
-                for ns, container_name in node_list:
-                    ns.error_message = error_msg
-                    self.log_parts.append(
-                        f"  {ns.node_name}: FAILED (transient) - {error_msg}"
-                    )
-                    logger.warning(
-                        f"Stop {ns.node_name} in job {self.job.id} failed due "
-                        f"to agent unavailability"
-                    )
-            except Exception as e:
-                for ns, container_name in node_list:
-                    ns.actual_state = NodeActualState.ERROR.value
-                    ns.stopping_started_at = None
-                    ns.error_message = str(e)
-                    ns.boot_started_at = None
-                    ns.is_ready = False
-                    self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
-                    self._broadcast_state(ns, name_suffix="error")
 
         # Fallback: retry not-found nodes on default agent in one batch
         if fallback_nodes:

@@ -1613,7 +1613,7 @@ async def _reconcile_single_node(
                     success=True,
                 )
             else:
-                await asyncio.to_thread(container.stop, timeout=30)
+                await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
                 logger.info(f"Stopped container {container_name}")
                 return NodeReconcileResult(
                     container_name=container_name,
