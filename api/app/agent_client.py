@@ -1100,54 +1100,6 @@ async def cleanup_lab_orphans(
 
 # --- Overlay Networking Functions ---
 
-async def create_tunnel_on_agent(
-    agent: models.Host,
-    lab_id: str,
-    link_id: str,
-    local_ip: str,
-    remote_ip: str,
-    vni: int | None = None,
-) -> dict:
-    """Create a VXLAN tunnel on an agent.
-
-    Args:
-        agent: The agent to create the tunnel on
-        lab_id: Lab identifier
-        link_id: Link identifier (e.g., "node1:eth0-node2:eth0")
-        local_ip: Agent's local IP for VXLAN endpoint
-        remote_ip: Remote agent's IP for VXLAN endpoint
-        vni: Optional VNI (auto-allocated if not specified)
-
-    Returns:
-        Dict with 'success', 'tunnel', and optionally 'error' keys
-    """
-    url = f"{get_agent_url(agent)}/overlay/tunnel"
-
-    try:
-        client = get_http_client()
-        response = await client.post(
-            url,
-            json={
-                "lab_id": lab_id,
-                "link_id": link_id,
-                "local_ip": local_ip,
-                "remote_ip": remote_ip,
-                "vni": vni,
-            },
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        result = response.json()
-        if result.get("success"):
-            logger.info(f"Created tunnel on {agent.id}: {link_id} -> {remote_ip}")
-        else:
-            logger.warning(f"Tunnel creation failed on {agent.id}: {result.get('error')}")
-        return result
-    except Exception as e:
-        logger.error(f"Failed to create tunnel on agent {agent.id}: {e}")
-        return {"success": False, "error": str(e)}
-
-
 async def attach_container_on_agent(
     agent: models.Host,
     lab_id: str,
@@ -1377,10 +1329,15 @@ async def setup_cross_host_link_v2(
         Dict with 'success' and status information
     """
     from app.services.link_manager import allocate_vni
+    from app.routers.infrastructure import get_or_create_settings
 
     # Prefer data plane addresses for VXLAN tunnels, fall back to management address
     agent_ip_a = await resolve_data_plane_ip(database, agent_a)
     agent_ip_b = await resolve_data_plane_ip(database, agent_b)
+
+    # Read overlay MTU from infrastructure settings
+    infra = get_or_create_settings(database)
+    overlay_mtu = infra.overlay_mtu or 0
 
     # Allocate deterministic per-link VNI
     vni = allocate_vni(lab_id, link_id)
@@ -1407,6 +1364,7 @@ async def setup_cross_host_link_v2(
                 local_ip=local_ip,
                 remote_ip=remote_ip,
                 link_id=link_id,
+                tenant_mtu=overlay_mtu,
             )
             if result.get("success"):
                 return result
@@ -2380,125 +2338,6 @@ async def detach_external_on_agent(
     except Exception as e:
         logger.error(f"External detach failed on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
-
-
-async def setup_cross_host_link(
-    database: Session,
-    lab_id: str,
-    link_id: str,
-    agent_a: models.Host,
-    agent_b: models.Host,
-    node_a: str,
-    interface_a: str,
-    node_b: str,
-    interface_b: str,
-    ip_a: str | None = None,
-    ip_b: str | None = None,
-    vni: int | None = None,
-) -> dict:
-    """Set up a cross-host link between two agents.
-
-    This creates VXLAN tunnels on both agents and attaches the
-    specified containers to the overlay bridges.
-
-    Args:
-        database: Database session
-        lab_id: Lab identifier
-        link_id: Link identifier
-        agent_a: First agent
-        agent_b: Second agent
-        node_a: Container name on agent_a
-        interface_a: Interface name in node_a
-        node_b: Container name on agent_b
-        interface_b: Interface name in node_b
-        ip_a: Optional IP address for node_a's interface (CIDR format)
-        ip_b: Optional IP address for node_b's interface (CIDR format)
-        vni: Optional VNI (auto-allocated if not specified)
-
-    Returns:
-        Dict with 'success' and status information
-    """
-    # Check both agents support VXLAN
-    if not agent_supports_vxlan(agent_a):
-        return {"success": False, "error": f"Agent {agent_a.id} does not support VXLAN"}
-    if not agent_supports_vxlan(agent_b):
-        return {"success": False, "error": f"Agent {agent_b.id} does not support VXLAN"}
-
-    # Prefer data plane addresses for VXLAN tunnels, fall back to management address
-    agent_ip_a = await resolve_data_plane_ip(database, agent_a)
-    agent_ip_b = await resolve_data_plane_ip(database, agent_b)
-
-    logger.info(f"Setting up cross-host link {link_id}: {agent_a.id}({agent_ip_a}) <-> {agent_b.id}({agent_ip_b})")
-
-    # Create tunnel on agent A (pointing to agent B)
-    result_a = await create_tunnel_on_agent(
-        agent_a,
-        lab_id=lab_id,
-        link_id=link_id,
-        local_ip=agent_ip_a,
-        remote_ip=agent_ip_b,
-        vni=vni,
-    )
-
-    if not result_a.get("success"):
-        return {"success": False, "error": f"Failed to create tunnel on {agent_a.id}: {result_a.get('error')}"}
-
-    # Extract VNI from result to use same on both sides
-    tunnel_vni = result_a.get("tunnel", {}).get("vni")
-    vlan_tag = result_a.get("tunnel", {}).get("vlan_tag")
-
-    # Create tunnel on agent B (pointing to agent A) with same VNI
-    result_b = await create_tunnel_on_agent(
-        agent_b,
-        lab_id=lab_id,
-        link_id=link_id,
-        local_ip=agent_ip_b,
-        remote_ip=agent_ip_a,
-        vni=tunnel_vni,
-    )
-
-    if not result_b.get("success"):
-        # Clean up tunnel on agent A
-        await cleanup_overlay_on_agent(agent_a, lab_id)
-        return {"success": False, "error": f"Failed to create tunnel on {agent_b.id}: {result_b.get('error')}"}
-
-    # Attach containers to bridges
-    # ip_a/ip_b are the interface IPs from the topology (optional, CIDR format)
-    attach_a = await attach_container_on_agent(
-        agent_a,
-        lab_id=lab_id,
-        link_id=link_id,
-        container_name=node_a,
-        interface_name=interface_a,
-        ip_address=ip_a,
-    )
-
-    if not attach_a.get("success"):
-        logger.warning(f"Container attachment on {agent_a.id} failed: {attach_a.get('error')}")
-
-    attach_b = await attach_container_on_agent(
-        agent_b,
-        lab_id=lab_id,
-        link_id=link_id,
-        container_name=node_b,
-        interface_name=interface_b,
-        ip_address=ip_b,
-    )
-
-    if not attach_b.get("success"):
-        logger.warning(f"Container attachment on {agent_b.id} failed: {attach_b.get('error')}")
-
-    return {
-        "success": True,
-        "vni": tunnel_vni,
-        "vlan_tag": vlan_tag,
-        "agent_a": agent_a.id,
-        "agent_b": agent_b.id,
-        "attachments": {
-            "a": attach_a.get("success", False),
-            "b": attach_b.get("success", False),
-        },
-    }
 
 
 async def get_lab_ports_from_agent(

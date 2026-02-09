@@ -290,6 +290,7 @@ class OverlayManager:
         remote_ip: str,
         bridge: str,
         vlan_tag: int | None = None,
+        tenant_mtu: int = 0,
     ) -> None:
         """Create a Linux VXLAN device with nopmtudisc and add it to OVS.
 
@@ -305,6 +306,7 @@ class OverlayManager:
             remote_ip: Remote IP for VXLAN endpoint
             bridge: OVS bridge name to add the port to
             vlan_tag: Optional VLAN tag (access mode) or None (trunk mode)
+            tenant_mtu: API-supplied overlay MTU (0 = use agent default)
 
         Raises:
             RuntimeError: If device creation fails
@@ -319,10 +321,11 @@ class OverlayManager:
             raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
 
         # Set MTU to desired overlay/tenant MTU (not local_mtu which is for veth pairs)
+        # Priority: API-supplied tenant_mtu > agent config overlay_mtu > 1500 fallback
         # With df=unset, the kernel fragments oversized outer packets transparently,
         # so the VXLAN device can advertise the full tenant MTU (e.g. 1500) even when
         # the underlay path MTU is also 1500. This hides fragmentation from the overlay.
-        vxlan_mtu = settings.overlay_mtu if settings.overlay_mtu > 0 else 1500
+        vxlan_mtu = tenant_mtu if tenant_mtu > 0 else (settings.overlay_mtu if settings.overlay_mtu > 0 else 1500)
         await self._run_cmd(["ip", "link", "set", name, "mtu", str(vxlan_mtu)])
 
         # Bring device up
@@ -1305,6 +1308,7 @@ class OverlayManager:
             remote_ip=remote_ip,
             bridge=self._bridge_name,
             vlan_tag=local_vlan,
+            tenant_mtu=tenant_mtu,
         )
 
         tunnel = LinkTunnel(

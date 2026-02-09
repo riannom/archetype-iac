@@ -168,11 +168,14 @@ async def attempt_partial_recovery(
         logger.warning(f"Agents not available for link {link.link_name} recovery")
         return False
 
-    # Get agent IPs and VNI
+    # Get agent IPs, VNI, and overlay MTU
     from app.agent_client import resolve_data_plane_ip
     from app.services.link_manager import allocate_vni
+    from app.routers.infrastructure import get_or_create_settings
     agent_ip_a = await resolve_data_plane_ip(session, agent_a)
     agent_ip_b = await resolve_data_plane_ip(session, agent_b)
+    infra = get_or_create_settings(session)
+    overlay_mtu = infra.overlay_mtu or 0
 
     # Ensure VNI is set (agent discovers local VLANs independently)
     if not link.vni:
@@ -196,6 +199,7 @@ async def attempt_partial_recovery(
                 local_ip=agent_ip_a,
                 remote_ip=agent_ip_b,
                 link_id=link.link_name,
+                tenant_mtu=overlay_mtu,
             )
             if result.get("success"):
                 source_ok = True
@@ -218,6 +222,7 @@ async def attempt_partial_recovery(
                 local_ip=agent_ip_b,
                 remote_ip=agent_ip_a,
                 link_id=link.link_name,
+                tenant_mtu=overlay_mtu,
             )
             if result.get("success"):
                 target_ok = True
