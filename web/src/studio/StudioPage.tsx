@@ -18,6 +18,7 @@ import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, Lab
 import { API_BASE_URL, apiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
+import { usePersistedState } from './hooks/usePersistedState';
 import { useLabStateWS, JobProgressData } from './hooks/useLabStateWS';
 import { NodeStateEntry, NodeStateData, NodeRuntimeStatus, mapActualToRuntime } from '../types/nodeState';
 import { useTheme } from '../theme/index';
@@ -222,7 +223,7 @@ const StudioPage: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [taskLog, setTaskLog] = useState<TaskLogEntry[]>([]);
-  const [isTaskLogVisible, setIsTaskLogVisible] = useState(true);
+  const [isTaskLogVisible, setIsTaskLogVisible] = usePersistedState('archetype-tasklog-visible', true);
   const [taskLogClearedAt, setTaskLogClearedAt] = useState<number>(() => {
     const stored = localStorage.getItem('archetype_tasklog_cleared_at');
     return stored ? parseInt(stored, 10) : 0;

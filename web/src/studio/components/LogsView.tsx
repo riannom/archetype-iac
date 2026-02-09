@@ -31,6 +31,7 @@ const LogsView: React.FC<LogsViewProps> = ({
   const [hostSidebarCollapsed, setHostSidebarCollapsed] = useState(false);
 
   // Expanded entry for detail view
+  const [copiedEntryIdx, setCopiedEntryIdx] = useState<number | null>(null);
   const [expandedEntryIdx, setExpandedEntryIdx] = useState<number | null>(null);
   const [expandedJobLog, setExpandedJobLog] = useState<string | null>(null);
   const [loadingJobLog, setLoadingJobLog] = useState(false);
@@ -241,17 +242,47 @@ const LogsView: React.FC<LogsViewProps> = ({
       })
       .join('\n');
 
-    await navigator.clipboard.writeText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   // Copy single entry
-  const handleCopyEntry = async (entry: LabLogEntry) => {
-    const ts = formatTimestamp(entry.timestamp);
-    const host = entry.host_name ? `[${entry.host_name}]` : '';
-    const text = `${ts} ${entry.level.toUpperCase()} ${host} ${entry.message}`;
-    await navigator.clipboard.writeText(text);
+  const handleCopyEntry = async (entry: LabLogEntry, idx: number) => {
+    try {
+      const ts = formatTimestamp(entry.timestamp);
+      const host = entry.host_name ? `[${entry.host_name}]` : '';
+      const text = `${ts} ${entry.level.toUpperCase()} ${host} ${entry.message}`;
+      await navigator.clipboard.writeText(text);
+      setCopiedEntryIdx(idx);
+      setTimeout(() => setCopiedEntryIdx(null), 2000);
+    } catch {
+      // Fallback for non-secure contexts
+      const ts = formatTimestamp(entry.timestamp);
+      const host = entry.host_name ? `[${entry.host_name}]` : '';
+      const text = `${ts} ${entry.level.toUpperCase()} ${host} ${entry.message}`;
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopiedEntryIdx(idx);
+      setTimeout(() => setCopiedEntryIdx(null), 2000);
+    }
   };
 
   // Export as text file
@@ -664,12 +695,16 @@ const LogsView: React.FC<LogsViewProps> = ({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleCopyEntry(entry);
+                              handleCopyEntry(entry, idx);
                             }}
-                            className="self-start px-2 py-1 text-[10px] bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600 text-stone-700 dark:text-stone-300 rounded transition-all"
+                            className={`self-start px-2 py-1 text-[10px] rounded transition-all ${
+                              copiedEntryIdx === idx
+                                ? 'bg-green-200 dark:bg-green-800 text-green-700 dark:text-green-300'
+                                : 'bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600 text-stone-700 dark:text-stone-300'
+                            }`}
                           >
-                            <i className="fa-solid fa-copy mr-1" />
-                            Copy entry
+                            <i className={`fa-solid ${copiedEntryIdx === idx ? 'fa-check' : 'fa-copy'} mr-1`} />
+                            {copiedEntryIdx === idx ? 'Copied!' : 'Copy entry'}
                           </button>
                         </div>
                       </div>
