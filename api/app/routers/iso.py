@@ -838,6 +838,19 @@ async def _execute_import(session_id: str):
         total_images = len(session.selected_images)
         completed_count = 0
 
+        # Build filename → device_ids map for shared disk images.
+        # Multiple node definitions may reference the same qcow2 file
+        # (e.g. cat9000v-q200 and cat9000v-uadp share cat9kv_prd.17.15.03.qcow2).
+        filename_to_devices: dict[str, list[str]] = {}
+        for sel_image_id in session.selected_images:
+            img = next((i for i in session.manifest.images if i.id == sel_image_id), None)
+            if not img:
+                continue
+            dev_id, _ = get_image_device_mapping(img, session.manifest.node_definitions)
+            filename_to_devices.setdefault(img.disk_image_filename, [])
+            if dev_id not in filename_to_devices[img.disk_image_filename]:
+                filename_to_devices[img.disk_image_filename].append(dev_id)
+
         for image_id in session.selected_images:
             # Check for cancellation
             session = _get_session(session_id)
@@ -864,6 +877,7 @@ async def _execute_import(session_id: str):
                     manifest_data,
                     session.create_devices,
                     iso_source=Path(session.iso_path).name,
+                    filename_to_devices=filename_to_devices,
                 )
                 completed_count += 1
 
@@ -909,6 +923,7 @@ async def _import_single_image(
     manifest_data: dict,
     create_devices: bool,
     iso_source: str = "",
+    filename_to_devices: dict[str, list[str]] | None = None,
 ):
     """Import a single image from the ISO."""
     image_id = image.id
@@ -938,14 +953,26 @@ async def _import_single_image(
         )
 
     if image.image_type == "qcow2":
-        # Extract qcow2 to image store
+        # Extract qcow2 to image store (skip if already extracted by a sibling device)
         dest_path = image_store / image.disk_image_filename
-        await extractor.extract_file(
-            image.disk_image_path,
-            dest_path,
-            progress_callback=progress_callback,
-            timeout_seconds=settings.iso_extraction_timeout,
+        if not dest_path.exists():
+            await extractor.extract_file(
+                image.disk_image_path,
+                dest_path,
+                progress_callback=progress_callback,
+                timeout_seconds=settings.iso_extraction_timeout,
+            )
+        else:
+            logger.info(f"qcow2 file {image.disk_image_filename} already exists, reusing")
+            _update_image_progress(session_id, image_id, "extracting", 90)
+
+        # Determine compatible devices from the pre-computed shared-filename map
+        shared_devices = (
+            filename_to_devices.get(image.disk_image_filename)
+            if filename_to_devices
+            else None
         )
+        compat = shared_devices if shared_devices else [device_id]
 
         # Create manifest entry
         entry = create_image_entry(
@@ -957,6 +984,7 @@ async def _import_single_image(
             version=image.version,
             size_bytes=dest_path.stat().st_size,
             source=iso_source,
+            compatible_devices=compat,
         )
 
     elif image.image_type == "docker":
@@ -1043,9 +1071,13 @@ async def _import_single_image(
     else:
         raise ValueError(f"Unsupported image type: {image.image_type}")
 
-    # Check for duplicates
-    if find_image_by_id(manifest_data, entry["id"]):
-        logger.warning(f"Image {entry['id']} already exists, skipping")
+    # Check for duplicates — merge compatible_devices instead of skipping
+    existing = find_image_by_id(manifest_data, entry["id"])
+    if existing:
+        for dev in entry.get("compatible_devices", []):
+            if dev not in existing.get("compatible_devices", []):
+                existing.setdefault("compatible_devices", []).append(dev)
+        logger.info(f"Image {entry['id']} already exists, merged compatible_devices: {existing.get('compatible_devices')}")
     else:
         manifest_data["images"].append(entry)
 
