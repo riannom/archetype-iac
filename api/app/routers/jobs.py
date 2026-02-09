@@ -361,6 +361,14 @@ async def lab_up(
         ns.error_message = None
     database.commit()
 
+    # Clear enforcement cooldowns so enforcement picks up new desired state immediately
+    if node_states:
+        from app.tasks.state_enforcement import clear_cooldowns_for_lab
+        safe_create_task(
+            clear_cooldowns_for_lab(lab.id, [ns.node_name for ns in node_states]),
+            name=f"clear_cooldowns:{lab.id}"
+        )
+
     # Start background task - choose deployment method based on topology
     # Deploy functions build topology from database (source of truth)
     if is_multihost:
@@ -431,6 +439,14 @@ async def lab_down(
         ns.enforcement_failed_at = None
         ns.last_enforcement_at = None
     database.commit()
+
+    # Clear enforcement cooldowns so enforcement picks up new desired state immediately
+    if node_states:
+        from app.tasks.state_enforcement import clear_cooldowns_for_lab
+        safe_create_task(
+            clear_cooldowns_for_lab(lab.id, [ns.node_name for ns in node_states]),
+            name=f"clear_cooldowns:{lab.id}"
+        )
 
     # Start background task - choose destroy method based on topology
     # Destroy functions use database for host analysis (source of truth)

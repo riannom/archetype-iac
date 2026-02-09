@@ -35,6 +35,11 @@ from app.utils.async_tasks import safe_create_task
 logger = logging.getLogger(__name__)
 
 
+# Seconds between cEOS container starts to avoid boot race conditions.
+# cEOS CPU-bound init takes ~1-2s; 2s spacing is sufficient.
+CEOS_STAGGER_SECONDS = 2
+
+
 def _is_ceos_kind(kind: str) -> bool:
     """Check if a device kind is cEOS (needs staggered starts)."""
     if not kind:
@@ -1485,11 +1490,124 @@ class NodeLifecycleManager:
 
         self.session.commit()
 
+    async def _deploy_single_node(self, ns: models.NodeState) -> str | None:
+        """Create and start a single node container/VM.
+
+        Returns the node_name on success, None on failure.
+        Used by _deploy_nodes_per_node for parallel/sequential deploys.
+        """
+        db_node = self.db_nodes_map.get(ns.node_name)
+        if not db_node:
+            ns.actual_state = NodeActualState.ERROR.value
+            ns.error_message = "Node definition not found"
+            self.log_parts.append(f"  {ns.node_name}: ERROR - no node definition")
+            return None
+
+        kind = db_node.device or "linux"
+        iface_count = self._get_interface_count(ns.node_name)
+        startup_config = self._get_startup_config(ns.node_name, db_node)
+
+        # Resolve image: explicit → manifest → vendor default
+        image = resolve_node_image(db_node.device, kind, db_node.image, db_node.version)
+        if not image:
+            ns.actual_state = NodeActualState.ERROR.value
+            ns.error_message = f"No image found for device '{db_node.device}'. Import one first."
+            self.log_parts.append(f"  {ns.node_name}: ERROR - no image available")
+            return None
+
+        # Determine provider from image type (qcow2 → libvirt, else docker)
+        node_provider = get_image_provider(image)
+
+        try:
+            # Create container/VM
+            create_result = await agent_client.create_node_on_agent(
+                self.agent,
+                self.lab.id,
+                ns.node_name,
+                kind,
+                image=image,
+                display_name=db_node.display_name,
+                interface_count=iface_count,
+                startup_config=startup_config,
+                provider=node_provider,
+            )
+
+            if not create_result.get("success"):
+                error_msg = create_result.get("error", "Container creation failed")
+                ns.actual_state = NodeActualState.ERROR.value
+                ns.error_message = error_msg
+                self.log_parts.append(f"  {ns.node_name}: CREATE FAILED - {error_msg}")
+                return None
+
+            # Start container/VM
+            start_result = await agent_client.start_node_on_agent(
+                self.agent,
+                self.lab.id,
+                ns.node_name,
+                provider=node_provider,
+            )
+
+            if start_result.get("success"):
+                ns.actual_state = NodeActualState.RUNNING.value
+                ns.error_message = None
+                ns.boot_started_at = datetime.now(timezone.utc)
+                self.log_parts.append(f"  {ns.node_name}: deployed and started")
+                self._broadcast_state(ns, name_suffix="started")
+                logger.info(
+                    "Node state transition",
+                    extra={
+                        "event": "node_state_transition",
+                        "lab_id": self.lab.id,
+                        "node_id": ns.node_id,
+                        "node_name": ns.node_name,
+                        "old_state": "pending",
+                        "new_state": "running",
+                        "trigger": "agent_response",
+                        "agent_id": self.agent.id,
+                        "job_id": self.job.id,
+                    },
+                )
+                return ns.node_name
+            else:
+                error_msg = start_result.get("error", "Container start failed")
+                ns.actual_state = NodeActualState.ERROR.value
+                ns.error_message = error_msg
+                self.log_parts.append(f"  {ns.node_name}: START FAILED - {error_msg}")
+                logger.info(
+                    "Node state transition",
+                    extra={
+                        "event": "node_state_transition",
+                        "lab_id": self.lab.id,
+                        "node_id": ns.node_id,
+                        "node_name": ns.node_name,
+                        "old_state": "pending",
+                        "new_state": "error",
+                        "trigger": "agent_response",
+                        "agent_id": self.agent.id,
+                        "job_id": self.job.id,
+                        "error_message": error_msg,
+                    },
+                )
+                return None
+
+        except AgentUnavailableError as e:
+            ns.actual_state = NodeActualState.PENDING.value
+            ns.error_message = f"Agent unreachable: {e.message}"
+            self.log_parts.append(f"  {ns.node_name}: FAILED (transient) - {e.message}")
+            return None
+        except Exception as e:
+            ns.actual_state = NodeActualState.ERROR.value
+            ns.error_message = str(e)
+            self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
+            logger.exception(f"Deploy node {ns.node_name} failed: {e}")
+            return None
+
     async def _deploy_nodes_per_node(self, nodes_need_deploy: list[models.NodeState]):
         """Deploy nodes via per-node container creation and start.
 
         Creates and starts each container individually, then connects
-        same-host links. No full topology redeploy needed.
+        same-host links. Non-cEOS nodes deploy in parallel;
+        cEOS nodes deploy sequentially with stagger delay.
         """
         from app.tasks.jobs import (
             _update_node_placements,
@@ -1499,118 +1617,40 @@ class NodeLifecycleManager:
         self.log_parts.append("=== Phase 1: Deploy (per-node) ===")
 
         deployed_names = []
-        ceos_started = False
 
+        # Split into cEOS (needs stagger) and non-cEOS (can deploy in parallel)
+        ceos_nodes = []
+        non_ceos_nodes = []
         for ns in nodes_need_deploy:
             db_node = self.db_nodes_map.get(ns.node_name)
-            if not db_node:
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.error_message = "Node definition not found"
-                self.log_parts.append(f"  {ns.node_name}: ERROR - no node definition")
-                continue
+            kind = (db_node.device or "linux") if db_node else "linux"
+            if _is_ceos_kind(kind):
+                ceos_nodes.append(ns)
+            else:
+                non_ceos_nodes.append(ns)
 
-            kind = db_node.device or "linux"
-            iface_count = self._get_interface_count(ns.node_name)
-            startup_config = self._get_startup_config(ns.node_name, db_node)
+        # Deploy all non-cEOS nodes in parallel
+        if non_ceos_nodes:
+            self.log_parts.append(f"  Deploying {len(non_ceos_nodes)} non-cEOS node(s) in parallel")
+            tasks = [self._deploy_single_node(ns) for ns in non_ceos_nodes]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for ns, result in zip(non_ceos_nodes, results):
+                if isinstance(result, Exception):
+                    logger.exception(f"Parallel deploy of {ns.node_name} raised: {result}")
+                elif result:
+                    deployed_names.append(result)
 
-            # Resolve image: explicit → manifest → vendor default
-            image = resolve_node_image(db_node.device, kind, db_node.image, db_node.version)
-            if not image:
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.error_message = f"No image found for device '{db_node.device}'. Import one first."
-                self.log_parts.append(f"  {ns.node_name}: ERROR - no image available")
-                continue
+        # Deploy cEOS nodes sequentially with stagger
+        ceos_started = False
+        for ns in ceos_nodes:
+            if ceos_started:
+                logger.info(f"Waiting {CEOS_STAGGER_SECONDS}s before starting {ns.node_name} (cEOS stagger)")
+                await asyncio.sleep(CEOS_STAGGER_SECONDS)
 
-            # Determine provider from image type (qcow2 → libvirt, else docker)
-            node_provider = get_image_provider(image)
-
-            # cEOS stagger: wait between starts
-            if _is_ceos_kind(kind) and ceos_started:
-                logger.info(f"Waiting 5s before starting {ns.node_name} (cEOS stagger)")
-                await asyncio.sleep(5)
-
-            try:
-                # Create container/VM
-                create_result = await agent_client.create_node_on_agent(
-                    self.agent,
-                    self.lab.id,
-                    ns.node_name,
-                    kind,
-                    image=image,
-                    display_name=db_node.display_name,
-                    interface_count=iface_count,
-                    startup_config=startup_config,
-                    provider=node_provider,
-                )
-
-                if not create_result.get("success"):
-                    error_msg = create_result.get("error", "Container creation failed")
-                    ns.actual_state = NodeActualState.ERROR.value
-                    ns.error_message = error_msg
-                    self.log_parts.append(f"  {ns.node_name}: CREATE FAILED - {error_msg}")
-                    continue
-
-                # Start container/VM
-                start_result = await agent_client.start_node_on_agent(
-                    self.agent,
-                    self.lab.id,
-                    ns.node_name,
-                    provider=node_provider,
-                )
-
-                if start_result.get("success"):
-                    ns.actual_state = NodeActualState.RUNNING.value
-                    ns.error_message = None
-                    ns.boot_started_at = datetime.now(timezone.utc)
-                    deployed_names.append(ns.node_name)
-                    self.log_parts.append(f"  {ns.node_name}: deployed and started")
-                    self._broadcast_state(ns, name_suffix="started")
-                    logger.info(
-                        "Node state transition",
-                        extra={
-                            "event": "node_state_transition",
-                            "lab_id": self.lab.id,
-                            "node_id": ns.node_id,
-                            "node_name": ns.node_name,
-                            "old_state": "pending",
-                            "new_state": "running",
-                            "trigger": "agent_response",
-                            "agent_id": self.agent.id,
-                            "job_id": self.job.id,
-                        },
-                    )
-                    if _is_ceos_kind(kind):
-                        ceos_started = True
-                else:
-                    error_msg = start_result.get("error", "Container start failed")
-                    ns.actual_state = NodeActualState.ERROR.value
-                    ns.error_message = error_msg
-                    self.log_parts.append(f"  {ns.node_name}: START FAILED - {error_msg}")
-                    logger.info(
-                        "Node state transition",
-                        extra={
-                            "event": "node_state_transition",
-                            "lab_id": self.lab.id,
-                            "node_id": ns.node_id,
-                            "node_name": ns.node_name,
-                            "old_state": "pending",
-                            "new_state": "error",
-                            "trigger": "agent_response",
-                            "agent_id": self.agent.id,
-                            "job_id": self.job.id,
-                            "error_message": error_msg,
-                        },
-                    )
-
-            except AgentUnavailableError as e:
-                ns.actual_state = NodeActualState.PENDING.value
-                ns.error_message = f"Agent unreachable: {e.message}"
-                self.log_parts.append(f"  {ns.node_name}: FAILED (transient) - {e.message}")
-            except Exception as e:
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.error_message = str(e)
-                self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
-                logger.exception(f"Deploy node {ns.node_name} failed: {e}")
+            name = await self._deploy_single_node(ns)
+            if name:
+                deployed_names.append(name)
+                ceos_started = True
 
         self.session.commit()
 
@@ -1624,11 +1664,96 @@ class NodeLifecycleManager:
             # Connect same-host links
             await self._connect_same_host_links(set(deployed_names))
 
+    async def _start_single_node(self, ns: models.NodeState) -> str | None:
+        """Start a single node and update its state.
+
+        Returns the node_name on success, None on failure.
+        Used by _start_nodes_per_node for parallel/sequential starts.
+        """
+        db_node = self.db_nodes_map.get(ns.node_name)
+        kind = db_node.device if db_node else "linux"
+
+        # Determine provider from image type
+        image = resolve_node_image(
+            db_node.device, kind, db_node.image, db_node.version
+        ) if db_node else None
+        node_provider = get_image_provider(image)
+
+        try:
+            result = await agent_client.start_node_on_agent(
+                self.agent,
+                self.lab.id,
+                ns.node_name,
+                provider=node_provider,
+            )
+
+            if result.get("success"):
+                old_state = ns.actual_state
+                ns.actual_state = NodeActualState.RUNNING.value
+                ns.starting_started_at = None
+                ns.error_message = None
+                if not ns.boot_started_at:
+                    ns.boot_started_at = datetime.now(timezone.utc)
+                self.log_parts.append(f"  {ns.node_name}: started")
+                self._broadcast_state(ns, name_suffix="started")
+                logger.info(
+                    "Node state transition",
+                    extra={
+                        "event": "node_state_transition",
+                        "lab_id": self.lab.id,
+                        "node_id": ns.node_id,
+                        "node_name": ns.node_name,
+                        "old_state": old_state,
+                        "new_state": "running",
+                        "trigger": "agent_response",
+                        "agent_id": self.agent.id,
+                        "job_id": self.job.id,
+                    },
+                )
+                return ns.node_name
+            else:
+                error_msg = result.get("error", "Start failed")
+                old_state = ns.actual_state
+                ns.actual_state = NodeActualState.ERROR.value
+                ns.starting_started_at = None
+                ns.error_message = error_msg
+                self.log_parts.append(f"  {ns.node_name}: FAILED - {error_msg}")
+                logger.info(
+                    "Node state transition",
+                    extra={
+                        "event": "node_state_transition",
+                        "lab_id": self.lab.id,
+                        "node_id": ns.node_id,
+                        "node_name": ns.node_name,
+                        "old_state": old_state,
+                        "new_state": "error",
+                        "trigger": "agent_response",
+                        "agent_id": self.agent.id,
+                        "job_id": self.job.id,
+                        "error_message": error_msg,
+                    },
+                )
+                return None
+
+        except AgentUnavailableError as e:
+            ns.starting_started_at = None
+            ns.error_message = f"Agent unreachable: {e.message}"
+            self.log_parts.append(f"  {ns.node_name}: FAILED (transient) - {e.message}")
+            return None
+        except Exception as e:
+            ns.actual_state = NodeActualState.ERROR.value
+            ns.starting_started_at = None
+            ns.error_message = str(e)
+            self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
+            logger.exception(f"Start node {ns.node_name} failed: {e}")
+            return None
+
     async def _start_nodes_per_node(self, nodes_need_start: list[models.NodeState]):
         """Start stopped nodes via per-node start with veth repair.
 
         Container already exists — just start it, repair veths, fix interfaces,
-        and reconnect same-host links.
+        and reconnect same-host links. Non-cEOS nodes start in parallel;
+        cEOS nodes start sequentially with stagger delay.
         """
         from app.tasks.jobs import _capture_node_ips
 
@@ -1648,90 +1773,40 @@ class NodeLifecycleManager:
             return
 
         started_names = []
-        ceos_started = False
 
+        # Split into cEOS (needs stagger) and non-cEOS (can start in parallel)
+        ceos_nodes = []
+        non_ceos_nodes = []
         for ns in nodes_need_start:
             db_node = self.db_nodes_map.get(ns.node_name)
             kind = db_node.device if db_node else "linux"
+            if _is_ceos_kind(kind):
+                ceos_nodes.append(ns)
+            else:
+                non_ceos_nodes.append(ns)
 
-            # Determine provider from image type
-            image = resolve_node_image(
-                db_node.device, kind, db_node.image, db_node.version
-            ) if db_node else None
-            node_provider = get_image_provider(image)
+        # Start all non-cEOS nodes in parallel
+        if non_ceos_nodes:
+            self.log_parts.append(f"  Starting {len(non_ceos_nodes)} non-cEOS node(s) in parallel")
+            tasks = [self._start_single_node(ns) for ns in non_ceos_nodes]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for ns, result in zip(non_ceos_nodes, results):
+                if isinstance(result, Exception):
+                    logger.exception(f"Parallel start of {ns.node_name} raised: {result}")
+                elif result:
+                    started_names.append(result)
 
-            # cEOS stagger
-            if _is_ceos_kind(kind) and ceos_started:
-                logger.info(f"Waiting 5s before starting {ns.node_name} (cEOS stagger)")
-                await asyncio.sleep(5)
+        # Start cEOS nodes sequentially with stagger
+        ceos_started = False
+        for ns in ceos_nodes:
+            if ceos_started:
+                logger.info(f"Waiting {CEOS_STAGGER_SECONDS}s before starting {ns.node_name} (cEOS stagger)")
+                await asyncio.sleep(CEOS_STAGGER_SECONDS)
 
-            try:
-                result = await agent_client.start_node_on_agent(
-                    self.agent,
-                    self.lab.id,
-                    ns.node_name,
-                    provider=node_provider,
-                )
-
-                if result.get("success"):
-                    old_state = ns.actual_state
-                    ns.actual_state = NodeActualState.RUNNING.value
-                    ns.starting_started_at = None
-                    ns.error_message = None
-                    if not ns.boot_started_at:
-                        ns.boot_started_at = datetime.now(timezone.utc)
-                    started_names.append(ns.node_name)
-                    self.log_parts.append(f"  {ns.node_name}: started")
-                    self._broadcast_state(ns, name_suffix="started")
-                    logger.info(
-                        "Node state transition",
-                        extra={
-                            "event": "node_state_transition",
-                            "lab_id": self.lab.id,
-                            "node_id": ns.node_id,
-                            "node_name": ns.node_name,
-                            "old_state": old_state,
-                            "new_state": "running",
-                            "trigger": "agent_response",
-                            "agent_id": self.agent.id,
-                            "job_id": self.job.id,
-                        },
-                    )
-                    if _is_ceos_kind(kind):
-                        ceos_started = True
-                else:
-                    error_msg = result.get("error", "Start failed")
-                    old_state = ns.actual_state
-                    ns.actual_state = NodeActualState.ERROR.value
-                    ns.starting_started_at = None
-                    ns.error_message = error_msg
-                    self.log_parts.append(f"  {ns.node_name}: FAILED - {error_msg}")
-                    logger.info(
-                        "Node state transition",
-                        extra={
-                            "event": "node_state_transition",
-                            "lab_id": self.lab.id,
-                            "node_id": ns.node_id,
-                            "node_name": ns.node_name,
-                            "old_state": old_state,
-                            "new_state": "error",
-                            "trigger": "agent_response",
-                            "agent_id": self.agent.id,
-                            "job_id": self.job.id,
-                            "error_message": error_msg,
-                        },
-                    )
-
-            except AgentUnavailableError as e:
-                ns.starting_started_at = None
-                ns.error_message = f"Agent unreachable: {e.message}"
-                self.log_parts.append(f"  {ns.node_name}: FAILED (transient) - {e.message}")
-            except Exception as e:
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.starting_started_at = None
-                ns.error_message = str(e)
-                self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
-                logger.exception(f"Start node {ns.node_name} failed: {e}")
+            name = await self._start_single_node(ns)
+            if name:
+                started_names.append(name)
+                ceos_started = True
 
         self.session.commit()
 
@@ -1780,13 +1855,16 @@ class NodeLifecycleManager:
     async def _connect_same_host_links(self, node_names: set[str]):
         """Connect same-host links for the given nodes.
 
-        Iterates topology links where both endpoints are on this agent
-        and calls create_link_on_agent for each.
+        Collects eligible links then connects them all in parallel via
+        asyncio.gather (each link is independent — unique VLAN tags).
         """
         if not self.graph:
             self.graph = self.topo_service.export_to_graph(self.lab.id)
 
-        links_connected = 0
+        from app.services.interface_naming import normalize_interface
+
+        # Collect eligible links
+        link_tasks = []
         for link in self.graph.links:
             if len(link.endpoints) != 2:
                 continue
@@ -1824,28 +1902,37 @@ class NodeLifecycleManager:
             if state_b.actual_state != NodeActualState.RUNNING.value:
                 continue
 
-            try:
-                from app.services.interface_naming import normalize_interface
+            ifname_a = normalize_interface(ep_a.ifname)
+            ifname_b = normalize_interface(ep_b.ifname)
+            link_tasks.append((node_a, ifname_a, node_b, ifname_b))
 
-                ifname_a = normalize_interface(ep_a.ifname)
-                ifname_b = normalize_interface(ep_b.ifname)
-                result = await agent_client.create_link_on_agent(
-                    self.agent,
-                    self.lab.id,
-                    node_a,
-                    ifname_a,
-                    node_b,
-                    ifname_b,
-                )
-                if result.get("success"):
-                    links_connected += 1
-                else:
-                    logger.warning(
-                        f"Failed to connect link {node_a}:{ifname_a} <-> "
-                        f"{node_b}:{ifname_b}: {result.get('error')}"
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to connect link: {e}")
+        if not link_tasks:
+            return
+
+        # Connect all links in parallel
+        async def _connect_one(na, ifa, nb, ifb):
+            result = await agent_client.create_link_on_agent(
+                self.agent, self.lab.id, na, ifa, nb, ifb,
+            )
+            if result.get("success"):
+                return True
+            logger.warning(
+                f"Failed to connect link {na}:{ifa} <-> {nb}:{ifb}: {result.get('error')}"
+            )
+            return False
+
+        results = await asyncio.gather(
+            *[_connect_one(*args) for args in link_tasks],
+            return_exceptions=True,
+        )
+
+        links_connected = 0
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                na, ifa, nb, ifb = link_tasks[i]
+                logger.warning(f"Failed to connect link {na}:{ifa} <-> {nb}:{ifb}: {result}")
+            elif result:
+                links_connected += 1
 
         if links_connected:
             self.log_parts.append(f"  Connected {links_connected} same-host link(s)")

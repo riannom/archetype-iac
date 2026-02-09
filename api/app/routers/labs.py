@@ -1024,6 +1024,19 @@ async def set_all_nodes_desired_state(
 
     database.commit()
 
+    # Clear enforcement cooldowns so enforcement doesn't ignore the new
+    # desired state for minutes due to stale Redis TTL keys
+    if affected_count > 0:
+        affected_names = [
+            s.node_name for s in states
+            if s.desired_state == payload.state
+        ]
+        from app.tasks.state_enforcement import clear_cooldowns_for_lab
+        safe_create_task(
+            clear_cooldowns_for_lab(lab_id, affected_names),
+            name=f"clear_cooldowns:{lab_id}"
+        )
+
     logger.info(
         "Bulk state change result",
         extra={

@@ -166,6 +166,25 @@ async def _set_cooldown(lab_id: str, node_name: str):
         # Continue even if Redis fails - enforcement will still work, just might retry sooner
 
 
+async def clear_cooldowns_for_lab(lab_id: str, node_names: list[str]):
+    """Clear enforcement cooldown keys for nodes in a lab.
+
+    Called when user triggers an explicit operation (Start All, Stop All,
+    Deploy, Destroy) so that enforcement doesn't ignore the new desired
+    state for up to 5 minutes due to stale cooldown keys.
+    """
+    if not node_names:
+        return
+    try:
+        r = get_async_redis()
+        keys = [_cooldown_key(lab_id, name) for name in node_names]
+        deleted = await r.delete(*keys)
+        if deleted:
+            logger.info(f"Cleared {deleted} enforcement cooldown(s) for lab {lab_id}")
+    except redis.RedisError as e:
+        logger.warning(f"Redis error clearing cooldowns for lab {lab_id}: {e}")
+
+
 def _has_active_job(session: Session, lab_id: str, node_name: str | None = None) -> bool:
     """Check if there's an active job for this lab/node."""
     query = session.query(models.Job).filter(
