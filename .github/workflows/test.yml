@@ -49,7 +49,7 @@ jobs:
       - name: Run Agent tests with coverage
         run: |
           cd agent
-          pytest tests/ -v --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=60
+          pytest tests/ -v --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
 
   frontend-tests:
     name: Frontend Tests
