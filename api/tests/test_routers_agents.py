@@ -189,9 +189,9 @@ class TestListAgents:
 class TestUnregisterAgent:
     """Tests for agent unregistration."""
 
-    def test_unregister_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
+    def test_unregister_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict):
         """Unregister agent removes from database."""
-        response = test_client.delete(f"/agents/{sample_host.id}", headers=auth_headers)
+        response = test_client.delete(f"/agents/{sample_host.id}", headers=admin_auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "deleted"
@@ -200,9 +200,9 @@ class TestUnregisterAgent:
         host = test_db.get(models.Host, sample_host.id)
         assert host is None
 
-    def test_unregister_nonexistent_agent(self, test_client: TestClient, auth_headers: dict):
+    def test_unregister_nonexistent_agent(self, test_client: TestClient, admin_auth_headers: dict):
         """Unregister nonexistent agent returns 404."""
-        response = test_client.delete("/agents/nonexistent", headers=auth_headers)
+        response = test_client.delete("/agents/nonexistent", headers=admin_auth_headers)
         assert response.status_code == 404
 
 

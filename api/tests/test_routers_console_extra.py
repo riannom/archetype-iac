@@ -7,28 +7,13 @@ from sqlalchemy.orm import Session
 from app import models
 
 
-class _FakeSessionLocal:
-    """Wraps a test DB session so that .close() is a no-op."""
-
-    def __init__(self, session: Session):
-        self._session = session
-
-    def __getattr__(self, name):
-        return getattr(self._session, name)
-
-    def close(self):
-        pass
-
-
-def test_console_ws_lab_not_found(test_client, test_db, monkeypatch):
-    monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
+def test_console_ws_lab_not_found(test_client, test_db):
     with test_client.websocket_connect("/labs/missing/nodes/node1/console") as ws:
         message = ws.receive_text()
         assert "not found" in message.lower()
 
 
-def test_console_ws_no_agent_available(test_client, test_db, monkeypatch):
-    monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
+def test_console_ws_no_agent_available(test_client, test_db):
     lab = models.Lab(
         name="Lab",
         owner_id="user",

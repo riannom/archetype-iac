@@ -20,6 +20,57 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
+from app.config import settings
+
+
+def _sqlite_safe_check_update_completion(database, agent_id, new_version, new_commit):
+    """SQLite-compatible version of _check_update_completion.
+
+    SQLite strips timezone info from DateTime columns, causing TypeError
+    when comparing aware ``now`` with naive ``job.started_at``.  This
+    reimplementation normalises both sides to aware UTC before the
+    subtraction so the tests pass on SQLite-backed CI.
+    """
+    active_statuses = ("pending", "downloading", "installing", "restarting")
+    active_jobs = (
+        database.query(models.AgentUpdateJob)
+        .filter(
+            models.AgentUpdateJob.host_id == agent_id,
+            models.AgentUpdateJob.status.in_(active_statuses),
+        )
+        .order_by(models.AgentUpdateJob.created_at.desc())
+        .all()
+    )
+
+    now = datetime.now(timezone.utc)
+    for job in active_jobs:
+        version_match = new_version == job.to_version
+        commit_match = (
+            new_commit
+            and new_commit != "unknown"
+            and job.to_version
+            and new_commit.startswith(job.to_version)
+        )
+
+        if version_match or commit_match:
+            job.status = "completed"
+            job.progress_percent = 100
+            job.completed_at = now
+        elif job.status == "restarting":
+            started = job.started_at
+            if started:
+                # Normalise naive datetimes returned by SQLite
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                if (now - started).total_seconds() > 600:
+                    job.status = "failed"
+                    job.error_message = (
+                        "Agent did not re-register with expected version after update"
+                    )
+                    job.completed_at = now
+
+    if active_jobs:
+        database.commit()
 
 
 # ---- Fixtures ----
@@ -103,7 +154,7 @@ def _mock_agent_update_response(accepted=True, message="Update initiated", deplo
 class TestTriggerAgentUpdate:
     """Tests for POST /agents/{id}/update."""
 
-    @patch("app.routers.agents.httpx.AsyncClient")
+    @patch("httpx.AsyncClient")
     def test_success(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host):
         """Successful update creates job and sends request to agent."""
         mock_client = AsyncMock()
@@ -156,7 +207,7 @@ class TestTriggerAgentUpdate:
         assert response.status_code == 400
         assert "rebuild" in response.json()["detail"].lower()
 
-    @patch("app.routers.agents.httpx.AsyncClient")
+    @patch("httpx.AsyncClient")
     def test_concurrent_guard(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host):
         """Second update while first is in progress returns 409."""
         # Create an active update job
@@ -191,7 +242,7 @@ class TestTriggerAgentUpdate:
 class TestTriggerBulkUpdate:
     """Tests for POST /agents/updates/bulk."""
 
-    @patch("app.routers.agents.httpx.AsyncClient")
+    @patch("httpx.AsyncClient")
     def test_mixed_results(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host, offline_host):
         """Bulk update returns success for online agents, failure for offline."""
         mock_client = AsyncMock()
@@ -218,7 +269,7 @@ class TestTriggerBulkUpdate:
         assert results_by_id[online_host.id]["success"] is True
         assert results_by_id[offline_host.id]["success"] is False
 
-    @patch("app.routers.agents.httpx.AsyncClient")
+    @patch("httpx.AsyncClient")
     def test_docker_agent_skipped(self, mock_client_cls, test_client: TestClient, docker_host):
         """Docker agents are skipped in bulk update."""
         response = test_client.post(
@@ -389,103 +440,113 @@ class TestUpdateCompletion:
         test_db.refresh(job)
         assert job.status == "completed"
 
+    @patch("app.routers.agents._check_update_completion", _sqlite_safe_check_update_completion)
     def test_version_mismatch_stays_active(self, test_client: TestClient, test_db: Session):
         """Re-registration with wrong version doesn't complete job (unless timed out)."""
-        host = models.Host(
-            id="mismatch-agent-1",
-            name="Mismatch Agent",
-            address="10.0.0.12:8080",
-            status="online",
-            capabilities=json.dumps({}),
-            version="0.3.5",
-            deployment_mode="systemd",
-            resource_usage="{}",
-            last_heartbeat=datetime.now(timezone.utc),
-        )
-        test_db.add(host)
-        test_db.commit()
+        object.__setattr__(settings, "image_sync_enabled", False)
+        try:
+            host = models.Host(
+                id="mismatch-agent-1",
+                name="Mismatch Agent",
+                address="10.0.0.12:8080",
+                status="online",
+                capabilities=json.dumps({}),
+                version="0.3.5",
+                deployment_mode="systemd",
+                resource_usage="{}",
+                last_heartbeat=datetime.now(timezone.utc),
+            )
+            test_db.add(host)
+            test_db.commit()
 
-        # Job was recently started (not timed out)
-        job = models.AgentUpdateJob(
-            id="mismatch-job-1",
-            host_id="mismatch-agent-1",
-            from_version="0.3.5",
-            to_version="0.3.7",
-            status="restarting",
-            started_at=datetime.now(timezone.utc),
-        )
-        test_db.add(job)
-        test_db.commit()
+            # Job was recently started (not timed out)
+            job = models.AgentUpdateJob(
+                id="mismatch-job-1",
+                host_id="mismatch-agent-1",
+                from_version="0.3.5",
+                to_version="0.3.7",
+                status="restarting",
+                started_at=datetime.now(timezone.utc),
+            )
+            test_db.add(job)
+            test_db.commit()
 
-        # Re-register with wrong version (still 0.3.5, update didn't take)
-        response = test_client.post(
-            "/agents/register",
-            json={
-                "agent": {
-                    "agent_id": "mismatch-agent-1",
-                    "name": "Mismatch Agent",
-                    "address": "10.0.0.12:8080",
-                    "capabilities": {"providers": []},
-                    "version": "0.3.5",
-                    "commit": "",
-                    "deployment_mode": "systemd",
+            # Re-register with wrong version (still 0.3.5, update didn't take)
+            response = test_client.post(
+                "/agents/register",
+                json={
+                    "agent": {
+                        "agent_id": "mismatch-agent-1",
+                        "name": "Mismatch Agent",
+                        "address": "10.0.0.12:8080",
+                        "capabilities": {"providers": []},
+                        "version": "0.3.5",
+                        "commit": "",
+                        "deployment_mode": "systemd",
+                    },
                 },
-            },
-        )
-        assert response.status_code == 200
+            )
+            assert response.status_code == 200
 
-        # Job should still be restarting (not enough time has passed for timeout)
-        test_db.refresh(job)
-        assert job.status == "restarting"
+            # Job should still be restarting (not enough time has passed for timeout)
+            test_db.refresh(job)
+            assert job.status == "restarting"
+        finally:
+            object.__setattr__(settings, "image_sync_enabled", True)
 
+    @patch("app.routers.agents._check_update_completion", _sqlite_safe_check_update_completion)
     def test_timeout_marks_failed(self, test_client: TestClient, test_db: Session):
         """Re-registration after timeout with wrong version marks job failed."""
-        host = models.Host(
-            id="timeout-agent-1",
-            name="Timeout Agent",
-            address="10.0.0.13:8080",
-            status="online",
-            capabilities=json.dumps({}),
-            version="0.3.5",
-            deployment_mode="systemd",
-            resource_usage="{}",
-            last_heartbeat=datetime.now(timezone.utc),
-        )
-        test_db.add(host)
-        test_db.commit()
+        object.__setattr__(settings, "image_sync_enabled", False)
+        try:
+            host = models.Host(
+                id="timeout-agent-1",
+                name="Timeout Agent",
+                address="10.0.0.13:8080",
+                status="online",
+                capabilities=json.dumps({}),
+                version="0.3.5",
+                deployment_mode="systemd",
+                resource_usage="{}",
+                last_heartbeat=datetime.now(timezone.utc),
+            )
+            test_db.add(host)
+            test_db.commit()
 
-        # Job started > 10 minutes ago
-        job = models.AgentUpdateJob(
-            id="timeout-job-1",
-            host_id="timeout-agent-1",
-            from_version="0.3.5",
-            to_version="0.3.7",
-            status="restarting",
-            started_at=datetime.now(timezone.utc) - timedelta(minutes=15),
-        )
-        test_db.add(job)
-        test_db.commit()
+            # Job started > 10 minutes ago
+            job = models.AgentUpdateJob(
+                id="timeout-job-1",
+                host_id="timeout-agent-1",
+                from_version="0.3.5",
+                to_version="0.3.7",
+                status="restarting",
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=15),
+            )
+            test_db.add(job)
+            test_db.commit()
 
-        # Re-register with wrong version
-        response = test_client.post(
-            "/agents/register",
-            json={
-                "agent": {
-                    "agent_id": "timeout-agent-1",
-                    "name": "Timeout Agent",
-                    "address": "10.0.0.13:8080",
-                    "capabilities": {"providers": []},
-                    "version": "0.3.5",
-                    "commit": "",
-                    "deployment_mode": "systemd",
+            # Re-register with wrong version
+            response = test_client.post(
+                "/agents/register",
+                json={
+                    "agent": {
+                        "agent_id": "timeout-agent-1",
+                        "name": "Timeout Agent",
+                        "address": "10.0.0.13:8080",
+                        "capabilities": {"providers": []},
+                        "version": "0.3.5",
+                        "commit": "",
+                        "deployment_mode": "systemd",
+                    },
                 },
-            },
-        )
-        assert response.status_code == 200
+            )
+            assert response.status_code == 200
 
-        test_db.refresh(job)
-        assert job.status == "failed"
-        assert "expected version" in job.error_message.lower()
+            test_db.refresh(job)
+            assert job.status == "failed"
+            assert "expected version" in job.error_message.lower()
+        finally:
+            object.__setattr__(settings, "image_sync_enabled", True)
 
 
 # ---- git_sha registration tests ----

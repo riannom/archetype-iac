@@ -647,6 +647,7 @@ class TestTeardownDeploymentLinks:
 class TestResolveAgentIp:
     """Tests for the resolve_agent_ip helper function in agent_client."""
 
+    @pytest.mark.asyncio
     async def test_extracts_ip_from_address(self):
         """Should extract IP from host:port format."""
         from app.agent_client import resolve_agent_ip
@@ -654,6 +655,7 @@ class TestResolveAgentIp:
         ip = await resolve_agent_ip("192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
+    @pytest.mark.asyncio
     async def test_handles_http_prefix(self):
         """Should strip http:// prefix."""
         from app.agent_client import resolve_agent_ip
@@ -661,6 +663,7 @@ class TestResolveAgentIp:
         ip = await resolve_agent_ip("http://192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
+    @pytest.mark.asyncio
     async def test_handles_https_prefix(self):
         """Should strip https:// prefix."""
         from app.agent_client import resolve_agent_ip
@@ -668,6 +671,7 @@ class TestResolveAgentIp:
         ip = await resolve_agent_ip("https://192.168.1.100:8080")
         assert ip == "192.168.1.100"
 
+    @pytest.mark.asyncio
     async def test_handles_hostname(self):
         """Should resolve or return hostname."""
         from app.agent_client import resolve_agent_ip

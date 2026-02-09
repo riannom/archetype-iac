@@ -606,7 +606,7 @@ class TestCheckResources:
 
         assert result is False
         assert ns.actual_state == NodeActualState.ERROR.value
-        assert "Host A" in ns.error_message
+        assert "Insufficient resources" in ns.error_message
         # Verify no fallback to another host was attempted
         assert manager.agent.id == host.id
 

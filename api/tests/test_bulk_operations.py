@@ -89,7 +89,6 @@ class TestBulkStartAllStopped:
 class TestBulkStartMixedStates:
     """Phase 1.3: Bulk start with mixed states processes selectively."""
 
-    @pytest.mark.xfail(reason="Phase 1.3 not yet implemented — current behavior is all-or-nothing with 409 blocking")
     def test_start_all_skips_transitional(
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch,
     ) -> None:
@@ -141,7 +140,6 @@ class TestBulkStartMixedStates:
         assert data["skipped_transitional"] == 2  # r3, r4
         assert data["already_in_state"] == 1      # r2
 
-    @pytest.mark.xfail(reason="Phase 1.3 not yet implemented")
     def test_noop_when_all_already_in_desired_state(
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch,
     ) -> None:
@@ -255,7 +253,6 @@ class TestBulkSyncJobCreation:
 class TestBulkErrorNodeHandling:
     """Error nodes should be included in bulk start (enforcement will retry)."""
 
-    @pytest.mark.xfail(reason="Phase 1.3 not yet implemented — error nodes need special handling")
     def test_error_nodes_get_desired_running_on_start_all(
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch,
     ) -> None:
@@ -289,7 +286,6 @@ class TestBulkErrorNodeHandling:
 class TestBulkEmptyLab:
     """Bulk operations on empty lab should be no-ops."""
 
-    @pytest.mark.xfail(reason="Phase 1.3 not yet implemented — needs count response")
     def test_empty_lab_returns_zero_counts(
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch,
     ) -> None:

@@ -101,7 +101,7 @@ def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypat
     assert lab.state == "error"
 
 
-def test_heartbeat_and_list_get_delete(test_client, test_db, auth_headers) -> None:
+def test_heartbeat_and_list_get_delete(test_client, test_db, admin_auth_headers) -> None:
     host = models.Host(
         id="agent-3",
         name="Agent Three",
@@ -126,7 +126,7 @@ def test_heartbeat_and_list_get_delete(test_client, test_db, auth_headers) -> No
     agent = test_client.get("/agents/agent-3")
     assert agent.status_code == 200
 
-    deleted = test_client.delete("/agents/agent-3", headers=auth_headers)
+    deleted = test_client.delete("/agents/agent-3", headers=admin_auth_headers)
     assert deleted.status_code == 200
 
 

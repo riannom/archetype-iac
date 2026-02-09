@@ -89,21 +89,22 @@ def test_should_skip_enforcement_backoff(monkeypatch) -> None:
     assert "backoff" in reason
 
 
-def test_cooldown_helpers(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_cooldown_helpers(monkeypatch) -> None:
     calls = []
 
-    class FakeRedis:
-        def exists(self, key):
+    class FakeAsyncRedis:
+        async def exists(self, key):
             calls.append(("exists", key))
             return 1
 
-        def setex(self, key, ttl, value):
+        async def setex(self, key, ttl, value):
             calls.append(("setex", key, ttl, value))
 
-    monkeypatch.setattr(state_enforcement, "get_redis", lambda: FakeRedis())
+    monkeypatch.setattr(state_enforcement, "get_async_redis", lambda: FakeAsyncRedis())
 
-    assert state_enforcement._is_on_cooldown("lab1", "r1")
-    state_enforcement._set_cooldown("lab1", "r1")
+    assert await state_enforcement._is_on_cooldown("lab1", "r1")
+    await state_enforcement._set_cooldown("lab1", "r1")
 
     assert calls[0][0] == "exists"
     assert calls[1][0] == "setex"

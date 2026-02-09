@@ -10,20 +10,6 @@ from sqlalchemy.orm import Session
 from app import models
 
 
-class _FakeSessionLocal:
-    """Wraps a test DB session so that .close() is a no-op."""
-
-    def __init__(self, session: Session):
-        self._session = session
-
-    def __getattr__(self, name):
-        return getattr(self._session, name)
-
-    def close(self):
-        # Don't actually close the test session
-        pass
-
-
 class TestConsoleWebSocket:
     """Tests for WebSocket /labs/{lab_id}/nodes/{node}/console endpoint."""
 
@@ -31,10 +17,8 @@ class TestConsoleWebSocket:
         self,
         test_client: TestClient,
         test_db: Session,
-        monkeypatch,
     ):
         """Test console connection to non-existent lab."""
-        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
         with test_client.websocket_connect(
             "/labs/nonexistent-lab/nodes/r1/console"
         ) as websocket:
@@ -47,10 +31,8 @@ class TestConsoleWebSocket:
         test_client: TestClient,
         test_db: Session,
         sample_lab: models.Lab,
-        monkeypatch,
     ):
         """Test console connection when no healthy agent available."""
-        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
         with test_client.websocket_connect(
             f"/labs/{sample_lab.id}/nodes/r1/console"
         ) as websocket:
@@ -66,12 +48,9 @@ class TestConsoleWebSocket:
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         sample_host: models.Host,
         sample_node_definitions: list[models.Node],
-        monkeypatch,
     ):
         """Test that console resolves GUI node ID to container name."""
         lab, nodes = sample_lab_with_nodes
-
-        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
 
         # Mock agent client to return healthy agent but fail on connect
         mock_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
@@ -96,10 +75,8 @@ class TestConsoleWebSocket:
         test_client: TestClient,
         test_db: Session,
         sample_lab: models.Lab,
-        monkeypatch,
     ):
         """Test that WebSocket connection is accepted initially."""
-        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
         # Even without a healthy agent, the connection should be accepted first
         with test_client.websocket_connect(
             f"/labs/{sample_lab.id}/nodes/r1/console"
@@ -120,12 +97,9 @@ class TestConsoleNodeResolution:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         sample_host: models.Host,
-        monkeypatch,
     ):
         """Test that console uses container_name over display name."""
         lab, nodes = sample_lab_with_nodes
-
-        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
 
         # Update node to have different container_name
         nodes[0].node_name = "actual-container-name"
@@ -171,12 +145,9 @@ class TestConsoleReadinessWarning:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         sample_host: models.Host,
-        monkeypatch,
     ):
         """Test that console shows boot warning for non-ready nodes."""
         lab, nodes = sample_lab_with_nodes
-
-        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
 
         # Set node as running but not ready
         nodes[0].actual_state = "running"
@@ -217,12 +188,9 @@ class TestConsoleMultiHost:
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         multiple_hosts: list[models.Host],
         sample_node_definitions: list[models.Node],
-        monkeypatch,
     ):
         """Test that console routes to the correct host for multi-host labs."""
         lab, nodes = sample_lab_with_nodes
-
-        monkeypatch.setattr("app.routers.console.SessionLocal", lambda: _FakeSessionLocal(test_db))
 
         # Update node definitions with host assignments
         sample_node_definitions[0].host_id = multiple_hosts[0].id
