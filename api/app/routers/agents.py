@@ -1107,10 +1107,15 @@ async def trigger_agent_update(
             detail=f"Update already in progress (job {active_job.id})"
         )
 
-    # Determine target version (for display/tracking) and checkout ref (for git)
+    # Determine target version and checkout ref (for git)
     target_version = (request.target_version if request else None) or get_latest_agent_version()
-    # The agent needs a git commit SHA to checkout, not a version string
-    checkout_ref = get_commit()
+    # Use target_version as checkout ref if it looks like a commit SHA,
+    # otherwise fall back to the API's own commit (for version-based updates)
+    import re
+    if re.fullmatch(r'[0-9a-f]{7,40}', target_version):
+        checkout_ref = target_version
+    else:
+        checkout_ref = get_commit()
 
     # Check if already at target version
     if host.version == target_version:
@@ -1210,8 +1215,13 @@ async def trigger_bulk_update(
     bulk_logger = logging.getLogger(__name__)
 
     target_version = request.target_version or get_latest_agent_version()
-    # The agent needs a git commit SHA to checkout, not a version string
-    checkout_ref = get_commit()
+    # Use target_version as checkout ref if it looks like a commit SHA,
+    # otherwise fall back to the API's own commit (for version-based updates)
+    import re
+    if re.fullmatch(r'[0-9a-f]{7,40}', target_version):
+        checkout_ref = target_version
+    else:
+        checkout_ref = get_commit()
     results: list[dict] = []
     # Jobs to dispatch: list of (agent_id, job_id, host_address)
     pending_dispatches: list[tuple[str, str, str]] = []
