@@ -238,7 +238,7 @@ class TestGetProbeForVendor:
             result = await probe.check("test-ceos")
 
         assert result.is_ready is False
-        assert result.progress_percent == CEOS_PROGRESS_PATTERNS[r\"ZTP|zerotouch\"]
+        assert result.progress_percent == CEOS_PROGRESS_PATTERNS[r"ZTP|zerotouch"]
 
     def test_ceos_alias_not_resolved_by_get_vendor_config(self):
         """get_vendor_config doesn't resolve aliases - use get_config_by_device for that."""
