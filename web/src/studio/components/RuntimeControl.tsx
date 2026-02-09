@@ -78,9 +78,15 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
 
     // Optimistic update + setPendingOps in same synchronous block
     // so React batches them into a single render (no gap where fallback 'stopped' can flash)
+    // Only update nodes that aren't already in the target state to avoid flashing
     setPendingOps(prev => new Set(prev).add('bulk'));
     nodes.forEach(node => {
-      onSetRuntimeStatus(node.id, action === 'running' ? 'booting' : 'stopping');
+      const current = runtimeStates[node.id];
+      if (action === 'running' && current !== 'running') {
+        onSetRuntimeStatus(node.id, 'booting');
+      } else if (action === 'stopped' && current !== 'stopped') {
+        onSetRuntimeStatus(node.id, 'stopping');
+      }
     });
 
     try {
@@ -108,7 +114,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
         return next;
       });
     }
-  }, [labId, nodes, studioRequest, onSetRuntimeStatus, onRefreshStates, isOperationPending, onFlushTopologySave]);
+  }, [labId, nodes, runtimeStates, studioRequest, onSetRuntimeStatus, onRefreshStates, isOperationPending, onFlushTopologySave]);
 
   const handleExtractConfigs = useCallback(async () => {
     const confirmed = window.confirm(
