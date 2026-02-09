@@ -1637,10 +1637,16 @@ async def _reconcile_single_node(
     libvirt_provider = get_provider("libvirt")
     if libvirt_provider:
         try:
-            # Extract node name from container_name (format: arch-{lab_id}-{node_name})
-            prefix = f"arch-{lab_id}-"
-            if container_name.startswith(prefix):
-                node_name = container_name[len(prefix):]
+            # Extract node name from container_name
+            # NLM sends format: archetype-{lab_id}-{node_name}
+            # Libvirt domains use: arch-{lab_id}-{node_name}
+            # Must handle both formats
+            archetype_prefix = f"archetype-{lab_id}-"
+            arch_prefix = f"arch-{lab_id}-"
+            if container_name.startswith(archetype_prefix):
+                node_name = container_name[len(archetype_prefix):]
+            elif container_name.startswith(arch_prefix):
+                node_name = container_name[len(arch_prefix):]
             else:
                 node_name = container_name  # fallback
 
