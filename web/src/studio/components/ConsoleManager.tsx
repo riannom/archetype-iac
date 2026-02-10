@@ -43,12 +43,22 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   onDockWindow,
 }) => {
   // Ref-based drag/resize tracking (no re-renders during movement)
-  const dragRef = useRef<{ id: string; startX: number; startY: number } | null>(null);
+  const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const resizeRef = useRef<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
+  const dragPerfRef = useRef<{ enabled: boolean; start: number; lastSample: number; frames: number } | null>(null);
+  const dragProfileRef = useRef<{
+    enabled: boolean;
+    lastFrameTs: number;
+    frameIntervals: number[];
+    longTasksTotal: number;
+    longTasksCount: number;
+    observer?: PerformanceObserver;
+  } | null>(null);
 
   // Boolean state for CSS shadow (only changes on start/end)
   const [isDragging, setIsDragging] = useState<string | null>(null);
   const [isResizing, setIsResizing] = useState<string | null>(null);
+  const [profileEnabled, setProfileEnabled] = useState(() => localStorage.getItem('consoleDragProfile') === '1');
 
   const [winSizes, setWinSizes] = useState<Record<string, { w: number; h: number }>>({});
 
@@ -56,6 +66,8 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   // Dock zone detection (for dropping onto bottom panel)
   const [showDockZone, setShowDockZone] = useState(false);
+  const dropTargetIdRef = useRef<string | null>(null);
+  const showDockZoneRef = useRef(false);
   const windowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Tab drag state for splitting tabs out of windows or reordering within
@@ -118,9 +130,59 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   }, []);
 
   const handleMouseDown = (e: React.MouseEvent, win: ConsoleWindow) => {
-    dragRef.current = { id: win.id, startX: e.clientX - win.x, startY: e.clientY - win.y };
+    dragRef.current = {
+      id: win.id,
+      startX: e.clientX - win.x,
+      startY: e.clientY - win.y,
+      originX: win.x,
+      originY: win.y,
+    };
+    const perfEnabled = localStorage.getItem('consoleDragPerf') === '1';
+    dragPerfRef.current = perfEnabled
+      ? { enabled: true, start: performance.now(), lastSample: performance.now(), frames: 0 }
+      : { enabled: false, start: 0, lastSample: 0, frames: 0 };
+    const profileEnabled = localStorage.getItem('consoleDragProfile') === '1';
+    if (profileEnabled) {
+      const profileState = {
+        enabled: true,
+        lastFrameTs: performance.now(),
+        frameIntervals: [] as number[],
+        longTasksTotal: 0,
+        longTasksCount: 0,
+        observer: undefined as PerformanceObserver | undefined,
+      };
+      if (typeof PerformanceObserver !== 'undefined') {
+        try {
+          const observer = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              profileState.longTasksTotal += entry.duration;
+              profileState.longTasksCount += 1;
+            }
+          });
+          observer.observe({ entryTypes: ['longtask'] });
+          profileState.observer = observer;
+        } catch {
+          // Ignore observer setup failures (not supported in some browsers)
+        }
+      }
+      dragProfileRef.current = profileState;
+    } else {
+      dragProfileRef.current = { enabled: false, lastFrameTs: 0, frameIntervals: [], longTasksTotal: 0, longTasksCount: 0 };
+    }
     setIsDragging(win.id);
   };
+
+  const toggleDragProfile = useCallback(() => {
+    setProfileEnabled((prev) => {
+      const next = !prev;
+      if (next) {
+        localStorage.setItem('consoleDragProfile', '1');
+      } else {
+        localStorage.removeItem('consoleDragProfile');
+      }
+      return next;
+    });
+  }, []);
 
   const handleResizeMouseDown = (e: React.MouseEvent, win: ConsoleWindow) => {
     e.stopPropagation();
@@ -191,8 +253,10 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
           // Direct DOM manipulation for smooth dragging
           const el = windowRefs.current.get(dragRef.current.id);
           if (el) {
-            el.style.left = `${newX}px`;
-            el.style.top = `${newY}px`;
+            const dx = newX - dragRef.current.originX;
+            const dy = newY - dragRef.current.originY;
+            el.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+            el.style.willChange = 'transform';
           }
 
           // Store position for mouseup commit
@@ -202,14 +266,38 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
           // Check for drop target (for window merge)
           if (onMergeWindowsRef.current) {
             const target = findDropTarget(e.clientX, e.clientY, dragRef.current.id);
-            setDropTargetId(target);
+            if (dropTargetIdRef.current !== target) {
+              dropTargetIdRef.current = target;
+              setDropTargetId(target);
+            }
           }
 
           // Check if near bottom of viewport for dock zone
           if (onDockWindowRef.current) {
             const viewportBottom = window.innerHeight;
             const isNearBottom = e.clientY > viewportBottom - DOCK_ZONE_HEIGHT;
-            setShowDockZone(isNearBottom);
+            if (showDockZoneRef.current !== isNearBottom) {
+              showDockZoneRef.current = isNearBottom;
+              setShowDockZone(isNearBottom);
+            }
+          }
+
+          if (dragPerfRef.current?.enabled) {
+            dragPerfRef.current.frames += 1;
+            const now = performance.now();
+            if (now - dragPerfRef.current.lastSample > 1000) {
+              const elapsed = now - dragPerfRef.current.start;
+              const fps = (dragPerfRef.current.frames / elapsed) * 1000;
+              console.debug(`[console-drag] fps=${fps.toFixed(1)} elapsed=${(elapsed / 1000).toFixed(1)}s`);
+              dragPerfRef.current.lastSample = now;
+            }
+          }
+
+          if (dragProfileRef.current?.enabled) {
+            const now = performance.now();
+            const interval = now - dragProfileRef.current.lastFrameTs;
+            dragProfileRef.current.frameIntervals.push(interval);
+            dragProfileRef.current.lastFrameTs = now;
           }
         }
 
@@ -311,14 +399,19 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         if (lastX !== undefined && lastY !== undefined) {
           onUpdateWindowPosRef.current(dragRef.current.id, lastX, lastY);
         }
+        const el = windowRefs.current.get(dragRef.current.id);
+        if (el) {
+          el.style.transform = '';
+          el.style.willChange = 'auto';
+        }
 
         // Handle dock to bottom panel on drop
-        if (showDockZone && onDockWindowRef.current) {
+        if (showDockZoneRef.current && onDockWindowRef.current) {
           onDockWindowRef.current(dragRef.current.id);
         }
         // Handle window merge on drop
-        else if (dropTargetId && onMergeWindowsRef.current) {
-          onMergeWindowsRef.current(dragRef.current.id, dropTargetId);
+        else if (dropTargetIdRef.current && onMergeWindowsRef.current) {
+          onMergeWindowsRef.current(dragRef.current.id, dropTargetIdRef.current);
         }
       }
 
@@ -352,11 +445,39 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       }
 
       dragRef.current = null;
+      if (dragProfileRef.current?.enabled) {
+        const { frameIntervals, longTasksCount, longTasksTotal, observer } = dragProfileRef.current;
+        if (observer) observer.disconnect();
+        if (frameIntervals.length > 1) {
+          const sorted = [...frameIntervals].sort((a, b) => a - b);
+          const avg = frameIntervals.reduce((sum, v) => sum + v, 0) / frameIntervals.length;
+          const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
+          const over16 = frameIntervals.filter((v) => v > 16.7).length;
+          const over33 = frameIntervals.filter((v) => v > 33.3).length;
+          const over50 = frameIntervals.filter((v) => v > 50).length;
+          console.groupCollapsed('[console-drag-profile]');
+          console.table({
+            frames: frameIntervals.length,
+            avgMs: Number(avg.toFixed(2)),
+            p95Ms: Number(p95.toFixed(2)),
+            over16ms: over16,
+            over33ms: over33,
+            over50ms: over50,
+            longTasks: longTasksCount,
+            longTasksMs: Number(longTasksTotal.toFixed(2)),
+          });
+          console.groupEnd();
+        }
+      }
+      dragProfileRef.current = null;
+      dragPerfRef.current = null;
       resizeRef.current = null;
       setIsDragging(null);
       setIsResizing(null);
       setDropTargetId(null);
       setShowDockZone(false);
+      dropTargetIdRef.current = null;
+      showDockZoneRef.current = false;
       setTabDragState(null);
     };
 
@@ -370,7 +491,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         rafRef.current = null;
       }
     };
-  }, [isDragging, isResizing, tabDragState, dropTargetId, showDockZone, findDropTarget, calculateReorderIndex]);
+  }, [isDragging, isResizing, tabDragState, findDropTarget, calculateReorderIndex]);
 
   // Get the node being dragged as a tab (for ghost preview)
   const tabDragNode = tabDragState?.isDragging
@@ -385,19 +506,29 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         const isDropTarget = dropTargetId === win.id;
         const isBeingDraggedOverTarget = isDragging === win.id && dropTargetId !== null;
         const isMinimized = !win.isExpanded;
+        const isMoving = isDragging === win.id || isResizing === win.id;
+        const dragState = dragRef.current && dragRef.current.id === win.id ? (dragRef.current as any) : null;
+        const resizeState = resizeRef.current && resizeRef.current.id === win.id ? (resizeRef.current as any) : null;
+        const width = resizeState?._lastW ?? (isMinimized ? 280 : size.w);
+        const height = resizeState?._lastH ?? (isMinimized ? 36 : size.h);
+        const dx = dragState?._lastX !== undefined ? dragState._lastX - win.x : 0;
+        const dy = dragState?._lastY !== undefined ? dragState._lastY - win.y : 0;
+        const transform = isDragging === win.id ? `translate3d(${dx}px, ${dy}px, 0)` : undefined;
 
         return (
           <div
             key={win.id}
             ref={(el) => setWindowRef(win.id, el)}
-            className={`fixed z-[100] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5 transition-all duration-200
+            className={`fixed z-[100] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5 ${isMoving ? '' : 'transition-all duration-200'}
               ${isDropTarget ? 'console-drop-target-active' : ''}
               ${isBeingDraggedOverTarget ? 'console-window-dragging-over-target' : ''}`}
             style={{
               left: win.x,
               top: win.y,
-              width: isMinimized ? 280 : size.w,
-              height: isMinimized ? 36 : size.h,
+              width,
+              height,
+              transform,
+              willChange: isMoving ? 'transform, width, height' : 'auto',
               boxShadow:
                 isDragging === win.id || isResizing === win.id
                   ? '0 25px 50px -12px rgba(0, 0, 0, 0.7)'
@@ -476,6 +607,18 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                 )}
               </div>
               <div className="flex items-center px-2 gap-1.5 shrink-0 bg-stone-800 ml-auto border-l border-stone-700">
+                <button
+                  className={`w-8 h-6 flex items-center justify-center text-[9px] font-bold uppercase tracking-widest rounded transition-all ${
+                    profileEnabled
+                      ? 'text-sage-300 bg-sage-500/20 hover:bg-sage-500/30'
+                      : 'text-stone-500 hover:text-stone-300 hover:bg-stone-700'
+                  }`}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={toggleDragProfile}
+                  title="Toggle drag profiling (consoleDragProfile)"
+                >
+                  Perf
+                </button>
                 {!isMinimized && onDockWindow && (
                   <button
                     className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-sage-400 hover:bg-stone-700 rounded transition-all"

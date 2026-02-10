@@ -111,6 +111,16 @@ export function useLabStateWS(
   const pingIntervalRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
 
+  // Store callbacks in refs to avoid recreating connect/handleMessage on callback changes
+  const onNodeStateChangeRef = useRef(onNodeStateChange);
+  const onLinkStateChangeRef = useRef(onLinkStateChange);
+  const onLabStateChangeRef = useRef(onLabStateChange);
+  const onJobProgressRef = useRef(onJobProgress);
+  onNodeStateChangeRef.current = onNodeStateChange;
+  onLinkStateChangeRef.current = onLinkStateChange;
+  onLabStateChangeRef.current = onLabStateChange;
+  onJobProgressRef.current = onJobProgress;
+
   // Build WebSocket URL from API URL
   const getWSUrl = useCallback(() => {
     // Convert http(s):// to ws(s)://
@@ -127,7 +137,7 @@ export function useLabStateWS(
     return `${baseUrl}/ws/labs/${labId}/state`;
   }, [labId]);
 
-  // Handle incoming messages
+  // Handle incoming messages - uses refs for callbacks so this doesn't change identity
   const handleMessage = useCallback((event: MessageEvent) => {
     try {
       const message: WSMessage = JSON.parse(event.data);
@@ -162,7 +172,7 @@ export function useLabStateWS(
             newMap.set(data.node_id, data);
             return newMap;
           });
-          onNodeStateChange?.(data.node_id, data);
+          onNodeStateChangeRef.current?.(data.node_id, data);
           break;
         }
 
@@ -173,20 +183,20 @@ export function useLabStateWS(
             newMap.set(data.link_name, data);
             return newMap;
           });
-          onLinkStateChange?.(data.link_name, data);
+          onLinkStateChangeRef.current?.(data.link_name, data);
           break;
         }
 
         case 'lab_state': {
           const data = message.data as LabStateData;
           setLabState(data);
-          onLabStateChange?.(data);
+          onLabStateChangeRef.current?.(data);
           break;
         }
 
         case 'job_progress': {
           const data = message.data as JobProgressData;
-          onJobProgress?.(data);
+          onJobProgressRef.current?.(data);
           break;
         }
 
@@ -204,7 +214,7 @@ export function useLabStateWS(
     } catch (e) {
       console.error('Failed to parse WebSocket message:', e);
     }
-  }, [onNodeStateChange, onLinkStateChange, onLabStateChange, onJobProgress]);
+  }, []);
 
   // Connect to WebSocket
   const connect = useCallback(() => {
