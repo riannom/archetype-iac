@@ -120,6 +120,27 @@ async def get_agent_mesh(
     # Get all agents
     agents = database.query(models.Host).all()
 
+    # Backfill data_plane_address from transport managed interfaces when missing
+    updated = False
+    for agent in agents:
+        if agent.data_plane_address:
+            continue
+        transport_iface = (
+            database.query(models.AgentManagedInterface)
+            .filter(
+                models.AgentManagedInterface.host_id == agent.id,
+                models.AgentManagedInterface.interface_type == "transport",
+                models.AgentManagedInterface.sync_status == "synced",
+                models.AgentManagedInterface.ip_address.isnot(None),
+            )
+            .first()
+        )
+        if transport_iface and transport_iface.ip_address:
+            agent.data_plane_address = transport_iface.ip_address.split("/")[0]
+            updated = True
+    if updated:
+        database.commit()
+
     # Build agent nodes list
     agent_nodes = [
         AgentMeshNode(
