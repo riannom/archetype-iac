@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator, ConfigDict
 
 
 class LabCreate(BaseModel):
@@ -27,8 +27,7 @@ class LabOut(BaseModel):
     state_error: str | None = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LabYamlIn(BaseModel):
@@ -51,8 +50,7 @@ class UserOut(BaseModel):
     is_admin: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TokenOut(BaseModel):
@@ -163,8 +161,7 @@ class JobOut(BaseModel):
     # Image sync events that occurred before job started (for task log display)
     image_sync_events: list[str] | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PermissionCreate(BaseModel):
@@ -180,8 +177,7 @@ class PermissionOut(BaseModel):
     created_at: datetime
     user_email: EmailStr | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Layout persistence schemas
@@ -274,8 +270,7 @@ class NodeStateOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode="after")
     def _compute_display_state(self) -> "NodeStateOut":
@@ -404,8 +399,7 @@ class LinkStateOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LinkStateUpdate(BaseModel):
@@ -449,8 +443,7 @@ class ConfigSnapshotOut(BaseModel):
     is_active: bool = False
     is_orphaned: bool = False
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ConfigSnapshotsResponse(BaseModel):
@@ -604,8 +597,7 @@ class WebhookOut(BaseModel):
     last_delivery_error: str | None = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WebhooksResponse(BaseModel):
@@ -628,8 +620,7 @@ class WebhookDeliveryOut(BaseModel):
     duration_ms: int | None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WebhookDeliveriesResponse(BaseModel):
@@ -833,8 +824,7 @@ class InfraSettingsOut(BaseModel):
     updated_at: datetime | None = None
     updated_by_id: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class InfraSettingsUpdate(BaseModel):
@@ -868,8 +858,7 @@ class AgentLinkOut(BaseModel):
     latency_ms: float | None = None
     test_path: str = "management"  # "data_plane" or "management"
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentMeshNode(BaseModel):
@@ -983,8 +972,7 @@ class AgentNetworkConfigOut(BaseModel):
     transport_ip: str | None = None
     transport_subnet: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentNetworkConfigUpdate(BaseModel):
@@ -1027,8 +1015,7 @@ class InterfaceMappingOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class InterfaceMappingsResponse(BaseModel):
@@ -1063,8 +1050,7 @@ class AgentManagedInterfaceOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentManagedInterfaceCreate(BaseModel):
