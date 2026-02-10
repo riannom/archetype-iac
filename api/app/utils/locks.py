@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from typing import Generator, TYPE_CHECKING
+from typing import Generator, TYPE_CHECKING, TypeVar
 
 import redis
 
@@ -125,6 +125,17 @@ def link_ops_lock(lab_id: str) -> Generator[bool, None, None]:
 # Database Row-Level Locking
 # =============================================================================
 
+ModelT = TypeVar("ModelT")
+
+
+def _get_for_update(
+    session: "Session",
+    model: type[ModelT],
+    *filters,
+) -> ModelT | None:
+    """Helper for row-level locking with SELECT ... FOR UPDATE."""
+    return session.query(model).filter(*filters).with_for_update().first()
+
 
 def get_link_state_for_update(
     session: "Session",
@@ -149,14 +160,11 @@ def get_link_state_for_update(
     """
     from app import models
 
-    return (
-        session.query(models.LinkState)
-        .filter(
-            models.LinkState.lab_id == lab_id,
-            models.LinkState.link_name == link_name,
-        )
-        .with_for_update()
-        .first()
+    return _get_for_update(
+        session,
+        models.LinkState,
+        models.LinkState.lab_id == lab_id,
+        models.LinkState.link_name == link_name,
     )
 
 
@@ -175,11 +183,10 @@ def get_link_state_by_id_for_update(
     """
     from app import models
 
-    return (
-        session.query(models.LinkState)
-        .filter(models.LinkState.id == link_state_id)
-        .with_for_update()
-        .first()
+    return _get_for_update(
+        session,
+        models.LinkState,
+        models.LinkState.id == link_state_id,
     )
 
 
@@ -198,9 +205,8 @@ def get_vxlan_tunnel_for_update(
     """
     from app import models
 
-    return (
-        session.query(models.VxlanTunnel)
-        .filter(models.VxlanTunnel.link_state_id == link_state_id)
-        .with_for_update()
-        .first()
+    return _get_for_update(
+        session,
+        models.VxlanTunnel,
+        models.VxlanTunnel.link_state_id == link_state_id,
     )

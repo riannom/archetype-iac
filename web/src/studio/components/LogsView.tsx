@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { TaskLogEntry } from './TaskLogPanel';
 import { LabLogEntry, LabLogJob, LabLogsResponse, LabLogsQueryParams } from '../../api';
+import { usePolling } from '../hooks/usePolling';
 
 interface LogsViewProps {
   labId: string;
@@ -36,7 +37,6 @@ const LogsView: React.FC<LogsViewProps> = ({
   const [expandedJobLog, setExpandedJobLog] = useState<string | null>(null);
   const [loadingJobLog, setLoadingJobLog] = useState(false);
 
-  const autoRefreshIntervalRef = useRef<number | null>(null);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const isInitialLoadRef = useRef(true);
 
@@ -108,19 +108,7 @@ const LogsView: React.FC<LogsViewProps> = ({
   }, [loadLogs]);
 
   // Auto-refresh
-  useEffect(() => {
-    if (autoRefresh) {
-      autoRefreshIntervalRef.current = window.setInterval(loadLogs, 5000);
-    } else if (autoRefreshIntervalRef.current) {
-      window.clearInterval(autoRefreshIntervalRef.current);
-      autoRefreshIntervalRef.current = null;
-    }
-    return () => {
-      if (autoRefreshIntervalRef.current) {
-        window.clearInterval(autoRefreshIntervalRef.current);
-      }
-    };
-  }, [autoRefresh, loadLogs]);
+  usePolling(loadLogs, 5000, autoRefresh);
 
   // Scroll to bottom helper
   const scrollToBottom = useCallback(() => {

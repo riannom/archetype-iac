@@ -27,6 +27,8 @@ from app.storage import (
 from app.tasks.jobs import run_agent_job, run_multihost_destroy
 from app.topology import analyze_topology
 from app.utils.lab import get_lab_or_404, get_lab_provider, update_lab_provider_from_nodes
+from app.utils.agents import get_online_agent_for_lab
+from app.utils.http import require_lab_owner, raise_not_found, raise_unavailable
 from app.utils.link import generate_link_name
 from app.services.interface_naming import normalize_interface
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map, teardown_link
@@ -326,8 +328,7 @@ def update_lab(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
     lab = get_lab_or_404(lab_id, database, current_user)
-    if lab.owner_id != current_user.id and not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
+    require_lab_owner(current_user, lab)
     if payload.name is not None:
         lab.name = payload.name
     database.commit()
@@ -342,8 +343,7 @@ async def delete_lab(
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, str]:
     lab = get_lab_or_404(lab_id, database, current_user)
-    if lab.owner_id != current_user.id and not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
+    require_lab_owner(current_user, lab)
 
     # If lab has running infrastructure, destroy it first
     if lab.state in ("running", "starting", "stopping"):
@@ -375,7 +375,7 @@ async def delete_lab(
                 )
             else:
                 # Check for healthy agent
-                agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+                agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
                 if agent:
                     await run_agent_job(
                         destroy_job.id, lab.id, "down", provider=lab_provider
@@ -498,7 +498,7 @@ def export_yaml(
 
     service = TopologyService(database)
     if not service.has_nodes(lab.id):
-        raise HTTPException(status_code=404, detail="Topology not found")
+        raise_not_found("Topology not found")
     return schemas.LabYamlOut(content=service.export_to_yaml(lab.id))
 
 
@@ -691,7 +691,7 @@ def export_graph(
 
     service = TopologyService(database)
     if not service.has_nodes(lab.id):
-        raise HTTPException(status_code=404, detail="Topology not found")
+        raise_not_found("Topology not found")
     graph = service.export_to_graph(lab.id)
 
     if include_layout:
@@ -710,7 +710,7 @@ def get_layout(
     lab = get_lab_or_404(lab_id, database, current_user)
     layout = read_layout(lab.id)
     if layout is None:
-        raise HTTPException(status_code=404, detail="Layout not found")
+        raise_not_found("Layout not found")
     return layout
 
 
@@ -737,7 +737,7 @@ def remove_layout(
     lab = get_lab_or_404(lab_id, database, current_user)
     deleted = delete_layout(lab.id)
     if not deleted:
-        raise HTTPException(status_code=404, detail="Layout not found")
+        raise_not_found("Layout not found")
     return {"status": "deleted"}
 
 
@@ -793,7 +793,7 @@ async def list_node_states(
             # No active job but states are pending - refresh from container status
             try:
                 lab_provider = get_lab_provider(lab)
-                agent = await agent_client.get_agent_for_lab(
+                agent = await get_online_agent_for_lab(
                     database, lab, required_provider=lab_provider
                 )
                 if agent:
@@ -1121,14 +1121,14 @@ async def refresh_node_states(
 
     # If no placements and no default, find any healthy agent
     if not agent_ids:
-        fallback_agent = await agent_client.get_agent_for_lab(
+        fallback_agent = await get_online_agent_for_lab(
             database, lab, required_provider=lab_provider
         )
         if fallback_agent:
             agent_ids.add(fallback_agent.id)
 
     if not agent_ids:
-        raise HTTPException(status_code=503, detail="No healthy agent available")
+        raise_unavailable("No healthy agent available")
 
     # Query actual container status from ALL agents
     container_status_map: dict[str, str] = {}
@@ -1160,7 +1160,7 @@ async def refresh_node_states(
             logger.warning(f"Failed to query agent {agent.name} for lab {lab_id}: {e}")
 
     if not agents_successfully_queried:
-        raise HTTPException(status_code=503, detail="Failed to reach any agent for this lab")
+        raise_unavailable("Failed to reach any agent for this lab")
 
     # Update NodeState records based on actual container status
     node_states = (
@@ -1308,9 +1308,9 @@ async def reconcile_node(
         node_provider = get_lab_provider(lab)
 
     # Get agent for this node
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=node_provider)
+    agent = await get_online_agent_for_lab(database, lab, required_provider=node_provider)
     if not agent:
-        raise HTTPException(status_code=503, detail=f"No healthy agent available with {node_provider} support")
+        raise_unavailable(f"No healthy agent available with {node_provider} support")
 
     # Note: Don't set state to pending here - let the task handle state transitions
     # after it reads the current state to determine what action is needed
@@ -1379,9 +1379,9 @@ async def reconcile_lab(
 
     # Get agent for this lab
     lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
     if not agent:
-        raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+        raise_unavailable(f"No healthy agent available with {lab_provider} support")
 
     # Note: Don't set states to pending here - let the task handle state transitions
     # after it reads the current states to determine what actions are needed
@@ -1445,7 +1445,7 @@ async def check_nodes_ready(
 
     # Get agent for readiness checks
     lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
 
     nodes_out = []
     ready_count = 0
@@ -1532,7 +1532,7 @@ async def poll_nodes_ready(
     _ensure_node_states_exist(database, lab.id)
 
     lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
 
     start_time = asyncio.get_event_loop().time()
     end_time = start_time + timeout
@@ -2064,7 +2064,7 @@ def get_link_state(
         .first()
     )
     if not state:
-        raise HTTPException(status_code=404, detail=f"Link '{link_name}' not found")
+        raise_not_found(f"Link '{link_name}' not found")
 
     return schemas.LinkStateOut.model_validate(state)
 
@@ -2095,7 +2095,7 @@ def set_link_state(
         .first()
     )
     if not state:
-        raise HTTPException(status_code=404, detail=f"Link '{link_name}' not found")
+        raise_not_found(f"Link '{link_name}' not found")
 
     state.desired_state = payload.state
     database.commit()
@@ -2155,7 +2155,7 @@ def refresh_link_states(
 
     service = TopologyService(database)
     if not service.has_nodes(lab.id):
-        raise HTTPException(status_code=404, detail="Topology not found")
+        raise_not_found("Topology not found")
     graph = service.export_to_graph(lab.id)
 
     created, updated = _upsert_link_states(database, lab.id, graph)
@@ -2224,7 +2224,7 @@ async def extract_configs(
 
     # If no placements exist, fall back to lab's default agent
     if not host_ids:
-        agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+        agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
         if agent:
             host_ids = [agent.id]
 
@@ -2236,7 +2236,7 @@ async def extract_configs(
             agents.append(agent)
 
     if not agents:
-        raise HTTPException(status_code=503, detail="No healthy agents available")
+        raise_unavailable("No healthy agents available")
 
     # Call all agents concurrently to extract configs
     tasks = [agent_client.extract_configs_on_agent(agent, lab.id) for agent in agents]
@@ -2584,7 +2584,7 @@ def delete_config_snapshot(
     )
 
     if not snapshot:
-        raise HTTPException(status_code=404, detail="Snapshot not found")
+        raise_not_found("Snapshot not found")
 
     database.delete(snapshot)
     database.commit()
@@ -2700,7 +2700,7 @@ async def set_active_config(
         .first()
     )
     if not node:
-        raise HTTPException(status_code=404, detail=f"Node '{node_name}' not found")
+        raise_not_found(f"Node '{node_name}' not found")
 
     from app.services.config_service import ConfigService
     config_svc = ConfigService(database)
@@ -2953,7 +2953,7 @@ async def hot_connect_link(
 
     host_to_agent = await _build_host_to_agent_map(database, lab_id)
     if not host_to_agent:
-        raise HTTPException(status_code=503, detail="No healthy agent available")
+        raise_unavailable("No healthy agent available")
 
     success = await create_link_if_ready(database, lab_id, link_state, host_to_agent)
     database.commit()
@@ -3013,7 +3013,7 @@ async def hot_disconnect_link(
 
     host_to_agent = await _build_host_to_agent_map(database, lab_id)
     if not host_to_agent:
-        raise HTTPException(status_code=503, detail="No healthy agent available")
+        raise_unavailable("No healthy agent available")
 
     link_info = {
         "link_name": link_state.link_name,
@@ -3054,7 +3054,7 @@ async def list_live_links(
 
     # Get agent for this lab
     lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
     if not agent:
         return {"links": [], "error": "No healthy agent available"}
 
@@ -3092,9 +3092,9 @@ async def connect_to_external_network(
 
     # Get agent for this lab
     lab_provider = get_lab_provider(lab)
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+    agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
     if not agent:
-        raise HTTPException(status_code=503, detail="No healthy agent available")
+        raise_unavailable("No healthy agent available")
 
     # Forward to agent
     result = await agent_client.connect_external_on_agent(
@@ -3149,16 +3149,10 @@ def generate_config_diff(
     )
 
     if not snapshot_a:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Snapshot A not found: {payload.snapshot_id_a}"
-        )
+        raise_not_found(f"Snapshot A not found: {payload.snapshot_id_a}")
 
     if not snapshot_b:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Snapshot B not found: {payload.snapshot_id_b}"
-        )
+        raise_not_found(f"Snapshot B not found: {payload.snapshot_id_b}")
 
     # Generate unified diff
     lines_a = snapshot_a.content.splitlines(keepends=True)
@@ -3267,26 +3261,17 @@ def get_lab_logs(
 
     Returns structured log entries with host associations and summary info.
     """
-    from datetime import timedelta
     from app.services.log_parser import parse_job_log, filter_entries
+    from app.utils.logs import get_log_content
 
     lab = get_lab_or_404(lab_id, database, current_user)
 
     # Parse 'since' parameter
+    from app.utils.time_range import parse_relative_duration
     since_dt = None
-    if since:
-        # Parse relative time like "15m", "1h", "24h"
-        import re
-        match = re.match(r"(\d+)([mhd])", since)
-        if match:
-            value = int(match.group(1))
-            unit = match.group(2)
-            if unit == "m":
-                since_dt = datetime.now(timezone.utc) - timedelta(minutes=value)
-            elif unit == "h":
-                since_dt = datetime.now(timezone.utc) - timedelta(hours=value)
-            elif unit == "d":
-                since_dt = datetime.now(timezone.utc) - timedelta(days=value)
+    duration = parse_relative_duration(since, allowed={"15m", "1h", "24h"})
+    if duration:
+        since_dt = datetime.now(timezone.utc) - duration
 
     # Query jobs for this lab
     jobs_query = (
@@ -3317,7 +3302,8 @@ def get_lab_logs(
     hosts_found = set()
 
     for job in jobs:
-        if not job.log_path:
+        log_content = get_log_content(job.log_path)
+        if not log_content:
             continue
 
         # Get host info for this job from its agent_id
@@ -3325,7 +3311,7 @@ def get_lab_logs(
         job_host_name = agent_name_map.get(job.agent_id) if job.agent_id else None
 
         parsed = parse_job_log(
-            log_content=job.log_path,  # log_path contains actual log content
+            log_content=log_content,
             job_id=job.id,
             job_created_at=job.created_at,
         )
@@ -3528,7 +3514,7 @@ async def get_node_interfaces(
         .first()
     )
     if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise_not_found("Node not found")
 
     mappings = (
         database.query(models.InterfaceMapping)

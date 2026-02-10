@@ -17,6 +17,7 @@ from app import db, models
 from app.auth import get_current_user
 from app.config import settings
 from app.routers.system import get_commit
+from app.utils.http import require_admin
 
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -687,8 +688,7 @@ def get_deregister_info(
     Returns counts of affected resources so the UI can show an
     informed confirmation dialog.
     """
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     host = database.get(models.Host, agent_id)
     if not host:
@@ -762,8 +762,7 @@ def unregister_agent(
     import logging
     logger = logging.getLogger(__name__)
 
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     host = database.get(models.Host, agent_id)
     if not host:

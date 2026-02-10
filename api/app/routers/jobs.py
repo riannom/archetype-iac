@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -20,6 +19,7 @@ from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.utils.lab import get_lab_or_404, get_lab_provider
+from app.utils.logs import get_log_content
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
 from app.services.state_machine import NodeStateMachine
@@ -138,46 +138,6 @@ def _extract_error_summary(log_content: str | None, status: str) -> str | None:
     return "Job failed - check logs for details"
 
 
-def _is_likely_file_path(value: str) -> bool:
-    """Check if a string looks like a file path (not inline content).
-
-    File paths don't contain newlines and are short enough for the OS.
-    """
-    # Paths don't contain newlines
-    if "\n" in value:
-        return False
-    # Linux max path length is 4096, but filename limit is 255
-    # If it's longer than reasonable for a path, it's content
-    if len(value) > 4096:
-        return False
-    # Must start with / for absolute path or look like a relative path
-    return value.startswith("/") or not value.startswith("=")
-
-
-def _get_log_content(log_path_or_content: str | None) -> str | None:
-    """Get log content from either a file path or inline content.
-
-    log_path can be either:
-    1. An actual file path (legacy jobs from app/jobs.py)
-    2. The log content directly (jobs from app/tasks/jobs.py)
-    """
-    if not log_path_or_content:
-        return None
-
-    # Check if it looks like a file path before trying Path operations
-    if _is_likely_file_path(log_path_or_content):
-        try:
-            log_path = Path(log_path_or_content)
-            if log_path.exists() and log_path.is_file():
-                return log_path.read_text(encoding="utf-8")
-        except OSError:
-            # Path too long or other OS error - treat as content
-            pass
-
-    # Content is stored directly
-    return log_path_or_content
-
-
 def _enrich_job_output(job: models.Job) -> schemas.JobOut:
     """Convert a Job model to JobOut schema with computed fields."""
     job_out = schemas.JobOut.model_validate(job)
@@ -194,7 +154,7 @@ def _enrich_job_output(job: models.Job) -> schemas.JobOut:
     )
 
     # Extract error summary for failed jobs
-    log_content = _get_log_content(job.log_path)
+    log_content = get_log_content(job.log_path)
     job_out.error_summary = _extract_error_summary(log_content, job.status)
 
     return job_out

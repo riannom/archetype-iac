@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from agent.registry import LazySingleton
+
 if TYPE_CHECKING:
     from agent.providers.base import Provider
 
@@ -22,16 +24,9 @@ class ProviderRegistry:
     This allows the agent to only load providers that are actually enabled.
     """
 
-    _instance: ProviderRegistry | None = None
-    _providers: dict[str, Provider]
-    _discovered: bool
-
-    def __new__(cls) -> ProviderRegistry:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._providers = {}
-            cls._instance._discovered = False
-        return cls._instance
+    def __init__(self) -> None:
+        self._providers: dict[str, Provider] = {}
+        self._discovered = False
 
     def _discover_providers(self) -> None:
         """Lazily discover and instantiate enabled providers."""
@@ -113,7 +108,7 @@ class ProviderRegistry:
 
 
 # Module-level singleton instance
-_registry = ProviderRegistry()
+_registry = LazySingleton(ProviderRegistry)
 
 
 def get_provider(name: str) -> Provider | None:
@@ -127,7 +122,7 @@ def get_provider(name: str) -> Provider | None:
     Returns:
         Provider instance if available, None otherwise
     """
-    return _registry.get(name)
+    return _registry.get().get(name)
 
 
 def get_default_provider() -> Provider | None:
@@ -138,7 +133,7 @@ def get_default_provider() -> Provider | None:
     Returns:
         Default provider instance, or None if no providers
     """
-    return _registry.get_default()
+    return _registry.get().get_default()
 
 
 def list_providers() -> list[str]:
@@ -149,7 +144,7 @@ def list_providers() -> list[str]:
     Returns:
         List of available provider names
     """
-    return _registry.list_available()
+    return _registry.get().list_available()
 
 
 def is_provider_available(name: str) -> bool:
@@ -163,4 +158,9 @@ def is_provider_available(name: str) -> bool:
     Returns:
         True if provider is available
     """
-    return _registry.is_available(name)
+    return _registry.get().is_available(name)
+
+
+def reset_provider_registry() -> None:
+    """Reset the registry singleton (mainly for testing)."""
+    _registry.reset()

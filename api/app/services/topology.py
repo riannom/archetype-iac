@@ -392,17 +392,9 @@ class TopologyService:
 
     def get_node_by_any_id(self, lab_id: str, identifier: str) -> models.Node | None:
         """Get a node by container_name or gui_id."""
-        return (
-            self.db.query(models.Node)
-            .filter(
-                models.Node.lab_id == lab_id,
-                or_(
-                    models.Node.container_name == identifier,
-                    models.Node.gui_id == identifier,
-                )
-            )
-            .first()
-        )
+        from app.utils.nodes import get_node_by_any_id
+
+        return get_node_by_any_id(self.db, lab_id, identifier)
 
     def get_node_host(self, lab_id: str, node_identifier: str) -> models.Host | None:
         """Get the host for a node.
@@ -410,22 +402,11 @@ class TopologyService:
         First checks Node.host_id (explicit placement in topology),
         then falls back to NodePlacement (runtime placement).
         """
-        node = self.get_node_by_any_id(lab_id, node_identifier)
-        if node and node.host_id:
-            return self.db.get(models.Host, node.host_id)
+        from app.utils.nodes import resolve_node_host_id
 
-        # Fall back to NodePlacement for backwards compatibility
-        # and for nodes without explicit topology placement
-        placement = (
-            self.db.query(models.NodePlacement)
-            .filter(
-                models.NodePlacement.lab_id == lab_id,
-                models.NodePlacement.node_name == (node.container_name if node else node_identifier),
-            )
-            .first()
-        )
-        if placement:
-            return self.db.get(models.Host, placement.host_id)
+        host_id = resolve_node_host_id(self.db, lab_id, node_identifier)
+        if host_id:
+            return self.db.get(models.Host, host_id)
 
         return None
 

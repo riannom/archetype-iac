@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal } from '../../components/ui/Modal';
 import { getSystemLogs, LogEntry, LogQueryParams } from '../../api';
+import { usePolling } from '../hooks/usePolling';
 
 interface SystemLogsModalProps {
   isOpen: boolean;
@@ -61,17 +62,14 @@ const SystemLogsModal: React.FC<SystemLogsModalProps> = ({ isOpen, onClose }) =>
     }
   }, [service, level, timeRange, search]);
 
-  // Initial fetch and auto-refresh
+  // Initial fetch
   useEffect(() => {
     if (!isOpen) return;
-
     fetchLogs();
+  }, [isOpen, fetchLogs]);
 
-    if (autoRefresh) {
-      const interval = setInterval(fetchLogs, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [isOpen, fetchLogs, autoRefresh]);
+  // Auto-refresh
+  usePolling(fetchLogs, 5000, isOpen && autoRefresh);
 
   // Format timestamp for display
   const formatTime = (timestamp: string): string => {

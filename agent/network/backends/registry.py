@@ -7,25 +7,32 @@ import logging
 from agent.config import settings
 from agent.network.backends.base import NetworkBackend
 from agent.network.backends.ovs_backend import OVSBackend
+from agent.registry import LazySingleton
 
 
 logger = logging.getLogger(__name__)
 
-_backend_instance: NetworkBackend | None = None
-
-
-def get_network_backend() -> NetworkBackend:
-    """Return the configured network backend singleton."""
-    global _backend_instance
-    if _backend_instance is not None:
-        return _backend_instance
-
+def _build_backend() -> NetworkBackend:
     backend_name = (getattr(settings, "network_backend", "ovs") or "ovs").lower()
     if backend_name != "ovs":
         logger.warning(f"Unsupported network backend '{backend_name}', falling back to 'ovs'")
         backend_name = "ovs"
 
     if backend_name == "ovs":
-        _backend_instance = OVSBackend()
+        return OVSBackend()
 
-    return _backend_instance
+    # Fallback guard in case new backends are added without wiring.
+    return OVSBackend()
+
+
+_backend_singleton = LazySingleton(_build_backend)
+
+
+def get_network_backend() -> NetworkBackend:
+    """Return the configured network backend singleton."""
+    return _backend_singleton.get()
+
+
+def reset_network_backend() -> None:
+    """Reset the backend singleton (mainly for testing)."""
+    _backend_singleton.reset()

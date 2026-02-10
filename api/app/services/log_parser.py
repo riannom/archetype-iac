@@ -7,23 +7,13 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-
-class LogEntry(BaseModel):
-    """Structured log entry from parsed job logs."""
-
-    timestamp: datetime
-    level: Literal["info", "success", "warning", "error"]
-    message: str
-    host_id: str | None = None
-    host_name: str | None = None
-    job_id: str | None = None
-    source: Literal["job", "system", "realtime"] = "job"
+from app.schemas import LabLogEntry
 
 
 class ParsedLogs(BaseModel):
     """Result of parsing job logs."""
 
-    entries: list[LogEntry]
+    entries: list[LabLogEntry]
     hosts: list[str]  # List of host names found in logs
 
 
@@ -88,7 +78,7 @@ def parse_job_log(
     if not log_content:
         return ParsedLogs(entries=[], hosts=[])
 
-    entries: list[LogEntry] = []
+    entries: list[LabLogEntry] = []
     hosts_found: set[str] = set()
     current_host_name: str | None = None
     current_host_id: str | None = None
@@ -135,7 +125,7 @@ def parse_job_log(
             message = line[len(ts_match.group(0)) :].lstrip(" -:")
 
         entries.append(
-            LogEntry(
+            LabLogEntry(
                 timestamp=timestamp,
                 level=level,
                 message=message,
@@ -151,12 +141,12 @@ def parse_job_log(
 
 
 def filter_entries(
-    entries: list[LogEntry],
+    entries: list[LabLogEntry],
     host_id: str | None = None,
     level: str | None = None,
     search: str | None = None,
     since: datetime | None = None,
-) -> list[LogEntry]:
+) -> list[LabLogEntry]:
     """Filter log entries by various criteria.
 
     Args:

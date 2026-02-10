@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
@@ -790,6 +791,31 @@ class LabLogsResponse(BaseModel):
     total_count: int
     error_count: int
     has_more: bool = False
+
+
+# =============================================================================
+# System Logs Schemas
+# =============================================================================
+
+
+class SystemLogEntry(BaseModel):
+    """A single log entry from centralized logging."""
+
+    timestamp: str
+    level: str
+    service: str
+    message: str
+    correlation_id: str | None = None
+    logger: str | None = None
+    extra: dict[str, Any] | None = None
+
+
+class SystemLogQueryResponse(BaseModel):
+    """Response from system log query endpoint."""
+
+    entries: list[SystemLogEntry]
+    total_count: int
+    has_more: bool
 
 
 # =============================================================================

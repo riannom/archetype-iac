@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app import db, models, schemas
 from app.auth import get_current_user
 from app.utils.lab import get_lab_or_404
+from app.utils.http import require_lab_owner, raise_not_found
 
 router = APIRouter(tags=["permissions"])
 
@@ -43,11 +44,10 @@ def add_permission(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.PermissionOut:
     lab = get_lab_or_404(lab_id, database, current_user)
-    if lab.owner_id != current_user.id and not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
+    require_lab_owner(current_user, lab)
     user = database.query(models.User).filter(models.User.email == payload.user_email).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise_not_found("User not found")
     permission = models.Permission(lab_id=lab_id, user_id=user.id, role=payload.role)
     database.add(permission)
     database.commit()
@@ -70,11 +70,10 @@ def delete_permission(
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, str]:
     lab = get_lab_or_404(lab_id, database, current_user)
-    if lab.owner_id != current_user.id and not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
+    require_lab_owner(current_user, lab)
     permission = database.get(models.Permission, permission_id)
     if not permission or permission.lab_id != lab_id:
-        raise HTTPException(status_code=404, detail="Permission not found")
+        raise_not_found("Permission not found")
     database.delete(permission)
     database.commit()
     return {"status": "deleted"}

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import db, models
 from app.auth import get_current_user
+from app.utils.http import require_admin, raise_not_found
 from app.schemas import (
     InfraSettingsOut,
     InfraSettingsUpdate,
@@ -70,8 +71,7 @@ async def update_infrastructure_settings(
     Requires admin access. Changes to overlay_mtu will affect new VXLAN
     tunnels but won't modify existing ones.
     """
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     settings = get_or_create_settings(database)
 
@@ -243,9 +243,9 @@ async def test_mtu_between_agents(
     target_agent = database.get(models.Host, request.target_agent_id)
 
     if not source_agent:
-        raise HTTPException(status_code=404, detail="Source agent not found")
+        raise_not_found("Source agent not found")
     if not target_agent:
-        raise HTTPException(status_code=404, detail="Target agent not found")
+        raise_not_found("Target agent not found")
 
     if not agent_client.is_agent_online(source_agent):
         return MtuTestResponse(
@@ -543,7 +543,7 @@ async def get_agent_interfaces(
     # Get the agent
     agent = database.get(models.Host, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     if not agent_client.is_agent_online(agent):
         raise HTTPException(status_code=503, detail="Agent is offline")
@@ -571,13 +571,12 @@ async def set_agent_interface_mtu(
     """
     from app import agent_client
 
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     # Get the agent
     agent = database.get(models.Host, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     if not agent_client.is_agent_online(agent):
         raise HTTPException(status_code=503, detail="Agent is offline")
@@ -606,7 +605,7 @@ async def get_agent_network_config(
     # Get the agent
     agent = database.get(models.Host, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     # Get or create network config
     config = (
@@ -653,13 +652,12 @@ async def update_agent_network_config(
     """
     from app import agent_client
 
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     # Get the agent
     agent = database.get(models.Host, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     # Get or create network config
     config = (
@@ -883,7 +881,7 @@ async def get_transport_config(
     """
     agent = database.get(models.Host, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     config = (
         database.query(models.AgentNetworkConfig)
@@ -919,12 +917,11 @@ async def apply_transport_config(
     """
     from app import agent_client
 
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     agent = database.get(models.Host, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     if not agent_client.is_agent_online(agent):
         raise HTTPException(status_code=503, detail="Agent is offline")
@@ -1012,7 +1009,7 @@ async def list_agent_managed_interfaces(
     """List managed interfaces for a specific agent."""
     agent = database.get(models.Host, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     interfaces = (
         database.query(models.AgentManagedInterface)
@@ -1039,12 +1036,11 @@ async def create_managed_interface(
     """Create and provision a managed interface on an agent host."""
     from app import agent_client
 
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     agent = database.get(models.Host, agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     # Determine interface name
     iface_name = request.name
@@ -1132,16 +1128,15 @@ async def update_managed_interface(
     """Update a managed interface (MTU, IP)."""
     from app import agent_client
 
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     iface = database.get(models.AgentManagedInterface, interface_id)
     if not iface:
-        raise HTTPException(status_code=404, detail="Interface not found")
+        raise_not_found("Interface not found")
 
     agent = database.get(models.Host, iface.host_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise_not_found("Agent not found")
 
     if update.desired_mtu is not None:
         iface.desired_mtu = update.desired_mtu
@@ -1183,12 +1178,11 @@ async def delete_managed_interface(
     """Delete a managed interface from the agent and remove the record."""
     from app import agent_client
 
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     iface = database.get(models.AgentManagedInterface, interface_id)
     if not iface:
-        raise HTTPException(status_code=404, detail="Interface not found")
+        raise_not_found("Interface not found")
 
     # Check for referencing external network nodes
     ref_count = (

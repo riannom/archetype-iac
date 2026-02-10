@@ -74,3 +74,31 @@ HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue({
   lineCap: 'round',
   lineJoin: 'round',
 });
+
+const originalConsoleError = console.error;
+const originalConsoleWarn = console.warn;
+
+const ignoredErrorPatterns = [
+  /not wrapped in act/i,
+  /not implemented: navigation/i,
+];
+
+const ignoredWarnPatterns = [
+  /react router future flag warning/i,
+];
+
+console.error = (...args) => {
+  const message = args[0] instanceof Error ? args[0].message : String(args[0] ?? '');
+  if (ignoredErrorPatterns.some((pattern) => pattern.test(message))) {
+    return;
+  }
+  originalConsoleError(...args);
+};
+
+console.warn = (...args) => {
+  const message = args[0] instanceof Error ? args[0].message : String(args[0] ?? '');
+  if (ignoredWarnPatterns.some((pattern) => pattern.test(message))) {
+    return;
+  }
+  originalConsoleWarn(...args);
+};

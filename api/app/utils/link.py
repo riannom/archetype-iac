@@ -24,60 +24,12 @@ def lookup_endpoint_hosts(
     Returns:
         Tuple of (source_host_id, target_host_id)
     """
-    from app import models as m
-
     lab_id = link_state.lab_id
 
-    source_host_id = None
-    target_host_id = None
+    from app.utils.nodes import resolve_node_host_id
 
-    # Check Node.host_id first (explicit placement)
-    source_node = (
-        session.query(m.Node)
-        .filter(
-            m.Node.lab_id == lab_id,
-            m.Node.container_name == link_state.source_node,
-        )
-        .first()
-    )
-    if source_node and source_node.host_id:
-        source_host_id = source_node.host_id
-
-    target_node = (
-        session.query(m.Node)
-        .filter(
-            m.Node.lab_id == lab_id,
-            m.Node.container_name == link_state.target_node,
-        )
-        .first()
-    )
-    if target_node and target_node.host_id:
-        target_host_id = target_node.host_id
-
-    # Fall back to NodePlacement
-    if not source_host_id:
-        placement = (
-            session.query(m.NodePlacement)
-            .filter(
-                m.NodePlacement.lab_id == lab_id,
-                m.NodePlacement.node_name == link_state.source_node,
-            )
-            .first()
-        )
-        if placement:
-            source_host_id = placement.host_id
-
-    if not target_host_id:
-        placement = (
-            session.query(m.NodePlacement)
-            .filter(
-                m.NodePlacement.lab_id == lab_id,
-                m.NodePlacement.node_name == link_state.target_node,
-            )
-            .first()
-        )
-        if placement:
-            target_host_id = placement.host_id
+    source_host_id = resolve_node_host_id(session, lab_id, link_state.source_node)
+    target_host_id = resolve_node_host_id(session, lab_id, link_state.target_node)
 
     return source_host_id, target_host_id
 

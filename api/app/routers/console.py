@@ -9,6 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app import agent_client, models
 from app.db import get_session
 from app.services.topology import TopologyService
+from app.utils.agents import get_online_agent_for_lab
 
 logger = logging.getLogger(__name__)
 
@@ -40,34 +41,15 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
             node_name = node_def.container_name
             logger.debug(f"Console: resolved {node} to container name {node_name} from DB")
 
-            # Get agent from Node.host_id (explicit placement)
-            if node_def.host_id:
-                agent = database.get(models.Host, node_def.host_id)
-                if agent and not agent_client.is_agent_online(agent):
-                    agent = None  # Agent offline, will fall back below
-                else:
-                    logger.debug(f"Console: using host_id {node_def.host_id} from topology")
-
-        # If no agent from topology, check NodePlacement (runtime placement records)
-        if not agent:
-            placement = (
-                database.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.node_name == node_name,
-                )
-                .first()
-            )
-            if placement:
-                agent = database.get(models.Host, placement.host_id)
-                if agent and not agent_client.is_agent_online(agent):
-                    agent = None
+        agent = topology_service.get_node_host(lab.id, node_name)
+        if agent and not agent_client.is_agent_online(agent):
+            agent = None  # Agent offline, will fall back below
         # Get the provider for this lab (outside try block for fallback)
         lab_provider = lab.provider if lab.provider else "docker"
 
         # If not found via topology (single-host or node not found), use lab's agent
         if not agent:
-            agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
+            agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
 
         if not agent:
             await websocket.send_text("No healthy agent available\r\n")

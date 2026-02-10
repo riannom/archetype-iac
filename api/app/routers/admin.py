@@ -3,41 +3,19 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
-
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app import agent_client, db, models
+from app import agent_client, db, models, schemas
 from app.auth import get_current_user
 from app.config import settings
 from app.utils.lab import get_lab_or_404
+from app.utils.http import require_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["admin"])
-
-
-# --- Log Query Models ---
-
-class LogEntry(BaseModel):
-    """A single log entry from Loki."""
-    timestamp: str
-    level: str
-    service: str
-    message: str
-    correlation_id: str | None = None
-    logger: str | None = None
-    extra: dict[str, Any] | None = None
-
-
-class LogQueryResponse(BaseModel):
-    """Response from log query endpoint."""
-    entries: list[LogEntry]
-    total_count: int
-    has_more: bool
 
 
 @router.post("/reconcile")
@@ -57,8 +35,7 @@ async def reconcile_state(
     Returns:
         Summary of reconciliation actions taken
     """
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     logger.info("Starting reconciliation")
 
@@ -314,7 +291,7 @@ async def get_system_logs(
     search: str | None = Query(None, description="Search text in message"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum entries to return"),
     current_user: models.User = Depends(get_current_user),
-) -> LogQueryResponse:
+) -> schemas.SystemLogQueryResponse:
     """Query system logs from Loki.
 
     Requires admin access. Returns recent log entries with optional filtering.
@@ -329,16 +306,13 @@ async def get_system_logs(
     Returns:
         List of log entries matching the query
     """
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     # Parse time range
-    time_ranges = {
-        "15m": 15 * 60,
-        "1h": 60 * 60,
-        "24h": 24 * 60 * 60,
-    }
-    seconds = time_ranges.get(since, 3600)
+    from app.utils.time_range import parse_relative_duration
+
+    duration = parse_relative_duration(since, allowed={"15m", "1h", "24h"})
+    seconds = int(duration.total_seconds()) if duration else 3600
     start_ns = (int(datetime.now(timezone.utc).timestamp()) - seconds) * 1_000_000_000
 
     # Build LogQL query
@@ -381,16 +355,16 @@ async def get_system_logs(
             if response.status_code != 200:
                 logger.warning(f"Loki query failed: {response.status_code} - {response.text}")
                 # Return empty result if Loki is not available
-                return LogQueryResponse(entries=[], total_count=0, has_more=False)
+                return schemas.SystemLogQueryResponse(entries=[], total_count=0, has_more=False)
 
             data = response.json()
 
     except httpx.ConnectError:
         logger.warning("Cannot connect to Loki - centralized logging may not be configured")
-        return LogQueryResponse(entries=[], total_count=0, has_more=False)
+        return schemas.SystemLogQueryResponse(entries=[], total_count=0, has_more=False)
     except Exception as e:
         logger.error(f"Error querying Loki: {e}")
-        return LogQueryResponse(entries=[], total_count=0, has_more=False)
+        return schemas.SystemLogQueryResponse(entries=[], total_count=0, has_more=False)
 
     # Parse Loki response
     entries = []
@@ -407,7 +381,7 @@ async def get_system_logs(
             try:
                 import json
                 log_data = json.loads(log_line)
-                entry = LogEntry(
+                entry = schemas.SystemLogEntry(
                     timestamp=log_data.get("timestamp", ""),
                     level=log_data.get("level", "INFO"),
                     service=service_name,
@@ -420,7 +394,7 @@ async def get_system_logs(
                 # Non-JSON log line
                 # Convert nanosecond timestamp
                 ts = datetime.fromtimestamp(int(timestamp_ns) / 1_000_000_000, tz=timezone.utc)
-                entry = LogEntry(
+                entry = schemas.SystemLogEntry(
                     timestamp=ts.isoformat(),
                     level="INFO",
                     service=service_name,
@@ -432,7 +406,7 @@ async def get_system_logs(
     # Sort by timestamp (most recent first)
     entries.sort(key=lambda e: e.timestamp, reverse=True)
 
-    return LogQueryResponse(
+    return schemas.SystemLogQueryResponse(
         entries=entries[:limit],
         total_count=len(entries),
         has_more=len(entries) > limit,
@@ -457,8 +431,7 @@ async def reconcile_images(
     Returns:
         Summary of reconciliation actions taken
     """
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     from app.tasks.image_reconciliation import (
         reconcile_image_hosts,
@@ -492,8 +465,7 @@ async def cleanup_stuck_jobs(
     Returns:
         Summary of cleanup actions taken
     """
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
 
     from datetime import timedelta
 
