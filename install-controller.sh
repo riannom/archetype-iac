@@ -87,7 +87,7 @@ resolve_install_target
 # Uninstall
 if [ "$UNINSTALL" = true ]; then
     log_info "Uninstalling Archetype Controller..."
-    cd $INSTALL_DIR 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null || true
+    (cd "$INSTALL_DIR" 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null) || true
     rm -rf $INSTALL_DIR
     log_info "Archetype Controller uninstalled successfully"
     exit 0

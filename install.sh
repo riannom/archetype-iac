@@ -173,7 +173,7 @@ if [ "$UNINSTALL" = true ]; then
 
     if [ -d "$INSTALL_DIR" ]; then
         log_info "Stopping controller services..."
-        cd $INSTALL_DIR 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null || true
+        (cd "$INSTALL_DIR" 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null) || true
         rm -rf $INSTALL_DIR
         log_info "Controller removed (including database volumes)"
     fi
@@ -215,7 +215,7 @@ if [ "$FRESH_INSTALL" = true ]; then
 
     if [ -d "$INSTALL_DIR" ]; then
         log_info "Removing existing controller (including database)..."
-        cd $INSTALL_DIR 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null || true
+        (cd "$INSTALL_DIR" 2>/dev/null && docker compose -f docker-compose.gui.yml down -v 2>/dev/null) || true
         rm -rf $INSTALL_DIR
     fi
 
