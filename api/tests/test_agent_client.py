@@ -467,7 +467,7 @@ async def test_get_healthy_agent_affinity_unavailable():
     mock_query.all.return_value = [agent1]
     mock_db.query.return_value = mock_query
 
-    with patch.object(agent_client, 'count_active_jobs', return_value=0):
+    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={}):
         result = await agent_client.get_healthy_agent(mock_db, prefer_agent_id="agent2")
 
     # Should fall back to agent1
@@ -489,10 +489,7 @@ async def test_get_healthy_agent_load_balancing():
     mock_db.query.return_value = mock_query
 
     # agent1 has 3 jobs, agent2 has 1 job
-    def mock_count(db, agent_id):
-        return 3 if agent_id == "agent1" else 1
-
-    with patch.object(agent_client, 'count_active_jobs', side_effect=mock_count):
+    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={"agent1": 3, "agent2": 1}):
         result = await agent_client.get_healthy_agent(mock_db)
 
     # Should select agent2 (less loaded)
@@ -513,10 +510,7 @@ async def test_get_healthy_agent_capacity_check():
     mock_db.query.return_value = mock_query
 
     # agent1 is at capacity (2/2), agent2 has room (1/4)
-    def mock_count(db, agent_id):
-        return 2 if agent_id == "agent1" else 1
-
-    with patch.object(agent_client, 'count_active_jobs', side_effect=mock_count):
+    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={"agent1": 2, "agent2": 1}):
         result = await agent_client.get_healthy_agent(mock_db)
 
     # Should select agent2 (agent1 at capacity)
@@ -537,7 +531,7 @@ async def test_get_healthy_agent_all_at_capacity():
     mock_db.query.return_value = mock_query
 
     # Both at capacity
-    with patch.object(agent_client, 'count_active_jobs', return_value=2):
+    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={"agent1": 2, "agent2": 2}):
         result = await agent_client.get_healthy_agent(mock_db)
 
     assert result is None
@@ -584,7 +578,7 @@ async def test_get_agent_for_lab_with_existing_agent():
 
     mock_db.query.side_effect = query_side_effect
 
-    with patch.object(agent_client, 'count_active_jobs', return_value=0):
+    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={}):
         result = await agent_client.get_agent_for_lab(mock_db, lab, required_provider="docker")
 
     # Should select agent2 (agent with existing node placements)
@@ -619,10 +613,7 @@ async def test_get_agent_for_lab_without_existing_agent():
     mock_db.query.side_effect = query_side_effect
 
     # agent1 less loaded
-    def mock_count(db, agent_id):
-        return 1 if agent_id == "agent1" else 3
-
-    with patch.object(agent_client, 'count_active_jobs', side_effect=mock_count):
+    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={"agent1": 1, "agent2": 3}):
         result = await agent_client.get_agent_for_lab(mock_db, lab, required_provider="docker")
 
     # Should select agent1 (least loaded)

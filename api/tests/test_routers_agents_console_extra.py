@@ -129,7 +129,7 @@ def test_heartbeat_and_list_get_delete(test_client, test_db, auth_headers, admin
     assert deleted.status_code == 200
 
 
-def test_sync_strategy_validation(test_client, test_db, auth_headers) -> None:
+def test_sync_strategy_validation(test_client, test_db, admin_auth_headers) -> None:
     host = models.Host(
         id="agent-4",
         name="Agent Four",
@@ -141,10 +141,10 @@ def test_sync_strategy_validation(test_client, test_db, auth_headers) -> None:
     test_db.add(host)
     test_db.commit()
 
-    bad = test_client.put("/agents/agent-4/sync-strategy", json={"strategy": "bad"}, headers=auth_headers)
+    bad = test_client.put("/agents/agent-4/sync-strategy", json={"strategy": "bad"}, headers=admin_auth_headers)
     assert bad.status_code == 400
 
-    good = test_client.put("/agents/agent-4/sync-strategy", json={"strategy": "push"}, headers=auth_headers)
+    good = test_client.put("/agents/agent-4/sync-strategy", json={"strategy": "push"}, headers=admin_auth_headers)
     assert good.status_code == 200
 
 

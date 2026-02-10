@@ -219,7 +219,7 @@ class TestAddPermission:
         """Test adding permission to non-existent lab fails."""
         response = test_client.post(
             "/labs/nonexistent-lab-id/permissions",
-            json={"user_email": admin_user.email, "role": "viewer"},
+            json={"user_identifier": admin_user.email, "role": "viewer"},
             headers=auth_headers,
         )
         assert response.status_code == 404

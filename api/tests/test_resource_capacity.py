@@ -741,7 +741,7 @@ class TestDetailedEndpointEnrichment:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=admin_auth_headers)
         assert response.status_code == 200
         data = response.json()
         agent = [a for a in data if a["id"] == "det-agent-1"][0]
@@ -782,7 +782,7 @@ class TestDetailedEndpointEnrichment:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=admin_auth_headers)
         assert response.status_code == 200
         data = response.json()
         agent = [a for a in data if a["id"] == "det-agent-vm"][0]
@@ -792,7 +792,7 @@ class TestDetailedEndpointEnrichment:
         assert vm_details[0]["lab_name"] == "VM Lab"
 
     def test_images_field_populated(
-        self, test_client: TestClient, test_db: Session,
+        self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """ImageHost records appear in the images array."""
         host = models.Host(
@@ -815,7 +815,7 @@ class TestDetailedEndpointEnrichment:
         test_db.add(ih)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         agent = [a for a in data if a["id"] == "det-agent-img"][0]
@@ -824,7 +824,7 @@ class TestDetailedEndpointEnrichment:
         assert agent["images"][0]["status"] == "synced"
 
     def test_vm_counts_present(
-        self, test_client: TestClient, test_db: Session,
+        self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """vms_running and vms_total fields appear in resource_usage."""
         host = models.Host(
@@ -839,7 +839,7 @@ class TestDetailedEndpointEnrichment:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         agent = [a for a in data if a["id"] == "det-agent-vmc"][0]
@@ -847,7 +847,7 @@ class TestDetailedEndpointEnrichment:
         assert agent["resource_usage"]["vms_total"] == 5
 
     def test_empty_details(
-        self, test_client: TestClient, test_db: Session,
+        self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Host with no container_details returns empty arrays."""
         host = models.Host(
@@ -860,7 +860,7 @@ class TestDetailedEndpointEnrichment:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         agent = [a for a in data if a["id"] == "det-agent-empty"][0]
@@ -869,7 +869,7 @@ class TestDetailedEndpointEnrichment:
         assert agent["images"] == []
 
     def test_image_status_filtering(
-        self, test_client: TestClient, test_db: Session,
+        self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Only synced/syncing/failed images appear, not 'unknown' or 'missing'."""
         host = models.Host(
@@ -892,7 +892,7 @@ class TestDetailedEndpointEnrichment:
             test_db.add(ih)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         agent = [a for a in data if a["id"] == "det-agent-filt"][0]

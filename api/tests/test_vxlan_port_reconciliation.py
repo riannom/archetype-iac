@@ -73,52 +73,54 @@ class TestComputeVxlanPortName:
 
 
 class TestReconcileVxlanPortsOnAgent:
-    """Tests for the agent client HTTP call."""
+    """Tests for the agent client HTTP call.
+
+    The function delegates to _agent_request, so we mock that internal helper
+    and verify the URL, method, and payload are constructed correctly.
+    """
 
     @pytest.mark.asyncio
     async def test_success(self):
         """Successful call returns agent response."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"removed_ports": ["vxlan-dead1234"], "valid_count": 2}
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
+        expected_response = {"removed_ports": ["vxlan-dead1234"], "valid_count": 2}
 
         agent = MagicMock(spec=models.Host)
         agent.id = "agent-1"
         agent.address = "http://10.0.0.1:8001"
 
-        with patch.object(agent_client, "get_http_client", return_value=mock_client):
-            with patch.object(agent_client, "get_agent_url", return_value="http://10.0.0.1:8001"):
+        mock_request = AsyncMock(return_value=expected_response)
+
+        with patch.object(agent_client, "get_agent_url", return_value="http://10.0.0.1:8001"):
+            with patch.object(agent_client, "_agent_request", mock_request):
                 result = await agent_client.reconcile_vxlan_ports_on_agent(
                     agent, ["vxlan-aabb1122", "vxlan-ccdd3344"]
                 )
 
-        assert result == {"removed_ports": ["vxlan-dead1234"], "valid_count": 2}
-        mock_client.post.assert_called_once_with(
+        assert result == expected_response
+        mock_request.assert_called_once_with(
+            "POST",
             "http://10.0.0.1:8001/overlay/reconcile-ports",
-            json={
+            json_body={
                 "valid_port_names": ["vxlan-aabb1122", "vxlan-ccdd3344"],
                 "force": False,
                 "confirm": False,
                 "allow_empty": False,
             },
             timeout=60.0,
+            max_retries=0,
         )
 
     @pytest.mark.asyncio
     async def test_connection_error_returns_empty(self):
         """Connection errors return empty removed_ports list, not exception."""
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(side_effect=Exception("Connection refused"))
-
         agent = MagicMock(spec=models.Host)
         agent.id = "agent-1"
         agent.address = "http://10.0.0.1:8001"
 
-        with patch.object(agent_client, "get_http_client", return_value=mock_client):
-            with patch.object(agent_client, "get_agent_url", return_value="http://10.0.0.1:8001"):
+        mock_request = AsyncMock(side_effect=Exception("Connection refused"))
+
+        with patch.object(agent_client, "get_agent_url", return_value="http://10.0.0.1:8001"):
+            with patch.object(agent_client, "_agent_request", mock_request):
                 result = await agent_client.reconcile_vxlan_ports_on_agent(agent, [])
 
         assert result["removed_ports"] == []

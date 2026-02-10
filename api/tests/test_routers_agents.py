@@ -207,12 +207,12 @@ class TestUnregisterAgent:
 class TestSyncStrategy:
     """Tests for sync strategy management."""
 
-    def test_update_sync_strategy(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
+    def test_update_sync_strategy(self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict):
         """Update agent's sync strategy."""
         response = test_client.put(
             f"/agents/{sample_host.id}/sync-strategy",
             json={"strategy": "pull"},
-            headers=auth_headers,
+            headers=admin_auth_headers,
         )
         assert response.status_code == 200
         data = response.json()
@@ -221,23 +221,23 @@ class TestSyncStrategy:
         test_db.refresh(sample_host)
         assert sample_host.image_sync_strategy == "pull"
 
-    def test_update_sync_strategy_invalid(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
+    def test_update_sync_strategy_invalid(self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict):
         """Invalid sync strategy returns error."""
         response = test_client.put(
             f"/agents/{sample_host.id}/sync-strategy",
             json={"strategy": "invalid_strategy"},
-            headers=auth_headers,
+            headers=admin_auth_headers,
         )
         assert response.status_code == 400
 
-    def test_update_sync_strategy_all_valid(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
+    def test_update_sync_strategy_all_valid(self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict):
         """All valid strategies are accepted."""
         valid_strategies = ["push", "pull", "on_demand", "disabled"]
         for strategy in valid_strategies:
             response = test_client.put(
                 f"/agents/{sample_host.id}/sync-strategy",
                 json={"strategy": strategy},
-                headers=auth_headers,
+                headers=admin_auth_headers,
             )
             assert response.status_code == 200
 
@@ -284,18 +284,18 @@ class TestAgentUpdates:
             data = response.json()
             assert data["version"] == "1.2.3"
 
-    def test_trigger_update_offline_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
+    def test_trigger_update_offline_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict):
         """Trigger update on offline agent returns error."""
         sample_host.status = "offline"
         test_db.commit()
 
-        response = test_client.post(f"/agents/{sample_host.id}/update", headers=auth_headers)
+        response = test_client.post(f"/agents/{sample_host.id}/update", headers=admin_auth_headers)
         assert response.status_code == 503
 
-    def test_trigger_update_already_current(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
+    def test_trigger_update_already_current(self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict):
         """Trigger update when already at target version."""
         with patch("app.routers.agents.get_latest_agent_version", return_value=sample_host.version):
-            response = test_client.post(f"/agents/{sample_host.id}/update", headers=auth_headers)
+            response = test_client.post(f"/agents/{sample_host.id}/update", headers=admin_auth_headers)
             assert response.status_code == 400
             assert "already at version" in response.json()["detail"].lower()
 

@@ -93,11 +93,11 @@ class TestRefreshLabState:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
-        auth_headers: dict,
+        admin_auth_headers: dict,
     ):
         """Test refresh when no healthy agent available."""
         response = test_client.post(
-            f"/labs/{sample_lab.id}/refresh-state", headers=auth_headers
+            f"/labs/{sample_lab.id}/refresh-state", headers=admin_auth_headers
         )
         assert response.status_code == 200
         data = response.json()
@@ -110,7 +110,7 @@ class TestRefreshLabState:
         test_db: Session,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
         sample_host: models.Host,
-        auth_headers: dict,
+        admin_auth_headers: dict,
     ):
         """Test refresh updates node states from agent."""
         lab, nodes = sample_lab_with_nodes
@@ -131,16 +131,16 @@ class TestRefreshLabState:
                 },
             ):
                 response = test_client.post(
-                    f"/labs/{lab.id}/refresh-state", headers=auth_headers
+                    f"/labs/{lab.id}/refresh-state", headers=admin_auth_headers
                 )
         assert response.status_code == 200
 
     def test_refresh_lab_not_found(
-        self, test_client: TestClient, auth_headers: dict
+        self, test_client: TestClient, admin_auth_headers: dict
     ):
         """Test refresh for non-existent lab."""
         response = test_client.post(
-            "/labs/nonexistent-lab/refresh-state", headers=auth_headers
+            "/labs/nonexistent-lab/refresh-state", headers=admin_auth_headers
         )
         assert response.status_code == 404
 

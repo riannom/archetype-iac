@@ -160,7 +160,7 @@ class TestTriggerAgentUpdate:
     """Tests for POST /agents/{id}/update."""
 
     @patch("httpx.AsyncClient")
-    def test_success(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host):
+    def test_success(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host, admin_user, admin_auth_headers):
         """Successful update creates job and sends request to agent."""
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -171,6 +171,7 @@ class TestTriggerAgentUpdate:
         response = test_client.post(
             f"/agents/{online_host.id}/update",
             json={"target_version": "0.3.7"},
+            headers=admin_auth_headers,
         )
 
         assert response.status_code == 200
@@ -186,34 +187,37 @@ class TestTriggerAgentUpdate:
         assert job.from_version == "0.3.6"
         assert job.to_version == "0.3.7"
 
-    def test_offline_rejected(self, test_client: TestClient, offline_host):
+    def test_offline_rejected(self, test_client: TestClient, offline_host, admin_auth_headers):
         """Update of offline agent returns 503."""
         response = test_client.post(
             f"/agents/{offline_host.id}/update",
             json={"target_version": "0.3.7"},
+            headers=admin_auth_headers,
         )
         assert response.status_code == 503
 
-    def test_already_at_version(self, test_client: TestClient, online_host):
+    def test_already_at_version(self, test_client: TestClient, online_host, admin_auth_headers):
         """Update to same version returns 400."""
         response = test_client.post(
             f"/agents/{online_host.id}/update",
             json={"target_version": "0.3.6"},
+            headers=admin_auth_headers,
         )
         assert response.status_code == 400
         assert "already at version" in response.json()["detail"].lower()
 
-    def test_docker_agent_rejected(self, test_client: TestClient, docker_host):
+    def test_docker_agent_rejected(self, test_client: TestClient, docker_host, admin_auth_headers):
         """Docker agents get 400 with guidance to use rebuild."""
         response = test_client.post(
             f"/agents/{docker_host.id}/update",
             json={"target_version": "0.3.7"},
+            headers=admin_auth_headers,
         )
         assert response.status_code == 400
         assert "rebuild" in response.json()["detail"].lower()
 
     @patch("httpx.AsyncClient")
-    def test_concurrent_guard(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host):
+    def test_concurrent_guard(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host, admin_auth_headers):
         """Second update while first is in progress returns 409."""
         # Create an active update job
         active_job = models.AgentUpdateJob(
@@ -229,15 +233,17 @@ class TestTriggerAgentUpdate:
         response = test_client.post(
             f"/agents/{online_host.id}/update",
             json={"target_version": "0.3.7"},
+            headers=admin_auth_headers,
         )
         assert response.status_code == 409
         assert "already in progress" in response.json()["detail"].lower()
 
-    def test_agent_not_found(self, test_client: TestClient):
+    def test_agent_not_found(self, test_client: TestClient, admin_auth_headers):
         """Update for nonexistent agent returns 404."""
         response = test_client.post(
             "/agents/nonexistent-agent/update",
             json={"target_version": "0.3.7"},
+            headers=admin_auth_headers,
         )
         assert response.status_code == 404
 
@@ -248,7 +254,7 @@ class TestTriggerBulkUpdate:
     """Tests for POST /agents/updates/bulk."""
 
     @patch("httpx.AsyncClient")
-    def test_mixed_results(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host, offline_host):
+    def test_mixed_results(self, mock_client_cls, test_client: TestClient, test_db: Session, online_host, offline_host, admin_auth_headers):
         """Bulk update returns success for online agents, failure for offline."""
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -262,6 +268,7 @@ class TestTriggerBulkUpdate:
                 "agent_ids": [online_host.id, offline_host.id],
                 "target_version": "0.3.7",
             },
+            headers=admin_auth_headers,
         )
 
         assert response.status_code == 200
@@ -275,7 +282,7 @@ class TestTriggerBulkUpdate:
         assert results_by_id[offline_host.id]["success"] is False
 
     @patch("httpx.AsyncClient")
-    def test_docker_agent_skipped(self, mock_client_cls, test_client: TestClient, docker_host):
+    def test_docker_agent_skipped(self, mock_client_cls, test_client: TestClient, docker_host, admin_auth_headers):
         """Docker agents are skipped in bulk update."""
         response = test_client.post(
             "/agents/updates/bulk",
@@ -283,6 +290,7 @@ class TestTriggerBulkUpdate:
                 "agent_ids": [docker_host.id],
                 "target_version": "0.3.7",
             },
+            headers=admin_auth_headers,
         )
 
         assert response.status_code == 200
@@ -296,7 +304,7 @@ class TestTriggerBulkUpdate:
 class TestUpdateStatusEndpoints:
     """Tests for update status and job listing."""
 
-    def test_get_update_status(self, test_client: TestClient, test_db: Session, online_host):
+    def test_get_update_status(self, test_client: TestClient, test_db: Session, online_host, auth_headers):
         """Returns most recent update job."""
         job = models.AgentUpdateJob(
             id="status-job-1",
@@ -309,20 +317,20 @@ class TestUpdateStatusEndpoints:
         test_db.add(job)
         test_db.commit()
 
-        response = test_client.get(f"/agents/{online_host.id}/update-status")
+        response = test_client.get(f"/agents/{online_host.id}/update-status", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["job_id"] == "status-job-1"
         assert data["status"] == "completed"
         assert data["progress_percent"] == 100
 
-    def test_get_update_status_no_jobs(self, test_client: TestClient, online_host):
+    def test_get_update_status_no_jobs(self, test_client: TestClient, online_host, auth_headers):
         """Returns null when no update jobs exist."""
-        response = test_client.get(f"/agents/{online_host.id}/update-status")
+        response = test_client.get(f"/agents/{online_host.id}/update-status", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() is None
 
-    def test_list_update_jobs(self, test_client: TestClient, test_db: Session, online_host):
+    def test_list_update_jobs(self, test_client: TestClient, test_db: Session, online_host, auth_headers):
         """Lists recent update jobs in reverse chronological order."""
         for i in range(3):
             job = models.AgentUpdateJob(
@@ -336,7 +344,7 @@ class TestUpdateStatusEndpoints:
             test_db.add(job)
         test_db.commit()
 
-        response = test_client.get(f"/agents/{online_host.id}/update-jobs?limit=10")
+        response = test_client.get(f"/agents/{online_host.id}/update-jobs?limit=10", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 3
@@ -606,17 +614,17 @@ class TestGitShaRegistration:
         assert online_host.git_sha == "newsha123456789a"
         assert online_host.git_sha != old_sha
 
-    def test_git_sha_in_detailed_response(self, test_client: TestClient, online_host):
+    def test_git_sha_in_detailed_response(self, test_client: TestClient, online_host, auth_headers):
         """git_sha appears in detailed agent listing."""
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         agent = next(h for h in data if h["id"] == online_host.id)
         assert agent["git_sha"] == online_host.git_sha
 
-    def test_git_sha_in_host_out(self, test_client: TestClient, online_host):
+    def test_git_sha_in_host_out(self, test_client: TestClient, online_host, auth_headers):
         """git_sha appears in basic agent response."""
-        response = test_client.get(f"/agents/{online_host.id}")
+        response = test_client.get(f"/agents/{online_host.id}", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert "git_sha" in data

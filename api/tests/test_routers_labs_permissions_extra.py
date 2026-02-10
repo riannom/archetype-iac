@@ -107,6 +107,10 @@ def test_permissions_flow(test_client, test_db, test_user, admin_user, auth_head
     )
     assert denied.status_code == 403
 
+    # Remove existing viewer perm to avoid UNIQUE constraint on (lab_id, user_id)
+    test_db.delete(perm)
+    test_db.commit()
+
     # Owner can add
     added = test_client.post(
         f"/labs/{lab.id}/permissions",
