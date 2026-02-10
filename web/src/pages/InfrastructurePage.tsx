@@ -1655,11 +1655,15 @@ const InfrastructurePage: React.FC = () => {
                                         : config?.transport_mode === 'dedicated' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
                                         : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
                                       }`}>
-                                      {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
-                                    </span>
-                                      {config?.transport_mode && config.transport_mode !== 'management' && (
+                                        {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
+                                      </span>
+                                      {config?.transport_mode && config.transport_mode !== 'management' ? (
                                         <span className="text-[10px] text-sage-600 dark:text-sage-400">
                                           Transport selected
+                                        </span>
+                                      ) : (
+                                        <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                                          Management mode
                                         </span>
                                       )}
                                       {config?.transport_mode && config.transport_mode !== 'management' && !hasDataPlaneMtuTest && (
