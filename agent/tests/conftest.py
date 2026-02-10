@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from agent.config import settings
@@ -15,3 +17,14 @@ def _set_testing_env(monkeypatch, tmp_path):
     monkeypatch.setenv("ARCHETYPE_AGENT_TESTING", "1")
     monkeypatch.setattr(settings, "workspace_path", str(tmp_path / "workspace"))
     yield
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip integration tests unless explicitly enabled."""
+    if os.getenv("ARCHETYPE_RUN_INTEGRATION") in {"1", "true", "TRUE", "yes", "YES"}:
+        return
+
+    skip_integration = pytest.mark.skip(reason="Integration tests require Docker. Set ARCHETYPE_RUN_INTEGRATION=1 to run.")
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
