@@ -699,6 +699,14 @@ class LocalNetworkManager:
         except Exception as e:
             result["errors"].append(f"Management network: {e}")
 
+        # Best-effort cleanup of orphaned veths (handles agent restarts)
+        try:
+            from agent.network.cleanup import NetworkCleanupManager
+            cleanup_mgr = NetworkCleanupManager()
+            await cleanup_mgr.cleanup_orphaned_veths()
+        except Exception as e:
+            result["errors"].append(f"Orphaned veth cleanup: {e}")
+
         logger.info(f"Lab {lab_id} local cleanup: {result}")
         return result
 

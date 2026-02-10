@@ -186,6 +186,7 @@ LABEL_LAB_ID = "archetype.lab_id"
 LABEL_NODE_NAME = "archetype.node_name"
 LABEL_NODE_DISPLAY_NAME = "archetype.node_display_name"
 LABEL_NODE_KIND = "archetype.node_kind"
+LABEL_NODE_INTERFACE_COUNT = "archetype.node_interface_count"
 LABEL_PROVIDER = "archetype.provider"
 
 
@@ -324,6 +325,10 @@ class DockerProvider(Provider):
         """Get container name prefix for a lab."""
         safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
         return f"{CONTAINER_PREFIX}-{safe_lab_id}"
+
+    def _lab_network_prefix(self, lab_id: str) -> str:
+        """Get network name prefix for a lab (sanitized)."""
+        return re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
 
     # =========================================================================
     # VLAN Persistence (matches LibvirtProvider pattern for feature parity)
@@ -713,6 +718,8 @@ class DockerProvider(Provider):
             LABEL_NODE_KIND: node.kind,
             LABEL_PROVIDER: self.name,
         }
+        if interface_count and interface_count > 0:
+            labels[LABEL_NODE_INTERFACE_COUNT] = str(interface_count)
         if node.display_name:
             labels[LABEL_NODE_DISPLAY_NAME] = node.display_name
 
@@ -988,10 +995,12 @@ username admin privilege 15 role network-admin nopassword
             Dict mapping interface name (e.g., "eth1") to network name
         """
         networks = {}
+        errors: list[str] = []
+        lab_prefix = self._lab_network_prefix(lab_id)
 
         for i in range(1, max_interfaces + 1):
             interface_name = f"eth{i}"
-            network_name = f"{lab_id}-{interface_name}"
+            network_name = f"{lab_prefix}-{interface_name}"
 
             try:
                 # Check if network already exists (run in thread to avoid blocking event loop)
@@ -1016,12 +1025,26 @@ username admin privilege 15 role network-admin nopassword
                         "lab_id": lab_id,
                         "interface_name": interface_name,
                     },
+                    labels={
+                        LABEL_LAB_ID: lab_id,
+                        LABEL_PROVIDER: self.name,
+                        "archetype.type": "lab-interface",
+                    },
                 )
                 networks[interface_name] = network_name
                 logger.debug(f"Created network {network_name}")
 
             except APIError as e:
-                logger.error(f"Failed to create network {network_name}: {e}")
+                msg = f"Failed to create network {network_name}: {e}"
+                errors.append(msg)
+                logger.error(msg)
+
+        if max_interfaces > 0 and len(networks) < max_interfaces:
+            missing = max_interfaces - len(networks)
+            err_detail = "; ".join(errors) if errors else "unknown error"
+            raise RuntimeError(
+                f"Failed to create {missing}/{max_interfaces} Docker networks for lab {lab_id}: {err_detail}"
+            )
 
         logger.info(f"Created {len(networks)} Docker networks for lab {lab_id}")
         return networks
@@ -1042,14 +1065,21 @@ username admin privilege 15 role network-admin nopassword
         deleted = 0
 
         try:
-            # Query networks by name prefix (efficient - single API call)
-            # Networks are named: {lab_id}-eth1, {lab_id}-Ethernet1, etc.
-            # Run in thread to avoid blocking event loop
-            all_networks = await asyncio.to_thread(self.docker.networks.list)
+            # Query networks by label when possible (more reliable than name)
+            lab_networks = await asyncio.to_thread(
+                self.docker.networks.list,
+                filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
+            )
 
-            # Filter to networks that start with this lab's prefix
-            lab_prefix = f"{lab_id}-"
-            lab_networks = [n for n in all_networks if n.name.startswith(lab_prefix)]
+            # Fallback to name-based lookup for legacy networks without labels
+            if not lab_networks:
+                all_networks = await asyncio.to_thread(self.docker.networks.list)
+                safe_prefix = self._lab_network_prefix(lab_id)
+                lab_prefixes = (f"{safe_prefix}-", f"{lab_id}-")
+                lab_networks = [
+                    n for n in all_networks
+                    if any(n.name.startswith(p) for p in lab_prefixes)
+                ]
 
             for network in lab_networks:
                 try:
@@ -1094,10 +1124,11 @@ username admin privilege 15 role network-admin nopassword
         """
         # Build list of networks to attach
         networks_to_attach = []
+        lab_prefix = self._lab_network_prefix(lab_id)
         for i in range(interface_count):
             iface_num = start_index + i
             interface_name = f"{interface_prefix}{iface_num}"
-            network_name = f"{lab_id}-{interface_name}"
+            network_name = f"{lab_prefix}-{interface_name}"
             networks_to_attach.append(network_name)
 
         # Attach all networks in a single thread to avoid thread pool exhaustion
@@ -1179,6 +1210,9 @@ username admin privilege 15 role network-admin nopassword
                 # Build container config
                 # Count interfaces for this specific node (for cEOS if-wait.sh)
                 node_interface_count = self._count_node_interfaces(node_name, topology)
+                if self.use_ovs_plugin and node_interface_count < 1:
+                    # We always attach at least eth1 when OVS plugin is enabled
+                    node_interface_count = 1
                 config = self._create_container_config(
                     node, lab_id, workspace, interface_count=node_interface_count
                 )
@@ -1195,7 +1229,7 @@ username admin privilege 15 role network-admin nopassword
                     # Docker network names always use "eth" prefix for consistency
                     # The OVS plugin handles renaming inside the container based on
                     # the interface_name option passed during network creation
-                    first_network = f"{lab_id}-eth1"
+                    first_network = f"{self._lab_network_prefix(lab_id)}-eth1"
                     config["network"] = first_network
                     logger.info(f"Creating container {log_name} with image {config['image']}")
 
@@ -1212,7 +1246,7 @@ username admin privilege 15 role network-admin nopassword
                     await self._attach_container_to_networks(
                         container=container,
                         lab_id=lab_id,
-                        interface_count=required_interfaces - 1,  # Already attached to eth1
+                        interface_count=max(node_interface_count - 1, 0),  # Already attached to eth1
                         interface_prefix="eth",
                         start_index=2,  # Start from eth2
                     )
@@ -2124,7 +2158,10 @@ username admin privilege 15 role network-admin nopassword
 
         # Create management network
         try:
-            await self.local_network.create_management_network(lab_id)
+            if self.use_ovs_plugin:
+                await self.ovs_plugin.create_management_network(lab_id)
+            else:
+                await self.local_network.create_management_network(lab_id)
         except Exception as e:
             logger.warning(f"Failed to create management network: {e}")
 
@@ -2143,6 +2180,14 @@ username admin privilege 15 role network-admin nopassword
         if failed_starts:
             failed_log_names = [parsed_topology.log_name(n) for n in failed_starts]
             logger.warning(f"Some containers failed to start: {failed_log_names}")
+            status_result = await self.status(lab_id, workspace)
+            error_msg = f"Failed to start {len(failed_starts)} container(s): {', '.join(failed_log_names)}"
+            return DeployResult(
+                success=False,
+                nodes=status_result.nodes,
+                stderr=error_msg,
+                error=error_msg,
+            )
 
         # Create local links
         links_created = await self._create_links(parsed_topology, lab_id)
@@ -2220,6 +2265,18 @@ username admin privilege 15 role network-admin nopassword
             if volumes_removed > 0:
                 logger.info(f"Volume cleanup: {volumes_removed} volumes removed")
 
+            # Clean up Docker networks if OVS plugin is enabled (triggers plugin cleanup)
+            if self.use_ovs_plugin:
+                networks_deleted = await self._delete_lab_networks(lab_id)
+                logger.info(f"Docker network cleanup: {networks_deleted} networks deleted")
+
+            # Clean up management network when plugin owns it
+            if self.use_ovs_plugin:
+                try:
+                    await self.ovs_plugin.delete_management_network(lab_id)
+                except Exception as e:
+                    logger.warning(f"Failed to delete management network for lab {lab_id}: {e}")
+
             # Clean up local networking
             cleanup_result = await self.local_network.cleanup_lab(lab_id)
             logger.info(f"Local network cleanup: {cleanup_result}")
@@ -2228,11 +2285,6 @@ username admin privilege 15 role network-admin nopassword
             if self.use_ovs and self.ovs_manager._initialized:
                 ovs_cleanup_result = await self.ovs_manager.cleanup_lab(lab_id)
                 logger.info(f"OVS network cleanup: {ovs_cleanup_result}")
-
-            # Clean up Docker networks if OVS plugin is enabled
-            if self.use_ovs_plugin:
-                networks_deleted = await self._delete_lab_networks(lab_id)
-                logger.info(f"Docker network cleanup: {networks_deleted} networks deleted")
 
             # Clean up VLAN allocations for this lab (in-memory and on disk)
             if lab_id in self._vlan_allocations:
@@ -2285,17 +2337,6 @@ username admin privilege 15 role network-admin nopassword
                 except APIError as e:
                     # Volume might still be in use
                     logger.debug(f"Could not remove volume {volume.name}: {e}")
-
-            # Also prune any dangling volumes (not tied to a container)
-            # This catches volumes that weren't labeled but were created by our containers
-            prune_result = await asyncio.to_thread(
-                self.docker.volumes.prune,
-                filters={"dangling": "true"}
-            )
-            if prune_result.get("VolumesDeleted"):
-                pruned_count = len(prune_result["VolumesDeleted"])
-                removed += pruned_count
-                logger.debug(f"Pruned {pruned_count} dangling volumes")
 
         except APIError as e:
             logger.warning(f"Failed to cleanup volumes for lab {lab_id}: {e}")
@@ -2383,14 +2424,25 @@ username admin privilege 15 role network-admin nopassword
         if not networks:
             return False
 
-        # Find current lab networks (format: {lab_id}-eth{N})
-        lab_prefix = f"{lab_id}-"
+        # Find current lab networks (format: {safe_lab_id}-eth{N})
+        safe_prefix = self._lab_network_prefix(lab_id)
+        lab_prefix = f"{safe_prefix}-"
         current_lab_networks = {}
         try:
-            all_networks = await asyncio.to_thread(self.docker.networks.list)
-            for net in all_networks:
-                if net.name.startswith(lab_prefix):
-                    current_lab_networks[net.name] = net
+            # Prefer label-based discovery for networks created by us
+            labeled = await asyncio.to_thread(
+                self.docker.networks.list,
+                filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
+            )
+            for net in labeled:
+                current_lab_networks[net.name] = net
+
+            if not current_lab_networks:
+                all_networks = await asyncio.to_thread(self.docker.networks.list)
+                legacy_prefixes = (lab_prefix, f"{lab_id}-")
+                for net in all_networks:
+                    if any(net.name.startswith(p) for p in legacy_prefixes):
+                        current_lab_networks[net.name] = net
         except Exception as e:
             logger.warning(f"Failed to list networks: {e}")
             return False
@@ -2441,8 +2493,33 @@ username admin privilege 15 role network-admin nopassword
         )
 
         # Reconnect to current lab networks
+        desired_count: int | None = None
+        try:
+            labels = container.labels or {}
+            raw = labels.get(LABEL_NODE_INTERFACE_COUNT)
+            if raw:
+                desired_count = int(raw)
+        except Exception:
+            desired_count = None
+
+        def _iface_index(name: str) -> int:
+            match = re.search(r"(\d+)$", name)
+            return int(match.group(1)) if match else 0
+
+        sorted_networks = sorted(
+            current_lab_networks.items(),
+            key=lambda kv: _iface_index(kv[0]),
+        )
+        if desired_count is None:
+            desired_count = 1
+            logger.warning(
+                f"{container_name} missing interface_count label; "
+                "reconnecting only eth1 for safety"
+            )
+        sorted_networks = sorted_networks[:desired_count]
+
         reconnected = 0
-        for net_name, net in sorted(current_lab_networks.items()):
+        for net_name, net in sorted_networks:
             try:
                 await asyncio.to_thread(net.connect, container_name)
                 reconnected += 1
@@ -2653,7 +2730,10 @@ username admin privilege 15 role network-admin nopassword
 
             # Ensure management network exists
             try:
-                await self.local_network.create_management_network(lab_id)
+                if self.use_ovs_plugin:
+                    await self.ovs_plugin.create_management_network(lab_id)
+                else:
+                    await self.local_network.create_management_network(lab_id)
             except Exception as e:
                 logger.warning(f"Failed to create management network: {e}")
 
@@ -2687,7 +2767,7 @@ username admin privilege 15 role network-admin nopassword
 
             if self.use_ovs_plugin:
                 # Attach to first OVS network during creation
-                first_network = f"{lab_id}-eth1"
+                first_network = f"{self._lab_network_prefix(lab_id)}-eth1"
                 container_config["network"] = first_network
                 logger.info(f"Creating container {log_name} with image {container_config['image']}")
 
@@ -2776,9 +2856,29 @@ username admin privilege 15 role network-admin nopassword
             if not remaining:
                 logger.info(f"Last container in lab {lab_id}, cleaning up networks")
                 await self._delete_lab_networks(lab_id)
+
+                if self.use_ovs_plugin:
+                    try:
+                        await self.ovs_plugin.delete_management_network(lab_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete management network for lab {lab_id}: {e}")
+
+                # Clean up local networking (management network + local links)
+                try:
+                    await self.local_network.cleanup_lab(lab_id)
+                except Exception as e:
+                    logger.warning(f"Local network cleanup failed for lab {lab_id}: {e}")
+
+                # Clean up OVS networking if enabled
+                if self.use_ovs and self.ovs_manager._initialized:
+                    try:
+                        await self.ovs_manager.cleanup_lab(lab_id)
+                    except Exception as e:
+                        logger.warning(f"OVS cleanup failed for lab {lab_id}: {e}")
                 # Clean up lab-level VLAN tracking
                 self._vlan_allocations.pop(lab_id, None)
                 self._next_vlan.pop(lab_id, None)
+                self._remove_vlan_file(lab_id, workspace)
 
             return NodeActionResult(
                 success=True,

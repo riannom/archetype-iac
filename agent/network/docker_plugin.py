@@ -684,14 +684,18 @@ class DockerOVSPlugin:
                 for container in containers:
                     attached = container.attrs.get("NetworkSettings", {}).get("Networks", {})
                     for network_state in networks:
-                        network_name = f"{lab_id}-{network_state.interface_name}"
+                        network = None
+                        try:
+                            network = client.networks.get(network_state.network_id)
+                            network_name = network.name
+                        except NotFound:
+                            network_name = f"{lab_id}-{network_state.interface_name}"
+                            network = client.networks.get(network_name)
+
                         if network_name in attached:
                             continue
+
                         try:
-                            try:
-                                network = client.networks.get(network_state.network_id)
-                            except NotFound:
-                                network = client.networks.get(network_name)
                             network.connect(container)
                             actions.append((container.name, network_name, True))
                         except APIError as e:
@@ -1289,8 +1293,30 @@ class DockerOVSPlugin:
                     expired_labs.append((lab_id, age))
 
         for lab_id, age in expired_labs:
+            # Safety check: skip cleanup if any containers still exist for this lab
+            has_containers = await self._lab_has_any_containers(lab_id)
+            if has_containers:
+                logger.info(
+                    f"Skipping TTL cleanup for lab {lab_id}: containers still present"
+                )
+                continue
             logger.info(f"Cleaning up expired lab {lab_id} (inactive {age})")
             await self._full_lab_cleanup(lab_id)
+
+    async def _lab_has_any_containers(self, lab_id: str) -> bool:
+        """Check if any containers exist for a lab (running or stopped)."""
+        def _sync_check() -> bool:
+            try:
+                import docker
+                client = docker.from_env(timeout=30)
+                containers = client.containers.list(
+                    all=True, filters={"label": f"archetype.lab_id={lab_id}"}
+                )
+                return bool(containers)
+            except Exception:
+                return True  # Fail-safe: treat as present to avoid destructive cleanup
+
+        return await asyncio.to_thread(_sync_check)
 
     async def _full_lab_cleanup(self, lab_id: str) -> None:
         """Clean up all resources for a lab."""
