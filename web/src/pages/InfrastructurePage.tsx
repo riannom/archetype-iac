@@ -288,6 +288,7 @@ const InfrastructurePage: React.FC = () => {
   // Managed interfaces state
   const [managedInterfaces, setManagedInterfaces] = useState<ManagedInterface[]>([]);
   const [managedInterfacesLoading, setManagedInterfacesLoading] = useState(false);
+  const [showManagedInterfaces, setShowManagedInterfaces] = useState(false);
 
   // NIC groups state (future interface affinity)
   const [nicGroups, setNicGroups] = useState<NicGroup[]>([]);
@@ -1963,96 +1964,107 @@ const InfrastructurePage: React.FC = () => {
                       </div>
                     )}
 
-                    {/* Managed Interfaces subsection - same columns as Host Network table */}
+                    {/* Managed Interfaces (collapsible) */}
                     {managedInterfaces.length > 0 && (
                       <div className="mt-6 pt-6 border-t border-stone-200 dark:border-stone-800">
-                        <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-300 mb-3 flex items-center gap-2">
-                          <i className="fa-solid fa-plug text-stone-400 text-xs"></i>
-                          Managed Interfaces
-                          <span className="text-xs font-normal text-stone-400">({managedInterfaces.length})</span>
-                        </h3>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="border-b border-stone-200 dark:border-stone-700">
-                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Agent</th>
-                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Transport</th>
-                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Interface</th>
-                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Data Plane IP</th>
-                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">MTU</th>
-                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Status</th>
-                                <th className="text-right py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Action</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {managedInterfaces.map((iface) => {
-                                const typeBadge = getInterfaceTypeBadge(iface.interface_type);
-                                const syncBadge = getManagedIfaceSyncBadge(iface.sync_status);
-                                return (
-                                  <tr key={iface.id} className="border-b border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/30">
-                                    <td className="py-2 px-3">
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-medium text-stone-700 dark:text-stone-300">
-                                          {iface.host_name || iface.host_id.slice(0, 8)}
-                                        </span>
-                                      </div>
-                                    </td>
-                                    <td className="py-2 px-3">
-                                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${typeBadge.color}`}>
-                                        {typeBadge.text}
-                                      </span>
-                                    </td>
-                                    <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
-                                      {iface.name}
-                                    </td>
-                                    <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
-                                      {iface.ip_address || '-'}
-                                    </td>
-                                    <td className="py-2 px-3">
-                                      <div className="flex items-center gap-1.5">
-                                        {iface.current_mtu ? (
-                                          <span className={`font-mono text-xs ${
-                                            iface.current_mtu >= iface.desired_mtu
-                                              ? 'text-green-600 dark:text-green-400'
-                                              : 'text-amber-600 dark:text-amber-400'
-                                          }`}>
-                                            {iface.current_mtu}
-                                          </span>
-                                        ) : (
-                                          <span className="text-stone-400 text-xs">-</span>
-                                        )}
-                                        <span className="text-stone-300 dark:text-stone-600">/</span>
-                                        <span className="font-mono text-xs text-stone-500 dark:text-stone-400">
-                                          {iface.desired_mtu}
-                                        </span>
-                                      </div>
-                                    </td>
-                                    <td className="py-2 px-3">
-                                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${syncBadge.color}`}>
-                                        <i className={`fa-solid ${syncBadge.icon} text-[10px]`}></i>
-                                        {syncBadge.text}
-                                      </span>
-                                      {iface.sync_error && (
-                                        <span className="ml-2 text-xs text-red-500" title={iface.sync_error}>
-                                          <i className="fa-solid fa-circle-exclamation"></i>
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="py-2 px-3 text-right">
-                                      <button
-                                        onClick={() => navigate('/admin/interfaces')}
-                                        className="px-2 py-1 rounded text-xs font-medium transition-all bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400"
-                                      >
-                                        <i className="fa-solid fa-pen-to-square mr-1"></i>
-                                        Edit
-                                      </button>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-300 flex items-center gap-2">
+                            <i className="fa-solid fa-plug text-stone-400 text-xs"></i>
+                            Managed Interfaces
+                            <span className="text-xs font-normal text-stone-400">({managedInterfaces.length})</span>
+                          </h3>
+                          <button
+                            onClick={() => setShowManagedInterfaces((prev) => !prev)}
+                            className="px-2 py-1 rounded text-xs font-medium transition-all bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400"
+                          >
+                            <i className={`fa-solid ${showManagedInterfaces ? 'fa-chevron-up' : 'fa-chevron-down'} mr-1`}></i>
+                            {showManagedInterfaces ? 'Hide' : 'Show'}
+                          </button>
                         </div>
+                        {showManagedInterfaces && (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b border-stone-200 dark:border-stone-700">
+                                  <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Agent</th>
+                                  <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Transport</th>
+                                  <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Interface</th>
+                                  <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Data Plane IP</th>
+                                  <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">MTU</th>
+                                  <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Status</th>
+                                  <th className="text-right py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {managedInterfaces.map((iface) => {
+                                  const typeBadge = getInterfaceTypeBadge(iface.interface_type);
+                                  const syncBadge = getManagedIfaceSyncBadge(iface.sync_status);
+                                  return (
+                                    <tr key={iface.id} className="border-b border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/30">
+                                      <td className="py-2 px-3">
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium text-stone-700 dark:text-stone-300">
+                                            {iface.host_name || iface.host_id.slice(0, 8)}
+                                          </span>
+                                        </div>
+                                      </td>
+                                      <td className="py-2 px-3">
+                                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${typeBadge.color}`}>
+                                          {typeBadge.text}
+                                        </span>
+                                      </td>
+                                      <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
+                                        {iface.name}
+                                      </td>
+                                      <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
+                                        {iface.ip_address || '-'}
+                                      </td>
+                                      <td className="py-2 px-3">
+                                        <div className="flex items-center gap-1.5">
+                                          {iface.current_mtu ? (
+                                            <span className={`font-mono text-xs ${
+                                              iface.current_mtu >= iface.desired_mtu
+                                                ? 'text-green-600 dark:text-green-400'
+                                                : 'text-amber-600 dark:text-amber-400'
+                                            }`}>
+                                              {iface.current_mtu}
+                                            </span>
+                                          ) : (
+                                            <span className="text-stone-400 text-xs">-</span>
+                                          )}
+                                          <span className="text-stone-300 dark:text-stone-600">/</span>
+                                          <span className="font-mono text-xs text-stone-500 dark:text-stone-400">
+                                            {iface.desired_mtu}
+                                          </span>
+                                        </div>
+                                      </td>
+                                      <td className="py-2 px-3">
+                                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${syncBadge.color}`}>
+                                          <i className={`fa-solid ${syncBadge.icon} text-[10px]`}></i>
+                                          {syncBadge.text}
+                                        </span>
+                                        {iface.sync_error && (
+                                          <span className="ml-2 text-xs text-red-500" title={iface.sync_error}>
+                                            <i className="fa-solid fa-circle-exclamation"></i>
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="py-2 px-3 text-right">
+                                        <button
+                                          onClick={() => navigate('/admin/interfaces')}
+                                          className="px-2 py-1 rounded text-xs font-medium transition-all bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400"
+                                        >
+                                          <i className="fa-solid fa-pen-to-square mr-1"></i>
+                                          Edit
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
                     )}
 
