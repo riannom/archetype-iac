@@ -243,7 +243,7 @@ async def with_retry(
         max_retries = settings.agent_max_retries
 
     # Transient HTTP errors that are worth retrying
-    TRANSIENT_HTTP_CODES = {502, 503, 504}
+    TRANSIENT_HTTP_CODES = {429, 502, 503, 504}
 
     last_exception = None
 
@@ -449,16 +449,18 @@ async def get_agent_for_lab(
     they were previously running, which would cause duplicate containers.
     """
     # Query NodePlacement to find which agent(s) have nodes for this lab
-    placements = (
-        database.query(models.NodePlacement)
+    placement_counts = (
+        database.query(
+            models.NodePlacement.host_id,
+            func.count(models.NodePlacement.id),
+        )
         .filter(models.NodePlacement.lab_id == lab.id)
+        .group_by(models.NodePlacement.host_id)
         .all()
     )
 
     # Count nodes per agent to find the one with most nodes
-    agent_node_counts: dict[str, int] = {}
-    for p in placements:
-        agent_node_counts[p.host_id] = agent_node_counts.get(p.host_id, 0) + 1
+    agent_node_counts: dict[str, int] = {host_id: count for host_id, count in placement_counts}
 
     # Prefer agent with most nodes (or lab.agent_id as fallback)
     if agent_node_counts:
@@ -781,11 +783,13 @@ async def check_node_readiness(
         params["provider_type"] = provider_type
 
     try:
-        client = get_http_client()
-        response = await client.get(url, params=params, timeout=10.0)
-        response.raise_for_status()
-        result = response.json()
-        return result
+        return await _agent_request(
+            "GET",
+            url,
+            params=params or None,
+            timeout=10.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"Failed to check readiness for {node_name} on agent {agent.id}: {e}")
         return {
@@ -1053,14 +1057,13 @@ async def cleanup_orphans_on_agent(agent: models.Host, valid_lab_ids: list[str])
     url = f"{get_agent_url(agent)}/cleanup-orphans"
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        return await _agent_request(
+            "POST",
             url,
-            json={"valid_lab_ids": valid_lab_ids},
+            json_body={"valid_lab_ids": valid_lab_ids},
             timeout=120.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        return response.json()
     except Exception as e:
         logger.error(f"Failed to cleanup orphans on agent {agent.id}: {e}")
         return {"removed_containers": [], "errors": [str(e)]}
@@ -1096,19 +1099,18 @@ async def reconcile_vxlan_ports_on_agent(
     url = f"{get_agent_url(agent)}/overlay/reconcile-ports"
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        return await _agent_request(
+            "POST",
             url,
-            json={
+            json_body={
                 "valid_port_names": valid_port_names,
                 "force": force,
                 "confirm": confirm,
                 "allow_empty": allow_empty,
             },
             timeout=60.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        return response.json()
     except Exception as e:
         logger.error(f"Failed to reconcile VXLAN ports on agent {agent.id}: {e}")
         return {"removed_ports": [], "errors": [str(e)]}
@@ -1134,17 +1136,16 @@ async def cleanup_lab_orphans(
     url = f"{get_agent_url(agent)}/cleanup-lab-orphans"
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        return await _agent_request(
+            "POST",
             url,
-            json={
+            json_body={
                 "lab_id": lab_id,
                 "keep_node_names": keep_node_names,
             },
             timeout=120.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        return response.json()
     except Exception as e:
         logger.error(f"Failed to cleanup lab orphans on agent {agent.id}: {e}")
         return {"removed_containers": [], "kept_containers": [], "errors": [str(e)]}
@@ -1185,10 +1186,13 @@ async def attach_container_on_agent(
         payload["ip_address"] = ip_address
 
     try:
-        client = get_http_client()
-        response = await client.post(url, json=payload, timeout=30.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "POST",
+            url,
+            json_body=payload,
+            timeout=30.0,
+            max_retries=0,
+        )
         if result.get("success"):
             ip_info = f" with IP {ip_address}" if ip_address else ""
             logger.info(f"Attached {container_name} to overlay on {agent.id}{ip_info}")
@@ -1213,14 +1217,13 @@ async def cleanup_overlay_on_agent(agent: models.Host, lab_id: str) -> dict:
     url = f"{get_agent_url(agent)}/overlay/cleanup"
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        result = await _agent_request(
+            "POST",
             url,
-            json={"lab_id": lab_id},
+            json_body={"lab_id": lab_id},
             timeout=60.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        result = response.json()
         logger.info(
             f"Overlay cleanup on {agent.id}: "
             f"{result.get('tunnels_deleted', 0)} tunnels, "
@@ -1237,14 +1240,13 @@ async def get_cleanup_audit_from_agent(agent: models.Host, include_ovs: bool = F
     url = f"{get_agent_url(agent)}/cleanup/audit"
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        return await _agent_request(
+            "POST",
             url,
-            json={"include_ovs": include_ovs},
+            json_body={"include_ovs": include_ovs},
             timeout=30.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        return response.json()
     except Exception as e:
         logger.error(f"Cleanup audit failed on agent {agent.id}: {e}")
         return {"network": {}, "ovs": None, "errors": [str(e)]}
@@ -1297,10 +1299,13 @@ async def attach_overlay_interface_on_agent(
     }
 
     try:
-        client = get_http_client()
-        response = await client.post(url, json=payload, timeout=VTEP_OPERATION_TIMEOUT)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "POST",
+            url,
+            json_body=payload,
+            timeout=VTEP_OPERATION_TIMEOUT,
+            max_retries=0,
+        )
         if result.get("success"):
             logger.info(
                 f"Attached {container_name}:{interface_name} with VNI {vni} "
@@ -1348,10 +1353,13 @@ async def detach_overlay_interface_on_agent(
     }
 
     try:
-        client = get_http_client()
-        response = await client.post(url, json=payload, timeout=VTEP_OPERATION_TIMEOUT)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "POST",
+            url,
+            json_body=payload,
+            timeout=VTEP_OPERATION_TIMEOUT,
+            max_retries=0,
+        )
         if result.get("success"):
             isolated_msg = f" (interface isolated to VLAN {result.get('new_vlan')})" if result.get("interface_isolated") else ""
             tunnel_msg = " (tunnel deleted)" if result.get("tunnel_deleted") else ""
@@ -1538,10 +1546,12 @@ async def get_overlay_status_from_agent(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/overlay/status"
 
     try:
-        client = get_http_client()
-        response = await client.get(url, timeout=10.0)
-        response.raise_for_status()
-        return response.json()
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"Overlay status failed on agent {agent.id}: {e}")
         return {"tunnels": [], "bridges": [], "error": str(e)}
@@ -1567,10 +1577,12 @@ async def get_agent_images(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/images"
 
     try:
-        client = get_http_client()
-        response = await client.get(url, timeout=30.0)
-        response.raise_for_status()
-        return response.json()
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=30.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"Failed to get images from agent {agent.id}: {e}")
         return {"images": []}
@@ -1630,20 +1642,25 @@ async def container_action(
     url = f"{get_agent_url(agent)}/containers/{container_name}/{action}"
 
     try:
-        client = get_http_client()
-        response = await client.post(url, timeout=60.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "POST",
+            url,
+            timeout=60.0,
+            max_retries=0,
+        )
         if result.get("success"):
             logger.info(f"Container {action} completed for {container_name}")
         else:
             logger.warning(f"Container {action} failed for {container_name}: {result.get('error')}")
         return result
-    except httpx.HTTPStatusError as e:
-        error_msg = f"HTTP {e.response.status_code}"
+    except AgentJobError as e:
+        error_msg = e.message
         try:
-            error_data = e.response.json()
-            error_msg = error_data.get("detail", error_msg)
+            if e.stderr and "Response:" in e.stderr:
+                error_body = e.stderr.split("Response:", 1)[1].strip()
+                data = json.loads(error_body)
+                if isinstance(data, dict):
+                    error_msg = data.get("detail", error_msg)
         except Exception:
             pass
         logger.error(f"Container {action} failed for {container_name}: {error_msg}")
@@ -1702,10 +1719,13 @@ async def create_node_on_agent(
     import time as _time
     _t0 = _time.monotonic()
     try:
-        client = get_http_client()
-        response = await client.post(url, json=payload, timeout=120.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "POST",
+            url,
+            json_body=payload,
+            timeout=120.0,
+            max_retries=0,
+        )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
         logger.info(
             "Agent response",
@@ -1770,17 +1790,16 @@ async def start_node_on_agent(
     import time as _time
     _t0 = _time.monotonic()
     try:
-        client = get_http_client()
-        response = await client.post(
+        result = await _agent_request(
+            "POST",
             url,
-            json={
+            json_body={
                 "repair_endpoints": repair_endpoints,
                 "fix_interfaces": fix_interfaces,
             },
             timeout=120.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        result = response.json()
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
         logger.info(
             "Agent response",
@@ -1842,10 +1861,12 @@ async def stop_node_on_agent(
     import time as _time
     _t0 = _time.monotonic()
     try:
-        client = get_http_client()
-        response = await client.post(url, timeout=60.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "POST",
+            url,
+            timeout=60.0,
+            max_retries=0,
+        )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
         logger.info(
             "Agent response",
@@ -1907,10 +1928,12 @@ async def destroy_node_on_agent(
     import time as _time
     _t0 = _time.monotonic()
     try:
-        client = get_http_client()
-        response = await client.delete(url, timeout=60.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "DELETE",
+            url,
+            timeout=60.0,
+            max_retries=0,
+        )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
         logger.info(
             "Agent response",
@@ -1961,10 +1984,12 @@ async def extract_configs_on_agent(
     logger.info(f"Extracting configs for lab {lab_id} via agent {agent.id}")
 
     try:
-        client = get_http_client()
-        response = await client.post(url, timeout=120.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "POST",
+            url,
+            timeout=120.0,
+            max_retries=0,
+        )
         if result.get("success"):
             logger.info(f"Extracted {result.get('extracted_count', 0)} configs for lab {lab_id}")
         else:
@@ -1999,10 +2024,13 @@ async def update_config_on_agent(
     logger.debug(f"Pushing config for {node_name} to agent {agent.id}")
 
     try:
-        client = get_http_client()
-        response = await client.put(url, json={"content": content}, timeout=30.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "PUT",
+            url,
+            json_body={"content": content},
+            timeout=30.0,
+            max_retries=0,
+        )
         if result.get("success"):
             logger.debug(f"Pushed config for {node_name} to agent {agent.id}")
         else:
@@ -2036,20 +2064,18 @@ async def prune_docker_on_agent(
     url = f"{get_agent_url(agent)}/prune-docker"
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        return await _agent_request(
+            "POST",
             url,
-            json={
+            json_body={
                 "valid_lab_ids": valid_lab_ids,
                 "prune_dangling_images": prune_dangling_images,
                 "prune_build_cache": prune_build_cache,
                 "prune_unused_volumes": prune_unused_volumes,
             },
             timeout=120.0,  # Docker prune can take a while
+            max_retries=0,
         )
-        response.raise_for_status()
-        result = response.json()
-        return result
     except Exception as e:
         logger.error(f"Failed to prune Docker on agent {agent.id}: {e}")
         return {
@@ -2088,20 +2114,19 @@ async def test_mtu_on_agent(
     url = f"{get_agent_url(agent)}/network/test-mtu"
 
     try:
-        client = get_http_client()
         payload: dict = {
             "target_ip": target_ip,
             "mtu": mtu,
         }
         if source_ip:
             payload["source_ip"] = source_ip
-        response = await client.post(
+        return await _agent_request(
+            "POST",
             url,
-            json=payload,
+            json_body=payload,
             timeout=30.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        return response.json()
     except Exception as e:
         logger.error(f"MTU test failed on agent {agent.id}: {e}")
         return {
@@ -2128,10 +2153,12 @@ async def get_agent_interface_details(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/interfaces/details"
 
     try:
-        client = get_http_client()
-        response = await client.get(url, timeout=30.0)
-        response.raise_for_status()
-        return response.json()
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=30.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"Failed to get interface details from agent {agent.id}: {e}")
         raise
@@ -2160,14 +2187,13 @@ async def set_agent_interface_mtu(
     url = f"{get_agent_url(agent)}/interfaces/{interface_name}/mtu"
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        return await _agent_request(
+            "POST",
             url,
-            json={"mtu": mtu, "persist": persist},
+            json_body={"mtu": mtu, "persist": persist},
             timeout=60.0,  # Longer timeout for persistence operations
+            max_retries=0,
         )
-        response.raise_for_status()
-        return response.json()
     except Exception as e:
         logger.error(f"Failed to set MTU on agent {agent.id} interface {interface_name}: {e}")
         return {
@@ -2222,10 +2248,13 @@ async def provision_interface_on_agent(
     payload = {k: v for k, v in payload.items() if v is not None}
 
     try:
-        client = get_http_client()
-        response = await client.post(url, json=payload, timeout=60.0)
-        response.raise_for_status()
-        return response.json()
+        return await _agent_request(
+            "POST",
+            url,
+            json_body=payload,
+            timeout=60.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"Failed to provision interface on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
@@ -2264,19 +2293,18 @@ async def create_link_on_agent(
     )
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        result = await _agent_request(
+            "POST",
             url,
-            json={
+            json_body={
                 "source_node": source_node,
                 "source_interface": source_interface,
                 "target_node": target_node,
                 "target_interface": target_interface,
             },
             timeout=30.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        result = response.json()
         if result.get("success"):
             logger.info(f"Hot-connect succeeded: {result.get('link', {}).get('link_id')}")
         else:
@@ -2309,10 +2337,12 @@ async def delete_link_on_agent(
     logger.info(f"Hot-disconnect on agent {agent.id}: {link_id}")
 
     try:
-        client = get_http_client()
-        response = await client.delete(url, timeout=30.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "DELETE",
+            url,
+            timeout=30.0,
+            max_retries=0,
+        )
         if result.get("success"):
             logger.info(f"Hot-disconnect succeeded: {link_id}")
         else:
@@ -2339,10 +2369,12 @@ async def list_links_on_agent(
     url = f"{get_agent_url(agent)}/labs/{lab_id}/links"
 
     try:
-        client = get_http_client()
-        response = await client.get(url, timeout=30.0)
-        response.raise_for_status()
-        return response.json()
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=30.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"List links failed on agent {agent.id}: {e}")
         return {"links": []}
@@ -2357,10 +2389,12 @@ async def get_ovs_status_from_agent(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/ovs/status"
 
     try:
-        client = get_http_client()
-        response = await client.get(url, timeout=10.0)
-        response.raise_for_status()
-        return response.json()
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"OVS status failed on agent {agent.id}: {e}")
         return {"bridge_name": "", "initialized": False, "ports": [], "links": []}
@@ -2394,19 +2428,18 @@ async def connect_external_on_agent(
     )
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        result = await _agent_request(
+            "POST",
             url,
-            json={
+            json_body={
                 "node_name": node_name,
                 "interface_name": interface_name,
                 "external_interface": external_interface,
                 "vlan_tag": vlan_tag,
             },
             timeout=30.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        result = response.json()
         if result.get("success"):
             logger.info(f"External connect succeeded (VLAN {result.get('vlan_tag')})")
         else:
@@ -2436,10 +2469,12 @@ async def detach_external_on_agent(
     logger.info(f"Detaching external interface {external_interface} on agent {agent.id}")
 
     try:
-        client = get_http_client()
-        response = await client.delete(url, timeout=30.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "DELETE",
+            url,
+            timeout=30.0,
+            max_retries=0,
+        )
         if result.get("success"):
             logger.info(f"External detach succeeded for {external_interface}")
         else:
@@ -2471,18 +2506,17 @@ async def get_lab_ports_from_agent(
         List of port info dicts
     """
     url = f"{get_agent_url(agent)}/ovs-plugin/labs/{lab_id}/ports"
-    client = get_http_client()
 
     try:
-        response = await client.get(url, timeout=10.0)
-        response.raise_for_status()
-        data = response.json()
+        data = await _agent_request(
+            "GET",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
         return data.get("ports", [])
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"Get lab ports failed ({e.response.status_code}): {e}")
-        return []
-    except httpx.RequestError as e:
-        logger.warning(f"Get lab ports request failed: {e}")
+    except Exception as e:
+        logger.warning(f"Get lab ports failed: {e}")
         return []
 
 
@@ -2509,18 +2543,16 @@ async def get_interface_vlan_from_agent(
     url = f"{get_agent_url(agent)}/labs/{lab_id}/interfaces/{node_name}/{interface}/vlan"
     if read_from_ovs:
         url += "?read_from_ovs=true"
-    client = get_http_client()
-
     try:
-        response = await client.get(url, timeout=10.0)
-        response.raise_for_status()
-        data = response.json()
+        data = await _agent_request(
+            "GET",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
         return data.get("vlan_tag")
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"Get interface VLAN failed ({e.response.status_code}): {e}")
-        return None
-    except httpx.RequestError as e:
-        logger.warning(f"Get interface VLAN request failed: {e}")
+    except Exception as e:
+        logger.warning(f"Get interface VLAN failed: {e}")
         return None
 
 
@@ -2551,14 +2583,13 @@ async def repair_endpoints_on_agent(
     )
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        result = await _agent_request(
+            "POST",
             url,
-            json={"nodes": nodes or []},
+            json_body={"nodes": nodes or []},
             timeout=60.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        result = response.json()
         repaired = result.get("total_endpoints_repaired", 0)
         if repaired > 0:
             logger.info(

@@ -1,6 +1,6 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
-function buildQueryString(params: Record<string, string | number | undefined | null>): string {
+function buildQueryString(params: Record<string, string | number | boolean | undefined | null>): string {
   const queryParams = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== "") {

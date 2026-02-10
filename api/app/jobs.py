@@ -99,22 +99,23 @@ def execute_netlab_action(job_id: str, lab_id: str, action: str) -> None:
         log_path = workspace / f"job-{job_id}.log"
         try:
             commands = _build_command(lab_id, action)
-            output_chunks: list[str] = []
             failed = False
-            for command in commands:
-                output_chunks.append(f"$ {' '.join(command)}\n")
-                code, stdout, stderr = run_netlab_command(command, workspace)
-                if stdout:
-                    output_chunks.append(stdout)
-                if stderr:
-                    if stdout and not stdout.endswith("\n"):
-                        output_chunks.append("\n")
-                    output_chunks.append(stderr)
-                if code != 0:
-                    failed = True
-                    break
-            log_content = "".join(output_chunks)
-            log_path.write_text(log_content, encoding="utf-8")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("w", encoding="utf-8") as log_file:
+                for command in commands:
+                    log_file.write(f"$ {' '.join(command)}\n")
+                    log_file.flush()
+                    code, stdout, stderr = run_netlab_command(command, workspace)
+                    if stdout:
+                        log_file.write(stdout)
+                    if stderr:
+                        if stdout and not stdout.endswith("\n"):
+                            log_file.write("\n")
+                        log_file.write(stderr)
+                    log_file.flush()
+                    if code != 0:
+                        failed = True
+                        break
             job_record.status = "failed" if failed else "completed"
         except Exception as exc:
             log_content = f"Failed to run action {action}: {exc}\n"
@@ -125,6 +126,7 @@ def execute_netlab_action(job_id: str, lab_id: str, action: str) -> None:
         session.commit()
         if settings.log_forward_url:
             try:
+                log_content = log_path.read_text(encoding="utf-8")
                 httpx.post(
                     settings.log_forward_url,
                     json={

@@ -85,6 +85,22 @@ async def test_with_retry_http_error_no_retry():
     assert mock_func.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_with_retry_http_429_retries():
+    """Test that 429 is retried."""
+    response = MagicMock()
+    response.status_code = 429
+    mock_func = AsyncMock(side_effect=[
+        httpx.HTTPStatusError("Too Many Requests", request=MagicMock(), response=response),
+        {"status": "ok"},
+    ])
+
+    result = await with_retry(mock_func, "arg1", max_retries=1)
+
+    assert result == {"status": "ok"}
+    assert mock_func.call_count == 2
+
+
 # --- Unit Tests for Agent Health ---
 
 @pytest.mark.asyncio
@@ -374,8 +390,8 @@ async def test_get_healthy_agent_capability_filtering():
     mock_query.all.return_value = [agent_docker, agent_libvirt, agent_both]
     mock_db.query.return_value = mock_query
 
-    # Mock count_active_jobs to return 0 for all agents
-    with patch.object(agent_client, 'count_active_jobs', return_value=0):
+    # Mock count_active_jobs_by_agent to return 0 for all agents
+    with patch.object(agent_client, "count_active_jobs_by_agent", return_value={}):
         # Request libvirt provider
         result = await agent_client.get_healthy_agent(mock_db, required_provider="libvirt")
 
@@ -413,7 +429,7 @@ async def test_get_healthy_agent_exclude_agents():
     mock_query.all.return_value = [agent2]  # agent1 excluded by query
     mock_db.query.return_value = mock_query
 
-    with patch.object(agent_client, 'count_active_jobs', return_value=0):
+    with patch.object(agent_client, "count_active_jobs_by_agent", return_value={}):
         result = await agent_client.get_healthy_agent(mock_db, exclude_agents=["agent1"])
 
     assert result == agent2
@@ -432,7 +448,7 @@ async def test_get_healthy_agent_affinity():
     mock_query.all.return_value = [agent1, agent2]
     mock_db.query.return_value = mock_query
 
-    with patch.object(agent_client, 'count_active_jobs', return_value=0):
+    with patch.object(agent_client, "count_active_jobs_by_agent", return_value={}):
         result = await agent_client.get_healthy_agent(mock_db, prefer_agent_id="agent2")
 
     assert result == agent2
