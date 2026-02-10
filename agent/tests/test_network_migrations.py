@@ -29,6 +29,11 @@ def test_prune_legacy_lab_networks_removes_unused_legacy(monkeypatch):
     docker_client.networks.list.return_value = [legacy_net, safe_net]
     provider._docker = docker_client
 
+    async def _sync_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+
     _run(provider._prune_legacy_lab_networks("legacy$lab"))
 
     legacy_net.remove.assert_called_once()
@@ -55,7 +60,7 @@ def test_plugin_mgmt_network_recreated_for_owner_label(monkeypatch):
     def _fake_from_env():
         return client
 
-    monkeypatch.setattr("agent.network.docker_plugin.docker.from_env", _fake_from_env)
+    monkeypatch.setattr("docker.from_env", _fake_from_env)
 
     async def _sync_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
