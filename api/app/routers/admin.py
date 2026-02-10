@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
@@ -243,7 +243,7 @@ async def refresh_lab_state(
         else:
             # Container not found - only update if the relevant agent was queried
             expected_agent = node_expected_agent.get(ns.node_name)
-            agent_was_queried = (
+            (
                 expected_agent in agents_successfully_queried
                 if expected_agent
                 else len(agents_successfully_queried) > 0

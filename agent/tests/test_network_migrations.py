@@ -4,7 +4,6 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from docker.errors import NotFound
 
 from agent.network.docker_plugin import DockerOVSPlugin
 from agent.providers.docker import DockerProvider

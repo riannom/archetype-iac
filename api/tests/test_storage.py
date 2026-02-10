@@ -12,7 +12,6 @@ from app.storage import (
     lab_workspace,
     layout_path,
     read_layout,
-    workspace_root,
     write_layout,
 )
 
@@ -113,7 +112,7 @@ class TestReadLayout:
         # Valid JSON but missing required fields
         layout_file.write_text('{"invalid": "schema"}')
 
-        result = read_layout("test-lab")
+        read_layout("test-lab")
         # Should return None or a default layout depending on validation
         # The schema allows many optional fields, so this might actually parse
 

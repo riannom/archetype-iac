@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from app import agent_client, models
 from app.config import settings
-from app.db import SessionLocal, get_session
+from app.db import get_session
 from app.utils.job import get_job_timeout, is_job_stuck
 from app.utils.async_tasks import safe_create_task
 from app.state import (

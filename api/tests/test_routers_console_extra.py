@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import app.routers.console as console_router  # noqa: F401
-import pytest
-from sqlalchemy.orm import Session
 
 from app import models
 

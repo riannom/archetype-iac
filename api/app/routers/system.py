@@ -5,7 +5,6 @@ import asyncio
 import logging
 import sys
 import time
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 import os

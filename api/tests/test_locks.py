@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 
 import app.utils.locks as locks
 from app import models

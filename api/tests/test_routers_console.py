@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -64,7 +63,7 @@ class TestConsoleWebSocket:
         try:
             with test_client.websocket_connect(
                 f"/labs/{lab.id}/nodes/{nodes[0].node_id}/console"
-            ) as websocket:
+            ):
                 # Will receive error about connection failure
                 pass
         except Exception:
@@ -125,7 +124,7 @@ class TestConsoleNodeResolution:
         try:
             with test_client.websocket_connect(
                 f"/labs/{lab.id}/nodes/{nodes[0].node_id}/console"
-            ) as websocket:
+            ):
                 pass
         except Exception:
             pass  # Expected to fail
@@ -206,7 +205,7 @@ class TestConsoleMultiHost:
         try:
             with test_client.websocket_connect(
                 f"/labs/{lab.id}/nodes/{nodes[0].node_name}/console"
-            ) as websocket:
+            ):
                 pass
         except Exception:
             pass  # Expected to fail connecting

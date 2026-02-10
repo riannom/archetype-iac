@@ -210,7 +210,6 @@ def check_capacity(
 
     # CPU check
     if capacity.cpu_cores_total > 0:
-        buffer_cores = settings.resource_cpu_buffer_cores
         projected_cpu_cores = capacity.cpu_used_cores + reqs.cpu_cores
         result.projected_cpu_pct = (projected_cpu_cores / capacity.cpu_cores_total) * 100
 

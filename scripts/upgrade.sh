@@ -32,7 +32,7 @@ NC='\033[0m' # No Color
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 COMPOSE_FILE="$ROOT_DIR/docker-compose.gui.yml"
 BACKUP_SCRIPT="$ROOT_DIR/scripts/backup.sh"
-BRANCH="main"
+BRANCH=""
 SKIP_BACKUP=false
 NO_PULL=false
 
@@ -51,6 +51,21 @@ while [[ $# -gt 0 ]]; do
             BRANCH="$2"
             shift 2
             ;;
+        --tag)
+            BRANCH="$2"
+            shift 2
+            ;;
+        --version)
+            CURRENT="unknown"
+            if [[ -f "$ROOT_DIR/VERSION" ]]; then
+                CURRENT=$(cat "$ROOT_DIR/VERSION")
+            fi
+            LATEST=$(curl -sS --max-time 10 \
+                https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+                | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "unknown")
+            echo "Installed: $CURRENT | Latest: $LATEST"
+            exit 0
+            ;;
         --help|-h)
             echo "Archetype Upgrade Script"
             echo ""
@@ -60,11 +75,13 @@ while [[ $# -gt 0 ]]; do
             echo "  --skip-backup    Skip the backup step"
             echo "  --no-pull        Don't pull from git (use local changes)"
             echo "  --branch NAME    Pull from specific branch (default: main)"
+            echo "  --tag TAG            Upgrade to specific release tag (e.g., v0.4.0)"
+            echo "  --version            Show installed and latest version"
             echo "  --help           Show this help message"
             echo ""
             echo "This script will:"
             echo "  1. Create a backup of the database and workspaces"
-            echo "  2. Pull the latest changes from git"
+            echo "  2. Pull the latest release (or specified branch/tag)"
             echo "  3. Run database migrations"
             echo "  4. Rebuild and restart containers"
             echo "  5. Verify health"
@@ -76,6 +93,26 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Resolve upgrade target (latest release by default)
+resolve_upgrade_target() {
+    if [[ -n "$BRANCH" ]]; then
+        # Already set via --branch or --tag
+        return
+    fi
+    LATEST_TAG=$(curl -sS --max-time 10 \
+        https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+        | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "")
+    if [[ -n "$LATEST_TAG" ]]; then
+        BRANCH="$LATEST_TAG"
+        echo -e "${GREEN}Upgrading to release: $LATEST_TAG${NC}"
+    else
+        BRANCH="main"
+        echo -e "${YELLOW}Could not fetch latest release, falling back to main branch${NC}"
+    fi
+}
+
+resolve_upgrade_target
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║           Archetype Upgrade Script                         ║${NC}"

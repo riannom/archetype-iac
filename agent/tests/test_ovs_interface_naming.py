@@ -13,13 +13,9 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-import asyncio
 
 from agent.providers.docker import (
     DockerProvider,
-    TopologyNode,
-    TopologyLink,
-    ParsedTopology,
 )
 
 

@@ -1,12 +1,10 @@
 """Tests for authentication endpoints."""
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.auth import hash_password
 
 
 class TestLogin:

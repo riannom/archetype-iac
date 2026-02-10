@@ -1,10 +1,7 @@
 """Tests for app/tasks/image_sync.py - Image synchronization tasks."""
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session

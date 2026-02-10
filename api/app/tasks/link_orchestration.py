@@ -13,7 +13,6 @@ Key operations:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -22,7 +21,6 @@ from app.services.link_manager import LinkManager
 from app.services.link_validator import verify_link_connected, update_interface_mappings
 from app.services.topology import TopologyService
 from app.services.interface_naming import normalize_interface
-from app.utils.locks import get_link_state_for_update
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +128,7 @@ async def create_deployment_links(
             if name in current_link_names
         }
 
-    link_manager = LinkManager(session)
+    LinkManager(session)
     success_count = 0
     fail_count = 0
 
@@ -347,7 +345,7 @@ async def create_external_network_links(
     if not ext_agent:
         for _, link_state, _, _, _ in links:
             link_state.actual_state = "error"
-            link_state.error_message = f"Agent for external interface not available"
+            link_state.error_message = "Agent for external interface not available"
             fail_count += 1
         log_parts.append(f"  External {ext_node.display_name}: FAILED - agent offline")
         return success_count, fail_count

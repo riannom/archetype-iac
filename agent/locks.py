@@ -16,7 +16,6 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 import redis.asyncio as redis
 

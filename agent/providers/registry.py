@@ -40,7 +40,7 @@ class ProviderRegistry:
                 from agent.providers.docker import DockerProvider
                 provider = DockerProvider()
                 self._providers["docker"] = provider
-                logger.info(f"Registered provider: docker")
+                logger.info("Registered provider: docker")
             except Exception as e:
                 logger.error(f"Failed to initialize docker provider: {e}")
 
@@ -49,7 +49,7 @@ class ProviderRegistry:
                 from agent.providers.libvirt import LibvirtProvider
                 provider = LibvirtProvider()
                 self._providers["libvirt"] = provider
-                logger.info(f"Registered provider: libvirt")
+                logger.info("Registered provider: libvirt")
             except ImportError:
                 logger.warning("Libvirt provider not available (module not installed)")
             except Exception as e:

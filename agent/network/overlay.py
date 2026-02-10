@@ -582,34 +582,6 @@ class OverlayManager:
 
         return vtep
 
-    async def delete_vtep(self, remote_ip: str) -> bool:
-        """Delete a VTEP to a remote host.
-
-        Args:
-            remote_ip: The remote host IP whose VTEP to delete
-
-        Returns:
-            True if deleted successfully, False otherwise
-        """
-        vtep = self._vteps.get(remote_ip)
-        if not vtep:
-            logger.warning(f"No VTEP found for {remote_ip}")
-            return False
-
-        try:
-            # Delete OVS port and Linux VXLAN device
-            await self._delete_vxlan_device(vtep.interface_name, self._bridge_name)
-
-            # Remove from tracking
-            del self._vteps[remote_ip]
-
-            logger.info(f"Deleted VTEP {vtep.interface_name} to {remote_ip}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error deleting VTEP: {e}")
-            return False
-
     def get_vtep(self, remote_ip: str) -> Vtep | None:
         """Get the VTEP for a remote host, if it exists."""
         return self._vteps.get(remote_ip)
@@ -889,9 +861,9 @@ class OverlayManager:
                 raise RuntimeError(f"Failed to create veth pair: {stderr}")
 
             # Set MTU for overlay link
-            # Use tenant_mtu (overlay effective MTU) since containers on
+            # Use bridge.tenant_mtu (overlay effective MTU) since containers on
             # overlay links shouldn't advertise jumbo MTU
-            mtu_to_use = tenant_mtu if tenant_mtu > 0 else settings.overlay_mtu
+            mtu_to_use = bridge.tenant_mtu if bridge.tenant_mtu > 0 else settings.overlay_mtu
             if mtu_to_use > 0 and settings.overlay_clamp_host_mtu:
                 await self._run_cmd([
                     "ip", "link", "set", veth_host, "mtu", str(mtu_to_use)

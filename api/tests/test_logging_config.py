@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from app.logging_config import (
     JSONFormatter,
@@ -487,7 +485,7 @@ class TestSetupLogging:
         # Add some existing handlers
         existing_handler = logging.StreamHandler()
         root_logger.addHandler(existing_handler)
-        initial_count = len(root_logger.handlers)
+        len(root_logger.handlers)
 
         with patch("app.logging_config.settings") as mock_settings:
             mock_settings.log_format = "text"

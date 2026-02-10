@@ -11,7 +11,6 @@ Mark with @pytest.mark.integration - requires Docker.
 
 from __future__ import annotations
 
-import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
@@ -360,7 +359,7 @@ class TestFixInterfacesEndpoint:
             response = test_client.post("/labs/test-lab/nodes/node1/fix-interfaces")
 
         assert response.status_code == 200
-        result = response.json()
+        response.json()
         # May succeed even with errors if they're warnings
 
 
@@ -508,7 +507,7 @@ class TestContainerLabRemovalIntegration:
         )
 
         assert response.status_code == 200
-        result = response.json()
+        response.json()
         # Should still succeed (or fail with appropriate error)
         # The behavior depends on implementation
 

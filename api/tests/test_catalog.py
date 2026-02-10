@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
 
 from app.catalog import _parse_devices_table, list_devices, list_images
 

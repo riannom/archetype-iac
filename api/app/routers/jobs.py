@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -19,7 +20,7 @@ from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.utils.lab import get_lab_or_404, get_lab_provider
-from app.utils.logs import get_log_content
+from app.utils.logs import get_log_content, _is_likely_file_path
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
 from app.services.state_machine import NodeStateMachine
@@ -236,7 +237,7 @@ async def lab_up(
             if not default_agent:
                 raise HTTPException(
                     status_code=503,
-                    detail=f"No healthy agent available for nodes without explicit host placement"
+                    detail="No healthy agent available for nodes without explicit host placement"
                 )
 
             # Re-analyze topology with default host for unplaced nodes

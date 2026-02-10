@@ -1,9 +1,6 @@
 """Tests for DockerOVSPlugin endpoint discovery logic."""
 from __future__ import annotations
 
-import asyncio
-import types
-import sys
 from unittest.mock import AsyncMock
 
 import pytest

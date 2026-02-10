@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import shutil
 import threading
 import time
@@ -17,9 +16,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
 
-from app import db, models
+from app import models
 from app.auth import get_current_user
 from app.config import settings
 from app.image_store import (
@@ -29,12 +27,10 @@ from app.image_store import (
     find_custom_device,
     find_image_by_id,
     load_manifest,
-    qcow2_path,
     save_manifest,
 )
 from app.iso import (
     ISOExtractor,
-    ISOManifest,
     ISOSession,
     ImageImportProgress,
     ParsedImage,

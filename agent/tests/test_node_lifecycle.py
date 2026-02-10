@@ -10,15 +10,13 @@ All Docker and OVS dependencies are mocked for isolated unit testing.
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock, call
+from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 import pytest
-from docker.errors import NotFound, APIError, ImageNotFound
+from docker.errors import NotFound, ImageNotFound
 
-from agent.providers.base import NodeActionResult, NodeStatus
-from agent.providers.docker import DockerProvider, TopologyNode
+from agent.providers.base import NodeStatus
+from agent.providers.docker import DockerProvider
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +38,7 @@ def mock_docker_client():
 def provider(mock_docker_client):
     """Create a DockerProvider with mocked Docker client and network managers."""
     with patch("agent.providers.docker.docker.from_env", return_value=mock_docker_client):
-        with patch("agent.providers.docker.get_local_manager") as mock_lm:
+        with patch("agent.providers.docker.get_local_manager"):
             with patch("agent.providers.docker.get_ovs_manager"):
                 with patch("agent.providers.docker.get_docker_ovs_plugin"):
                     p = DockerProvider()

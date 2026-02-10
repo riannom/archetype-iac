@@ -10,6 +10,7 @@ Separating monitors from the API ensures that:
 Usage:
     python -m app.scheduler
 """
+# ruff: noqa: E402  -- faulthandler setup must run before other imports
 from __future__ import annotations
 
 import asyncio

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -95,7 +94,7 @@ class TestDeployNodeImmediately:
         self, test_db: Session, running_lab: models.Lab, undeployed_node_state: models.NodeState, sample_host: models.Host
     ):
         """Should set node to pending state before deploying."""
-        with patch("app.tasks.live_nodes.broadcast_node_state_change", new_callable=AsyncMock) as mock_broadcast:
+        with patch("app.tasks.live_nodes.broadcast_node_state_change", new_callable=AsyncMock):
             with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                 mock_agent.get_agent_for_lab = AsyncMock(return_value=sample_host)
                 with patch("app.tasks.live_nodes.run_node_reconcile", new_callable=AsyncMock):

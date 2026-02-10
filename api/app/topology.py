@@ -16,7 +16,6 @@ from app.schemas import (
     TopologyGraph,
 )
 from app.image_store import find_image_reference
-from app.config import settings
 from app.storage import lab_workspace
 from app.services.interface_naming import (
     normalize_interface,

@@ -1,7 +1,6 @@
 """Tests for labs router endpoints."""
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -619,8 +618,7 @@ class TestLayout:
         workspace.mkdir(parents=True)
         layout_file = workspace / "layout.json"
 
-        from app import storage, schemas
-        import json
+        from app import storage
 
         monkeypatch.setattr(storage, "lab_workspace", lambda lab_id: workspace)
         monkeypatch.setattr(storage, "layout_path", lambda lab_id: layout_file)

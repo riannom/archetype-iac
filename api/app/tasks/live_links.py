@@ -19,8 +19,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
-from app.db import SessionLocal, get_session
-from app.services.link_manager import LinkManager, allocate_vni
+from app.db import get_session
 from app.utils.link import lookup_endpoint_hosts
 from app.tasks.link_orchestration import (
     create_same_host_link,
@@ -29,9 +28,7 @@ from app.tasks.link_orchestration import (
 from app.services.interface_naming import normalize_interface
 from app.utils.locks import (
     link_ops_lock,
-    extend_link_ops_lock,
     get_link_state_for_update,
-    get_vxlan_tunnel_for_update,
 )
 
 logger = logging.getLogger(__name__)

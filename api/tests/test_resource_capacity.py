@@ -17,11 +17,9 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import settings
 from app.services.resource_capacity import (
-    AgentCapacity,
     CapacityCheckResult,
     DEFAULT_CPU_CORES,
     DEFAULT_MEMORY_MB,
-    ResourceRequirements,
     calculate_node_requirements,
     check_capacity,
     check_multihost_capacity,

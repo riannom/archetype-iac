@@ -26,27 +26,13 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 def get_latest_agent_version() -> str:
     """Get the latest available agent version.
 
-    Reads from the agent/VERSION file.
+    Reads from the root VERSION file (same as controller version).
 
     Returns:
-        Version string (e.g., "0.2.0")
+        Version string (e.g., "0.4.0")
     """
-    # Try multiple possible locations for the VERSION file
-    possible_paths = [
-        # In Docker container: /app/agent/VERSION
-        Path("/app/agent/VERSION"),
-        # Relative to this file in development: api/app/routers/agents.py -> agent/VERSION
-        Path(__file__).parent.parent.parent.parent / "agent" / "VERSION",
-    ]
-
-    for version_file in possible_paths:
-        if version_file.exists():
-            try:
-                return version_file.read_text().strip()
-            except Exception:
-                pass
-
-    return "0.0.0"
+    from app.routers.system import get_version
+    return get_version()
 
 
 # --- Request/Response Schemas ---
@@ -353,7 +339,7 @@ async def _mark_links_for_recovery(database: Session, agent_id: str) -> None:
         database.query(models.LinkState)
         .filter(
             models.LinkState.actual_state == "up",
-            models.LinkState.is_cross_host == True,
+            models.LinkState.is_cross_host,
             or_(
                 models.LinkState.source_host_id == agent_id,
                 models.LinkState.target_host_id == agent_id,
@@ -551,7 +537,6 @@ def list_agents_detailed(
             })
 
     # Build lab lookup maps for container/VM enrichment
-    from app.utils.lab import find_lab_with_name
     labs_by_id = {lab.id: lab.name for lab in all_labs}
     labs_by_prefix = {lab.id[:20]: (lab.id, lab.name) for lab in all_labs}
 
@@ -699,7 +684,7 @@ def get_deregister_info(
         .filter(models.Lab.agent_id == agent_id)
         .all()
     )
-    running_labs = [{"id": l.id, "name": l.name, "state": l.state} for l in labs if l.state in ("running", "starting")]
+    running_labs = [{"id": lab.id, "name": lab.name, "state": lab.state} for lab in labs if lab.state in ("running", "starting")]
 
     node_placements = (
         database.query(models.NodePlacement)
@@ -1210,7 +1195,7 @@ async def trigger_bulk_update(
     """
     import httpx
     import logging
-    bulk_logger = logging.getLogger(__name__)
+    logging.getLogger(__name__)
 
     target_version = request.target_version or get_latest_agent_version()
     # Use target_version as checkout ref if it looks like a commit SHA,

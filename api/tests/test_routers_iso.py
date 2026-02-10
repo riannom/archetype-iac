@@ -1,18 +1,11 @@
 """Tests for ISO router endpoints."""
 from __future__ import annotations
 
-import json
-import os
-import tempfile
-from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
 
-from app import models
 
 
 class TestBrowseISOFiles:

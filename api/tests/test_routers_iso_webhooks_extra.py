@@ -4,9 +4,7 @@ from unittest.mock import AsyncMock
 
 import app.routers.iso as iso_router  # noqa: F401
 import app.routers.webhooks as webhooks_router  # noqa: F401
-import pytest
 
-from app import models
 from app.config import settings
 
 

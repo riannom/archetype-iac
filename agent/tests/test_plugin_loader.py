@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 
 from agent.plugins import VendorPlugin, PluginMetadata, VendorConfig, DeviceType, _plugin_registry
 from agent.plugins import loader

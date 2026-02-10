@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
 
 import app.routers.jobs as jobs_router  # noqa: F401
 import app.routers.system as system_router  # noqa: F401
-import pytest
 
 from app import models
 

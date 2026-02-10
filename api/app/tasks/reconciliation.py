@@ -18,20 +18,17 @@ import asyncio
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import redis
 
-from app import agent_client, models
+from app import agent_client, db, models
 from app.config import settings
-from app.db import SessionLocal, get_redis, get_session
+from app.db import get_redis, get_session
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
-from app.utils.link import generate_link_name
 from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
 from app.state import (
-    HostStatus,
     JobStatus,
     LabState,
     LinkActualState,
@@ -39,7 +36,7 @@ from app.state import (
     NodeActualState,
     NodeDesiredState,
 )
-from app.services.state_machine import LabStateMachine, LinkStateMachine, NodeStateMachine
+from app.services.state_machine import LabStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +330,7 @@ async def refresh_states_from_agents():
             # - Labs in transitional states (starting, stopping, unknown)
             # - Labs where state has been stuck for too long
             now = datetime.now(timezone.utc)
-            stale_cutoff = now - timedelta(seconds=settings.stale_starting_threshold)
+            now - timedelta(seconds=settings.stale_starting_threshold)
 
             transitional_labs = (
                 session.query(models.Lab)
@@ -359,7 +356,7 @@ async def refresh_states_from_agents():
                 session.query(models.NodeState)
                 .filter(
                     models.NodeState.actual_state == NodeActualState.RUNNING.value,
-                    models.NodeState.is_ready == False,
+                    not models.NodeState.is_ready,
                 )
                 .all()
             )
@@ -384,7 +381,6 @@ async def refresh_states_from_agents():
 
             # Find running nodes that are missing NodePlacement records
             # This handles cases where deploy jobs failed after containers were created
-            from sqlalchemy import and_, exists
             from sqlalchemy.sql import select
 
             placement_exists_subquery = (
@@ -617,7 +613,6 @@ async def _check_readiness_for_nodes(session, nodes: list):
 
 async def _reconcile_single_lab(session, lab_id: str):
     """Reconcile a single lab's state with actual container status."""
-    from app.utils.lab import get_lab_provider
 
     lab = session.get(models.Lab, lab_id)
     if not lab:

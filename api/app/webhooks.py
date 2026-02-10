@@ -245,7 +245,7 @@ async def dispatch_webhook_event(
                 session.query(models.Webhook)
                 .filter(
                     models.Webhook.owner_id == user_id,
-                    models.Webhook.enabled == True,
+                    models.Webhook.enabled,
                 )
                 .all()
             )

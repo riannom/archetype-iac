@@ -9,20 +9,16 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from agent.updater import (
     DeploymentMode,
-    ROLLBACK_SENTINEL,
     _clear_rollback_info,
     _save_rollback_info,
     check_and_rollback,
     detect_deployment_mode,
-    get_agent_root,
     is_commit_sha,
     perform_docker_update,
     perform_systemd_update,

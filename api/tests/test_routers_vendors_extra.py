@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import app.routers.vendors as vendors_router  # noqa: F401
 
-import pytest
 
 
 def test_list_vendors_filters_hidden(test_client, monkeypatch) -> None:

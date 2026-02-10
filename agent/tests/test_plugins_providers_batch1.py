@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import os
 import sys
 import types
 from pathlib import Path
@@ -9,8 +8,6 @@ from pathlib import Path
 import pytest
 
 from agent.plugins.builtin.arista import AristaPlugin
-import agent.plugins.builtin  # ensure builtin package is imported
-import agent.plugins.loader as plugin_loader
 import agent.providers.libvirt as libvirt_provider
 from agent.providers.base import NodeStatus
 

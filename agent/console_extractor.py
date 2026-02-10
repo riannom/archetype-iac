@@ -324,7 +324,7 @@ class SerialConsoleExtractor:
             lines = lines[1:]
 
         # Remove "Building configuration..." line
-        lines = [l for l in lines if not l.strip().startswith("Building configuration")]
+        lines = [line for line in lines if not line.strip().startswith("Building configuration")]
 
         # Remove empty lines at start and end
         while lines and not lines[0].strip():

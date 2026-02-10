@@ -15,9 +15,8 @@ Needed" or silently dropped oversized inner packets.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
-import pytest
 
 from agent.network.overlay import OverlayManager
 from agent.network.ovs import OVSNetworkManager

@@ -296,7 +296,7 @@ class TestTransitionalStateTimestamps:
         test_db.commit()
         test_db.refresh(job)
 
-        before_sync = datetime.now(timezone.utc)
+        datetime.now(timezone.utc)
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
             with patch("app.tasks.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_agent:
@@ -304,7 +304,7 @@ class TestTransitionalStateTimestamps:
                 with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
                     await run_node_reconcile(job.id, lab.id, ["node-1"])
 
-        after_sync = datetime.now(timezone.utc)
+        datetime.now(timezone.utc)
         test_db.refresh(node_state)
 
         # Even though it ended in error, stopping_started_at should have been set

@@ -11,7 +11,6 @@ Mark with @pytest.mark.integration - requires Docker.
 
 from __future__ import annotations
 
-import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
@@ -90,7 +89,7 @@ class TestConsoleWebSocketUnit:
 
                     with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
                         try:
-                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                            with test_client.websocket_connect("/console/test-lab/node1"):
                                 pass
                         except Exception:
                             # WebSocket may close, that's ok for unit test
@@ -120,7 +119,7 @@ class TestConsoleWebSocketUnit:
 
                     with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=True) as mock_ssh_ws:
                         try:
-                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                            with test_client.websocket_connect("/console/test-lab/node1"):
                                 pass
                         except Exception:
                             pass
@@ -137,7 +136,7 @@ class TestConsoleWebSocketUnit:
                     with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=False) as mock_ssh_ws:
                         with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
                             try:
-                                with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                                with test_client.websocket_connect("/console/test-lab/node1"):
                                     pass
                             except Exception:
                                 pass
@@ -158,7 +157,7 @@ class TestConsoleWebSocketBidirectional:
 
                     with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
                         try:
-                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                            with test_client.websocket_connect("/console/test-lab/node1"):
                                 pass
                         except Exception:
                             pass
@@ -184,7 +183,7 @@ class TestConsoleWebSocketDisconnect:
 
                     with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
                         try:
-                            with test_client.websocket_connect("/console/test-lab/node1") as websocket:
+                            with test_client.websocket_connect("/console/test-lab/node1"):
                                 # Client disconnects by exiting context
                                 pass
                         except Exception:
@@ -264,7 +263,7 @@ class TestConsoleE2EWithDocker:
                         data = websocket.receive_text(timeout=5)
                         # Should get some response
                         assert data is not None
-                except Exception as e:
+                except Exception:
                     # Connection might close but we just want to verify it worked
                     assert True
 
@@ -297,7 +296,7 @@ class TestConsoleE2EWithDocker:
                                 break
 
                         # Should have received the echo response
-                        full_output = "".join(received)
+                        "".join(received)
                         # May or may not contain our output depending on timing
                         assert True  # Test passes if we got this far
                 except Exception:
@@ -330,7 +329,7 @@ class TestConsoleE2EWithDocker:
 
                         # Receive and verify (may include resize result)
                         try:
-                            data = websocket.receive_text(timeout=2)
+                            websocket.receive_text(timeout=2)
                         except Exception:
                             pass
                 except Exception:
@@ -352,7 +351,7 @@ class TestSSHConsoleWebSocket:
 
                     with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=True) as mock_ssh:
                         try:
-                            with test_client.websocket_connect("/console/test/router1") as websocket:
+                            with test_client.websocket_connect("/console/test/router1"):
                                 pass
                         except Exception:
                             pass
@@ -376,7 +375,7 @@ class TestSSHConsoleWebSocket:
                     with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=False):
                         with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker:
                             try:
-                                with test_client.websocket_connect("/console/test/router1") as websocket:
+                                with test_client.websocket_connect("/console/test/router1"):
                                     pass
                             except Exception:
                                 pass

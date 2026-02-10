@@ -14,9 +14,7 @@ import asyncio
 import pytest
 import subprocess
 import time
-import json
 import httpx
-from typing import Generator
 
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration

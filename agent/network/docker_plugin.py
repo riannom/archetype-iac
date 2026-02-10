@@ -47,7 +47,6 @@ import ipaddress
 import json
 import logging
 import os
-import re
 import secrets
 import signal
 from dataclasses import dataclass, field
@@ -590,7 +589,7 @@ class DockerOVSPlugin:
             if code != 0:
                 continue
 
-            ovs_ports = set(stdout.strip().split("\n")) if stdout.strip() else set()
+            set(stdout.strip().split("\n")) if stdout.strip() else set()
 
         # Verify each endpoint's host veth exists
         endpoints_to_remove: list[tuple[str, bool]] = []
@@ -2105,12 +2104,12 @@ class DockerOVSPlugin:
 
             # Create veth pair
             if not await self._create_veth_pair(host_veth, cont_veth):
-                return web.json_response({"Err": f"Failed to create veth pair"})
+                return web.json_response({"Err": "Failed to create veth pair"})
 
             # Attach to OVS
             if not await self._attach_to_ovs(network.bridge_name, host_veth, vlan_tag):
                 await self._run_cmd(["ip", "link", "delete", host_veth])
-                return web.json_response({"Err": f"Failed to attach to OVS"})
+                return web.json_response({"Err": "Failed to attach to OVS"})
 
             # Track endpoint
             endpoint = EndpointState(

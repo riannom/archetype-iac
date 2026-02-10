@@ -5,13 +5,13 @@ simulated dual enforcement, and concurrent bulk + individual operations.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import models
-from app.state import JobStatus, NodeActualState
+from app.state import JobStatus
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ class TestDeployLock:
         monkeypatch.setattr("app.tasks.jobs.get_redis", lambda: fake)
 
         # Pre-lock r2 as another agent (bytes, as real Redis returns)
-        held[f"deploy_lock:lab1:r2"] = b"agent:other:time:2026-01-01"
+        held["deploy_lock:lab1:r2"] = b"agent:other:time:2026-01-01"
 
         ok, failed = acquire_deploy_lock("lab1", ["r1", "r2"], "agent-1")
         assert ok is False
@@ -428,7 +428,6 @@ class TestBulkIndividualConflict:
 
     def test_conflicting_job_blocks_sync(self, test_db) -> None:
         """An active 'up' job conflicts with 'sync' actions."""
-        from app.jobs import has_conflicting_job
 
         lab = models.Lab(
             name="Test", owner_id="user1", provider="docker",

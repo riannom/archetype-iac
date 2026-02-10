@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.tasks.live_nodes import deploy_node_immediately, process_node_changes
-from app.tasks.jobs import run_node_reconcile
 
 
 @pytest.fixture
@@ -64,7 +63,7 @@ class TestAutoSyncJobCreation:
         with patch("app.tasks.live_nodes.broadcast_node_state_change", new_callable=AsyncMock):
             with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                 mock_agent.get_agent_for_lab = AsyncMock(return_value=sample_host)
-                with patch("app.tasks.live_nodes.run_node_reconcile", new_callable=AsyncMock) as mock_sync:
+                with patch("app.tasks.live_nodes.run_node_reconcile", new_callable=AsyncMock):
                     await deploy_node_immediately(
                         test_db,
                         running_lab_with_agent.id,
@@ -123,7 +122,7 @@ class TestAutoSyncExecution:
         with patch("app.tasks.live_nodes.broadcast_node_state_change", new_callable=AsyncMock):
             with patch("app.tasks.live_nodes.agent_client") as mock_agent:
                 mock_agent.get_agent_for_lab = AsyncMock(return_value=sample_host)
-                with patch("app.tasks.live_nodes.run_node_reconcile", new_callable=AsyncMock) as mock_sync:
+                with patch("app.tasks.live_nodes.run_node_reconcile", new_callable=AsyncMock):
                     await deploy_node_immediately(
                         test_db,
                         running_lab_with_agent.id,

@@ -18,16 +18,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
 from typing import Dict, List, Set
-from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
-from app.db import SessionLocal, get_session
+from app.db import get_session
 from app.services.broadcaster import broadcast_node_state_change
-from app.services.topology import TopologyService
 from app.utils.async_tasks import safe_create_task
 from app.tasks.jobs import run_node_reconcile
 
@@ -243,7 +240,7 @@ async def destroy_node_immediately(
         True if destruction was successful, False otherwise
     """
     node_name = node_info.get("node_name", "")
-    node_id = node_info.get("node_id", "")
+    node_info.get("node_id", "")
     host_id = node_info.get("host_id")
     actual_state = node_info.get("actual_state", "unknown")
 

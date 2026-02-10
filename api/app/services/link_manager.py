@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -72,7 +71,6 @@ class LinkManager:
         Returns:
             True if link was connected successfully
         """
-        lab_id = link_state.lab_id
 
         # Determine which hosts have the source and target nodes
         source_host_id = link_state.source_host_id

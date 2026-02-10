@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 
 import app.routers.auth as auth_router  # noqa: F401
-import pytest
 
 from app import models
 

@@ -8,9 +8,7 @@ This module tests:
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
 
-import pytest
 from sqlalchemy.orm import Session
 
 
@@ -214,7 +212,6 @@ class TestDatabaseConnectionSettings:
 
     def test_engine_uses_settings_database_url(self):
         """Test that engine uses the database URL from settings."""
-        from app.config import settings
         from app.db import engine
 
         # Engine URL should match settings (may have driver-specific prefix)

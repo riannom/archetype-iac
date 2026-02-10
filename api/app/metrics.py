@@ -231,7 +231,7 @@ def update_node_metrics(session: "Session") -> None:
                 models.NodeState.lab_id,
                 func.count(),
             )
-            .filter(models.NodeState.is_ready == True)
+            .filter(models.NodeState.is_ready)
             .group_by(models.NodeState.lab_id)
             .all()
         )
@@ -398,7 +398,6 @@ def update_enforcement_metrics(session: "Session") -> None:
 
     try:
         from app import models
-        from app.config import settings
 
         # Count nodes with pending enforcement (desired != actual)
         pending = (

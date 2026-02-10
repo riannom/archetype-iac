@@ -1,7 +1,7 @@
 """FastAPI application entry point."""
+# ruff: noqa: E402  -- faulthandler setup must run before other imports
 from __future__ import annotations
 
-import asyncio
 import faulthandler
 import logging
 import signal
@@ -13,7 +13,6 @@ faulthandler.enable()
 faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -29,12 +28,11 @@ from starlette.routing import Route
 
 from app import db, models
 from app.config import settings
-from app.auth import get_current_user, hash_password
+from app.auth import hash_password
 from app.catalog import list_devices as catalog_devices, list_images as catalog_images
 from app.logging_config import (
     correlation_id_var,
     generate_correlation_id,
-    set_correlation_id,
     setup_logging,
 )
 from app.middleware import CurrentUserMiddleware, DeprecationMiddleware
@@ -148,7 +146,7 @@ async def healthz(request: StarletteRequest) -> StarletteJSONResponse:
 
 app = FastAPI(
     title="Archetype API",
-    version="0.1.0",
+    version="0.4.0",
     lifespan=lifespan,
     routes=[Route("/healthz", healthz)],  # Bypass all middleware
 )

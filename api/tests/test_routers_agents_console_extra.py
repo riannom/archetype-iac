@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import app.routers.agents as agents_router  # noqa: F401
-import pytest
 
 from app import models
 

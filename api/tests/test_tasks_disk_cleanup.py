@@ -1,11 +1,8 @@
 """Tests for the disk cleanup background task."""
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-import tempfile
 import os
 
 import pytest
@@ -19,9 +16,6 @@ from app.tasks.disk_cleanup import (
     cleanup_old_webhook_deliveries,
     cleanup_old_config_snapshots,
     cleanup_old_image_sync_jobs,
-    cleanup_old_iso_import_jobs,
-    cleanup_old_agent_update_jobs,
-    cleanup_orphaned_image_host_records,
     cleanup_orphaned_lab_workspaces,
     cleanup_orphaned_qcow2_images,
     cleanup_docker_on_agents,
@@ -336,7 +330,6 @@ class TestCleanupDockerOnAgents:
             mock_lab_id_query = MagicMock()
             mock_lab_id_query.all.return_value = [("lab-1",)]
 
-            call_count = [0]
             def query_side_effect(model):
                 if hasattr(model, 'property') or hasattr(model, 'key'):
                     # This is Lab.id column query from get_valid_lab_ids

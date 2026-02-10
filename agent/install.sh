@@ -14,6 +14,8 @@ set -e
 #   --no-docker           Skip Docker installation
 #   --libvirt             Install libvirt/KVM for VM-based devices (IOSv, CSR1000v, etc.)
 #   --update              Quick update: pull latest code and restart (no full reinstall)
+#   --branch BRANCH       Install specific branch/tag (default: latest release)
+#   --version             Show installed and latest version
 #   --uninstall           Remove the agent
 #
 # Examples:
@@ -24,7 +26,7 @@ set -e
 INSTALL_DIR="/opt/archetype-agent"
 SERVICE_NAME="archetype-agent"
 REPO_URL="https://github.com/riannom/archetype-iac.git"
-BRANCH="main"
+BRANCH=""
 
 # Colors
 RED='\033[0;31m'
@@ -92,12 +94,48 @@ while [[ $# -gt 0 ]]; do
             UPDATE_ONLY=true
             shift
             ;;
+        --branch)
+            BRANCH_OVERRIDE="$2"
+            shift 2
+            ;;
+        --version)
+            CURRENT="none"
+            if [ -f "$INSTALL_DIR/repo/VERSION" ]; then
+                CURRENT=$(cat "$INSTALL_DIR/repo/VERSION")
+            fi
+            LATEST=$(curl -sS --max-time 10 \
+                https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+                | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "unknown")
+            echo "Installed: $CURRENT | Latest: $LATEST"
+            exit 0
+            ;;
         *)
             log_error "Unknown option: $1"
             exit 1
             ;;
     esac
 done
+
+# Resolve branch/tag to install
+resolve_install_target() {
+    if [ -n "$BRANCH_OVERRIDE" ]; then
+        BRANCH="$BRANCH_OVERRIDE"
+        log_info "Using specified branch/tag: $BRANCH"
+        return
+    fi
+    LATEST_TAG=$(curl -sS --max-time 10 \
+        https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+        | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "")
+    if [ -n "$LATEST_TAG" ]; then
+        BRANCH="$LATEST_TAG"
+        log_info "Installing release: $LATEST_TAG"
+    else
+        BRANCH="main"
+        log_warn "Could not fetch latest release, falling back to main branch"
+    fi
+}
+
+resolve_install_target
 
 # Update only mode - quick update without full reinstall
 if [ "$UPDATE_ONLY" = true ]; then
@@ -109,10 +147,21 @@ if [ "$UPDATE_ONLY" = true ]; then
     log_info "Updating Archetype Agent..."
     cd $INSTALL_DIR/repo
 
-    # Fetch and reset to latest
+    # Resolve to latest release or use override
+    if [ -n "$BRANCH_OVERRIDE" ]; then
+        UPDATE_REF="$BRANCH_OVERRIDE"
+    else
+        UPDATE_REF=$(curl -sS --max-time 10 \
+            https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+            | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "")
+        if [ -z "$UPDATE_REF" ]; then
+            UPDATE_REF="origin/main"
+            log_warn "Could not fetch latest release, falling back to main"
+        fi
+    fi
     git fetch origin
     CURRENT=$(git rev-parse HEAD)
-    git reset --hard origin/$BRANCH
+    git checkout "$UPDATE_REF" 2>/dev/null || git reset --hard "$UPDATE_REF"
     NEW=$(git rev-parse HEAD)
 
     if [ "$CURRENT" = "$NEW" ]; then

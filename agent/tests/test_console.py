@@ -8,9 +8,7 @@ These tests verify that:
 5. Reconnection works
 """
 
-import asyncio
-import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from agent.console.docker_exec import DockerConsole
 

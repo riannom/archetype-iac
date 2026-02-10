@@ -21,7 +21,7 @@ set -e
 INSTALL_DIR="/opt/archetype-controller"
 AGENT_INSTALL_DIR="/opt/archetype-agent"
 REPO_URL="https://github.com/riannom/archetype-iac.git"
-BRANCH="main"
+BRANCH=""
 
 # Colors
 RED='\033[0;31m'
@@ -80,6 +80,21 @@ while [[ $# -gt 0 ]]; do
             FRESH_INSTALL=true
             shift
             ;;
+        --branch)
+            BRANCH_OVERRIDE="$2"
+            shift 2
+            ;;
+        --version)
+            CURRENT="none"
+            if [ -f "$INSTALL_DIR/VERSION" ]; then
+                CURRENT=$(cat "$INSTALL_DIR/VERSION")
+            fi
+            LATEST=$(curl -sS --max-time 10 \
+                https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+                | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "unknown")
+            echo "Installed: $CURRENT | Latest: $LATEST"
+            exit 0
+            ;;
         --help|-h)
             echo "Archetype Infrastructure-as-Code Installer"
             echo ""
@@ -97,6 +112,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --port PORT          Agent port (default: 8001)"
             echo "  --uninstall          Remove installation completely"
             echo "  --fresh              Clean reinstall (removes database/volumes)"
+            echo "  --branch BRANCH      Install specific branch/tag (default: latest release)"
+            echo "  --version            Show installed and latest version"
             exit 0
             ;;
         *)
@@ -105,6 +122,27 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Resolve branch/tag to install
+resolve_install_target() {
+    if [ -n "$BRANCH_OVERRIDE" ]; then
+        BRANCH="$BRANCH_OVERRIDE"
+        log_info "Using specified branch/tag: $BRANCH"
+        return
+    fi
+    LATEST_TAG=$(curl -sS --max-time 10 \
+        https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+        | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "")
+    if [ -n "$LATEST_TAG" ]; then
+        BRANCH="$LATEST_TAG"
+        log_info "Installing release: $LATEST_TAG"
+    else
+        BRANCH="main"
+        log_warn "Could not fetch latest release, falling back to main branch"
+    fi
+}
+
+resolve_install_target
 
 # Default: install both if neither specified
 if [ "$INSTALL_CONTROLLER" = false ] && [ "$INSTALL_AGENT" = false ]; then
@@ -294,10 +332,10 @@ install_base_deps() {
     case $OS in
         ubuntu|debian)
             apt-get update -qq
-            apt-get install -y -qq git curl iproute2 jq bridge-utils openvswitch-switch
+            apt-get install -y -qq git curl iproute2 jq bridge-utils openvswitch-switch openssl
             ;;
         centos|rhel|rocky|almalinux|fedora)
-            dnf install -y git curl iproute jq bridge-utils openvswitch
+            dnf install -y git curl iproute jq bridge-utils openvswitch openssl
             ;;
     esac
 
@@ -346,12 +384,6 @@ install_agent_deps() {
             dnf install -y python3 python3-pip
             ;;
     esac
-
-    # Containerlab
-    if ! command -v containerlab &> /dev/null; then
-        log_info "Installing containerlab..."
-        curl -sL https://containerlab.dev/setup | bash -s "all"
-    fi
 
     # vrnetlab for building VM images from qcow2
     VRNETLAB_DIR="/opt/vrnetlab"
@@ -423,6 +455,7 @@ WEB_PORT=8080
 # Local agent configuration
 ARCHETYPE_AGENT_NAME=local-agent
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
+INTERNAL_URL=http://$LOCAL_IP:8000
 EOF
         chmod 644 .env
         log_info "Generated .env with admin password: $ADMIN_PASS"

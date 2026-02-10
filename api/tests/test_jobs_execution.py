@@ -8,10 +8,8 @@ This module tests the core job execution functions including:
 """
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import Session

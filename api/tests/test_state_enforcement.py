@@ -9,12 +9,12 @@ Extends existing unit tests with full enforce_node_state() integration tests:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app import models
-from app.state import JobStatus, NodeActualState, NodeDesiredState
+from app.state import JobStatus, NodeActualState
 import app.tasks.state_enforcement as state_enforcement
 
 

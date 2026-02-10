@@ -183,7 +183,7 @@ def _clean_config(raw_output: str, command: str) -> str:
     lines = output.split('\n')
     if lines and command in lines[0]:
         lines = lines[1:]
-    lines = [l for l in lines if not l.strip().startswith("Building configuration")]
+    lines = [line for line in lines if not line.strip().startswith("Building configuration")]
     while lines and not lines[0].strip():
         lines = lines[1:]
     while lines and not lines[-1].strip():

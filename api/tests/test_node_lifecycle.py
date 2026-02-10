@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app import models
-from app.state import HostStatus, JobStatus, NodeActualState, NodeDesiredState
+from app.state import JobStatus, NodeActualState
 from app.tasks.node_lifecycle import LifecycleResult, NodeLifecycleManager, _get_container_name
 
 
@@ -496,7 +496,7 @@ class TestResolveAgents:
         manager.placements_map = {}
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle.safe_create_task") as mock_task:
+             patch("app.tasks.node_lifecycle.safe_create_task"):
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             result = await manager._resolve_agents()
@@ -1148,7 +1148,7 @@ class TestExecuteOrchestration:
         host = _make_host(test_db)
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
         node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"])
@@ -1226,8 +1226,8 @@ class TestExecuteOrchestration:
         host = _make_host(test_db)
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
-        ns_deploy = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-        ns_stop = _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
+        _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
         node_def1 = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
         node_def2 = _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host.id)
         container_name_r2 = _get_container_name(lab.id, "R2")
@@ -1284,7 +1284,7 @@ class TestExecuteOrchestration:
         host = _make_host(test_db)
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
         node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"])

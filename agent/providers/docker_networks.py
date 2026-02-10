@@ -12,15 +12,12 @@ solving the cEOS interface enumeration timing issue.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any
 
 import docker
 from docker.errors import APIError, NotFound
 
 from agent.network.docker_plugin import get_docker_ovs_plugin
-from agent.vendors import get_config_by_device
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +76,7 @@ class DockerNetworkManager:
 
                 # Create network via Docker API
                 # The plugin will handle OVS bridge creation
-                network = self.docker.networks.create(
+                self.docker.networks.create(
                     name=network_name,
                     driver=PLUGIN_DRIVER,
                     options={

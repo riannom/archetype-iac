@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from agent.vendors import get_vendor_config, get_config_by_device
+from agent.vendors import get_config_by_device
 from app.image_store import find_custom_device, get_device_override
 
 

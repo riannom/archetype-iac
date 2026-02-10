@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app import db, models, schemas
@@ -82,7 +82,7 @@ async def job_completion_callback(
     if payload.status == "completed":
         log_parts.append("Job completed successfully (async callback).")
     else:
-        log_parts.append(f"Job failed (async callback).")
+        log_parts.append("Job failed (async callback).")
         if payload.error_message:
             log_parts.append(f"\nError: {payload.error_message}")
 

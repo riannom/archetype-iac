@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 import app.routers.events as events_router  # noqa: F401
 import app.routers.callbacks as callbacks_router  # noqa: F401
-import pytest
 
 from app import models
 

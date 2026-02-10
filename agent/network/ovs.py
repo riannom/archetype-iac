@@ -42,7 +42,7 @@ import asyncio
 import json
 import logging
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -645,7 +645,7 @@ class OVSNetworkManager:
         for vlan_tag, port_keys in vlan_to_ports.items():
             if len(port_keys) == 2:
                 port_a = self._ports[port_keys[0]]
-                port_b = self._ports[port_keys[1]]
+                self._ports[port_keys[1]]
                 link_id = f"{port_keys[0]}-{port_keys[1]}"
                 link = OVSLink(
                     link_id=link_id,
@@ -1235,7 +1235,7 @@ class OVSNetworkManager:
 
     def get_links_for_lab(self, lab_id: str) -> list[OVSLink]:
         """Get all links for a lab."""
-        return [l for l in self._links.values() if l.lab_id == lab_id]
+        return [lnk for lnk in self._links.values() if lnk.lab_id == lab_id]
 
     def get_port(self, container_name: str, interface_name: str) -> OVSPort | None:
         """Get port by container and interface name."""
@@ -1633,7 +1633,7 @@ class OVSNetworkManager:
 
         # Create patch port names
         patch_local = f"patch-to-{target_bridge[:8]}"
-        patch_remote = f"patch-from-arch"
+        patch_remote = "patch-from-arch"
 
         # Check if target is OVS bridge
         code, _, _ = await self._ovs_vsctl("br-exists", target_bridge)
@@ -1815,13 +1815,13 @@ class OVSNetworkManager:
             ],
             "links": [
                 {
-                    "link_id": l.link_id,
-                    "lab_id": l.lab_id,
-                    "port_a": l.port_a,
-                    "port_b": l.port_b,
-                    "vlan_tag": l.vlan_tag,
+                    "link_id": lnk.link_id,
+                    "lab_id": lnk.lab_id,
+                    "port_a": lnk.port_a,
+                    "port_b": lnk.port_b,
+                    "vlan_tag": lnk.vlan_tag,
                 }
-                for l in self._links.values()
+                for lnk in self._links.values()
             ],
             "vlan_allocations": len(self._vlan_allocator._allocated),
         }

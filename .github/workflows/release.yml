@@ -1,10 +1,9 @@
-name: Tests
+name: Release
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags:
+      - 'v*'
 
 jobs:
   backend-tests:
@@ -112,3 +111,50 @@ jobs:
         run: |
           cd web
           npx tsc --noEmit
+
+  version-check:
+    name: Version Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify VERSION matches tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          VERSION=$(cat VERSION)
+          echo "Tag version: $TAG"
+          echo "VERSION file: $VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::VERSION file ($VERSION) does not match tag (v$TAG)"
+            exit 1
+          fi
+          echo "Version check passed: v$VERSION"
+
+  create-release:
+    name: Create Release
+    needs: [backend-tests, frontend-tests, lint, version-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine prerelease
+        id: prerelease
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if echo "$TAG" | grep -qE '(-rc|-beta|-alpha)'; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}

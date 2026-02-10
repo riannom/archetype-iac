@@ -1,7 +1,6 @@
 """Tests for admin router endpoints."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest

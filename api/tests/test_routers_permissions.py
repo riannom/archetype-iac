@@ -1,12 +1,11 @@
 """Tests for permissions router endpoints."""
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.auth import create_access_token, hash_password
+from app.auth import hash_password
 
 
 class TestListPermissions:
@@ -485,5 +484,5 @@ class TestPermissionAccessControl:
         # Lab should appear in test user's list
         response = test_client.get("/labs", headers=auth_headers)
         assert response.status_code == 200
-        lab_ids = [l["id"] for l in response.json()["labs"]]
+        lab_ids = [lab_item["id"] for lab_item in response.json()["labs"]]
         assert lab.id in lab_ids

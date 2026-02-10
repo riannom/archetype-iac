@@ -20,8 +20,8 @@ from typing import Any
 
 from sqlalchemy import or_
 
-from agent.vendors import get_kind_for_device, get_default_image, get_config_by_device
-from app.image_store import find_image_reference, find_custom_device, get_device_override, get_image_provider
+from agent.vendors import get_default_image, get_config_by_device
+from app.image_store import find_image_reference, find_custom_device, get_device_override
 from sqlalchemy.orm import Session
 
 from app import models
@@ -611,7 +611,7 @@ class TopologyService:
 
         # Track existing records for deletion detection
         existing_nodes = {n.gui_id: n for n in self.get_nodes(lab_id)}
-        existing_links = {l.link_name: l for l in self.get_links(lab_id)}
+        existing_links = {lnk.link_name: lnk for lnk in self.get_links(lab_id)}
 
         # Track which records we've seen
         seen_node_gui_ids: set[str] = set()
@@ -1067,8 +1067,8 @@ class TopologyService:
 
         # Filter links to only include those where both endpoints are on this host
         filtered_links = [
-            l for l in full_graph.links
-            if all(ep.node in host_node_gui_ids for ep in l.endpoints)
+            lnk for lnk in full_graph.links
+            if all(ep.node in host_node_gui_ids for ep in lnk.endpoints)
         ]
 
         filtered_graph = TopologyGraph(
@@ -1118,7 +1118,7 @@ class TopologyService:
     def _link_link_states(self, lab_id: str) -> None:
         """Link LinkState records to their Link definitions."""
         links = self.get_links(lab_id)
-        link_by_name = {l.link_name: l for l in links}
+        link_by_name = {lnk.link_name: lnk for lnk in links}
 
         link_states = (
             self.db.query(models.LinkState)
@@ -1178,8 +1178,8 @@ class TopologyService:
         # Filter links where BOTH endpoints are on this host (local links)
         # Cross-host links are handled separately via VXLAN overlay
         host_links = [
-            l for l in links
-            if l.source_node_id in host_node_ids and l.target_node_id in host_node_ids
+            lnk for lnk in links
+            if lnk.source_node_id in host_node_ids and lnk.target_node_id in host_node_ids
         ]
 
         # Build node ID to container_name mapping for link endpoint resolution
@@ -1192,7 +1192,7 @@ class TopologyService:
                 self._node_to_deploy_dict(n, interface_count_map.get(n.container_name))
                 for n in host_nodes
             ],
-            "links": [self._link_to_deploy_dict(l, node_id_to_name) for l in host_links],
+            "links": [self._link_to_deploy_dict(lnk, node_id_to_name) for lnk in host_links],
         }
 
     def normalize_links_for_lab(self, lab_id: str) -> int:

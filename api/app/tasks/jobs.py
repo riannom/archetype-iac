@@ -24,20 +24,16 @@ from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.config import settings
 from app.db import get_redis, get_session
-from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
-from app.services.topology import TopologyService, graph_to_deploy_topology
+from app.services.broadcaster import get_broadcaster
+from app.services.topology import TopologyService
 from app.utils.lab import update_lab_state
-from app.utils.async_tasks import safe_create_task
 from app.events.publisher import emit_deploy_finished, emit_destroy_finished, emit_job_failed
 from app.state import (
     HostStatus,
     JobStatus,
     LabState,
     LinkActualState,
-    NodeActualState,
-    NodeDesiredState,
 )
-from app.services.state_machine import NodeStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -585,7 +581,7 @@ async def run_agent_job(
 
                 if result.get("status") == "completed":
                     job.status = JobStatus.COMPLETED.value
-                    log_content = f"Job completed successfully.\n\n"
+                    log_content = "Job completed successfully.\n\n"
 
                     # Broadcast job completed
                     await _broadcast_job_progress(
@@ -739,7 +735,7 @@ async def run_multihost_deploy(
             # This is the key fix: nodes.host_id is the source of truth
             topo_service = TopologyService(session)
             nodes = topo_service.get_nodes(lab_id)
-            total_node_count = len(nodes)
+            len(nodes)
 
             # Find nodes without host assignment
             unplaced_nodes = [n for n in nodes if not n.host_id]
@@ -950,7 +946,7 @@ async def run_multihost_deploy(
 
             # Fail the job if any links failed
             if links_failed > 0:
-                log_parts.append(f"\n=== Link Setup Summary ===")
+                log_parts.append("\n=== Link Setup Summary ===")
                 log_parts.append(f"Links: {links_ok} OK, {links_failed} failed")
                 log_parts.append("\nNote: Containers are deployed but some links failed.")
                 job.status = JobStatus.FAILED.value
@@ -1256,7 +1252,7 @@ async def _create_cross_host_links_if_ready(
         session.query(models.LinkState)
         .filter(
             models.LinkState.lab_id == lab_id,
-            models.LinkState.is_cross_host == True,
+            models.LinkState.is_cross_host,
             models.LinkState.actual_state != LinkActualState.UP.value,
         )
         .count()
@@ -1267,7 +1263,7 @@ async def _create_cross_host_links_if_ready(
         session.query(models.LinkState)
         .filter(
             models.LinkState.lab_id == lab_id,
-            models.LinkState.source_host_id == None,
+            models.LinkState.source_host_id is None,
         )
         .count()
     )
@@ -1282,7 +1278,7 @@ async def _create_cross_host_links_if_ready(
         .filter(models.LinkState.lab_id == lab_id)
         .all()
     }
-    new_links = [l for l in db_links if l.link_name not in existing_link_names]
+    new_links = [lnk for lnk in db_links if lnk.link_name not in existing_link_names]
 
     # Determine if we need to force VXLAN recreation after agent restarts.
     # If there are cross-host links but no tunnels reported for this lab, rebuild.
@@ -1292,7 +1288,7 @@ async def _create_cross_host_links_if_ready(
             session.query(models.LinkState)
             .filter(
                 models.LinkState.lab_id == lab_id,
-                models.LinkState.is_cross_host == True,
+                models.LinkState.is_cross_host,
             )
             .count()
         )
@@ -1331,7 +1327,7 @@ async def _create_cross_host_links_if_ready(
             host_to_agent[agent.id] = agent
 
     if not host_to_agent:
-        logger.warning(f"No online agents available for cross-host link creation")
+        logger.warning("No online agents available for cross-host link creation")
         return
 
     # Call create_deployment_links which handles all the logic:

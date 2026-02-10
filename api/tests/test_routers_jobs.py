@@ -9,12 +9,9 @@ This module tests:
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 

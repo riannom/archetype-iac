@@ -1347,7 +1347,7 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
     """
     import logging
     from app.db import get_session
-    from app.errors import ErrorCategory, StructuredError, categorize_httpx_error
+    from app.errors import categorize_httpx_error
 
     logger = logging.getLogger(__name__)
     logger.info(f"Starting sync job {job_id}: {image_id} -> {host.name}")

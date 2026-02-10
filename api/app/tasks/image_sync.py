@@ -17,9 +17,8 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.db import SessionLocal, get_session
+from app.db import get_session
 from app.image_store import find_image_by_id, load_manifest
-from app.services.topology import TopologyService
 
 
 async def sync_image_to_agent(
@@ -611,7 +610,7 @@ async def check_and_start_image_sync(
     try:
         host = database.get(models.Host, host_id)
         if not host or host.status != "online":
-            log_entries.append(f"Agent not available for image sync")
+            log_entries.append("Agent not available for image sync")
             # All nodes fail
             for ref in image_references:
                 for node_name in image_to_nodes.get(ref, []):

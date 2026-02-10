@@ -9,9 +9,8 @@ These tests verify:
 
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 import tempfile
-import os
 
 from agent.providers.docker import (
     DockerProvider,

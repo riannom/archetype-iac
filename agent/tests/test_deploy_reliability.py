@@ -15,11 +15,10 @@ from contextlib import asynccontextmanager
 from agent.schemas import (
     DeployRequest,
     DeployTopology,
-    JobResult,
     JobStatus,
     Provider,
 )
-from agent.locks import DeployLockManager, LockAcquisitionTimeout
+from agent.locks import LockAcquisitionTimeout
 
 
 # --- Mock Lock Manager for Testing ---
@@ -425,7 +424,6 @@ def test_lock_ttl_is_short_for_crash_recovery():
 @pytest.mark.asyncio
 async def test_acquire_with_heartbeat_calls_extend():
     """Test that acquire_with_heartbeat extends lock periodically."""
-    from agent.locks import DeployLockManager
 
     # This test uses a mock to verify extend is called
     extend_calls = []

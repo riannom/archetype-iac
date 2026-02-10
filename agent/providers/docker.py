@@ -37,7 +37,7 @@ from typing import Any
 
 import docker
 from docker.errors import NotFound, APIError, ImageNotFound
-from docker.types import Mount, IPAMConfig
+from docker.types import IPAMConfig
 
 from agent.config import settings
 from agent.network.local import LocalNetworkManager, get_local_manager
@@ -52,9 +52,8 @@ from agent.providers.base import (
     Provider,
     StatusResult,
 )
-from agent.schemas import DeployLink, DeployNode, DeployTopology
+from agent.schemas import DeployTopology
 from agent.vendors import (
-    VendorConfig,
     get_config_by_device,
     get_config_extraction_settings,
     get_console_credentials,
@@ -2091,11 +2090,11 @@ username admin privilege 15 role network-admin nopassword
             )
 
         links = []
-        for l in deploy_topology.links:
+        for lnk in deploy_topology.links:
             links.append(TopologyLink(
                 endpoints=[
-                    f"{l.source_node}:{l.source_interface}",
-                    f"{l.target_node}:{l.target_interface}",
+                    f"{lnk.source_node}:{lnk.source_interface}",
+                    f"{lnk.target_node}:{lnk.target_interface}",
                 ]
             ))
 

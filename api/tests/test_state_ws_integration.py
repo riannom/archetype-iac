@@ -5,7 +5,6 @@ These tests verify that state changes propagate correctly through the pub/sub sy
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,7 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.services.broadcaster import StateBroadcaster, broadcast_node_state_change
+from app.services.broadcaster import StateBroadcaster
 
 
 class TestNodeStateChangeFlow:
@@ -124,7 +123,7 @@ class TestNodeStateChangeFlow:
         """Multiple clients on same lab should receive the same update."""
         from app.routers.state_ws import manager
 
-        update_message = {
+        {
             "type": "node_state",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "data": {
@@ -146,14 +145,14 @@ class TestNodeStateChangeFlow:
             mock_broadcaster.return_value = mock_instance
 
             # Connect first client
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws1:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state"):
                 # Check connection was registered
                 if sample_lab.id in manager.active_connections:
                     connection_count = len(manager.active_connections[sample_lab.id])
                     assert connection_count >= 1
 
                 # Connect second client
-                with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws2:
+                with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state"):
                     # Should have more connections now
                     if sample_lab.id in manager.active_connections:
                         assert len(manager.active_connections[sample_lab.id]) >= connection_count
@@ -393,8 +392,8 @@ class TestConcurrentConnections:
             mock_instance.subscribe = AsyncMock(return_value=mock_subscribe("any"))
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{lab1.id}/state") as ws1:
-                with test_client.websocket_connect(f"/ws/labs/{lab2.id}/state") as ws2:
+            with test_client.websocket_connect(f"/ws/labs/{lab1.id}/state"):
+                with test_client.websocket_connect(f"/ws/labs/{lab2.id}/state"):
                     # Both labs should have their own connection lists
                     if lab1.id in manager.active_connections and lab2.id in manager.active_connections:
                         # They should be separate

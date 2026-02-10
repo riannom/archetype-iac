@@ -9,7 +9,6 @@ Covers:
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

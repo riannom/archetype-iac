@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from app import agent_client, models
 from app.config import settings
-from app.db import SessionLocal, get_session
+from app.db import get_session
 from app.image_store import load_manifest
 
 logger = logging.getLogger(__name__)

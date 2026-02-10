@@ -6,7 +6,7 @@ import logging
 
 from app import agent_client
 from app.config import settings
-from app.db import SessionLocal, get_session
+from app.db import get_session
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ set -e
 
 INSTALL_DIR="/opt/archetype-controller"
 REPO_URL="https://github.com/riannom/archetype-iac.git"
-BRANCH="main"
+BRANCH=""
 
 # Colors
 RED='\033[0;31m'
@@ -41,12 +41,48 @@ while [[ $# -gt 0 ]]; do
             UNINSTALL=true
             shift
             ;;
+        --branch)
+            BRANCH_OVERRIDE="$2"
+            shift 2
+            ;;
+        --version)
+            CURRENT="none"
+            if [ -f "$INSTALL_DIR/VERSION" ]; then
+                CURRENT=$(cat "$INSTALL_DIR/VERSION")
+            fi
+            LATEST=$(curl -sS --max-time 10 \
+                https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+                | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "unknown")
+            echo "Installed: $CURRENT | Latest: $LATEST"
+            exit 0
+            ;;
         *)
             log_error "Unknown option: $1"
             exit 1
             ;;
     esac
 done
+
+# Resolve branch/tag to install
+resolve_install_target() {
+    if [ -n "$BRANCH_OVERRIDE" ]; then
+        BRANCH="$BRANCH_OVERRIDE"
+        log_info "Using specified branch/tag: $BRANCH"
+        return
+    fi
+    LATEST_TAG=$(curl -sS --max-time 10 \
+        https://api.github.com/repos/riannom/archetype-iac/releases/latest 2>/dev/null \
+        | grep -oP '"tag_name":\s*"\K[^"]+' 2>/dev/null || echo "")
+    if [ -n "$LATEST_TAG" ]; then
+        BRANCH="$LATEST_TAG"
+        log_info "Installing release: $LATEST_TAG"
+    else
+        BRANCH="main"
+        log_warn "Could not fetch latest release, falling back to main branch"
+    fi
+}
+
+resolve_install_target
 
 # Uninstall
 if [ "$UNINSTALL" = true ]; then
@@ -160,7 +196,7 @@ API_PORT=$API_PORT
 DATABASE_URL=postgresql+psycopg://archetype:archetype@postgres:5432/archetype
 REDIS_URL=redis://redis:6379/0
 WORKSPACE=/var/lib/archetype
-PROVIDER=clab
+PROVIDER=docker
 LOCAL_AUTH_ENABLED=true
 MAX_CONCURRENT_JOBS_PER_USER=2
 
@@ -183,6 +219,7 @@ OIDC_APP_REDIRECT_URL=http://localhost:$WEB_PORT/auth/callback
 # Local agent (built into docker-compose)
 ARCHETYPE_AGENT_NAME=local-agent
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
+INTERNAL_URL=http://$LOCAL_IP:$API_PORT
 EOF
 
 # Make readable by docker group (or use 600 and run with sudo for tighter security)

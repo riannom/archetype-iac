@@ -15,16 +15,13 @@ This eliminates timeout issues for long-running operations.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import httpx
 
-from agent.config import settings
 
 logger = logging.getLogger(__name__)
 

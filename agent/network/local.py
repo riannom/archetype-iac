@@ -29,13 +29,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import docker
 from docker.errors import NotFound, APIError
 
-from agent.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -684,7 +683,7 @@ class LocalNetworkManager:
         }
 
         # Delete all links for this lab
-        links_to_delete = [l for l in self._links.values() if l.lab_id == lab_id]
+        links_to_delete = [lnk for lnk in self._links.values() if lnk.lab_id == lab_id]
         for link in links_to_delete:
             try:
                 if await self.delete_link(link):
@@ -712,7 +711,7 @@ class LocalNetworkManager:
 
     def get_links_for_lab(self, lab_id: str) -> list[LocalLink]:
         """Get all local links for a lab."""
-        return [l for l in self._links.values() if l.lab_id == lab_id]
+        return [lnk for lnk in self._links.values() if lnk.lab_id == lab_id]
 
     def get_network_for_lab(self, lab_id: str) -> ManagedNetwork | None:
         """Get management network for a lab."""
@@ -723,14 +722,14 @@ class LocalNetworkManager:
         return {
             "links": [
                 {
-                    "lab_id": l.lab_id,
-                    "link_id": l.link_id,
-                    "container_a": l.container_a,
-                    "container_b": l.container_b,
-                    "iface_a": l.iface_a,
-                    "iface_b": l.iface_b,
+                    "lab_id": lnk.lab_id,
+                    "link_id": lnk.link_id,
+                    "container_a": lnk.container_a,
+                    "container_b": lnk.container_b,
+                    "iface_a": lnk.iface_a,
+                    "iface_b": lnk.iface_b,
                 }
-                for l in self._links.values()
+                for lnk in self._links.values()
             ],
             "networks": [
                 {

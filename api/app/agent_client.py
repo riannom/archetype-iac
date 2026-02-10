@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import json
 import logging
 import socket
 from datetime import datetime, timedelta
-from typing import TypeVar, Callable, Any
+from typing import Callable, Any
 
 import httpx
 from sqlalchemy.orm import Session
@@ -114,7 +113,7 @@ def _data_plane_mtu_ok(
         .all()
     )
     # Build lookup for (src, dst) -> tested_mtu
-    mtus = {(l.source_agent_id, l.target_agent_id): l.tested_mtu for l in links}
+    mtus = {(lnk.source_agent_id, lnk.target_agent_id): lnk.tested_mtu for lnk in links}
     a_to_b = mtus.get((agent_a_id, agent_b_id))
     b_to_a = mtus.get((agent_b_id, agent_a_id))
     if a_to_b is None or b_to_a is None:

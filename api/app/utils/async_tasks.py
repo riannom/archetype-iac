@@ -6,10 +6,9 @@ exception handling to prevent silent failures and improve debuggability.
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 import traceback
-from typing import Awaitable, Callable, TypeVar
+from typing import Awaitable, TypeVar
 
 logger = logging.getLogger(__name__)
 

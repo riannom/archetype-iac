@@ -21,7 +21,6 @@ import queue
 from datetime import datetime, timezone
 
 import docker
-from docker.models.containers import Container
 
 from agent.events.base import EventCallback, NodeEvent, NodeEventListener, NodeEventType
 

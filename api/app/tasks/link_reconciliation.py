@@ -217,7 +217,7 @@ async def attempt_partial_recovery(
     # Re-query with row-level lock to prevent concurrent modifications
     link = get_link_state_by_id_for_update(session, link.id)
     if not link:
-        logger.warning(f"Link not found for recovery (may have been deleted)")
+        logger.warning("Link not found for recovery (may have been deleted)")
         return False
 
     if not link.is_cross_host:
@@ -335,7 +335,7 @@ async def attempt_link_repair(
     # Re-query with row-level lock to prevent concurrent modifications
     link = get_link_state_by_id_for_update(session, link.id)
     if not link:
-        logger.warning(f"Link not found for repair (may have been deleted)")
+        logger.warning("Link not found for repair (may have been deleted)")
         return False
 
     try:
@@ -387,7 +387,7 @@ async def cleanup_orphaned_link_states(session: Session) -> int:
     orphaned = (
         session.query(models.LinkState)
         .filter(
-            models.LinkState.link_definition_id == None,
+            models.LinkState.link_definition_id is None,
             models.LinkState.actual_state != "up",
         )
         .all()
@@ -475,7 +475,7 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
         session.query(models.VxlanTunnel)
         .filter(
             or_(
-                models.VxlanTunnel.link_state_id == None,
+                models.VxlanTunnel.link_state_id is None,
                 and_(
                     models.VxlanTunnel.status == "cleanup",
                     models.VxlanTunnel.updated_at < cutoff_time,

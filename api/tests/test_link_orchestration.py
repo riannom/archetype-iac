@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.services.link_manager import allocate_vni
 
 
 class TestCreateDeploymentLinks:

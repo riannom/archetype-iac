@@ -18,9 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import docker
-from docker.errors import NotFound
 
-from agent.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -287,7 +285,7 @@ class NetworkCleanupManager:
             # Peer exists - check if it's in a container namespace
             # If the peer is still in the host namespace (no @ifX suffix in name),
             # it might be waiting to be moved to a container
-            peer_name = peer.get("ifname", "")
+            peer.get("ifname", "")
 
             # If peer is on OVS bridge or a known bridge, it's not orphaned
             # (it's the host-side of an active connection)

@@ -133,7 +133,6 @@ class TestIsolatePortLogic:
         # VLAN-based isolation still provides L2 isolation
         # even if carrier state change fails
         isolated_vlan = 999
-        carrier_success = False
 
         # VLAN should still be returned
         assert isolated_vlan is not None

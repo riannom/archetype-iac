@@ -7,6 +7,7 @@ This agent runs on each compute host and handles:
 - Network overlay management
 - Health reporting to controller
 """
+# ruff: noqa: E402  -- agent setup and logging must run before other imports
 
 from __future__ import annotations
 
@@ -20,13 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.config import settings
 from agent.network.backends.registry import get_network_backend
 from agent.providers import NodeStatus as ProviderNodeStatus, get_provider, list_providers
-from agent.providers.base import Provider
+from agent.providers.base import Provider as BaseProvider
 from agent.schemas import (
     AgentCapabilities,
     AgentInfo,
@@ -41,7 +42,6 @@ from agent.schemas import (
     CleanupAuditResponse,
     CleanupOverlayRequest,
     CleanupOverlayResponse,
-    ConsoleRequest,
     CreateTunnelRequest,
     CreateTunnelResponse,
     DeployRequest,
@@ -50,7 +50,6 @@ from agent.schemas import (
     DiscoveredLab,
     DiscoverLabsResponse,
     DockerImageInfo,
-    ExtractConfigsRequest,
     ExtractConfigsResponse,
     ExtractedConfig,
     FixInterfacesResponse,
@@ -61,7 +60,6 @@ from agent.schemas import (
     ImagePullProgress,
     ImagePullRequest,
     ImagePullResponse,
-    ImageReceiveRequest,
     ImageReceiveResponse,
     JobResult,
     JobStatus,
@@ -79,7 +77,6 @@ from agent.schemas import (
     LinkState,
     NodeInfo,
     NodeStatus,
-    OVSPortInfo,
     OVSStatusResponse,
     OverlayStatusResponse,
     # New VTEP model schemas
@@ -153,7 +150,6 @@ from agent.schemas import (
     # Interface provisioning
     InterfaceProvisionRequest,
     InterfaceProvisionResponse,
-    TransportConfigResponse,
 )
 from agent.version import __version__, get_commit
 from agent.updater import (
@@ -302,7 +298,7 @@ def get_workspace(lab_id: str) -> Path:
     return workspace
 
 
-def get_provider_for_request(provider_name: str = "docker") -> Provider:
+def get_provider_for_request(provider_name: str = "docker") -> BaseProvider:
     """Get a provider instance for handling a request.
 
     Args:
@@ -2046,7 +2042,6 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
     Returns:
         Lists of removed and kept containers/VMs
     """
-    import docker
     from docker.errors import APIError
 
     logger.info(f"Cleaning up orphan containers/VMs for lab {request.lab_id}, keeping {len(request.keep_node_names)} nodes")
@@ -3765,7 +3760,7 @@ async def list_links(lab_id: str) -> LinkListResponse:
             return LinkListResponse(links=[])
 
         # Get provider for container name resolution
-        provider = get_provider_for_request()
+        get_provider_for_request()
 
         links = []
         for ovs_link in backend.get_links_for_lab(lab_id):
@@ -3831,16 +3826,16 @@ async def ovs_status() -> OVSStatusResponse:
 
         links = [
             LinkInfo(
-                link_id=l["link_id"],
-                lab_id=l["lab_id"],
-                source_node=l["port_a"].rsplit(":", 1)[0].split("-")[-1],
-                source_interface=l["port_a"].rsplit(":", 1)[1] if ":" in l["port_a"] else "",
-                target_node=l["port_b"].rsplit(":", 1)[0].split("-")[-1],
-                target_interface=l["port_b"].rsplit(":", 1)[1] if ":" in l["port_b"] else "",
+                link_id=lnk["link_id"],
+                lab_id=lnk["lab_id"],
+                source_node=lnk["port_a"].rsplit(":", 1)[0].split("-")[-1],
+                source_interface=lnk["port_a"].rsplit(":", 1)[1] if ":" in lnk["port_a"] else "",
+                target_node=lnk["port_b"].rsplit(":", 1)[0].split("-")[-1],
+                target_interface=lnk["port_b"].rsplit(":", 1)[1] if ":" in lnk["port_b"] else "",
                 state=LinkState.CONNECTED,
-                vlan_tag=l["vlan_tag"],
+                vlan_tag=lnk["vlan_tag"],
             )
-            for l in status["links"]
+            for lnk in status["links"]
         ]
 
         return OVSStatusResponse(
@@ -4773,9 +4768,7 @@ async def check_node_ready(
               auto-detected.
     """
     from agent.readiness import (
-        get_probe_for_vendor,
         get_readiness_timeout,
-        run_post_boot_commands,
     )
 
     # Try libvirt if explicitly requested or if Docker fails
@@ -5751,7 +5744,6 @@ async def _console_websocket_ssh(
     Returns True if SSH session was established (even if it later ended),
     False if SSH connection failed (caller should fall back to docker exec).
     """
-    from agent.console.ssh_console import SSHConsole
 
     # Send boot logs before connecting to CLI
     boot_logs = await _get_container_boot_logs(container_name)
@@ -5869,7 +5861,6 @@ async def _console_websocket_docker(
     websocket: WebSocket, container_name: str, node_name: str, shell_cmd: str
 ):
     """Handle console via docker exec (for native containers)."""
-    from agent.console.docker_exec import DockerConsole
 
     # Send boot logs before connecting to CLI
     boot_logs = await _get_container_boot_logs(container_name)
@@ -6012,7 +6003,6 @@ async def _console_websocket_libvirt(
     """Handle console via virsh console (for libvirt VMs)."""
     import pty
     import os
-    import select
     import termios
     import struct
     import fcntl
@@ -6051,8 +6041,8 @@ async def _console_websocket_libvirt(
             await websocket.close(code=1011)
             return
 
-    await websocket.send_text(f"\r\n\x1b[90m--- Connecting to VM console ---\x1b[0m\r\n")
-    await websocket.send_text(f"\x1b[90mPress Ctrl+] to disconnect\x1b[0m\r\n\r\n")
+    await websocket.send_text("\r\n\x1b[90m--- Connecting to VM console ---\x1b[0m\r\n")
+    await websocket.send_text("\x1b[90mPress Ctrl+] to disconnect\x1b[0m\r\n\r\n")
 
     # Create pseudo-terminal for virsh console
     master_fd, slave_fd = pty.openpty()

@@ -2,7 +2,6 @@
 
 import re
 
-import pytest
 
 from app.schemas import (
     GraphEndpoint,

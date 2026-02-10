@@ -8,11 +8,9 @@ Tests verify:
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-import asyncio
+from unittest.mock import MagicMock, patch
 
 from agent.readiness import (
-    ReadinessResult,
     NoopProbe,
     LogPatternProbe,
     CliProbe,

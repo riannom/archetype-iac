@@ -20,12 +20,10 @@ from app.services.topology import TopologyService
 from app.storage import (
     delete_layout,
     lab_workspace,
-    layout_path,
     read_layout,
     write_layout,
 )
 from app.tasks.jobs import run_agent_job, run_multihost_destroy
-from app.topology import analyze_topology
 from app.utils.lab import get_lab_or_404, get_lab_provider, update_lab_provider_from_nodes
 from app.utils.agents import get_online_agent_for_lab
 from app.utils.http import require_lab_owner, raise_not_found, raise_unavailable
@@ -602,7 +600,6 @@ def check_resources(
     """
     from app.services.resource_capacity import (
         check_multihost_capacity,
-        format_capacity_warnings,
     )
 
     lab = get_lab_or_404(lab_id, database, current_user)
@@ -886,8 +883,6 @@ async def set_node_desired_state(
     Auto-triggers sync to immediately apply the change. This eliminates
     the need for a separate "Sync" button in the UI.
     """
-    from app.tasks.jobs import run_node_reconcile
-    from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
 
@@ -1204,7 +1199,7 @@ async def refresh_node_states(
         else:
             # Container not found - only update if the relevant agent was queried
             expected_agent = node_expected_agent.get(ns.node_name)
-            agent_was_queried = (
+            (
                 expected_agent in agents_successfully_queried
                 if expected_agent
                 else len(agents_successfully_queried) > 0
@@ -1277,8 +1272,6 @@ async def reconcile_node(
     This will bring the node's actual state in line with its desired state.
     If the node is already in the correct state, no job is created.
     """
-    import asyncio
-    from app import agent_client
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider, get_node_provider
 
@@ -1286,7 +1279,7 @@ async def reconcile_node(
     _ensure_node_states_exist(database, lab.id)
 
     # Get or create the node state with correct naming
-    state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state="running")
+    _get_or_create_node_state(database, lab.id, node_id, initial_desired_state="running")
 
     # Check if node needs reconciliation
     out_of_sync = _get_out_of_sync_nodes(database, lab_id, [node_id])
@@ -1350,8 +1343,6 @@ async def reconcile_lab(
     This will bring all nodes' actual states in line with their desired states.
     If all nodes are already in the correct state, no job is created.
     """
-    import asyncio
-    from app import agent_client
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
@@ -2162,7 +2153,7 @@ def refresh_link_states(
     database.commit()
 
     return schemas.LinkStateRefreshResponse(
-        message=f"Link states refreshed",
+        message="Link states refreshed",
         links_created=created,
         links_updated=updated,
     )
@@ -2442,7 +2433,7 @@ def list_config_snapshots(
 
     Returns snapshots with is_orphaned and is_active flags.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService
     config_svc = ConfigService(database)
@@ -2470,7 +2461,7 @@ def list_node_config_snapshots(
     Returns snapshots with is_orphaned and is_active flags,
     ordered by created_at descending (newest first).
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService
     config_svc = ConfigService(database)
@@ -2572,7 +2563,7 @@ def delete_config_snapshot(
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Delete a specific config snapshot."""
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     snapshot = (
         database.query(models.ConfigSnapshot)
@@ -2611,7 +2602,7 @@ def bulk_delete_config_snapshots(
     If any snapshot is the active startup-config for a node and force=False,
     returns 409 with details about which snapshots are active.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService, ActiveConfigGuardError
     config_svc = ConfigService(database)
@@ -2649,7 +2640,7 @@ def map_config_snapshot(
     Sets mapped_to_node_id on the snapshot. Validates device_kind
     compatibility (warns on mismatch but does not block).
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService
     config_svc = ConfigService(database)
@@ -2689,7 +2680,7 @@ async def set_active_config(
     Updates the node's active_config_snapshot_id, syncs content to
     config_json["startup-config"], and pushes to the agent workspace.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     node = (
         database.query(models.Node)
@@ -2794,7 +2785,7 @@ def list_orphaned_configs(
     Returns stranded configs (from deleted nodes) organized by device type
     for the config mapping UI.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService
     config_svc = ConfigService(database)
@@ -2846,8 +2837,6 @@ class ExternalConnectResponse(BaseModel):
     vlan_tag: int | None = None
     error: str | None = None
 
-
-from pydantic import BaseModel
 
 
 @router.post("/labs/{lab_id}/hot-connect")
@@ -2994,7 +2983,7 @@ async def hot_disconnect_link(
         lab_id: Lab identifier
         link_id: Link identifier (format: "node1:iface1-node2:iface2")
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     link_states = (
         database.query(models.LinkState)
@@ -3127,7 +3116,7 @@ def generate_config_diff(
     """
     import difflib
 
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     # Fetch both snapshots
     snapshot_a = (
@@ -3264,7 +3253,7 @@ def get_lab_logs(
     from app.services.log_parser import parse_job_log, filter_entries
     from app.utils.logs import get_log_content
 
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     # Parse 'since' parameter
     from app.utils.time_range import parse_relative_duration
@@ -3410,7 +3399,7 @@ async def cleanup_lab_orphans(
     Returns:
         Dict mapping agent names to lists of removed containers
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     # Get all node placements for this lab
     placements = (
@@ -3479,7 +3468,7 @@ async def get_lab_interface_mappings(
     Returns OVS port, Linux interface, and vendor interface mappings
     for all interfaces in the lab.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     mappings = (
         database.query(models.InterfaceMapping)
@@ -3505,7 +3494,7 @@ async def get_node_interfaces(
     Returns OVS port, Linux interface, and vendor interface mappings
     for all interfaces on the specified node.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     # Get the Node definition
     node = (
@@ -3550,7 +3539,7 @@ async def sync_interface_mappings(
     Fetches OVS port information from agents and updates the
     interface_mappings table with current state.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     result = await interface_mapping_service.populate_all_agents(database, lab_id)
 
@@ -3582,7 +3571,7 @@ async def reconcile_links(
     Verifies all links marked as "up" have matching VLAN tags on both
     endpoints. Attempts to repair any mismatched links.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    get_lab_or_404(lab_id, database, current_user)
 
     result = await reconcile_lab_links(database, lab_id)
 

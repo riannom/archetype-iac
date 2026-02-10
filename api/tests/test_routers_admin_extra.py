@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import app.routers.admin as admin_router  # noqa: F401
-import pytest
 
 from app import models
 

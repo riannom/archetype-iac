@@ -1,4 +1,5 @@
 """Shared pytest fixtures for API tests."""
+# ruff: noqa: E402  -- sys.path setup must run before app imports
 from __future__ import annotations
 
 from contextlib import contextmanager

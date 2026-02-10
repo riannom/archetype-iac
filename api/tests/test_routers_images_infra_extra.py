@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 import app.routers.images as images_router  # noqa: F401
 import app.routers.infrastructure as infrastructure_router  # noqa: F401
-import pytest
 
 from app import models
 

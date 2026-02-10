@@ -849,7 +849,7 @@ async def list_agent_network_configs(
     """
     # Get all agents
     agents = database.query(models.Host).all()
-    agent_map = {a.id: a for a in agents}
+    {a.id: a for a in agents}
 
     # Get all network configs
     configs = database.query(models.AgentNetworkConfig).all()

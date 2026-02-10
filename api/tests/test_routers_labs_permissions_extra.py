@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 
 import app.routers.labs as labs_router  # noqa: F401
 import app.routers.permissions as permissions_router  # noqa: F401
-import pytest
 
 from app import models
 

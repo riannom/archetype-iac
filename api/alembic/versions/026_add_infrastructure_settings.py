@@ -13,7 +13,6 @@ Create Date: 2026-02-01
 """
 from alembic import op
 import sqlalchemy as sa
-from datetime import datetime, timezone
 
 revision = "026"
 down_revision = "025"

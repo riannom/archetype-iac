@@ -56,7 +56,7 @@ def links_needing_reconciliation_filter():
             # includes both partial attachment AND VLAN tag mismatch cases
             (
                 (models.LinkState.actual_state == "error") &
-                (models.LinkState.is_cross_host == True) &
+                (models.LinkState.is_cross_host) &
                 (models.LinkState.desired_state == "up")
             ),
         ),

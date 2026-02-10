@@ -20,7 +20,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator
 
 import redis.asyncio as aioredis
 

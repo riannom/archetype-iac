@@ -6,7 +6,6 @@ These tests verify:
 3. Cross-host link analysis correctly identifies links
 """
 
-import pytest
 import json
 
 from app import models

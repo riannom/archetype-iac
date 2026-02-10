@@ -11,7 +11,6 @@ Note: These tests require a running agent. For unit tests without
 an agent, use mocking.
 """
 
-import asyncio
 import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,11 +19,9 @@ import httpx
 
 from app import agent_client
 from app.agent_client import (
-    AgentError,
     AgentUnavailableError,
     AgentJobError,
     with_retry,
-    MAX_RETRIES,
 )
 
 
@@ -160,7 +157,7 @@ def test_get_agent_console_url():
 async def test_update_stale_agents():
     """Test marking stale agents as offline."""
     from unittest.mock import MagicMock
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     # Create mock database session
     mock_db = MagicMock()
@@ -394,7 +391,7 @@ async def test_get_healthy_agent_exclude_agents():
     """Test that excluded agents are not selected."""
     mock_db = MagicMock()
 
-    agent1 = MockAgent("agent1", "localhost:8001")
+    MockAgent("agent1", "localhost:8001")
     agent2 = MockAgent("agent2", "localhost:8002")
 
     mock_query = MagicMock()

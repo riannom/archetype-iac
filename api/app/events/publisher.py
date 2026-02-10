@@ -5,7 +5,6 @@ All publish calls log warnings on failure but never raise.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import redis.asyncio as aioredis

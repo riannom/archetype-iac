@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.iso.extractor import ISOExtractor
-from app.iso.models import ISOFormat, ISOManifest, ParsedImage, ParsedNodeDefinition
+from app.iso.models import ISOFormat
 from app.iso.parser import ParserRegistry
 from app.iso.virl2_parser import VIRL2Parser
 
