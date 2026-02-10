@@ -12,6 +12,23 @@ from sqlalchemy.orm import Session
 from app import models
 
 
+@pytest.fixture(autouse=True)
+def _disable_link_broadcasts():
+    """Disable background link broadcast tasks during reconciliation tests."""
+    with patch("app.tasks.reconciliation.broadcast_link_state_change", new_callable=AsyncMock):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _disable_external_reconcile_actions():
+    """Prevent reconciliation from invoking external side effects."""
+    with patch("app.tasks.reconciliation.acquire_link_ops_lock", return_value=False):
+        with patch("app.tasks.reconciliation.agent_client.cleanup_lab_orphans", new_callable=AsyncMock):
+            with patch("app.tasks.reconciliation.agent_client.destroy_container_on_agent", new_callable=AsyncMock):
+                with patch("app.tasks.reconciliation.agent_client.repair_endpoints_on_agent", new_callable=AsyncMock):
+                    yield
+
+
 def _add_node_defs(test_db: Session, lab_id: str, node_names: list[str]) -> None:
     """Create Node definitions to prevent orphan cleanup."""
     for name in node_names:
@@ -137,7 +154,13 @@ class TestRefreshStatesFromAgents:
         """Should complete without error when no labs need reconciliation."""
         from app.tasks.reconciliation import refresh_states_from_agents
 
-        with patch("app.tasks.reconciliation.SessionLocal", return_value=test_db):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _session_ctx():
+            yield test_db
+
+        with patch("app.tasks.reconciliation.get_session", _session_ctx):
             await refresh_states_from_agents()
 
     @pytest.mark.asyncio
@@ -149,7 +172,13 @@ class TestRefreshStatesFromAgents:
         sample_lab.state = "starting"
         test_db.commit()
 
-        with patch("app.tasks.reconciliation.SessionLocal", return_value=test_db):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _session_ctx():
+            yield test_db
+
+        with patch("app.tasks.reconciliation.get_session", _session_ctx):
             with patch("app.tasks.reconciliation._reconcile_single_lab", new_callable=AsyncMock) as mock_reconcile:
                 await refresh_states_from_agents()
                 # Should not call reconcile for this lab

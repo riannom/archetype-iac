@@ -82,6 +82,16 @@ async def resolve_data_plane_ip(session: Session, agent: models.Host) -> str:
     if iface and iface.ip_address:
         ip = iface.ip_address.split("/")[0]
         logger.info(f"Using transport interface IP {ip} for agent {agent.id}")
+        # Backfill data_plane_address for visibility and future use.
+        if not agent.data_plane_address:
+            try:
+                agent.data_plane_address = ip
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.warning(
+                    f"Failed to persist data_plane_address for agent {agent.id}: {e}"
+                )
         return ip
 
     return await resolve_agent_ip(agent.address)

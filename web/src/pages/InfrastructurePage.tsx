@@ -1622,6 +1622,8 @@ const InfrastructurePage: React.FC = () => {
                               const statusBadge = getMtuSyncStatusBadge(config?.sync_status || 'unconfigured');
                               const isLoading = configuringMtu === host.id;
                               const needsAttention = config?.sync_status === 'mismatch' || config?.sync_status === 'error';
+                              const effectiveDataPlaneIp = host.data_plane_address
+                                || (config?.transport_ip ? config.transport_ip.split('/')[0] : '');
 
                               return (
                                 <tr
@@ -1653,7 +1655,14 @@ const InfrastructurePage: React.FC = () => {
                                         : '-'}
                                   </td>
                                   <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
-                                    {host.data_plane_address || (config?.transport_ip ? config.transport_ip.split('/')[0] : '-')}
+                                    <div className="flex flex-col">
+                                      <span>{effectiveDataPlaneIp || '-'}</span>
+                                      {config?.transport_mode === 'management' && effectiveDataPlaneIp && (
+                                        <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                                          Auto-selected transport IP
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="py-2 px-3">
                                     <div className="flex items-center gap-1.5">
