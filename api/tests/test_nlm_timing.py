@@ -1,7 +1,6 @@
 """Tests for NLM phase timing instrumentation."""
 import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

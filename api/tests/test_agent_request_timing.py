@@ -1,5 +1,4 @@
 """Tests for agent_client operation timing instrumentation."""
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
