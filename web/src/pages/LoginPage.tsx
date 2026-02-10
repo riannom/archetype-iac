@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { API_BASE_URL } from "../api";
 
 export function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -12,7 +12,7 @@ export function LoginPage() {
     event.preventDefault();
     try {
       const formBody = new URLSearchParams();
-      formBody.append("username", email);
+      formBody.append("username", username);
       formBody.append("password", password);
       const response = await fetch(`${API_BASE_URL}/auth/login`, {
         method: "POST",
@@ -38,11 +38,11 @@ export function LoginPage() {
       </div>
       <form onSubmit={handleSubmit} className="auth-form">
         <label>
-          Email
+          Username
           <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@lab.dev"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="username"
           />
         </label>
         <label>
@@ -57,10 +57,6 @@ export function LoginPage() {
         <button type="submit">Sign in</button>
       </form>
       {status && <p className="auth-status">{status}</p>}
-      <div className="auth-footer">
-        <span>New here?</span>
-        <Link to="/auth/register">Create an account</Link>
-      </div>
     </div>
   );
 }

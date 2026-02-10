@@ -114,10 +114,11 @@ def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
 def test_user(test_db: Session) -> models.User:
     """Create a regular test user."""
     user = models.User(
+        username="testuser",
         email="testuser@example.com",
         hashed_password=hash_password("testpassword123"),
         is_active=True,
-        is_admin=False,
+        global_role="operator",
     )
     test_db.add(user)
     test_db.commit()
@@ -129,10 +130,11 @@ def test_user(test_db: Session) -> models.User:
 def admin_user(test_db: Session) -> models.User:
     """Create an admin test user."""
     user = models.User(
+        username="admin",
         email="admin@example.com",
         hashed_password=hash_password("adminpassword123"),
         is_active=True,
-        is_admin=True,
+        global_role="admin",
     )
     test_db.add(user)
     test_db.commit()

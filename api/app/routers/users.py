@@ -74,7 +74,6 @@ def create_user(
         email=payload.email or f"{username}@local",
         hashed_password=hash_password(payload.password),
         global_role=payload.global_role,
-        is_admin=payload.global_role in (GlobalRole.SUPER_ADMIN.value, GlobalRole.ADMIN.value),
     )
     database.add(user)
     database.flush()
@@ -139,7 +138,6 @@ def update_user(
             PermissionService.require_global_role(current_user, GlobalRole.SUPER_ADMIN)
         changes["global_role"] = {"from": user.global_role, "to": payload.global_role}
         user.global_role = payload.global_role
-        user.is_admin = payload.global_role in (GlobalRole.SUPER_ADMIN.value, GlobalRole.ADMIN.value)
 
     AuditService.log(
         database,

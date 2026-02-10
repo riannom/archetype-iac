@@ -77,10 +77,11 @@ class TestGetLabOr404:
         """Non-owner without permission gets 403."""
         # Create a different user
         other_user = models.User(
+            username="otheruser",
             email="other@example.com",
             hashed_password="hashed",
             is_active=True,
-            is_admin=False,
+            global_role="operator",
         )
         test_db.add(other_user)
         test_db.commit()
@@ -98,10 +99,11 @@ class TestGetLabOr404:
         """User with permission grant can access lab."""
         # Create a different user
         other_user = models.User(
+            username="permitteduser",
             email="permitted@example.com",
             hashed_password="hashed",
             is_active=True,
-            is_admin=False,
+            global_role="operator",
         )
         test_db.add(other_user)
         test_db.commit()
@@ -135,10 +137,11 @@ class TestGetLabOr404:
 
         # Create a different user
         other_user = models.User(
+            username="otheruser2",
             email="other2@example.com",
             hashed_password="hashed",
             is_active=True,
-            is_admin=False,
+            global_role="operator",
         )
         test_db.add(other_user)
         test_db.commit()
@@ -194,10 +197,11 @@ class TestGetLabOr404EdgeCases:
     ):
         """Multiple permission records for same lab/user still grants access."""
         other_user = models.User(
+            username="multiuser",
             email="multi@example.com",
             hashed_password="hashed",
             is_active=True,
-            is_admin=False,
+            global_role="operator",
         )
         test_db.add(other_user)
         test_db.commit()

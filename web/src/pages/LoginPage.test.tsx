@@ -38,16 +38,16 @@ describe("LoginPage", () => {
       renderLoginPage();
 
       expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
-      expect(screen.getByPlaceholderText("you@lab.dev")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("username")).toBeInTheDocument();
       expect(screen.getByPlaceholderText("••••••••")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
     });
 
-    it("renders email input field", () => {
+    it("renders username input field", () => {
       renderLoginPage();
 
-      const emailInput = screen.getByPlaceholderText("you@lab.dev");
-      expect(emailInput).toBeInTheDocument();
+      const usernameInput = screen.getByPlaceholderText("username");
+      expect(usernameInput).toBeInTheDocument();
     });
 
     it("renders password input field", () => {
@@ -57,22 +57,22 @@ describe("LoginPage", () => {
       expect(passwordInput).toHaveAttribute("type", "password");
     });
 
-    it("renders register link", () => {
+    it("does not render register link", () => {
       renderLoginPage();
 
-      expect(screen.getByText("Create an account")).toBeInTheDocument();
+      expect(screen.queryByText("Create an account")).not.toBeInTheDocument();
     });
   });
 
   describe("form validation", () => {
-    it("accepts valid email", async () => {
+    it("accepts valid username", async () => {
       const user = userEvent.setup();
       renderLoginPage();
 
-      const emailInput = screen.getByPlaceholderText("you@lab.dev");
-      await user.type(emailInput, "valid@example.com");
+      const usernameInput = screen.getByPlaceholderText("username");
+      await user.type(usernameInput, "admin");
 
-      expect(emailInput).toHaveValue("valid@example.com");
+      expect(usernameInput).toHaveValue("admin");
     });
 
     it("accepts password input", async () => {
@@ -102,7 +102,7 @@ describe("LoginPage", () => {
 
       renderLoginPage();
 
-      await user.type(screen.getByPlaceholderText("you@lab.dev"), "test@example.com");
+      await user.type(screen.getByPlaceholderText("username"), "testuser");
       await user.type(screen.getByPlaceholderText("••••••••"), "password123");
       await user.click(screen.getByRole("button", { name: /sign in/i }));
 
@@ -119,17 +119,17 @@ describe("LoginPage", () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 401,
-        text: () => Promise.resolve("Invalid email or password"),
+        text: () => Promise.resolve("Invalid credentials"),
       });
 
       renderLoginPage();
 
-      await user.type(screen.getByPlaceholderText("you@lab.dev"), "wrong@example.com");
+      await user.type(screen.getByPlaceholderText("username"), "wronguser");
       await user.type(screen.getByPlaceholderText("••••••••"), "wrongpassword");
       await user.click(screen.getByRole("button", { name: /sign in/i }));
 
       await waitFor(() => {
-        expect(screen.getByText("Invalid email or password")).toBeInTheDocument();
+        expect(screen.getByText("Invalid credentials")).toBeInTheDocument();
       });
     });
 
@@ -147,7 +147,7 @@ describe("LoginPage", () => {
 
       renderLoginPage();
 
-      await user.type(screen.getByPlaceholderText("you@lab.dev"), "test@example.com");
+      await user.type(screen.getByPlaceholderText("username"), "testuser");
       await user.type(screen.getByPlaceholderText("••••••••"), "password123");
       await user.click(screen.getByRole("button", { name: /sign in/i }));
 
@@ -172,7 +172,7 @@ describe("LoginPage", () => {
 
       renderLoginPage();
 
-      await user.type(screen.getByPlaceholderText("you@lab.dev"), "test@example.com");
+      await user.type(screen.getByPlaceholderText("username"), "testuser");
       await user.type(screen.getByPlaceholderText("••••••••"), "password123");
       await user.keyboard("{Enter}");
 

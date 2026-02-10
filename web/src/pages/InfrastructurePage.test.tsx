@@ -15,7 +15,7 @@ vi.mock('../theme/index', () => ({
 }));
 
 vi.mock('../contexts/UserContext', () => ({
-  useUser: () => ({ user: { is_admin: true }, loading: false }),
+  useUser: () => ({ user: { id: "user-1", username: "admin", email: "admin@example.com", is_active: true, global_role: "super_admin", created_at: "2024-01-01T00:00:00Z" }, loading: false }),
 }));
 
 vi.mock('react-router-dom', async () => {

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
+import { canViewInfrastructure } from '../utils/permissions';
 import { apiRequest } from '../api';
 import { ArchetypeIcon } from '../components/icons';
 import { formatSize, formatStorageSize, formatTimestamp, formatUptimeFromBoot } from '../utils/format';
@@ -497,7 +498,7 @@ const InfrastructurePage: React.FC = () => {
   // Auth Check
   // ============================================================================
 
-  if (!userLoading && user && !user.is_admin) {
+  if (!userLoading && user && !canViewInfrastructure(user)) {
     return <Navigate to="/" replace />;
   }
 

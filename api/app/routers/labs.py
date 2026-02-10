@@ -24,7 +24,9 @@ from app.storage import (
     write_layout,
 )
 from app.tasks.jobs import run_agent_job, run_multihost_destroy
-from app.utils.lab import get_lab_or_404, get_lab_provider, update_lab_provider_from_nodes
+from app.enums import GlobalRole, LabRole
+from app.services.permissions import PermissionService
+from app.utils.lab import get_lab_or_404, get_lab_with_role, get_lab_provider, update_lab_provider_from_nodes
 from app.utils.agents import get_online_agent_for_lab
 from app.utils.http import require_lab_owner, raise_not_found, raise_unavailable
 from app.utils.link import generate_link_name
@@ -40,6 +42,14 @@ from app.events.publisher import emit_lab_deleted, emit_link_removed, emit_node_
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["labs"])
+
+
+def _require_lab_editor(lab_id: str, database: Session, user: models.User) -> models.Lab:
+    """Get lab and verify user has at least editor role. Raises 403/404."""
+    lab, role = get_lab_with_role(lab_id, database, user)
+    if role < LabRole.EDITOR:
+        raise HTTPException(status_code=403, detail="Editor access required")
+    return lab
 
 
 def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
@@ -275,15 +285,23 @@ def list_labs(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, list[schemas.LabOut]]:
-    owned = database.query(models.Lab).filter(models.Lab.owner_id == current_user.id)
-    shared = (
-        database.query(models.Lab)
-        .join(models.Permission, models.Permission.lab_id == models.Lab.id)
-        .filter(models.Permission.user_id == current_user.id)
-    )
+    global_role = PermissionService.get_user_global_role(current_user)
+
+    if global_role >= GlobalRole.ADMIN:
+        # Admins see all labs
+        query = database.query(models.Lab)
+    else:
+        # Operators see own labs + shared; viewers see only shared
+        owned = database.query(models.Lab).filter(models.Lab.owner_id == current_user.id)
+        shared = (
+            database.query(models.Lab)
+            .join(models.Permission, models.Permission.lab_id == models.Lab.id)
+            .filter(models.Permission.user_id == current_user.id)
+        )
+        query = owned.union(shared)
+
     labs = (
-        owned.union(shared)
-        .order_by(models.Lab.created_at.desc())
+        query.order_by(models.Lab.created_at.desc())
         .offset(skip)
         .limit(limit)
         .all()
@@ -297,6 +315,7 @@ def create_lab(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
+    PermissionService.require_global_role(current_user, GlobalRole.OPERATOR)
     lab = models.Lab(name=payload.name, owner_id=current_user.id, provider=payload.provider)
     database.add(lab)
     database.flush()
@@ -314,8 +333,10 @@ def get_lab(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
-    lab = get_lab_or_404(lab_id, database, current_user)
-    return schemas.LabOut.model_validate(lab)
+    lab, role = get_lab_with_role(lab_id, database, current_user)
+    out = schemas.LabOut.model_validate(lab)
+    out.user_role = role.value
+    return out
 
 
 @router.put("/labs/{lab_id}")
@@ -326,7 +347,7 @@ def update_lab(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
     lab = get_lab_or_404(lab_id, database, current_user)
-    require_lab_owner(current_user, lab)
+    require_lab_owner(current_user, lab, db=database)
     if payload.name is not None:
         lab.name = payload.name
     database.commit()
@@ -341,7 +362,7 @@ async def delete_lab(
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, str]:
     lab = get_lab_or_404(lab_id, database, current_user)
-    require_lab_owner(current_user, lab)
+    require_lab_owner(current_user, lab, db=database)
 
     # If lab has running infrastructure, destroy it first
     if lab.state in ("running", "starting", "stopping"):
@@ -419,6 +440,7 @@ def clone_lab(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
+    PermissionService.require_global_role(current_user, GlobalRole.OPERATOR)
     lab = get_lab_or_404(lab_id, database, current_user)
     clone = models.Lab(name=f"{lab.name} (copy)", owner_id=current_user.id)
     database.add(clone)
@@ -446,7 +468,7 @@ async def update_topology_from_yaml(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -507,7 +529,7 @@ async def update_topology(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
     workspace.mkdir(parents=True, exist_ok=True)
 
@@ -719,7 +741,7 @@ def save_layout(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabLayout:
     """Save or update layout data for a lab."""
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     write_layout(lab.id, payload)
     return payload
 
@@ -731,7 +753,7 @@ def remove_layout(
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, str]:
     """Delete layout data, reverting to auto-layout on next load."""
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     deleted = delete_layout(lab.id)
     if not deleted:
         raise_not_found("Layout not found")
@@ -884,7 +906,7 @@ async def set_node_desired_state(
     the need for a separate "Sync" button in the UI.
     """
 
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
 
     logger.info(
         "User state change request",
@@ -959,7 +981,7 @@ async def set_all_nodes_desired_state(
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
 
     logger.info(
         "User state change request",
@@ -1275,7 +1297,7 @@ async def reconcile_node(
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider, get_node_provider
 
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
 
     # Get or create the node state with correct naming
@@ -1346,7 +1368,7 @@ async def reconcile_lab(
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
 
     # Check for conflicting jobs before proceeding
     has_conflict, conflicting_action = has_conflicting_job(lab_id, "reconcile")
@@ -2074,7 +2096,7 @@ def set_link_state(
     will be reconciled by the reconciliation system or can be triggered
     by a manual sync operation.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     _ensure_link_states_exist(database, lab.id)
 
     state = (
@@ -2106,7 +2128,7 @@ def set_all_links_desired_state(
 
     Useful for "Enable All Links" or "Disable All Links" operations.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     _ensure_link_states_exist(database, lab.id)
 
     states = (
@@ -2201,7 +2223,7 @@ async def extract_configs(
     Returns:
         Dict with 'success', 'extracted_count', 'snapshots_created', and optionally 'error' keys
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     lab_provider = get_lab_provider(lab)
 
     # Get all agents that have nodes for this lab (multi-host support)
@@ -2490,7 +2512,7 @@ async def create_config_snapshot(
     Snapshots are deduplicated by content hash - if the content hasn't
     changed since the last snapshot, a new one won't be created.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
     configs_dir = workspace / "configs"
 
@@ -2563,7 +2585,7 @@ def delete_config_snapshot(
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Delete a specific config snapshot."""
-    get_lab_or_404(lab_id, database, current_user)
+    _require_lab_editor(lab_id, database, current_user)
 
     snapshot = (
         database.query(models.ConfigSnapshot)
@@ -2602,7 +2624,7 @@ def bulk_delete_config_snapshots(
     If any snapshot is the active startup-config for a node and force=False,
     returns 409 with details about which snapshots are active.
     """
-    get_lab_or_404(lab_id, database, current_user)
+    _require_lab_editor(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService, ActiveConfigGuardError
     config_svc = ConfigService(database)
@@ -2640,7 +2662,7 @@ def map_config_snapshot(
     Sets mapped_to_node_id on the snapshot. Validates device_kind
     compatibility (warns on mismatch but does not block).
     """
-    get_lab_or_404(lab_id, database, current_user)
+    _require_lab_editor(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService
     config_svc = ConfigService(database)
@@ -2680,7 +2702,7 @@ async def set_active_config(
     Updates the node's active_config_snapshot_id, syncs content to
     config_json["startup-config"], and pushes to the agent workspace.
     """
-    get_lab_or_404(lab_id, database, current_user)
+    _require_lab_editor(lab_id, database, current_user)
 
     node = (
         database.query(models.Node)
@@ -2857,7 +2879,7 @@ async def hot_connect_link(
     - Both nodes must be running
     - Interfaces must be pre-provisioned via OVS
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
 
     # Verify lab is running
     if lab.state not in ("running", "starting"):
@@ -2983,7 +3005,7 @@ async def hot_disconnect_link(
         lab_id: Lab identifier
         link_id: Link identifier (format: "node1:iface1-node2:iface2")
     """
-    get_lab_or_404(lab_id, database, current_user)
+    _require_lab_editor(lab_id, database, current_user)
 
     link_states = (
         database.query(models.LinkState)
@@ -3070,7 +3092,7 @@ async def connect_to_external_network(
     - Node must be running
     - External interface must exist on the host
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab = _require_lab_editor(lab_id, database, current_user)
 
     # Verify lab is running
     if lab.state not in ("running", "starting"):
@@ -3399,7 +3421,9 @@ async def cleanup_lab_orphans(
     Returns:
         Dict mapping agent names to lists of removed containers
     """
-    get_lab_or_404(lab_id, database, current_user)
+    lab, role = get_lab_with_role(lab_id, database, current_user)
+    if role < LabRole.OWNER:
+        raise HTTPException(status_code=403, detail="Owner access required")
 
     # Get all node placements for this lab
     placements = (
@@ -3571,7 +3595,7 @@ async def reconcile_links(
     Verifies all links marked as "up" have matching VLAN tags on both
     endpoints. Attempts to repair any mismatched links.
     """
-    get_lab_or_404(lab_id, database, current_user)
+    _require_lab_editor(lab_id, database, current_user)
 
     result = await reconcile_lab_links(database, lab_id)
 

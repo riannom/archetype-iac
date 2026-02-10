@@ -31,9 +31,16 @@ def create_access_token(subject: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def authenticate_user(database: Session, email: str, password: str) -> models.User | None:
-    user = database.query(models.User).filter(models.User.email == email).first()
+def authenticate_user(database: Session, identifier: str, password: str) -> models.User | None:
+    """Authenticate by username (primary) or email (fallback)."""
+    # Try username first
+    user = database.query(models.User).filter(models.User.username == identifier.lower()).first()
+    if not user:
+        # Fall back to email
+        user = database.query(models.User).filter(models.User.email == identifier).first()
     if not user or not verify_password(password, user.hashed_password):
+        return None
+    if not user.is_active:
         return None
     return user
 
@@ -56,6 +63,12 @@ def get_current_user(token: str = Depends(oauth2_scheme), database: Session = De
     user = database.query(models.User).filter(models.User.id == subject).first()
     if not user:
         raise credentials_exception
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account deactivated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 
@@ -75,4 +88,7 @@ def get_current_user_optional(request: Request, database: Session) -> models.Use
         return None
     if not subject:
         return None
-    return database.query(models.User).filter(models.User.id == subject).first()
+    user = database.query(models.User).filter(models.User.id == subject).first()
+    if user and not user.is_active:
+        return None
+    return user

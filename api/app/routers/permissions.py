@@ -31,6 +31,7 @@ def list_permissions(
                 role=perm.role,
                 created_at=perm.created_at,
                 user_email=user.email if user else None,
+                user_username=user.username if user else None,
             )
         )
     return {"permissions": output}
@@ -44,8 +45,11 @@ def add_permission(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.PermissionOut:
     lab = get_lab_or_404(lab_id, database, current_user)
-    require_lab_owner(current_user, lab)
-    user = database.query(models.User).filter(models.User.email == payload.user_email).first()
+    require_lab_owner(current_user, lab, db=database)
+    # Look up by username first, then email
+    user = database.query(models.User).filter(models.User.username == payload.user_identifier.lower()).first()
+    if not user:
+        user = database.query(models.User).filter(models.User.email == payload.user_identifier).first()
     if not user:
         raise_not_found("User not found")
     permission = models.Permission(lab_id=lab_id, user_id=user.id, role=payload.role)
@@ -70,7 +74,7 @@ def delete_permission(
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, str]:
     lab = get_lab_or_404(lab_id, database, current_user)
-    require_lab_owner(current_user, lab)
+    require_lab_owner(current_user, lab, db=database)
     permission = database.get(models.Permission, permission_id)
     if not permission or permission.lab_id != lab_id:
         raise_not_found("Permission not found")

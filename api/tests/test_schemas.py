@@ -86,9 +86,10 @@ class TestUserSchemas:
         """UserOut validates from model attributes."""
         data = {
             "id": "user-123",
+            "username": "testuser",
             "email": "test@example.com",
             "is_active": True,
-            "is_admin": False,
+            "global_role": "operator",
             "created_at": datetime.now(timezone.utc),
         }
         user = schemas.UserOut(**data)

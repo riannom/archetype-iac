@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app import db, models
 from app.auth import get_current_user
 from app.config import settings
+from app.utils.http import require_admin
 from app.image_store import (
     create_image_entry,
     delete_image_entry,
@@ -179,7 +180,10 @@ def load_image(
     If background=true, returns immediately with an upload_id for polling progress.
     If stream=true, returns Server-Sent Events with progress updates.
     Otherwise returns a JSON response when complete.
+    Requires admin access.
     """
+    require_admin(current_user)
+
     if background:
         # Background mode with polling
         import uuid
@@ -801,6 +805,8 @@ def upload_qcow2(
     current_user: models.User = Depends(get_current_user),
     auto_build: bool = Query(default=True, description="Auto-trigger vrnetlab Docker build"),
 ) -> dict[str, str]:
+    require_admin(current_user)
+
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
     if not file.filename.lower().endswith((".qcow2", ".qcow")):
@@ -870,10 +876,13 @@ def trigger_docker_build(
 
     This queues a background job to build the Docker image using vrnetlab.
     Only works for qcow2 images with recognized device types.
+    Requires admin access.
 
     Returns:
         Dict with job_id and status
     """
+    require_admin(current_user)
+
     from urllib.parse import unquote
     image_id = unquote(image_id)
 
@@ -996,7 +1005,12 @@ def update_image_library(
     payload: dict,
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, object]:
-    """Update an image's metadata (device_id, version, notes, is_default, etc.)."""
+    """Update an image's metadata (device_id, version, notes, is_default, etc.).
+
+    Requires admin access.
+    """
+    require_admin(current_user)
+
     manifest = load_manifest()
 
     # Build updates from payload
@@ -1029,7 +1043,10 @@ def assign_image_to_device(
     """Assign an image to a device type.
 
     Body: { "device_id": "eos", "is_default": true }
+    Requires admin access.
     """
+    require_admin(current_user)
+
     manifest = load_manifest()
 
     device_id = payload.get("device_id")
@@ -1065,7 +1082,12 @@ def unassign_image_from_device(
     image_id: str,
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, object]:
-    """Unassign an image from its current device type."""
+    """Unassign an image from its current device type.
+
+    Requires admin access.
+    """
+    require_admin(current_user)
+
     manifest = load_manifest()
 
     updates = {
@@ -1090,7 +1112,10 @@ def delete_image(
 
     For QCOW2 images, also deletes the file from disk.
     For Docker images, only removes from manifest (does not remove from Docker).
+    Requires admin access.
     """
+    require_admin(current_user)
+
     manifest = load_manifest()
 
     # Find the image first to get its details
@@ -1255,7 +1280,10 @@ async def push_image_to_hosts(
 
     This creates transfer jobs for each target host and starts the image
     push process in the background. Returns the created job IDs.
+    Requires admin access.
     """
+    require_admin(current_user)
+
     from urllib.parse import unquote
     image_id = unquote(image_id)
 
@@ -1664,7 +1692,10 @@ def cancel_sync_job(
 
     Only jobs in pending, transferring, or loading status can be cancelled.
     Completed or failed jobs cannot be cancelled.
+    Requires admin access.
     """
+    require_admin(current_user)
+
     job = database.get(models.ImageSyncJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Sync job not found")

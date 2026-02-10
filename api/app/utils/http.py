@@ -4,19 +4,27 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from app.enums import GlobalRole, LabRole
+from app.services.permissions import PermissionService
+
 
 def require_admin(user, message: str = "Admin access required") -> None:
-    """Raise 403 if user is not an admin."""
-    if not getattr(user, "is_admin", False):
-        raise HTTPException(status_code=403, detail=message)
+    """Raise 403 if user does not have admin-level global role."""
+    PermissionService.require_global_role(user, GlobalRole.ADMIN, message)
 
 
-def require_lab_owner(user, lab, message: str = "Access denied") -> None:
-    """Raise 403 if user is not the lab owner or an admin."""
-    if getattr(user, "is_admin", False):
-        return
-    if getattr(lab, "owner_id", None) != getattr(user, "id", None):
-        raise HTTPException(status_code=403, detail=message)
+def require_lab_owner(user, lab, message: str = "Access denied", db=None) -> None:
+    """Raise 403 if user does not have owner-level access to the lab.
+
+    Args:
+        user: Current user model
+        lab: Lab model
+        message: Error message for 403
+        db: SQLAlchemy session (required for RBAC permission lookup)
+    """
+    if db is None:
+        raise ValueError("db session is required for RBAC permission checks")
+    PermissionService.require_lab_role(user, lab, db, LabRole.OWNER, message)
 
 
 def raise_not_found(detail: str = "Not found") -> None:

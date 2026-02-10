@@ -21,10 +21,11 @@ class TestUserModel:
     def test_create_user(self, test_db: Session):
         """Create user with all fields."""
         user = models.User(
+            username="testuser",
             email="test@example.com",
             hashed_password="hashedpassword123",
             is_active=True,
-            is_admin=False,
+            global_role="operator",
         )
         test_db.add(user)
         test_db.commit()
@@ -34,12 +35,13 @@ class TestUserModel:
         assert len(user.id) == 36  # UUID format
         assert user.email == "test@example.com"
         assert user.is_active is True
-        assert user.is_admin is False
+        assert user.global_role == "operator"
         assert user.created_at is not None
 
     def test_user_defaults(self, test_db: Session):
         """User has correct defaults."""
         user = models.User(
+            username="defaultuser",
             email="default@example.com",
             hashed_password="hash",
         )
@@ -48,15 +50,15 @@ class TestUserModel:
         test_db.refresh(user)
 
         assert user.is_active is True
-        assert user.is_admin is False
+        assert user.global_role == "operator"
 
     def test_email_unique_constraint(self, test_db: Session):
         """Email must be unique."""
-        user1 = models.User(email="same@example.com", hashed_password="hash1")
+        user1 = models.User(username="user1", email="same@example.com", hashed_password="hash1")
         test_db.add(user1)
         test_db.commit()
 
-        user2 = models.User(email="same@example.com", hashed_password="hash2")
+        user2 = models.User(username="user2", email="same@example.com", hashed_password="hash2")
         test_db.add(user2)
         with pytest.raises(IntegrityError):
             test_db.commit()

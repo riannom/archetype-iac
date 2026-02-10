@@ -144,6 +144,8 @@ async def refresh_lab_state(
     the lab state and individual NodeState records in the database.
     Supports multi-host labs by querying all agents with NodePlacement records.
     """
+    require_admin(current_user)
+
     lab = get_lab_or_404(lab_id, database, current_user)
 
     # Get ALL agents that have nodes for this lab (multi-host support)
@@ -506,3 +508,56 @@ async def cleanup_stuck_jobs(
         "cleaned_jobs": cleaned,
         "cutoff_minutes": max_age_minutes,
     }
+
+
+@router.get("/audit-logs", response_model=schemas.AuditLogsResponse)
+def get_audit_logs(
+    event_type: str | None = Query(None, description="Filter by event type"),
+    user_id: str | None = Query(None, description="Filter by acting user ID"),
+    target_user_id: str | None = Query(None, description="Filter by target user ID"),
+    skip: int = 0,
+    limit: int = 50,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.AuditLogsResponse:
+    """Query audit logs. Requires super_admin role."""
+    from app.services.permissions import PermissionService
+    from app.enums import GlobalRole
+    import json
+
+    PermissionService.require_global_role(current_user, GlobalRole.SUPER_ADMIN)
+
+    query = database.query(models.AuditLog)
+    if event_type:
+        query = query.filter(models.AuditLog.event_type == event_type)
+    if user_id:
+        query = query.filter(models.AuditLog.user_id == user_id)
+    if target_user_id:
+        query = query.filter(models.AuditLog.target_user_id == target_user_id)
+
+    total = query.count()
+    entries = query.order_by(models.AuditLog.created_at.desc()).offset(skip).limit(limit).all()
+
+    result = []
+    for entry in entries:
+        details = None
+        if entry.details_json:
+            try:
+                details = json.loads(entry.details_json)
+            except (json.JSONDecodeError, TypeError):
+                details = {"raw": entry.details_json}
+        result.append(schemas.AuditLogOut(
+            id=entry.id,
+            event_type=entry.event_type,
+            user_id=entry.user_id,
+            target_user_id=entry.target_user_id,
+            ip_address=entry.ip_address,
+            details=details,
+            created_at=entry.created_at,
+        ))
+
+    return schemas.AuditLogsResponse(
+        entries=result,
+        total=total,
+        has_more=(skip + limit) < total,
+    )

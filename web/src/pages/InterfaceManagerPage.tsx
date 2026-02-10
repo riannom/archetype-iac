@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useUser } from '../contexts/UserContext';
+import { canViewInfrastructure } from '../utils/permissions';
 import { apiRequest } from '../api';
 import { formatTimestamp } from '../utils/format';
 
@@ -115,7 +116,7 @@ export default function InterfaceManagerPage() {
   const [editForm, setEditForm] = useState({ ip_address: '', desired_mtu: 9000 });
   const [saving, setSaving] = useState(false);
 
-  if (!user?.is_admin) return <Navigate to="/infrastructure" replace />;
+  if (!canViewInfrastructure(user ?? null)) return <Navigate to="/infrastructure" replace />;
 
   const loadInterfaces = useCallback(async () => {
     try {

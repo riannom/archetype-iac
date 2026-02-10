@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../../theme/index';
 import { useUser } from '../../contexts/UserContext';
+import { canViewInfrastructure, canManageImages, canManageUsers } from '../../utils/permissions';
 import SystemStatusStrip from './SystemStatusStrip';
 import SystemLogsModal from './SystemLogsModal';
 import { ArchetypeIcon } from '../../components/icons';
@@ -78,7 +79,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [showSystemLogs, setShowSystemLogs] = useState(false);
   const [editingLabId, setEditingLabId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
-  const isAdmin = user?.is_admin ?? false;
+  const showInfra = canViewInfrastructure(user ?? null);
+  const showUsers = canManageUsers(user ?? null);
 
   const handleStartEdit = (lab: LabSummary, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -120,7 +122,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
-          {isAdmin && (
+          {showInfra && (
             <>
               <button
                 onClick={() => navigate('/infrastructure')}
@@ -148,6 +150,16 @@ const Dashboard: React.FC<DashboardProps> = ({
               </button>
             </>
           )}
+          {showUsers && (
+            <button
+              onClick={() => navigate('/admin/users')}
+              className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+              title="User Management"
+            >
+              <i className="fa-solid fa-users text-xs"></i>
+              <span className="text-[10px] font-bold uppercase">Users</span>
+            </button>
+          )}
 
           <button
             onClick={() => setShowThemeSelector(true)}
@@ -168,7 +180,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </header>
 
-      {isAdmin && <SystemStatusStrip metrics={systemMetrics || null} />}
+      {showInfra && <SystemStatusStrip metrics={systemMetrics || null} />}
 
       <main className="flex-1 overflow-y-auto p-10 custom-scrollbar">
         <div className="max-w-6xl mx-auto">

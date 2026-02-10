@@ -15,10 +15,11 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    username: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(default=True)
-    is_admin: Mapped[bool] = mapped_column(default=False)
+    global_role: Mapped[str] = mapped_column(String(20), default="operator")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -33,6 +34,19 @@ class UserPreferences(Base):
     # Canvas display preferences as JSON
     canvas_settings: Mapped[str] = mapped_column(Text, default="{}")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AuditLog(Base):
+    """Tracks authentication and user management events."""
+    __tablename__ = "audit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    target_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class Lab(Base):
@@ -67,6 +81,7 @@ class LabFile(Base):
 
 class Permission(Base):
     __tablename__ = "permissions"
+    __table_args__ = (UniqueConstraint("lab_id", "user_id", name="uq_permission_lab_user"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id"))

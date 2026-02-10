@@ -462,6 +462,7 @@ def heartbeat(
 @router.get("", response_model=list[HostOut])
 def list_agents(
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> list[HostOut]:
     """List all registered agents."""
     hosts = database.query(models.Host).order_by(models.Host.name).all()
@@ -513,6 +514,7 @@ def _enrich_details(
 @router.get("/detailed")
 def list_agents_detailed(
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> list[dict]:
     """List all agents with full details including resource usage, role, and labs.
 
@@ -633,6 +635,7 @@ def list_agents_detailed(
 def get_agent(
     agent_id: str,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> HostOut:
     """Get details of a specific agent."""
     host = database.get(models.Host, agent_id)
@@ -843,6 +846,7 @@ def update_sync_strategy(
     agent_id: str,
     request: UpdateSyncStrategyRequest,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Update an agent's image synchronization strategy.
 
@@ -852,6 +856,7 @@ def update_sync_strategy(
     - on_demand: Sync only when deployment requires an image
     - disabled: No automatic sync, manual only
     """
+    require_admin(current_user)
     valid_strategies = {"push", "pull", "on_demand", "disabled"}
     if request.strategy not in valid_strategies:
         raise HTTPException(
@@ -877,6 +882,7 @@ def update_sync_strategy(
 async def list_agent_images(
     agent_id: str,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Get image sync status for all library images on an agent.
 
@@ -942,6 +948,7 @@ async def reconcile_agent_images_endpoint(
 async def list_agent_interfaces(
     agent_id: str,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Proxy request to agent for listing available network interfaces.
 
@@ -971,6 +978,7 @@ async def list_agent_interfaces(
 async def list_agent_bridges(
     agent_id: str,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Proxy request to agent for listing available Linux bridges.
 
@@ -1039,7 +1047,9 @@ class UpdateStatusResponse(BaseModel):
 
 
 @router.get("/updates/latest", response_model=LatestVersionResponse)
-def get_latest_version() -> LatestVersionResponse:
+def get_latest_version(
+    current_user: models.User = Depends(get_current_user),
+) -> LatestVersionResponse:
     """Get the latest available agent version.
 
     This reads from the agent/VERSION file in the repository.
@@ -1053,12 +1063,14 @@ async def trigger_agent_update(
     agent_id: str,
     request: TriggerUpdateRequest | None = None,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> UpdateJobResponse:
     """Trigger a software update for a specific agent.
 
     Creates an update job and sends the update request to the agent.
     The agent reports progress via callbacks.
     """
+    require_admin(current_user)
     import httpx
 
     host = database.get(models.Host, agent_id)
@@ -1187,12 +1199,14 @@ async def trigger_agent_update(
 async def trigger_bulk_update(
     request: BulkUpdateRequest,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Trigger updates for multiple agents.
 
     Creates DB jobs sequentially (shared session), then fires HTTP requests
     to agents in parallel via asyncio.gather for faster bulk updates.
     """
+    require_admin(current_user)
     import httpx
     import logging
     logging.getLogger(__name__)
@@ -1320,6 +1334,7 @@ async def trigger_bulk_update(
 def get_update_status(
     agent_id: str,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> UpdateStatusResponse | None:
     """Get the status of the most recent update job for an agent.
 
@@ -1359,6 +1374,7 @@ def list_update_jobs(
     agent_id: str,
     limit: int = 10,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> list[UpdateStatusResponse]:
     """List recent update jobs for an agent.
 
@@ -1406,6 +1422,7 @@ class RebuildResponse(BaseModel):
 async def rebuild_docker_agent(
     agent_id: str,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> RebuildResponse:
     """Rebuild a Docker-deployed agent container.
 
@@ -1417,6 +1434,8 @@ async def rebuild_docker_agent(
     2. The agent container is rebuilt with latest code
     3. Agent re-registers with new version after restart
     """
+    require_admin(current_user)
+
     host = database.get(models.Host, agent_id)
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")

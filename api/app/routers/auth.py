@@ -26,32 +26,34 @@ if settings.oidc_issuer_url and settings.oidc_client_id:
     )
 
 
-@router.post("/register", response_model=schemas.UserOut)
-def register(payload: schemas.UserCreate, database: Session = Depends(db.get_db)) -> schemas.UserOut:
-    if not settings.local_auth_enabled:
-        raise HTTPException(status_code=403, detail="Local auth is disabled")
-    existing = database.query(models.User).filter(models.User.email == payload.email).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="Email already registered")
-    if len(payload.password.encode("utf-8")) > 72:
-        raise HTTPException(status_code=400, detail="Password must be 72 bytes or fewer")
-    user = models.User(email=payload.email, hashed_password=hash_password(payload.password))
-    database.add(user)
-    database.commit()
-    database.refresh(user)
-    return schemas.UserOut.model_validate(user)
-
-
 @router.post("/login", response_model=schemas.TokenOut)
 def login(
-    form_data: OAuth2PasswordRequestForm = Depends(), database: Session = Depends(db.get_db)
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    database: Session = Depends(db.get_db),
 ) -> schemas.TokenOut:
+    from app.services.audit import AuditService
+
     if not settings.local_auth_enabled:
         raise HTTPException(status_code=403, detail="Local auth is disabled")
+
+    ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+          or (request.client.host if request.client else None))
+
     user = authenticate_user(database, form_data.username, form_data.password)
     if not user:
+        AuditService.log(
+            database, "login_failed", ip_address=ip,
+            details={"identifier": form_data.username},
+        )
+        database.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    AuditService.log(
+        database, "login_success", user_id=user.id, ip_address=ip,
+    )
     token = create_access_token(user.id)
+    database.commit()
     return schemas.TokenOut(access_token=token)
 
 
@@ -83,11 +85,37 @@ async def oidc_callback(request: Request, database: Session = Depends(db.get_db)
 
     user = database.query(models.User).filter(models.User.email == email).first()
     if not user:
+        # Derive username from preferred_username claim or email prefix
+        preferred = user_info.get("preferred_username", "")
+        import re
+        username = preferred.lower().strip() if preferred else email.split("@")[0].lower()
+        username = re.sub(r"[^a-zA-Z0-9._-]", "_", username)
+        if not username or not username[0].isalpha():
+            username = "user_" + username
+        username = username[:32]
+        while len(username) < 3:
+            username = username + "_"
+        # Handle collisions
+        base_username = username
+        counter = 2
+        while database.query(models.User).filter(models.User.username == username).first():
+            suffix = f"_{counter}"
+            username = base_username[: 32 - len(suffix)] + suffix
+            counter += 1
+
         random_password = secrets.token_urlsafe(24)
-        user = models.User(email=email, hashed_password=hash_password(random_password))
+        user = models.User(
+            username=username,
+            email=email,
+            hashed_password=hash_password(random_password),
+            global_role=settings.oidc_default_role,
+        )
         database.add(user)
         database.commit()
         database.refresh(user)
+
+    if not user.is_active:
+        raise HTTPException(status_code=401, detail="Account deactivated")
 
     access_token = create_access_token(user.id)
     if settings.oidc_app_redirect_url:

@@ -9,9 +9,11 @@ import { UserProvider } from "../contexts/UserContext";
  */
 export interface TestUser {
   id: string;
+  username: string;
   email: string;
-  is_admin: boolean;
   is_active: boolean;
+  global_role: string;
+  created_at: string;
 }
 
 /**
@@ -41,9 +43,11 @@ interface CustomRenderOptions extends Omit<RenderOptions, "wrapper"> {
  */
 export const defaultTestUser: TestUser = {
   id: "test-user-1",
+  username: "testuser",
   email: "test@example.com",
-  is_admin: false,
   is_active: true,
+  global_role: "operator",
+  created_at: "2024-01-01T00:00:00Z",
 };
 
 /**
@@ -51,9 +55,11 @@ export const defaultTestUser: TestUser = {
  */
 export const adminTestUser: TestUser = {
   id: "admin-user-1",
+  username: "admin",
   email: "admin@example.com",
-  is_admin: true,
   is_active: true,
+  global_role: "super_admin",
+  created_at: "2024-01-01T00:00:00Z",
 };
 
 /**

@@ -23,6 +23,7 @@ import { useLabStateWS, JobProgressData } from './hooks/useLabStateWS';
 import { NodeStateEntry, NodeStateData, NodeRuntimeStatus, mapActualToRuntime } from '../types/nodeState';
 import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
+import { canViewInfrastructure } from '../utils/permissions';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
 import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
@@ -188,7 +189,7 @@ const StudioPage: React.FC = () => {
   const { addNotification, preferences } = useNotifications();
   const { imageLibrary } = useImageLibrary();
   const { deviceModels, deviceCategories, imageCatalog, refresh: refreshDeviceCatalog } = useDeviceCatalog();
-  const isAdmin = user?.is_admin ?? false;
+  const showAdminStrip = canViewInfrastructure(user ?? null);
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
   const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime'>('designer');
@@ -1730,11 +1731,11 @@ const StudioPage: React.FC = () => {
           </div>
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Email</label>
+              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Username</label>
               <input
                 value={authEmail}
                 onChange={(event) => setAuthEmail(event.target.value)}
-                type="email"
+                type="text"
                 className="w-full bg-stone-100 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500"
               />
             </div>
@@ -1812,7 +1813,7 @@ const StudioPage: React.FC = () => {
           Logs
         </button>
       </div>
-      {isAdmin && <SystemStatusStrip metrics={systemMetrics} />}
+      {showAdminStrip && <SystemStatusStrip metrics={systemMetrics} />}
       <AgentAlertBanner />
       <div className="flex flex-1 overflow-hidden relative">
         {renderView()}

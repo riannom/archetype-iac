@@ -31,8 +31,10 @@ class Settings(BaseSettings):
 
     max_concurrent_jobs_per_user: int = 2
 
+    admin_username: str | None = None
     admin_email: str | None = None
     admin_password: str | None = None
+    oidc_default_role: str = "viewer"
 
     # CORS configuration
     cors_allowed_origins: str = "http://localhost:8090,http://127.0.0.1:8090"

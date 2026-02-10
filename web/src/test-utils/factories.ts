@@ -223,9 +223,11 @@ export function createMockImageEntry(
  */
 export interface MockUser {
   id: string;
+  username: string;
   email: string;
-  is_admin: boolean;
   is_active: boolean;
+  global_role: string;
+  created_at: string;
 }
 
 /**
@@ -234,9 +236,11 @@ export interface MockUser {
 export function createMockUser(overrides: Partial<MockUser> = {}): MockUser {
   return {
     id: overrides.id || "user-1",
+    username: overrides.username || "testuser",
     email: overrides.email || "user@example.com",
-    is_admin: overrides.is_admin ?? false,
     is_active: overrides.is_active ?? true,
+    global_role: overrides.global_role || "operator",
+    created_at: overrides.created_at || "2024-01-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -248,8 +252,9 @@ export function createMockAdminUser(
   overrides: Partial<MockUser> = {}
 ): MockUser {
   return createMockUser({
+    username: "admin",
     email: "admin@example.com",
-    is_admin: true,
+    global_role: "super_admin",
     ...overrides,
   });
 }

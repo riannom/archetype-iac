@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
+import { canManageImages } from '../utils/permissions';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
 import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
 import DeviceManager from '../studio/components/DeviceManager';
@@ -67,8 +68,8 @@ const NodesPage: React.FC = () => {
     await removeCustomDevice(deviceId);
   };
 
-  // Redirect if not authenticated
-  if (!userLoading && !user) {
+  // Redirect if not authenticated or insufficient role
+  if (!userLoading && (!user || !canManageImages(user))) {
     return <Navigate to="/" replace />;
   }
 

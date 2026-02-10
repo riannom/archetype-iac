@@ -216,9 +216,11 @@ const mockAgentsResponse: { id: string; name: string; address: string; status: s
 
 const mockUserResponse = {
   id: "user-1",
+  username: "testuser",
   email: "test@example.com",
-  is_admin: true,
   is_active: true,
+  global_role: "super_admin",
+  created_at: "2024-01-01T00:00:00Z",
 };
 
 const mockGraphResponse = {

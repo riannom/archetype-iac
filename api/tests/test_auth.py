@@ -85,7 +85,7 @@ class TestRegister:
         data = response.json()
         assert data["email"] == "newuser@example.com"
         assert data["is_active"] is True
-        assert data["is_admin"] is False
+        assert data["global_role"] == "operator"
         assert "id" in data
 
         # Verify user was created in database
@@ -179,7 +179,7 @@ class TestMe:
         assert data["id"] == test_user.id
         assert data["email"] == test_user.email
         assert data["is_active"] is True
-        assert data["is_admin"] is False
+        assert data["global_role"] == "operator"
 
     def test_me_admin_user(
         self,
@@ -192,7 +192,7 @@ class TestMe:
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == admin_user.id
-        assert data["is_admin"] is True
+        assert data["global_role"] == "admin"
 
     def test_me_unauthenticated(
         self,

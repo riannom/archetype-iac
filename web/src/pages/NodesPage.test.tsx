@@ -21,9 +21,11 @@ vi.mock("../contexts/UserContext", () => ({
   useUser: () => ({
     user: {
       id: "user-1",
+      username: "testuser",
       email: "user@example.com",
-      is_admin: false,
       is_active: true,
+      global_role: "admin",
+      created_at: "2024-01-01T00:00:00Z",
     },
     loading: false,
     error: null,

@@ -65,7 +65,10 @@ describe("UserContext", () => {
           Promise.resolve({
             id: "user-1",
             email: "existing@example.com",
-            is_admin: false,
+            username: "testuser",
+            global_role: "operator",
+            is_active: true,
+            created_at: "2024-01-01T00:00:00Z",
           }),
       });
 
@@ -97,7 +100,10 @@ describe("UserContext", () => {
           Promise.resolve({
             id: "user-1",
             email: "test@example.com",
-            is_admin: false,
+            username: "testuser",
+            global_role: "operator",
+            is_active: true,
+            created_at: "2024-01-01T00:00:00Z",
           }),
       });
 
@@ -121,8 +127,11 @@ describe("UserContext", () => {
         json: () =>
           Promise.resolve({
             id: "user-1",
+            username: "admin",
             email: "updated@example.com",
-            is_admin: true,
+            global_role: "super_admin",
+            is_active: true,
+            created_at: "2024-01-01T00:00:00Z",
           }),
       });
 
@@ -146,7 +155,10 @@ describe("UserContext", () => {
           Promise.resolve({
             id: "user-1",
             email: "test@example.com",
-            is_admin: false,
+            username: "testuser",
+            global_role: "operator",
+            is_active: true,
+            created_at: "2024-01-01T00:00:00Z",
           }),
       });
 
@@ -204,7 +216,10 @@ describe("UserContext", () => {
           Promise.resolve({
             id: "user-1",
             email: "test@example.com",
-            is_admin: false,
+            username: "testuser",
+            global_role: "operator",
+            is_active: true,
+            created_at: "2024-01-01T00:00:00Z",
           }),
       });
 

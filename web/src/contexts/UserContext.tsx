@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../api';
 
+export type GlobalRole = 'super_admin' | 'admin' | 'operator' | 'viewer';
+
 export interface User {
   id: string;
+  username: string;
   email: string;
-  is_admin: boolean;
   is_active: boolean;
+  global_role: GlobalRole;
   created_at: string;
 }
 

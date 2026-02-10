@@ -26,6 +26,7 @@ class LabOut(BaseModel):
     state_updated_at: datetime | None = None
     state_error: str | None = None
     created_at: datetime
+    user_role: str | None = None  # Effective lab role for the requesting user
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -38,16 +39,12 @@ class LabYamlOut(BaseModel):
     content: str
 
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=72)
-
-
 class UserOut(BaseModel):
     id: str
+    username: str
     email: EmailStr
     is_active: bool
-    is_admin: bool
+    global_role: str = "operator"
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -165,7 +162,7 @@ class JobOut(BaseModel):
 
 
 class PermissionCreate(BaseModel):
-    user_email: EmailStr
+    user_identifier: str  # username or email
     role: str = "viewer"
 
 
@@ -176,6 +173,7 @@ class PermissionOut(BaseModel):
     role: str
     created_at: datetime
     user_email: EmailStr | None = None
+    user_username: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1133,3 +1131,65 @@ class HostNicGroupsResponse(BaseModel):
 
     groups: list[HostNicGroupOut]
     total: int
+
+
+# =============================================================================
+# User Management Schemas (RBAC)
+# =============================================================================
+
+
+class UserCreateAdmin(BaseModel):
+    """Admin-created user."""
+
+    username: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{2,31}$")
+    password: str = Field(min_length=8, max_length=72)
+    email: EmailStr | None = None
+    global_role: str = "operator"
+
+
+class UserUpdateAdmin(BaseModel):
+    """Admin update of user profile."""
+
+    email: EmailStr | None = None
+    global_role: str | None = None
+
+
+class PasswordChange(BaseModel):
+    """Password change request."""
+
+    current_password: str | None = None  # Required for self-change, optional for admin
+    new_password: str = Field(min_length=8, max_length=72)
+
+
+class UserListResponse(BaseModel):
+    """Response for listing users."""
+
+    users: list[UserOut]
+    total: int
+
+
+# =============================================================================
+# Audit Log Schemas
+# =============================================================================
+
+
+class AuditLogOut(BaseModel):
+    """Output schema for an audit log entry."""
+
+    id: str
+    event_type: str
+    user_id: str | None = None
+    target_user_id: str | None = None
+    ip_address: str | None = None
+    details: dict | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AuditLogsResponse(BaseModel):
+    """Response for listing audit logs."""
+
+    entries: list[AuditLogOut]
+    total: int
+    has_more: bool = False

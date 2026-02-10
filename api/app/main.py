@@ -37,7 +37,7 @@ from app.logging_config import (
 )
 from app.middleware import CurrentUserMiddleware, DeprecationMiddleware
 from app.routers.v1 import router as v1_router
-from app.routers import admin, agents, auth, callbacks, console, events, images, infrastructure, iso, jobs, labs, permissions, state_ws, system, vendors, webhooks
+from app.routers import admin, agents, auth, callbacks, console, events, images, infrastructure, iso, jobs, labs, permissions, state_ws, system, users, vendors, webhooks
 from app.events.publisher import close_publisher
 from app.utils.async_tasks import setup_asyncio_exception_handler
 from alembic.config import Config as AlembicConfig
@@ -70,21 +70,36 @@ async def lifespan(app: FastAPI):
         models.Base.metadata.create_all(bind=db.engine)
 
     # Seed admin user if configured
-    if settings.admin_email and settings.admin_password:
+    admin_username = settings.admin_username
+    admin_email = settings.admin_email
+    admin_password = settings.admin_password
+    if admin_password and (admin_username or admin_email):
         with db.get_session() as session:
-            existing = session.query(models.User).filter(models.User.email == settings.admin_email).first()
+            # Check if admin already exists by username or email
+            existing = None
+            if admin_username:
+                existing = session.query(models.User).filter(
+                    models.User.username == admin_username.lower()
+                ).first()
+            if not existing and admin_email:
+                existing = session.query(models.User).filter(
+                    models.User.email == admin_email
+                ).first()
             if not existing:
-                if len(settings.admin_password.encode("utf-8")) > 72:
+                if len(admin_password.encode("utf-8")) > 72:
                     logger.warning("Skipping admin seed: ADMIN_PASSWORD must be 72 bytes or fewer")
                 else:
+                    # Derive username if only email provided
+                    username = admin_username.lower() if admin_username else admin_email.split("@")[0].lower()
                     admin_user = models.User(
-                        email=settings.admin_email,
-                        hashed_password=hash_password(settings.admin_password),
-                        is_admin=True,
+                        username=username,
+                        email=admin_email or f"{username}@local",
+                        hashed_password=hash_password(admin_password),
+                        global_role="super_admin",
                     )
                     session.add(admin_user)
                     session.commit()
-                    logger.info(f"Created admin user: {settings.admin_email}")
+                    logger.info(f"Created admin user: {username}")
 
     # Background monitors run in the separate scheduler service.
     # See app/scheduler.py and docker-compose scheduler service.
@@ -240,6 +255,7 @@ app.include_router(agents.router)
 app.include_router(labs.router)
 app.include_router(jobs.router)
 app.include_router(permissions.router)
+app.include_router(users.router)
 app.include_router(images.router)
 app.include_router(console.router)
 app.include_router(admin.router)

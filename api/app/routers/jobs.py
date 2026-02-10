@@ -19,7 +19,8 @@ from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_de
 from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
-from app.utils.lab import get_lab_or_404, get_lab_provider
+from app.enums import LabRole
+from app.utils.lab import get_lab_or_404, get_lab_provider, get_lab_with_role
 from app.utils.logs import get_log_content, _is_likely_file_path
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
@@ -167,7 +168,9 @@ async def lab_up(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab, role = get_lab_with_role(lab_id, database, current_user)
+    if role < LabRole.EDITOR:
+        raise HTTPException(status_code=403, detail="Editor access required")
 
     # Check for conflicting jobs before proceeding
     has_conflict, conflicting_action = has_conflicting_job(lab_id, "up")
@@ -356,7 +359,9 @@ async def lab_down(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab, role = get_lab_with_role(lab_id, database, current_user)
+    if role < LabRole.EDITOR:
+        raise HTTPException(status_code=403, detail="Editor access required")
 
     # Check for conflicting jobs before proceeding
     has_conflict, conflicting_action = has_conflicting_job(lab_id, "down")
@@ -431,7 +436,9 @@ async def lab_restart(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab, role = get_lab_with_role(lab_id, database, current_user)
+    if role < LabRole.EDITOR:
+        raise HTTPException(status_code=403, detail="Editor access required")
 
     # Check for conflicting jobs before proceeding (restart involves down + up)
     has_conflict, conflicting_action = has_conflicting_job(lab_id, "down")
@@ -505,7 +512,9 @@ async def node_action(
     if action not in ("start", "stop"):
         raise HTTPException(status_code=400, detail="Unsupported node action")
 
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab, role = get_lab_with_role(lab_id, database, current_user)
+    if role < LabRole.EDITOR:
+        raise HTTPException(status_code=403, detail="Editor access required")
 
     # Resolve node by id or name (with SELECT FOR UPDATE to prevent races)
     node_state = (
@@ -763,7 +772,9 @@ async def cancel_job(
     Marks the job as 'cancelled' and sets the lab state to 'unknown'
     so reconciliation can determine actual state.
     """
-    lab = get_lab_or_404(lab_id, database, current_user)
+    lab, role = get_lab_with_role(lab_id, database, current_user)
+    if role < LabRole.EDITOR:
+        raise HTTPException(status_code=403, detail="Editor access required")
     job = database.get(models.Job, job_id)
 
     if not job or job.lab_id != lab_id:

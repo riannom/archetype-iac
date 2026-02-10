@@ -899,12 +899,15 @@ async def list_agent_network_configs(
 async def get_transport_config(
     agent_id: str,
     database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Get transport configuration for agent bootstrap.
 
     Called by agents during two-phase bootstrap to fetch their
     transport configuration from the controller.
+    Requires admin access.
     """
+    require_admin(current_user)
     agent = database.get(models.Host, agent_id)
     if not agent:
         raise_not_found("Agent not found")

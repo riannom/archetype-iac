@@ -222,7 +222,7 @@ describe("Dashboard", () => {
       // Mock authenticated admin user for navigation button tests
       mockFetch.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({ id: 1, email: "admin@test.com", is_admin: true }),
+        json: () => Promise.resolve({ id: "1", username: "admin", email: "admin@test.com", is_active: true, global_role: "super_admin", created_at: "2024-01-01T00:00:00Z" }),
       });
     });
 

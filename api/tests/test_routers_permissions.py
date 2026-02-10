@@ -142,10 +142,11 @@ class TestAddPermission:
 
         # Create another user to share with
         other_user = models.User(
+            username="otheruser",
             email="other@example.com",
             hashed_password=hash_password("password123"),
             is_active=True,
-            is_admin=False,
+            global_role="operator",
         )
         test_db.add(other_user)
         test_db.commit()
