@@ -26,8 +26,8 @@ def test_node_ready_docker_runs_post_boot():
 
     with patch("agent.main.get_provider", return_value=provider):
         with patch("docker.from_env", return_value=mock_docker):
-            with patch("agent.readiness.get_probe_for_vendor", return_value=probe):
-                with patch("agent.readiness.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
+            with patch("agent.main.get_probe_for_vendor", return_value=probe):
+                with patch("agent.main.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
                     with patch("agent.readiness.get_readiness_timeout", return_value=120):
                         response = client.get("/labs/lab1/nodes/r1/ready")
 
@@ -107,8 +107,8 @@ def test_node_ready_docker_not_ready_skips_post_boot():
 
     with patch("agent.main.get_provider", return_value=provider):
         with patch("docker.from_env", return_value=mock_docker):
-            with patch("agent.readiness.get_probe_for_vendor", return_value=probe):
-                with patch("agent.readiness.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
+            with patch("agent.main.get_probe_for_vendor", return_value=probe):
+                with patch("agent.main.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
                     with patch("agent.readiness.get_readiness_timeout", return_value=120):
                         response = client.get("/labs/lab1/nodes/r1/ready")
 

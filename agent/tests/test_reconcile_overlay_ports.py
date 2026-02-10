@@ -107,7 +107,7 @@ def test_reconcile_empty_valid_list_removes_all_vxlan(test_client):
     with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
-            json={"valid_port_names": []},
+            json={"valid_port_names": [], "force": True, "confirm": True, "allow_empty": True},
         )
 
     assert resp.status_code == 200
@@ -129,7 +129,7 @@ def test_reconcile_ignores_non_vxlan_ports(test_client):
     with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
-            json={"valid_port_names": []},
+            json={"valid_port_names": [], "force": True, "confirm": True, "allow_empty": True},
         )
 
     assert resp.status_code == 200
@@ -165,7 +165,7 @@ def test_reconcile_handles_del_port_failure(test_client):
     with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
-            json={"valid_port_names": []},
+            json={"valid_port_names": [], "force": True, "confirm": True, "allow_empty": True},
         )
 
     assert resp.status_code == 200

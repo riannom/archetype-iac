@@ -4,7 +4,7 @@ import agent.network.backends.registry as registry
 
 
 def test_get_network_backend_defaults_to_ovs(monkeypatch) -> None:
-    registry._backend_instance = None
+    registry.reset_network_backend()
 
     class FakeBackend:
         pass
@@ -17,7 +17,7 @@ def test_get_network_backend_defaults_to_ovs(monkeypatch) -> None:
 
 
 def test_get_network_backend_singleton(monkeypatch) -> None:
-    registry._backend_instance = None
+    registry.reset_network_backend()
 
     class FakeBackend:
         pass
