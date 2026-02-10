@@ -955,7 +955,7 @@ const StudioPage: React.FC = () => {
     }
   };
 
-  const handleAddDevice = (model: DeviceModel) => {
+  const handleAddDevice = (model: DeviceModel, x?: number, y?: number) => {
     const id = Math.random().toString(36).slice(2, 9);
     const displayName = `${model.id.toUpperCase()}-${nodes.length + 1}`;
     const newNode: DeviceNode = {
@@ -968,8 +968,8 @@ const StudioPage: React.FC = () => {
       type: model.type,
       model: model.id,
       version: model.versions[0],
-      x: 300 + Math.random() * 50,
-      y: 200 + Math.random() * 50,
+      x: x ?? 300 + Math.random() * 50,
+      y: y ?? 200 + Math.random() * 50,
       cpu: 1,
       memory: 1024,
     };
@@ -980,15 +980,15 @@ const StudioPage: React.FC = () => {
     setTimeout(() => triggerTopologySave(), 100);
   };
 
-  const handleAddExternalNetwork = () => {
+  const handleAddExternalNetwork = (x?: number, y?: number) => {
     const id = Math.random().toString(36).slice(2, 9);
     const extNetCount = nodes.filter((n) => isExternalNetworkNode(n)).length;
     const newNode: ExternalNetworkNode = {
       id,
       nodeType: 'external',
       name: `External-${extNetCount + 1}`,
-      x: 350 + Math.random() * 50,
-      y: 250 + Math.random() * 50,
+      x: x ?? 350 + Math.random() * 50,
+      y: y ?? 250 + Math.random() * 50,
     };
     setNodes((prev) => [...prev, newNode]);
     setSelectedId(id);
@@ -1681,6 +1681,8 @@ const StudioPage: React.FC = () => {
               onOpenConsole={handleOpenConsole}
               onUpdateStatus={handleUpdateStatus}
               onDelete={handleDelete}
+              onDropDevice={handleAddDevice}
+              onDropExternalNetwork={handleAddExternalNetwork}
               onUpdateAnnotation={handleUpdateAnnotation}
             />
             <div

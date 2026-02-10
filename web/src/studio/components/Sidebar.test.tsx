@@ -332,7 +332,7 @@ describe("Sidebar", () => {
       expect(ceosDevice).toHaveAttribute("draggable", "true");
     });
 
-    it("calls onAddDevice on drag end", () => {
+    it("sets device data on drag start", () => {
       render(
         <Sidebar
           categories={mockCategories}
@@ -344,10 +344,15 @@ describe("Sidebar", () => {
 
       const ceosDevice = screen.getByText("Arista cEOS").closest("[draggable]");
       if (ceosDevice) {
-        fireEvent.dragEnd(ceosDevice);
+        const setData = vi.fn();
+        fireEvent.dragStart(ceosDevice, {
+          dataTransfer: { setData, effectAllowed: '' },
+        });
+        expect(setData).toHaveBeenCalledWith(
+          'application/x-archetype-device',
+          JSON.stringify(mockDeviceModels[0])
+        );
       }
-
-      expect(mockOnAddDevice).toHaveBeenCalledWith(mockDeviceModels[0]);
     });
   });
 

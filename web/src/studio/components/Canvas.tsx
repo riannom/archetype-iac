@@ -25,6 +25,8 @@ interface CanvasProps {
   onOpenConsole: (nodeId: string) => void;
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
   onDelete: (id: string) => void;
+  onDropDevice?: (model: DeviceModel, x: number, y: number) => void;
+  onDropExternalNetwork?: (x: number, y: number) => void;
   onUpdateAnnotation?: (id: string, updates: Partial<Annotation>) => void;
 }
 
@@ -49,7 +51,7 @@ interface ContextMenu {
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete, onUpdateAnnotation
+  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -332,6 +334,36 @@ const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes('application/x-archetype-device') ||
+        e.dataTransfer.types.includes('application/x-archetype-external')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left - offset.x) / zoom;
+    const y = (e.clientY - rect.top - offset.y) / zoom;
+
+    const deviceData = e.dataTransfer.getData('application/x-archetype-device');
+    if (deviceData && onDropDevice) {
+      try {
+        const model = JSON.parse(deviceData) as DeviceModel;
+        onDropDevice(model, x, y);
+      } catch { /* ignore parse errors */ }
+      return;
+    }
+
+    const externalData = e.dataTransfer.getData('application/x-archetype-external');
+    if (externalData && onDropExternalNetwork) {
+      onDropExternalNetwork(x, y);
+    }
+  }, [offset, zoom, onDropDevice, onDropExternalNetwork]);
+
   return (
     <div
       ref={containerRef}
@@ -342,6 +374,8 @@ const Canvas: React.FC<CanvasProps> = ({
       onMouseUp={handleMouseUp}
       onMouseDown={handleMouseDown}
       onWheel={handleWheel}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
       onContextMenu={(e) => e.preventDefault()}
     >
       <div

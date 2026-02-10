@@ -279,7 +279,10 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     <div
       key={model.id}
       draggable
-      onDragEnd={() => onAddDevice(model)}
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/x-archetype-device', JSON.stringify(model));
+        e.dataTransfer.effectAllowed = 'copy';
+      }}
       onClick={() => onAddDevice(model)}
       className="group flex items-center p-2 bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 border border-transparent hover:border-stone-200 dark:hover:border-stone-700 rounded-lg cursor-grab active:cursor-grabbing transition-all"
     >
@@ -349,7 +352,10 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
               <button
                 onClick={onAddExternalNetwork}
                 draggable
-                onDragEnd={onAddExternalNetwork}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/x-archetype-external', 'true');
+                  e.dataTransfer.effectAllowed = 'copy';
+                }}
                 className="w-full flex items-center p-3 rounded-lg bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30 hover:from-blue-100 hover:to-purple-100 dark:hover:from-blue-900/40 dark:hover:to-purple-900/40 border border-blue-200 dark:border-blue-800/50 hover:border-blue-300 dark:hover:border-blue-700 transition-all gap-3 group shadow-sm cursor-grab active:cursor-grabbing"
               >
                 <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shadow-md">
@@ -472,7 +478,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
             <span>Network Canvas</span>
           </div>
           <p className="text-[9px] text-stone-500 dark:text-stone-400 leading-relaxed">
-            Drag devices onto the grid to build your topology.
+            Click or drag devices onto the grid to build your topology.
           </p>
         </div>
       </div>
