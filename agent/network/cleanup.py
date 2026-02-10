@@ -168,10 +168,11 @@ class NetworkCleanupManager:
 
         return await asyncio.to_thread(_sync_get_pids)
 
-    async def _get_container_ifindexes(self) -> set[int]:
+    async def _get_container_ifindexes(self, pids: set[int] | None = None) -> set[int]:
         """Collect interface ifindex values from running container namespaces."""
         ifindexes: set[int] = set()
-        pids = await self._get_running_container_pids()
+        if pids is None:
+            pids = await self._get_running_container_pids()
         if not pids:
             return ifindexes
 
@@ -249,6 +250,12 @@ class NetworkCleanupManager:
             logger.debug(f"Veth {name} has master {master}, not orphaned")
             return False
 
+        # If this is an OVS-managed port, it's not orphaned
+        if name.startswith("vh"):
+            code, _, _ = await self._run_cmd(["ovs-vsctl", "port-to-br", name])
+            if code == 0:
+                return False
+
         if not link_index:
             # No peer link index - might be orphaned
             return True
@@ -325,7 +332,14 @@ class NetworkCleanupManager:
             return stats
 
         # Get interface ifindexes in running container namespaces
-        container_ifindexes = await self._get_container_ifindexes()
+        running_pids = await self._get_running_container_pids()
+        container_ifindexes = await self._get_container_ifindexes(running_pids)
+        if running_pids and not container_ifindexes:
+            logger.warning(
+                "Container PIDs detected but no netns ifindexes found; "
+                "skipping veth deletion to avoid false positives"
+            )
+            return stats
 
         # Get active veths tracked by OVS plugin - these should never be deleted
         ovs_active_veths = _get_ovs_plugin_active_veths()

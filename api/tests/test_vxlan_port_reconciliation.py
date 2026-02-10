@@ -99,7 +99,12 @@ class TestReconcileVxlanPortsOnAgent:
         assert result == {"removed_ports": ["vxlan-dead1234"], "valid_count": 2}
         mock_client.post.assert_called_once_with(
             "http://10.0.0.1:8001/overlay/reconcile-ports",
-            json={"valid_port_names": ["vxlan-aabb1122", "vxlan-ccdd3344"]},
+            json={
+                "valid_port_names": ["vxlan-aabb1122", "vxlan-ccdd3344"],
+                "force": False,
+                "confirm": False,
+                "allow_empty": False,
+            },
             timeout=60.0,
         )
 

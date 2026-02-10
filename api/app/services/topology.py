@@ -1214,6 +1214,21 @@ class TopologyService:
 
         updates = 0
 
+        def _prefer_link_state(a: models.LinkState, b: models.LinkState) -> models.LinkState:
+            """Choose which LinkState to keep when duplicates exist.
+
+            Prefer non-deleted desired_state; otherwise prefer most recently updated.
+            """
+            a_deleted = (a.desired_state == "deleted")
+            b_deleted = (b.desired_state == "deleted")
+            if a_deleted != b_deleted:
+                return b if a_deleted else a
+            a_ts = a.updated_at or a.created_at
+            b_ts = b.updated_at or b.created_at
+            if a_ts and b_ts:
+                return a if a_ts >= b_ts else b
+            return a
+
         for link in links:
             source_node = node_by_id.get(link.source_node_id)
             target_node = node_by_id.get(link.target_node_id)
@@ -1264,6 +1279,31 @@ class TopologyService:
                 .first()
             )
             if link_state:
+                # If another LinkState already exists with the normalized name,
+                # merge to prevent duplicate (lab_id, link_name) conflicts.
+                conflict = (
+                    self.db.query(models.LinkState)
+                    .filter(
+                        models.LinkState.lab_id == lab_id,
+                        models.LinkState.link_name == new_link_name,
+                        models.LinkState.id != link_state.id,
+                    )
+                    .first()
+                )
+                if conflict:
+                    keep = _prefer_link_state(link_state, conflict)
+                    remove = conflict if keep is link_state else link_state
+                    # Clean up VXLAN tunnels tied to the duplicate LinkState
+                    try:
+                        self.db.query(models.VxlanTunnel).filter(
+                            models.VxlanTunnel.link_state_id == remove.id
+                        ).delete(synchronize_session=False)
+                    except Exception:
+                        # Best-effort; orphan cleanup runs separately.
+                        pass
+                    self.db.delete(remove)
+                    link_state = keep
+
                 link_state.link_name = link.link_name
 
                 src_node = node_by_id.get(link.source_node_id)

@@ -174,7 +174,7 @@ class NetworkBackend(ABC):
         """Create a per-link access-mode VXLAN tunnel port."""
 
     @abstractmethod
-    async def overlay_delete_link_tunnel(self, link_id: str) -> bool:
+    async def overlay_delete_link_tunnel(self, link_id: str, lab_id: str | None = None) -> bool:
         """Delete a per-link VXLAN tunnel port."""
 
     @abstractmethod

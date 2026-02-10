@@ -34,6 +34,61 @@ RECONCILIATION_INTERVAL_SECONDS = 60
 RECONCILIATION_ENABLED = True
 
 
+async def _cleanup_deleted_links(
+    session: Session,
+    host_to_agent: dict[str, models.Host],
+    lab_id: str | None = None,
+) -> int:
+    """Remove LinkState records marked as deleted and tear down their tunnels.
+
+    This prevents stale VXLAN overlays from persisting after interface renames
+    (e.g., Ethernet -> eth) or topology updates.
+    """
+    from app.tasks.live_links import teardown_link
+
+    query = session.query(models.LinkState).filter(
+        models.LinkState.desired_state == "deleted"
+    )
+    if lab_id:
+        query = query.filter(models.LinkState.lab_id == lab_id)
+    deleted_links = query.all()
+
+    if not deleted_links:
+        return 0
+
+    removed = 0
+    for link_state in deleted_links:
+        link_info = {
+            "link_name": link_state.link_name,
+            "source_node": link_state.source_node,
+            "source_interface": link_state.source_interface,
+            "target_node": link_state.target_node,
+            "target_interface": link_state.target_interface,
+            "is_cross_host": link_state.is_cross_host,
+            "actual_state": link_state.actual_state,
+            "source_host_id": link_state.source_host_id,
+            "target_host_id": link_state.target_host_id,
+            "vni": link_state.vni,
+        }
+        try:
+            await teardown_link(session, link_state.lab_id, link_info, host_to_agent)
+        except Exception as e:
+            logger.warning(
+                f"Failed to teardown deleted link {link_state.link_name}: {e}"
+            )
+
+        # Always delete VXLAN tunnel records tied to this LinkState
+        session.query(models.VxlanTunnel).filter(
+            models.VxlanTunnel.link_state_id == link_state.id
+        ).delete(synchronize_session=False)
+
+        session.delete(link_state)
+        removed += 1
+
+    session.commit()
+    return removed
+
+
 async def reconcile_link_states(session: Session) -> dict:
     """Reconcile link_states with actual OVS configuration.
 
@@ -56,6 +111,19 @@ async def reconcile_link_states(session: Session) -> dict:
         "skipped": 0,
     }
 
+    # Build host_to_agent map for all online agents
+    agents = (
+        session.query(models.Host)
+        .filter(models.Host.status == "online")
+        .all()
+    )
+    host_to_agent = {a.id: a for a in agents}
+
+    # Remove deleted links first to prevent stale overlays
+    deleted_removed = await _cleanup_deleted_links(session, host_to_agent)
+    if deleted_removed > 0:
+        logger.info(f"Cleaned up {deleted_removed} deleted LinkState record(s)")
+
     # Get links that need attention:
     # - Links marked as "up" (verification)
     # - Cross-host links in "error" with partial attachment (recovery)
@@ -67,14 +135,6 @@ async def reconcile_link_states(session: Session) -> dict:
 
     if not links_to_check:
         return results
-
-    # Build host_to_agent map for all online agents
-    agents = (
-        session.query(models.Host)
-        .filter(models.Host.status == "online")
-        .all()
-    )
-    host_to_agent = {a.id: a for a in agents}
 
     for link in links_to_check:
         results["checked"] += 1
@@ -111,6 +171,10 @@ async def reconcile_link_states(session: Session) -> dict:
                 results["valid"] += 1
             else:
                 logger.warning(f"Link {link.link_name} verification failed: {error}")
+
+                if error and error.startswith("Overlay status unavailable"):
+                    results["skipped"] += 1
+                    continue
 
                 # Attempt repair
                 repaired = await attempt_link_repair(session, link, host_to_agent)
@@ -421,8 +485,54 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
         .all()
     )
 
+    # Build host_to_agent map for teardown calls
+    agents = (
+        session.query(models.Host)
+        .filter(models.Host.status == "online")
+        .all()
+    )
+    host_to_agent = {a.id: a for a in agents}
+
     count = len(orphaned)
     for tunnel in orphaned:
+        link_state = None
+        if tunnel.link_state_id is not None:
+            link_state = (
+                session.query(models.LinkState)
+                .filter(models.LinkState.id == tunnel.link_state_id)
+                .first()
+            )
+
+        if link_state:
+            for agent_id, node, iface in [
+                (tunnel.agent_a_id, link_state.source_node, link_state.source_interface),
+                (tunnel.agent_b_id, link_state.target_node, link_state.target_interface),
+            ]:
+                agent = host_to_agent.get(agent_id)
+                if agent:
+                    try:
+                        await agent_client.detach_overlay_interface_on_agent(
+                            agent,
+                            lab_id=link_state.lab_id,
+                            container_name=node,
+                            interface_name=normalize_interface(iface) if iface else "",
+                            link_id=link_state.link_name,
+                        )
+                        logger.info(
+                            f"Torn down VXLAN port for orphaned tunnel on agent {agent.name} "
+                            f"(link {link_state.link_name})"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to detach VXLAN port for orphaned tunnel on agent "
+                            f"{agent_id}: {e}"
+                        )
+                else:
+                    logger.debug(
+                        f"Agent {agent_id} offline, skipping VXLAN teardown "
+                        f"for orphaned tunnel (link_state_id={tunnel.link_state_id})"
+                    )
+
         logger.debug(
             f"Deleting orphaned tunnel: vni={tunnel.vni}, "
             f"link_state_id={tunnel.link_state_id}, status={tunnel.status}"
@@ -505,6 +615,19 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
         "skipped": 0,
     }
 
+    # Build host_to_agent map
+    agents = (
+        session.query(models.Host)
+        .filter(models.Host.status == "online")
+        .all()
+    )
+    host_to_agent = {a.id: a for a in agents}
+
+    # Remove deleted links first to prevent stale overlays
+    deleted_removed = await _cleanup_deleted_links(session, host_to_agent, lab_id=lab_id)
+    if deleted_removed > 0:
+        logger.info(f"Cleaned up {deleted_removed} deleted LinkState record(s) for lab {lab_id}")
+
     # Get links that need attention for this lab
     links_to_check = (
         session.query(models.LinkState)
@@ -517,14 +640,6 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
 
     if not links_to_check:
         return results
-
-    # Build host_to_agent map
-    agents = (
-        session.query(models.Host)
-        .filter(models.Host.status == "online")
-        .all()
-    )
-    host_to_agent = {a.id: a for a in agents}
 
     for link in links_to_check:
         results["checked"] += 1

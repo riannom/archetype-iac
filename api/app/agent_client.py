@@ -1042,6 +1042,8 @@ async def reconcile_vxlan_ports_on_agent(
     agent: models.Host,
     valid_port_names: list[str],
     force: bool = False,
+    confirm: bool = False,
+    allow_empty: bool = False,
 ) -> dict:
     """Tell agent which VXLAN ports should exist; agent removes the rest.
 
@@ -1057,7 +1059,12 @@ async def reconcile_vxlan_ports_on_agent(
         client = get_http_client()
         response = await client.post(
             url,
-            json={"valid_port_names": valid_port_names, "force": force},
+            json={
+                "valid_port_names": valid_port_names,
+                "force": force,
+                "confirm": confirm,
+                "allow_empty": allow_empty,
+            },
             timeout=60.0,
         )
         response.raise_for_status()
@@ -1424,6 +1431,36 @@ async def setup_cross_host_link_v2(
         logger.error(
             f"Per-link tunnel creation failed for {link_id}: {error_msg}"
         )
+
+        # Best-effort rollback: detach the side that succeeded
+        rollback_tasks = []
+        if attach_a_result.get("success"):
+            rollback_tasks.append(
+                detach_overlay_interface_on_agent(
+                    agent_a,
+                    lab_id=lab_id,
+                    container_name=node_a,
+                    interface_name=interface_a,
+                    link_id=link_id,
+                )
+            )
+        if attach_b_result.get("success"):
+            rollback_tasks.append(
+                detach_overlay_interface_on_agent(
+                    agent_b,
+                    lab_id=lab_id,
+                    container_name=node_b,
+                    interface_name=interface_b,
+                    link_id=link_id,
+                )
+            )
+        if rollback_tasks:
+            try:
+                await asyncio.gather(*rollback_tasks)
+                logger.info(f"Rolled back partial attachments for {link_id}")
+            except Exception as e:
+                logger.warning(f"Rollback failed for {link_id}: {e}")
+
         return {
             "success": False,
             "error": f"Per-link tunnel creation failed: {error_msg}",
@@ -1457,7 +1494,7 @@ async def get_overlay_status_from_agent(agent: models.Host) -> dict:
         return response.json()
     except Exception as e:
         logger.error(f"Overlay status failed on agent {agent.id}: {e}")
-        return {"tunnels": [], "bridges": []}
+        return {"tunnels": [], "bridges": [], "error": str(e)}
 
 
 def agent_supports_vxlan(agent: models.Host) -> bool:

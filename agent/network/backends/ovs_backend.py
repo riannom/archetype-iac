@@ -227,8 +227,8 @@ class OVSBackend(NetworkBackend):
             tenant_mtu=tenant_mtu,
         )
 
-    async def overlay_delete_link_tunnel(self, link_id: str) -> bool:
-        return await self._overlay.delete_link_tunnel(link_id=link_id)
+    async def overlay_delete_link_tunnel(self, link_id: str, lab_id: str | None = None) -> bool:
+        return await self._overlay.delete_link_tunnel(link_id=link_id, lab_id=lab_id)
 
     def check_port_exists(self, port_name: str) -> bool:
         try:

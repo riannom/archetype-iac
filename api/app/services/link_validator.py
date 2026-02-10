@@ -165,6 +165,8 @@ async def verify_cross_host_link(
     for side, agent in [("source", source_agent), ("target", target_agent)]:
         try:
             status = await agent_client.get_overlay_status_from_agent(agent)
+            if status.get("error"):
+                return False, f"Overlay status unavailable on {agent.name}: {status['error']}"
             link_tunnels = status.get("link_tunnels", [])
             if not link_tunnels:
                 return False, f"Per-link VXLAN tunnel not found on {agent.name} for link {link_name}"

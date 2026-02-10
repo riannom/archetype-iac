@@ -45,17 +45,20 @@ def links_needing_reconciliation_filter():
     Returns:
         SQLAlchemy filter expression
     """
-    from sqlalchemy import or_
+    from sqlalchemy import or_, and_
     from app import models
 
-    return or_(
-        models.LinkState.actual_state == "up",
-        # All cross-host error links that should be up need attention —
-        # includes both partial attachment AND VLAN tag mismatch cases
-        (
-            (models.LinkState.actual_state == "error") &
-            (models.LinkState.is_cross_host == True) &
-            (models.LinkState.desired_state == "up")
+    return and_(
+        models.LinkState.actual_state != "cleanup",
+        or_(
+            models.LinkState.actual_state == "up",
+            # All cross-host error links that should be up need attention —
+            # includes both partial attachment AND VLAN tag mismatch cases
+            (
+                (models.LinkState.actual_state == "error") &
+                (models.LinkState.is_cross_host == True) &
+                (models.LinkState.desired_state == "up")
+            ),
         ),
     )
 

@@ -12,6 +12,20 @@ from sqlalchemy.orm import Session
 from app import models
 
 
+def _add_node_defs(test_db: Session, lab_id: str, node_names: list[str]) -> None:
+    """Create Node definitions to prevent orphan cleanup."""
+    for name in node_names:
+        node_def = models.Node(
+            lab_id=lab_id,
+            gui_id=name.lower(),
+            display_name=name,
+            container_name=name,
+            node_type="device",
+            device="linux",
+        )
+        test_db.add(node_def)
+
+
 class TestGenerateLinkName:
     """Tests for the _generate_link_name helper function."""
 
@@ -324,6 +338,7 @@ class TestLinkStateReconciliation:
             actual_state="running",
         )
         test_db.add_all([node1, node2])
+        _add_node_defs(test_db, sample_lab.id, ["R1", "R2"])
 
         # Create link state
         link = models.LinkState(
@@ -349,8 +364,9 @@ class TestLinkStateReconciliation:
                 }
                 with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
                     mock_ready.return_value = {"is_ready": True}
-
-                    await _reconcile_single_lab(test_db, sample_lab.id)
+                    # Prevent auto-connect from invoking live link creation
+                    with patch("app.tasks.reconciliation.acquire_link_ops_lock", return_value=False):
+                        await _reconcile_single_lab(test_db, sample_lab.id)
 
                     test_db.refresh(link)
                     assert link.actual_state == "up"
@@ -382,6 +398,7 @@ class TestLinkStateReconciliation:
             actual_state="stopped",
         )
         test_db.add_all([node1, node2])
+        _add_node_defs(test_db, sample_lab.id, ["R1", "R2"])
 
         # Create link state
         link = models.LinkState(
@@ -438,6 +455,7 @@ class TestLinkStateReconciliation:
             actual_state="running",
         )
         test_db.add_all([node1, node2])
+        _add_node_defs(test_db, sample_lab.id, ["R1", "R2"])
 
         # Create link state with carrier off on source
         link = models.LinkState(
@@ -522,6 +540,7 @@ class TestLinkStateReconciliation:
             actual_state="running",
         )
         test_db.add_all([node1, node2])
+        _add_node_defs(test_db, sample_lab.id, ["R1", "R3"])
 
         # Create cross-host link state with VXLAN
         link = models.LinkState(
@@ -610,6 +629,7 @@ class TestLinkStateCarrierReconciliation:
             actual_state="running",
         )
         test_db.add_all([node1, node2])
+        _add_node_defs(test_db, sample_lab.id, ["R1", "R2"])
 
         # Create link state with specific carrier states
         link = models.LinkState(
@@ -699,6 +719,7 @@ class TestLinkStateCarrierReconciliation:
             actual_state="running",
         )
         test_db.add_all([node1, node2])
+        _add_node_defs(test_db, sample_lab.id, ["R1", "R3"])
 
         # Create cross-host link state
         link = models.LinkState(
@@ -794,6 +815,7 @@ class TestReconciliationEnforcementInteraction:
         )
         test_db.add(ns)
         test_db.commit()
+        _add_node_defs(test_db, sample_lab.id, ["R1"])
 
         # Agent reports the node as "running" — reconciliation should NOT overwrite
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
@@ -832,6 +854,7 @@ class TestReconciliationEnforcementInteraction:
         )
         test_db.add(ns)
         test_db.commit()
+        _add_node_defs(test_db, sample_lab.id, ["R1"])
 
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
@@ -875,6 +898,7 @@ class TestReconciliationEnforcementInteraction:
         )
         test_db.add_all([ns_failed, ns_normal])
         test_db.commit()
+        _add_node_defs(test_db, sample_lab.id, ["R1", "R2"])
 
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
@@ -919,6 +943,7 @@ class TestReconciliationEnforcementInteraction:
         )
         test_db.add(ns)
         test_db.commit()
+        _add_node_defs(test_db, sample_lab.id, ["R1"])
 
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:

@@ -14,7 +14,7 @@ import time
 
 import redis.asyncio as aioredis
 
-from app import models
+from app import agent_client, models
 from app.config import settings
 from app.db import get_session
 from app.events.cleanup_events import CLEANUP_CHANNEL, CleanupEvent, CleanupEventType
@@ -131,6 +131,51 @@ async def _cleanup_lab_placements(lab_id: str) -> CleanupResult:
         if deleted:
             session.commit()
         result.deleted = deleted
+    return result
+
+
+async def _cleanup_recovered_vxlan_ports(lab_id: str) -> CleanupResult:
+    """Remove recovered VXLAN ports that no longer match active tunnels."""
+    result = CleanupResult(task_name="cleanup_recovered_vxlan_ports")
+    with get_session() as session:
+        try:
+            active_tunnels = (
+                session.query(models.VxlanTunnel)
+                .filter(models.VxlanTunnel.status == "active")
+                .all()
+            )
+
+            agent_valid_ports: dict[str, set[str]] = {}
+            for tunnel in active_tunnels:
+                link_state = session.get(models.LinkState, tunnel.link_state_id)
+                if not link_state:
+                    continue
+                port_name = agent_client.compute_vxlan_port_name(
+                    str(tunnel.lab_id), link_state.link_name
+                )
+                for aid in [tunnel.agent_a_id, tunnel.agent_b_id]:
+                    if aid:
+                        agent_valid_ports.setdefault(str(aid), set()).add(port_name)
+
+            all_agents = session.query(models.Host).all()
+            for agent in all_agents:
+                if not agent_client.is_agent_online(agent):
+                    continue
+                valid = list(agent_valid_ports.get(str(agent.id), set()))
+                try:
+                    reconcile = await agent_client.reconcile_vxlan_ports_on_agent(
+                        agent,
+                        valid,
+                        force=True,
+                        confirm=True,
+                        allow_empty=True,
+                    )
+                    removed = reconcile.get("removed_ports", [])
+                    result.deleted += len(removed)
+                except Exception as e:
+                    result.errors.append(f"{agent.name}: {e}")
+        except Exception as e:
+            result.errors.append(str(e))
     return result
 
 
@@ -266,6 +311,7 @@ class CleanupEventHandler:
         await _runner.run_task(_cleanup_lab_workspace, lab_id)
         await _runner.run_task(_cleanup_lab_config_snapshots, lab_id)
         await _runner.run_task(_cleanup_lab_placements, lab_id)
+        await _runner.run_task(_cleanup_recovered_vxlan_ports, lab_id)
 
     async def _handle_node_removed(self, event: CleanupEvent) -> None:
         if not event.lab_id or not event.node_name:
@@ -298,6 +344,7 @@ class CleanupEventHandler:
             return
         logger.info(f"Handling DESTROY_FINISHED cleanup for lab {event.lab_id}")
         await _runner.run_task(_cleanup_lab_placements, event.lab_id)
+        await _runner.run_task(_cleanup_recovered_vxlan_ports, event.lab_id)
         await self._trigger_lab_state_check(event.lab_id)
 
     async def _handle_job_completed(self, event: CleanupEvent) -> None:

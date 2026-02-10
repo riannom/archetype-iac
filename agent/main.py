@@ -2599,12 +2599,28 @@ async def reconcile_overlay_ports(request: dict):
 
     valid_port_names = set(request.get("valid_port_names", []))
     force = bool(request.get("force", False))
+    confirm = bool(request.get("confirm", False))
+    allow_empty = bool(request.get("allow_empty", False))
+    if force and not confirm:
+        return {
+            "removed_ports": [],
+            "valid_count": len(valid_port_names),
+            "skipped": True,
+            "reason": "force requires confirm=true",
+        }
     if not valid_port_names and not force:
         return {
             "removed_ports": [],
             "valid_count": 0,
             "skipped": True,
             "reason": "empty valid_port_names",
+        }
+    if force and not valid_port_names and not allow_empty:
+        return {
+            "removed_ports": [],
+            "valid_count": 0,
+            "skipped": True,
+            "reason": "empty valid_port_names requires allow_empty=true when force=true",
         }
     bridge = settings.ovs_bridge_name or "arch-ovs"
 
@@ -2830,7 +2846,17 @@ async def detach_overlay_interface(
         backend = get_network_backend()
         tunnel_deleted = await backend.overlay_delete_link_tunnel(
             link_id=request.link_id,
+            lab_id=request.lab_id,
         )
+
+        if not tunnel_deleted:
+            return DetachOverlayInterfaceResponse(
+                success=False,
+                interface_isolated=interface_isolated,
+                new_vlan=new_vlan,
+                tunnel_deleted=tunnel_deleted,
+                error="Failed to delete VXLAN tunnel",
+            )
 
         return DetachOverlayInterfaceResponse(
             success=True,

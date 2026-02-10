@@ -261,7 +261,8 @@ class LinkManager:
             f"{agent_a.name} and {agent_b.name}"
         )
 
-        # Phase 1: Mark tunnel as cleanup in progress
+        # Phase 1: Mark tunnel as cleanup in progress and pause reconciliation
+        link_state.actual_state = "cleanup"
         tunnel.status = "cleanup"
         self.session.flush()
 
@@ -286,6 +287,8 @@ class LinkManager:
 
         if not source_ok:
             tunnel.status = "failed"
+            link_state.actual_state = "error"
+            link_state.error_message = "Failed to detach source endpoint"
             return False
 
         # Phase 2b: Detach target interface
@@ -313,6 +316,7 @@ class LinkManager:
                 f"Target detach failed, rolling back source for link {link_name}"
             )
             rollback_vni = tunnel.vni if tunnel else None
+            rollback_ok = False
             if rollback_vni:
                 try:
                     await agent_client.attach_overlay_interface_on_agent(
@@ -326,12 +330,15 @@ class LinkManager:
                         link_id=link_name,
                     )
                     logger.info(f"Rolled back source attachment for link {link_name}")
+                    rollback_ok = True
                 except Exception as e:
                     logger.error(f"Rollback failed for link {link_name}: {e}")
 
             tunnel.status = "failed"
-            link_state.source_vxlan_attached = False
+            link_state.source_vxlan_attached = rollback_ok
             link_state.target_vxlan_attached = False
+            link_state.actual_state = "error"
+            link_state.error_message = "Failed to detach target endpoint"
             return False
 
         # Phase 3: Both sides detached successfully - delete tunnel record
@@ -340,6 +347,8 @@ class LinkManager:
         # Clear VXLAN fields from link_state
         link_state.vni = None
         link_state.vlan_tag = None
+        link_state.actual_state = "down"
+        link_state.error_message = None
 
         logger.info(f"Successfully tore down cross-host link {link_name}")
         return True

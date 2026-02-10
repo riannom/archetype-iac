@@ -1354,6 +1354,24 @@ class OverlayManager:
         if await self._ovs_port_exists(interface_name):
             vni_found, remote_found, local_found = await self._read_vxlan_link_info(interface_name)
             if vni_found == vni and remote_found == remote_ip and (not local_ip or local_found == local_ip):
+                if local_vlan > 0:
+                    code, tag_out, _ = await self._ovs_vsctl("get", "port", interface_name, "tag")
+                    current_tag = 0
+                    if code == 0:
+                        tag_str = tag_out.strip()
+                        if tag_str and tag_str != "[]":
+                            try:
+                                current_tag = int(tag_str)
+                            except ValueError:
+                                current_tag = 0
+                    if current_tag != local_vlan:
+                        await self._ovs_vsctl(
+                            "set", "port", interface_name, f"tag={local_vlan}"
+                        )
+                        logger.info(
+                            f"Updated VLAN tag for adopted tunnel {interface_name}: "
+                            f"{current_tag} -> {local_vlan}"
+                        )
                 tunnel = LinkTunnel(
                     link_id=link_id,
                     vni=vni,
@@ -1407,16 +1425,41 @@ class OverlayManager:
 
         return tunnel
 
-    async def delete_link_tunnel(self, link_id: str) -> bool:
+    async def delete_link_tunnel(self, link_id: str, lab_id: str | None = None) -> bool:
         """Delete a per-link VXLAN tunnel port.
 
         Args:
             link_id: The link identifier whose tunnel to delete
+            lab_id: Optional lab identifier (used to compute port name)
 
         Returns:
             True if deleted successfully, False otherwise
         """
         tunnel = self._link_tunnels.get(link_id)
+        if not tunnel:
+            # Allow deletion by port name for recovered tunnels (link_id == interface_name)
+            for existing in self._link_tunnels.values():
+                if existing.interface_name == link_id:
+                    tunnel = existing
+                    break
+
+        if not tunnel and lab_id:
+            expected_name = self._link_tunnel_interface_name(lab_id, link_id)
+            for existing in self._link_tunnels.values():
+                if existing.interface_name == expected_name:
+                    tunnel = existing
+                    break
+            if not tunnel:
+                # Best-effort delete by port name even if tracking is missing
+                if await self._ovs_port_exists(expected_name):
+                    try:
+                        await self._delete_vxlan_device(expected_name, self._bridge_name)
+                        logger.info(f"Deleted untracked link tunnel {expected_name} for {link_id}")
+                        return True
+                    except Exception as e:
+                        logger.error(f"Error deleting untracked link tunnel {expected_name}: {e}")
+                        return False
+
         if not tunnel:
             logger.warning(f"No link tunnel found for {link_id}")
             return False
@@ -1425,7 +1468,9 @@ class OverlayManager:
             # Delete OVS port and Linux VXLAN device
             await self._delete_vxlan_device(tunnel.interface_name, self._bridge_name)
 
-            del self._link_tunnels[link_id]
+            # Remove from tracking using actual key
+            if tunnel.link_id in self._link_tunnels:
+                del self._link_tunnels[tunnel.link_id]
             logger.info(f"Deleted link tunnel {tunnel.interface_name} for {link_id}")
             return True
 

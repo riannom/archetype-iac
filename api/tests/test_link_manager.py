@@ -159,7 +159,7 @@ class TestLinkManagerConnectLink:
                 "success": True,
                 "vlan_tag": 200,
             })
-            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_data_plane_ip = AsyncMock(side_effect=lambda *_: "10.0.0.1")
 
             result = await link_manager.connect_link(cross_host_link_state, agents)
 
@@ -457,7 +457,7 @@ class TestLinkManagerCreateCrossHostLink:
                 "success": True,
                 "vni": 200,
             })
-            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_data_plane_ip = AsyncMock(side_effect=lambda *_: "10.0.0.1")
 
             result = await link_manager.create_cross_host_link(
                 cross_host_link_state, agent_a, agent_b
@@ -490,7 +490,7 @@ class TestLinkManagerCreateCrossHostLink:
                 "success": False,
                 "error": "VXLAN port creation failed",
             })
-            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.resolve_data_plane_ip = AsyncMock(side_effect=lambda *_: "10.0.0.1")
 
             result = await link_manager.create_cross_host_link(
                 cross_host_link_state, agent_a, agent_b
