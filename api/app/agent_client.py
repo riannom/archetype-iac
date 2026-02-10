@@ -1181,6 +1181,24 @@ async def cleanup_overlay_on_agent(agent: models.Host, lab_id: str) -> dict:
         return {"tunnels_deleted": 0, "bridges_deleted": 0, "errors": [str(e)]}
 
 
+async def get_cleanup_audit_from_agent(agent: models.Host, include_ovs: bool = False) -> dict:
+    """Get a dry-run cleanup audit from an agent (no deletions)."""
+    url = f"{get_agent_url(agent)}/cleanup/audit"
+
+    try:
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json={"include_ovs": include_ovs},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Cleanup audit failed on agent {agent.id}: {e}")
+        return {"network": {}, "ovs": None, "errors": [str(e)]}
+
+
 # --- Per-Link VNI Model Functions ---
 
 

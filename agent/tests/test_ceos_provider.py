@@ -275,7 +275,7 @@ class TestStartupConfigHostname:
         """Verify minimal startup-config uses display_name for hostname."""
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            await provider._ensure_directories(sample_topology, workspace)
+            await provider._ensure_directories(sample_topology, workspace, use_thread=False)
 
             # Check eos_1 (has display_name="EOS-1")
             config_path = workspace / "configs" / "eos_1" / "flash" / "startup-config"
@@ -293,7 +293,7 @@ class TestStartupConfigHostname:
         """Verify fallback to node_name when display_name is None."""
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            await provider._ensure_directories(sample_topology, workspace)
+            await provider._ensure_directories(sample_topology, workspace, use_thread=False)
 
             # Check eos_3 (display_name=None, should use node_name)
             config_path = workspace / "configs" / "eos_3" / "flash" / "startup-config"
@@ -316,7 +316,7 @@ class TestStartupConfigHostname:
             config_path = flash_dir / "startup-config"
             config_path.write_text("hostname EXISTING\n")
 
-            await provider._ensure_directories(topology, workspace)
+            await provider._ensure_directories(topology, workspace, use_thread=False)
 
             # Should not be overwritten
             content = config_path.read_text()
@@ -338,7 +338,7 @@ class TestIfWaitScript:
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            await provider._ensure_directories(topology, workspace)
+            await provider._ensure_directories(topology, workspace, use_thread=False)
 
             script_path = workspace / "configs" / "eos_1" / "flash" / "if-wait.sh"
             assert script_path.exists()
@@ -352,7 +352,7 @@ class TestIfWaitScript:
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            await provider._ensure_directories(topology, workspace)
+            await provider._ensure_directories(topology, workspace, use_thread=False)
 
             script_path = workspace / "configs" / "eos_1" / "flash" / "if-wait.sh"
             mode = script_path.stat().st_mode
@@ -367,7 +367,7 @@ class TestIfWaitScript:
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            await provider._ensure_directories(topology, workspace)
+            await provider._ensure_directories(topology, workspace, use_thread=False)
 
             script_path = workspace / "configs" / "eos_1" / "flash" / "if-wait.sh"
             content = script_path.read_text()
@@ -382,7 +382,7 @@ class TestIfWaitScript:
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            await provider._ensure_directories(topology, workspace)
+            await provider._ensure_directories(topology, workspace, use_thread=False)
 
             # Linux nodes don't get flash directory
             flash_dir = workspace / "configs" / "linux_1" / "flash"
@@ -403,7 +403,7 @@ class TestZerotouchConfig:
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            await provider._ensure_directories(topology, workspace)
+            await provider._ensure_directories(topology, workspace, use_thread=False)
 
             zt_path = workspace / "configs" / "eos_1" / "flash" / "zerotouch-config"
             assert zt_path.exists()

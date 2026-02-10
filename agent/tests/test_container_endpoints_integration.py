@@ -41,7 +41,9 @@ pytestmark = [
 @pytest.fixture
 def test_client():
     """Create a test client for the agent API."""
-    return TestClient(app)
+    client = TestClient(app)
+    yield client
+    client.close()
 
 
 @pytest.fixture

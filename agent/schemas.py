@@ -339,6 +339,18 @@ class CleanupOverlayResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class CleanupAuditRequest(BaseModel):
+    """Controller -> Agent: Dry-run cleanup audit request."""
+    include_ovs: bool = False
+
+
+class CleanupAuditResponse(BaseModel):
+    """Agent -> Controller: Dry-run cleanup audit response."""
+    network: dict[str, Any] = Field(default_factory=dict)
+    ovs: dict[str, Any] | None = None
+    errors: list[str] = Field(default_factory=list)
+
+
 class OverlayStatusResponse(BaseModel):
     """Agent -> Controller: Status of all overlay networks."""
     vteps: list[dict[str, Any]] = Field(default_factory=list)  # New trunk VTEPs

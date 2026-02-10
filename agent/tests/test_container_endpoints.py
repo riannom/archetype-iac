@@ -5,18 +5,16 @@ live node removal when users delete nodes from the canvas.
 """
 from __future__ import annotations
 
+import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
-# Import the FastAPI app from agent main
-from agent.main import app
+from agent.main import remove_container, remove_container_for_lab
 
 
-@pytest.fixture
-def test_client():
-    """Create a test client for the agent API."""
-    return TestClient(app)
+def _run(coro):
+    return asyncio.run(coro)
 
 
 @pytest.fixture
@@ -42,7 +40,6 @@ class TestRemoveContainerForLab:
 
     def test_delete_container_for_lab_success(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
         mock_container: MagicMock,
     ):
@@ -55,16 +52,13 @@ class TestRemoveContainerForLab:
                 # First call: get container, second call: remove
                 mock_thread.side_effect = [mock_container, None]
 
-                response = test_client.delete("/containers/test-lab/test-container")
+                result = _run(remove_container_for_lab("test-lab", "test-container"))
 
-        assert response.status_code == 200
-        result = response.json()
         assert result["success"] is True
         assert result["message"] == "Container removed"
 
     def test_delete_container_for_lab_not_found(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
     ):
         """Container not found should return success (idempotent operation)."""
@@ -74,16 +68,13 @@ class TestRemoveContainerForLab:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("Container not found")
 
-                response = test_client.delete("/containers/test-lab/missing-container")
+                result = _run(remove_container_for_lab("test-lab", "missing-container"))
 
-        assert response.status_code == 200
-        result = response.json()
         assert result["success"] is True
         assert "not found" in result["message"].lower() or "already removed" in result["message"].lower()
 
     def test_delete_container_stops_running_container_first(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
         mock_container: MagicMock,
     ):
@@ -91,28 +82,18 @@ class TestRemoveContainerForLab:
         mock_container.status = "running"
         mock_docker_client.containers.get.return_value = mock_container
 
-        call_sequence = []
-
-        async def track_calls(func, *args, **kwargs):
-            call_sequence.append(func.__name__ if hasattr(func, '__name__') else str(func))
-            if "containers.get" in str(func) or func == mock_docker_client.containers.get:
-                return mock_container
-            return None
-
         with patch("agent.main.docker.from_env", return_value=mock_docker_client):
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 # Sequence: get container -> stop -> remove
                 mock_thread.side_effect = [mock_container, None, None]
 
-                response = test_client.delete("/containers/test-lab/running-container")
+                result = _run(remove_container_for_lab("test-lab", "running-container"))
 
-        assert response.status_code == 200
-        result = response.json()
         assert result["success"] is True
+        assert result["message"] == "Container removed"
 
-    def test_delete_container_lab_id_mismatch_logs_warning(
+    def test_delete_container_lab_id_mismatch(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
         mock_container: MagicMock,
     ):
@@ -127,11 +108,9 @@ class TestRemoveContainerForLab:
                 mock_thread.side_effect = [mock_container, None]
 
                 with patch("agent.main.logger") as mock_logger:
-                    response = test_client.delete("/containers/test-lab/mismatched-container")
+                    result = _run(remove_container_for_lab("test-lab", "mismatched-container"))
 
                     # Should still succeed
-                    assert response.status_code == 200
-                    result = response.json()
                     assert result["success"] is True
 
                     # Should log warning (check warning was called)
@@ -139,7 +118,6 @@ class TestRemoveContainerForLab:
 
     def test_delete_container_force_flag(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
         mock_container: MagicMock,
     ):
@@ -151,18 +129,16 @@ class TestRemoveContainerForLab:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                response = test_client.delete(
-                    "/containers/test-lab/test-container",
-                    params={"force": "true"}
-                )
+                result = _run(remove_container_for_lab(
+                    "test-lab",
+                    "test-container",
+                    force=True,
+                ))
 
-        assert response.status_code == 200
-        result = response.json()
         assert result["success"] is True
 
     def test_delete_container_docker_api_error(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
         mock_container: MagicMock,
     ):
@@ -178,16 +154,13 @@ class TestRemoveContainerForLab:
                     docker.errors.APIError("Permission denied"),
                 ]
 
-                response = test_client.delete("/containers/test-lab/test-container")
+                result = _run(remove_container_for_lab("test-lab", "test-container"))
 
-        assert response.status_code == 200
-        result = response.json()
         assert result["success"] is False
         assert "error" in result
 
     def test_delete_container_no_labels(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
         mock_container: MagicMock,
     ):
@@ -200,10 +173,8 @@ class TestRemoveContainerForLab:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                response = test_client.delete("/containers/test-lab/unlabeled-container")
+                result = _run(remove_container_for_lab("test-lab", "unlabeled-container"))
 
-        assert response.status_code == 200
-        result = response.json()
         assert result["success"] is True
 
 
@@ -212,7 +183,6 @@ class TestRemoveContainerGeneric:
 
     def test_delete_container_success(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
         mock_container: MagicMock,
     ):
@@ -224,15 +194,12 @@ class TestRemoveContainerGeneric:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                response = test_client.delete("/containers/test-container")
+                result = _run(remove_container("test-container"))
 
-        assert response.status_code == 200
-        result = response.json()
         assert result["success"] is True
 
     def test_delete_container_not_found_returns_404(
         self,
-        test_client: TestClient,
         mock_docker_client: MagicMock,
     ):
         """Generic endpoint returns 404 for missing container."""
@@ -242,6 +209,7 @@ class TestRemoveContainerGeneric:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("not found")
 
-                response = test_client.delete("/containers/missing")
+                with pytest.raises(HTTPException) as exc:
+                    _run(remove_container("missing"))
 
-        assert response.status_code == 404
+        assert exc.value.status_code == 404

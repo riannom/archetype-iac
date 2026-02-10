@@ -232,6 +232,9 @@ async def _auto_reattach_overlay_endpoints(
     if not host_to_agent:
         return
 
+    from app.services.link_manager import allocate_vni
+    from app.routers.infrastructure import get_or_create_settings
+
     node_set = set(node_names)
     cross_links = (
         database.query(models.LinkState)
@@ -243,23 +246,52 @@ async def _auto_reattach_overlay_endpoints(
         .all()
     )
 
+    infra = get_or_create_settings(database)
+    overlay_mtu = infra.overlay_mtu or 0
+    vni_updates = False
+
     for ls in cross_links:
-        if ls.source_node in node_set and ls.source_host_id in host_to_agent:
-            await agent_client.attach_container_on_agent(
-                host_to_agent[ls.source_host_id],
+        if ls.source_host_id not in host_to_agent or ls.target_host_id not in host_to_agent:
+            continue
+
+        agent_a = host_to_agent[ls.source_host_id]
+        agent_b = host_to_agent[ls.target_host_id]
+
+        vni = ls.vni or allocate_vni(lab_id, ls.link_name)
+        if ls.vni is None:
+            ls.vni = vni
+            vni_updates = True
+
+        local_ip_a = await agent_client.resolve_data_plane_ip(database, agent_a)
+        local_ip_b = await agent_client.resolve_data_plane_ip(database, agent_b)
+
+        if ls.source_node in node_set:
+            await agent_client.attach_overlay_interface_on_agent(
+                agent_a,
                 lab_id=lab_id,
-                link_id=ls.link_name,
                 container_name=ls.source_node,
                 interface_name=ls.source_interface,
-            )
-        if ls.target_node in node_set and ls.target_host_id in host_to_agent:
-            await agent_client.attach_container_on_agent(
-                host_to_agent[ls.target_host_id],
-                lab_id=lab_id,
+                vni=vni,
+                local_ip=local_ip_a,
+                remote_ip=local_ip_b,
                 link_id=ls.link_name,
+                tenant_mtu=overlay_mtu,
+            )
+        if ls.target_node in node_set:
+            await agent_client.attach_overlay_interface_on_agent(
+                agent_b,
+                lab_id=lab_id,
                 container_name=ls.target_node,
                 interface_name=ls.target_interface,
+                vni=vni,
+                local_ip=local_ip_b,
+                remote_ip=local_ip_a,
+                link_id=ls.link_name,
+                tenant_mtu=overlay_mtu,
             )
+
+    if vni_updates:
+        database.commit()
 
 
 @router.post("/job/{job_id}/heartbeat")

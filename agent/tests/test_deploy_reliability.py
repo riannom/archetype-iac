@@ -82,6 +82,17 @@ def _minimal_topology() -> DeployTopology:
     return DeployTopology(nodes=[], links=[])
 
 
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path, monkeypatch):
+    def _fake_get_workspace(lab_id: str):
+        ws = tmp_path / lab_id
+        ws.mkdir(parents=True, exist_ok=True)
+        return ws
+    monkeypatch.setattr('agent.main.get_workspace', _fake_get_workspace)
+    yield
+
+
+
 # --- Tests for Lock Acquisition Timeout ---
 
 @pytest.mark.asyncio

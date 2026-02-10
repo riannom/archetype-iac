@@ -168,6 +168,36 @@ class NetworkCleanupManager:
 
         return await asyncio.to_thread(_sync_get_pids)
 
+    async def _get_container_ifindexes(self) -> set[int]:
+        """Collect interface ifindex values from running container namespaces."""
+        ifindexes: set[int] = set()
+        pids = await self._get_running_container_pids()
+        if not pids:
+            return ifindexes
+
+        for pid in pids:
+            try:
+                code, stdout, _ = await self._run_cmd([
+                    "nsenter", "-t", str(pid), "-n",
+                    "ip", "-o", "link", "show",
+                ])
+                if code != 0:
+                    continue
+                for line in stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Format: "2: eth0@if3: <...>"
+                    try:
+                        idx_str = line.split(":", 1)[0].strip()
+                        ifindexes.add(int(idx_str))
+                    except ValueError:
+                        continue
+            except Exception as e:
+                logger.debug(f"Failed to read netns interfaces for pid {pid}: {e}")
+
+        return ifindexes
+
     async def _get_veth_interfaces(self) -> list[dict[str, Any]]:
         """List all veth interfaces on the host."""
         interfaces = []
@@ -200,7 +230,7 @@ class NetworkCleanupManager:
 
         return interfaces
 
-    async def _is_veth_orphaned(self, interface: dict[str, Any], container_pids: set[int]) -> bool:
+    async def _is_veth_orphaned(self, interface: dict[str, Any], container_ifindexes: set[int]) -> bool:
         """Check if a veth interface is orphaned (peer not in any container).
 
         A veth is orphaned if:
@@ -258,6 +288,10 @@ class NetworkCleanupManager:
             if master:
                 return False
 
+            # If peer ifindex is seen inside a container namespace, it's not orphaned
+            if link_index in container_ifindexes:
+                return False
+
             # Check if the host-side veth has a master (attached to bridge/OVS)
             # If it does, it's likely still in use
             code, stdout, _ = await self._run_cmd([
@@ -290,8 +324,8 @@ class NetworkCleanupManager:
         if not veths:
             return stats
 
-        # Get running container PIDs
-        container_pids = await self._get_running_container_pids()
+        # Get interface ifindexes in running container namespaces
+        container_ifindexes = await self._get_container_ifindexes()
 
         # Get active veths tracked by OVS plugin - these should never be deleted
         ovs_active_veths = _get_ovs_plugin_active_veths()
@@ -307,7 +341,7 @@ class NetworkCleanupManager:
                     logger.debug(f"Skipping veth {name}: tracked by OVS plugin")
                     continue
 
-                if await self._is_veth_orphaned(veth, container_pids):
+                if await self._is_veth_orphaned(veth, container_ifindexes):
                     stats.veths_orphaned += 1
 
                     if dry_run:

@@ -199,6 +199,34 @@ class OverlayManager:
     # 14 (outer Ethernet) + 20 (IP) + 8 (UDP) + 8 (VXLAN) = 50 bytes
     VXLAN_OVERHEAD = 50
 
+    async def _read_vxlan_link_info(self, interface_name: str) -> tuple[int, str, str]:
+        """Read VNI/remote/local from a Linux VXLAN device.
+
+        Returns (vni, remote_ip, local_ip). Zero/empty values on failure.
+        """
+        code, link_out, _ = await self._run_cmd([
+            "ip", "-d", "link", "show", interface_name
+        ])
+        if code != 0:
+            return 0, "", ""
+
+        vni = 0
+        remote_ip = ""
+        local_ip = ""
+        parts = link_out.split()
+        for i, part in enumerate(parts):
+            if part == "id" and i + 1 < len(parts):
+                try:
+                    vni = int(parts[i + 1])
+                except ValueError:
+                    pass
+            elif part == "remote" and i + 1 < len(parts):
+                remote_ip = parts[i + 1]
+            elif part == "local" and i + 1 < len(parts):
+                local_ip = parts[i + 1]
+
+        return vni, remote_ip, local_ip
+
     def __init__(self):
         self._docker: docker.DockerClient | None = None
         self._tunnels: dict[str, VxlanTunnel] = {}  # key -> tunnel (legacy)
@@ -1290,8 +1318,57 @@ class OverlayManager:
 
         interface_name = self._link_tunnel_interface_name(lab_id, link_id)
 
+        # If a recovered tunnel exists under a placeholder key, rebind it to the real link_id
+        for existing_key, existing in list(self._link_tunnels.items()):
+            if existing.interface_name != interface_name:
+                continue
+            if await self._ovs_port_exists(interface_name):
+                if local_vlan > 0 and local_vlan != existing.local_vlan:
+                    await self._ovs_vsctl(
+                        "set", "port", existing.interface_name, f"tag={local_vlan}"
+                    )
+                    old_vlan = existing.local_vlan
+                    existing.local_vlan = local_vlan
+                    logger.info(
+                        f"Updated VLAN tag for {link_id}: "
+                        f"{existing.interface_name} tag {old_vlan} -> {local_vlan}"
+                    )
+                existing.link_id = link_id
+                existing.lab_id = lab_id
+                existing.vni = vni
+                existing.local_ip = local_ip
+                existing.remote_ip = remote_ip
+                existing.tenant_mtu = tenant_mtu
+                if existing_key != link_id:
+                    del self._link_tunnels[existing_key]
+                    self._link_tunnels[link_id] = existing
+                logger.info(
+                    f"Rebound recovered link tunnel {interface_name} to link_id {link_id}"
+                )
+                return existing
+            # Port missing, drop stale tracking and recreate
+            del self._link_tunnels[existing_key]
+            break
+
         # Delete existing port if present (from previous run / recovery)
         if await self._ovs_port_exists(interface_name):
+            vni_found, remote_found, local_found = await self._read_vxlan_link_info(interface_name)
+            if vni_found == vni and remote_found == remote_ip and (not local_ip or local_found == local_ip):
+                tunnel = LinkTunnel(
+                    link_id=link_id,
+                    vni=vni,
+                    local_ip=local_ip or local_found,
+                    remote_ip=remote_ip,
+                    local_vlan=local_vlan,
+                    interface_name=interface_name,
+                    lab_id=lab_id,
+                    tenant_mtu=tenant_mtu,
+                )
+                self._link_tunnels[link_id] = tunnel
+                logger.info(
+                    f"Adopted existing link tunnel {interface_name} for {link_id} without recreation"
+                )
+                return tunnel
             logger.warning(f"Link tunnel port {interface_name} already exists, replacing")
             await self._delete_vxlan_device(interface_name, self._bridge_name)
 
@@ -1468,27 +1545,7 @@ class OverlayManager:
                             pass
 
                 # Read VNI, remote IP, local IP from Linux VXLAN device
-                code, link_out, _ = await self._run_cmd([
-                    "ip", "-d", "link", "show", port_name
-                ])
-                if code != 0:
-                    continue
-
-                # Parse: "vxlan id <VNI> remote <IP> local <IP>"
-                vni = 0
-                remote_ip = ""
-                local_ip = ""
-                parts = link_out.split()
-                for i, part in enumerate(parts):
-                    if part == "id" and i + 1 < len(parts):
-                        try:
-                            vni = int(parts[i + 1])
-                        except ValueError:
-                            pass
-                    elif part == "remote" and i + 1 < len(parts):
-                        remote_ip = parts[i + 1]
-                    elif part == "local" and i + 1 < len(parts):
-                        local_ip = parts[i + 1]
+                vni, remote_ip, local_ip = await self._read_vxlan_link_info(port_name)
 
                 if not vni or not remote_ip:
                     continue
@@ -1695,7 +1752,33 @@ class VniAllocator:
                                 recovered += 1
                                 logger.info(f"Recovered VNI {vni} from OVS port {port}")
                         except ValueError:
-                            continue
+                            # Non-numeric VXLAN port (e.g., vxlan-<hash>) - read VNI from device
+                            try:
+                                proc_info = await asyncio.create_subprocess_exec(
+                                    "ip", "-d", "link", "show", port,
+                                    stdout=asyncio.subprocess.PIPE,
+                                    stderr=asyncio.subprocess.PIPE,
+                                )
+                                info_out, _ = await proc_info.communicate()
+                                if proc_info.returncode != 0:
+                                    continue
+                                parts = info_out.decode().split()
+                                vni = 0
+                                for i, part in enumerate(parts):
+                                    if part == "id" and i + 1 < len(parts):
+                                        try:
+                                            vni = int(parts[i + 1])
+                                        except ValueError:
+                                            vni = 0
+                                        break
+                                if vni and self._base <= vni <= self._max and vni not in used_vnis:
+                                    placeholder_key = f"_recovered:{port}"
+                                    self._allocated[placeholder_key] = vni
+                                    used_vnis.add(vni)
+                                    recovered += 1
+                                    logger.info(f"Recovered VNI {vni} from OVS port {port}")
+                            except Exception:
+                                continue
 
             # Also check Linux VXLAN interfaces (legacy)
             proc = await asyncio.create_subprocess_exec(

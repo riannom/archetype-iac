@@ -881,6 +881,7 @@ username admin privilege 15 role network-admin nopassword
         self,
         topology: ParsedTopology,
         workspace: Path,
+        use_thread: bool = True,
     ) -> None:
         """Create required directories for nodes (e.g., cEOS flash).
 
@@ -888,13 +889,16 @@ username admin privilege 15 role network-admin nopassword
         """
         for node_name, node in topology.nodes.items():
             if is_ceos_kind(node.kind):
-                # Run blocking file operations in thread pool
-                await asyncio.to_thread(
-                    self._setup_ceos_directories,
-                    node_name,
-                    node,
-                    workspace,
-                )
+                if use_thread:
+                    # Run blocking file operations in thread pool
+                    await asyncio.to_thread(
+                        self._setup_ceos_directories,
+                        node_name,
+                        node,
+                        workspace,
+                    )
+                else:
+                    self._setup_ceos_directories(node_name, node, workspace)
 
     def _calculate_required_interfaces(self, topology: ParsedTopology) -> int:
         """Calculate the maximum interface index needed for pre-provisioning.

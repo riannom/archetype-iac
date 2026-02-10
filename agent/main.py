@@ -37,6 +37,8 @@ from agent.schemas import (
     CleanupLabOrphansResponse,
     CleanupOrphansRequest,
     CleanupOrphansResponse,
+    CleanupAuditRequest,
+    CleanupAuditResponse,
     CleanupOverlayRequest,
     CleanupOverlayResponse,
     ConsoleRequest,
@@ -811,6 +813,11 @@ async def lifespan(app: FastAPI):
     global _heartbeat_task, _event_listener_task, _lock_manager
 
     logger.info(f"Agent {AGENT_ID} starting...")
+
+    if os.getenv("ARCHETYPE_AGENT_TESTING") == "1":
+        logger.info("Testing mode enabled; skipping agent startup tasks")
+        yield
+        return
 
     # Check for pending rollback from a failed update
     check_and_rollback()
@@ -2380,6 +2387,66 @@ async def cleanup_overlay(request: CleanupOverlayRequest) -> CleanupOverlayRespo
     except Exception as e:
         logger.error(f"Overlay cleanup failed: {e}")
         return CleanupOverlayResponse(errors=[str(e)])
+
+
+@app.post("/cleanup/audit")
+async def cleanup_audit(request: CleanupAuditRequest) -> CleanupAuditResponse:
+    """Dry-run cleanup audit (no deletions)."""
+    errors: list[str] = []
+
+    try:
+        from agent.network.cleanup import get_cleanup_manager
+        cleanup_mgr = get_cleanup_manager()
+        stats = await cleanup_mgr.run_full_cleanup(dry_run=True, include_ovs=False)
+        network = stats.to_dict()
+    except Exception as e:
+        network = {}
+        errors.append(f"network_audit_failed: {e}")
+
+    ovs_result = None
+    if request.include_ovs:
+        try:
+            backend = get_network_backend()
+            ovs_mgr = getattr(backend, "ovs_manager", None)
+            overlay_mgr = getattr(backend, "overlay_manager", None)
+            ovs_result = {
+                "bridge_initialized": False,
+                "orphaned_ports": [],
+                "vxlan_orphan_ports": [],
+            }
+
+            if ovs_mgr and getattr(ovs_mgr, "_initialized", False):
+                ovs_result["bridge_initialized"] = True
+                bridge_state = await ovs_mgr.get_ovs_bridge_state()
+                ovs_result["orphaned_ports"] = [
+                    p.get("port_name") for p in bridge_state.get("orphaned_ports", [])
+                ]
+
+                if overlay_mgr:
+                    tracked_vxlan = set()
+                    for t in overlay_mgr._tunnels.values():
+                        tracked_vxlan.add(t.interface_name)
+                    for vtep in overlay_mgr._vteps.values():
+                        tracked_vxlan.add(vtep.interface_name)
+                    for lt in overlay_mgr._link_tunnels.values():
+                        tracked_vxlan.add(lt.interface_name)
+
+                    all_ports = await ovs_mgr.get_all_ovs_ports()
+                    ovs_result["vxlan_orphan_ports"] = [
+                        p.get("port_name")
+                        for p in all_ports
+                        if p.get("type") == "vxlan" and p.get("port_name") not in tracked_vxlan
+                    ]
+        except Exception as e:
+            errors.append(f"ovs_audit_failed: {e}")
+            if ovs_result is None:
+                ovs_result = {"bridge_initialized": False, "orphaned_ports": [], "vxlan_orphan_ports": []}
+
+    return CleanupAuditResponse(
+        network=network,
+        ovs=ovs_result,
+        errors=errors,
+    )
 
 
 @app.get("/overlay/status")

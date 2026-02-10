@@ -6,12 +6,11 @@
 - Keep top-level clutter low; group related modules under feature folders (for example, `src/auth/`, `src/api/`).
 
 ## Build, Test, and Development Commands
-- No build or test commands are defined in this repository yet.
-- Add a single source of truth for developer commands (for example, a `Makefile`, `package.json` scripts, or `scripts/` directory) and document it here.
-- Example pattern once tooling exists:
-  - `make build` — produce production artifacts.
-  - `make test` — run the full automated test suite.
-  - `make dev` — start a local development server.
+- Developer commands are defined in the `Makefile`:
+  - `make audit` — dry-run cleanup audit (no deletions).
+  - `make audit-ovs` — dry-run cleanup audit including OVS/VXLAN checks.
+  - `make test-agent` — run agent test suite.
+  - `make test-api` — run API test suite.
   - `python3 scripts/coverage_map.py` — generate test-to-source coverage mapping and gaps report (outputs under `reports/`).
 
 ## Coding Style & Naming Conventions
