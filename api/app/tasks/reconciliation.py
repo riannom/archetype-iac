@@ -23,6 +23,7 @@ import redis
 
 from app import agent_client, db, models
 from app.config import settings
+from app.metrics import nlm_phase_duration
 from app.db import get_redis, get_session
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
 from app.services.topology import TopologyService
@@ -597,6 +598,13 @@ async def _check_readiness_for_nodes(session, nodes: list):
                     )
                     if readiness.get("is_ready", False):
                         ns.is_ready = True
+                        # Record boot-wait duration metric
+                        if ns.boot_started_at:
+                            boot_secs = (datetime.now(timezone.utc) - ns.boot_started_at).total_seconds()
+                            _boot_device = (node_devices.get(ns.node_name) or "linux").lower()
+                            nlm_phase_duration.labels(
+                                phase="boot_wait", device_type=_boot_device,
+                            ).observe(boot_secs)
                         logger.info(f"Node {ns.node_name} in lab {lab_id} is now ready")
                 except Exception as e:
                     logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
@@ -998,6 +1006,13 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                             )
                             if readiness.get("is_ready", False):
                                 ns.is_ready = True
+                                # Record boot-wait duration metric
+                                if ns.boot_started_at:
+                                    boot_secs = (datetime.now(timezone.utc) - ns.boot_started_at).total_seconds()
+                                    _boot_device = (device_kind or "linux").lower()
+                                    nlm_phase_duration.labels(
+                                        phase="boot_wait", device_type=_boot_device,
+                                    ).observe(boot_secs)
                                 logger.info(
                                     f"Node {ns.node_name} in lab {lab_id} is now ready"
                                 )

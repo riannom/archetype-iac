@@ -134,6 +134,24 @@ if PROMETHEUS_AVAILABLE:
         "Number of nodes with pending enforcement",
     )
 
+    # --- NLM Phase Timing ---
+
+    nlm_phase_duration = Histogram(
+        "archetype_nlm_phase_duration_seconds",
+        "Duration of NLM lifecycle phases",
+        ["phase", "device_type"],
+        buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
+    )
+
+    # --- Agent Operation Timing (API-measured round-trip) ---
+
+    agent_operation_duration = Histogram(
+        "archetype_agent_operation_duration_seconds",
+        "API-to-agent operation round-trip duration",
+        ["operation", "host_id"],
+        buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
+    )
+
     # --- Lab Metrics ---
 
     labs_total = Gauge(
@@ -189,6 +207,8 @@ else:
     enforcement_actions = DummyMetric()
     enforcement_failures = DummyMetric()
     enforcement_pending = DummyMetric()
+    nlm_phase_duration = DummyMetric()
+    agent_operation_duration = DummyMetric()
     labs_total = DummyMetric()
     labs_active = DummyMetric()
     db_connections_idle_in_transaction = DummyMetric()

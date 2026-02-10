@@ -127,3 +127,35 @@ groups:
         annotations:
           summary: "Critical: Multiple idle-in-transaction connections"
           description: "{{ $value }} connections are stuck idle in transaction. API may become unresponsive. PostgreSQL will auto-terminate after 5 minutes."
+
+  - name: archetype-performance
+    rules:
+      # Alert when node deploy phase P95 is slow
+      - alert: SlowNodeDeploy
+        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{phase="container_deploy"}[10m])) by (le)) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow node deploy operations"
+          description: "P95 container deploy duration exceeds 120 seconds for the last 10 minutes."
+
+      # Alert when boot wait P95 is very slow
+      - alert: SlowBootWait
+        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{phase="boot_wait"}[15m])) by (le)) > 300
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow node boot wait times"
+          description: "P95 boot wait duration exceeds 300 seconds for the last 15 minutes."
+
+      # Alert when agent operation errors are high
+      - alert: HighAgentOperationErrors
+        expr: sum(rate(archetype_agent_node_operation_errors_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High agent operation error rate"
+          description: "Agent node operation errors exceed 0.5/sec for the last 5 minutes."

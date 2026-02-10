@@ -249,6 +249,8 @@ class NodeStateOut(BaseModel):
     is_ready: bool = False
     # Boot timestamp for tracking how long boot is taking
     boot_started_at: datetime | None = None
+    # Timestamp when node entered starting/deploying state (for elapsed timer)
+    starting_started_at: datetime | None = None
     # Image sync status: null (not syncing), "checking", "syncing", "synced", "failed"
     image_sync_status: str | None = None
     # Image sync progress/error message

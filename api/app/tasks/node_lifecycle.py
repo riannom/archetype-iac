@@ -18,6 +18,8 @@ from typing import Optional
 
 from app import agent_client, models
 from app.agent_client import AgentUnavailableError
+from app.metrics import nlm_phase_duration
+from app.timing import AsyncTimedOperation
 from app.config import settings
 from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
 from app.services.state_machine import NodeStateMachine
@@ -123,6 +125,27 @@ class NodeLifecycleManager:
         # Topology graph — loaded once in _filter_topology_for_agent, reused
         self.graph = None
 
+    # Known device types for bounded Prometheus labels
+    _KNOWN_DEVICE_TYPES = frozenset({
+        "ceos", "srlinux", "iosv", "iosvl2", "csr1000v", "cat8000v",
+        "cat9000v", "xrv9k", "asav", "nxosv", "linux", "frr",
+    })
+
+    def _dominant_device_type(self, node_states: list | None = None) -> str:
+        """Return the most common device type among target nodes, bounded to known set."""
+        states = node_states or self.node_states
+        types: list[str] = []
+        for ns in states:
+            db_node = self.db_nodes_map.get(ns.node_name)
+            device = (db_node.device if db_node else "linux") or "linux"
+            types.append(device.lower())
+        if not types:
+            return "other"
+        # Most common type
+        from collections import Counter
+        most_common = Counter(types).most_common(1)[0][0]
+        return most_common if most_common in self._KNOWN_DEVICE_TYPES else "other"
+
     async def execute(self) -> LifecycleResult:
         """Main orchestrator — calls phases in order."""
         # Phase: Load and validate
@@ -171,13 +194,20 @@ class NodeLifecycleManager:
             await self._handle_migration(nodes_to_start_or_deploy)
 
         # Phase: Image sync check
+        _timing_extras = {"lab_id": str(self.lab.id), "job_id": str(self.job.id)}
         if nodes_to_start_or_deploy:
-            result = await self._check_images(
-                nodes_need_deploy,
-                nodes_need_start,
-                nodes_to_start_or_deploy,
-                nodes_need_stop,
-            )
+            async with AsyncTimedOperation(
+                histogram=nlm_phase_duration,
+                labels={"phase": "image_sync", "device_type": self._dominant_device_type(nodes_to_start_or_deploy)},
+                log_event="nlm_phase",
+                log_extras={**_timing_extras, "phase": "image_sync"},
+            ):
+                result = await self._check_images(
+                    nodes_need_deploy,
+                    nodes_need_start,
+                    nodes_to_start_or_deploy,
+                    nodes_need_stop,
+                )
             if result is None:
                 # All nodes syncing/failed, nothing left to do this pass
                 return LifecycleResult(success=True, log=self.log_parts)
@@ -185,18 +215,42 @@ class NodeLifecycleManager:
 
         # Phase: Deploy undeployed nodes
         if nodes_need_deploy:
-            await self._deploy_nodes(nodes_need_deploy)
+            async with AsyncTimedOperation(
+                histogram=nlm_phase_duration,
+                labels={"phase": "container_deploy", "device_type": self._dominant_device_type(nodes_need_deploy)},
+                log_event="nlm_phase",
+                log_extras={**_timing_extras, "phase": "container_deploy"},
+            ):
+                await self._deploy_nodes(nodes_need_deploy)
 
         # Phase: Start stopped nodes (via redeploy)
         if nodes_need_start:
-            await self._start_nodes(nodes_need_start)
+            async with AsyncTimedOperation(
+                histogram=nlm_phase_duration,
+                labels={"phase": "container_start", "device_type": self._dominant_device_type(nodes_need_start)},
+                log_event="nlm_phase",
+                log_extras={**_timing_extras, "phase": "container_start"},
+            ):
+                await self._start_nodes(nodes_need_start)
 
         # Phase: Stop running nodes
         if nodes_need_stop:
-            await self._stop_nodes(nodes_need_stop)
+            async with AsyncTimedOperation(
+                histogram=nlm_phase_duration,
+                labels={"phase": "container_stop", "device_type": self._dominant_device_type(nodes_need_stop)},
+                log_event="nlm_phase",
+                log_extras={**_timing_extras, "phase": "container_stop"},
+            ):
+                await self._stop_nodes(nodes_need_stop)
 
         # Phase: Post-operation cleanup (cross-host links)
-        await self._post_operation_cleanup()
+        async with AsyncTimedOperation(
+            histogram=nlm_phase_duration,
+            labels={"phase": "post_cleanup", "device_type": self._dominant_device_type()},
+            log_event="nlm_phase",
+            log_extras={**_timing_extras, "phase": "post_cleanup"},
+        ):
+            await self._post_operation_cleanup()
 
         # Finalize job
         return await self._finalize()
@@ -2364,6 +2418,10 @@ class NodeLifecycleManager:
 
     def _broadcast_state(self, ns, name_suffix="state", **extra):
         """Fire-and-forget WebSocket broadcast of node state change."""
+        # Include starting_started_at for frontend elapsed timer
+        started_at = getattr(ns, "starting_started_at", None)
+        if started_at and "starting_started_at" not in extra:
+            extra["starting_started_at"] = started_at.isoformat()
         safe_create_task(
             broadcast_node_state_change(
                 lab_id=self.lab.id,

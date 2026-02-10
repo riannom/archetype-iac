@@ -89,6 +89,7 @@ class StateBroadcaster:
         display_state: str | None = None,
         enforcement_attempts: int = 0,
         max_enforcement_attempts: int = 0,
+        starting_started_at: str | None = None,
     ) -> int:
         """Publish a node state change event.
 
@@ -136,6 +137,7 @@ class StateBroadcaster:
                     "display_state": display_state,
                     "enforcement_attempts": enforcement_attempts,
                     "max_enforcement_attempts": max_enforcement_attempts,
+                    "starting_started_at": starting_started_at,
                 },
             }
             channel = self._channel_name(lab_id)
@@ -345,6 +347,7 @@ async def broadcast_node_state_change(
     display_state: str | None = None,
     enforcement_attempts: int = 0,
     max_enforcement_attempts: int = 0,
+    starting_started_at: str | None = None,
 ) -> None:
     """Convenience function to broadcast a node state change.
 
@@ -367,6 +370,7 @@ async def broadcast_node_state_change(
         display_state=display_state,
         enforcement_attempts=enforcement_attempts,
         max_enforcement_attempts=max_enforcement_attempts,
+        starting_started_at=starting_started_at,
     )
 
 

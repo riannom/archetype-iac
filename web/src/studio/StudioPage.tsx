@@ -334,6 +334,7 @@ const StudioPage: React.FC = () => {
           enforcement_attempts: wsState.enforcement_attempts,
           max_enforcement_attempts: wsState.max_enforcement_attempts,
           display_state: wsState.display_state,
+          starting_started_at: wsState.starting_started_at,
           created_at: prev[nodeId]?.created_at || new Date().toISOString(),
           updated_at: new Date().toISOString(),
         } as NodeStateEntry,

@@ -34,6 +34,8 @@ export interface NodeStateEntry {
   error_message?: string | null;
   is_ready?: boolean;
   boot_started_at?: string | null;
+  /** Timestamp when node entered starting/deploying state (for elapsed timer) */
+  starting_started_at?: string | null;
   image_sync_status?: string | null;
   image_sync_message?: string | null;
   host_id?: string | null;
@@ -70,6 +72,8 @@ export interface NodeStateData {
   max_enforcement_attempts?: number;
   /** Server-computed display state: running, starting, stopping, stopped, error */
   display_state?: string;
+  /** Timestamp when node entered starting/deploying state (for elapsed timer) */
+  starting_started_at?: string | null;
 }
 
 /** Subset of NodeStateEntry used by the Canvas component. */

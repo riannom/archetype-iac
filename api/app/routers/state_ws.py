@@ -193,6 +193,7 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
                         ),
                         "enforcement_attempts": ns.enforcement_attempts,
                         "max_enforcement_attempts": settings.state_enforcement_max_retries,
+                        "starting_started_at": ns.starting_started_at.isoformat() if ns.starting_started_at else None,
                     })
 
                 messages.append({

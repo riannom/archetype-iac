@@ -977,6 +977,15 @@ def health():
     }
 
 
+@app.get("/metrics")
+def metrics():
+    """Prometheus metrics endpoint."""
+    from starlette.responses import Response as StarletteResponse
+    from agent.metrics import get_metrics
+    body, content_type = get_metrics()
+    return StarletteResponse(content=body, media_type=content_type)
+
+
 @app.get("/info")
 def info():
     """Return agent info and capabilities."""
@@ -3214,11 +3223,18 @@ async def create_node(
         },
     )
 
+    # Record metrics
+    from agent.metrics import node_operation_duration, node_operation_errors
+    node_operation_duration.labels(operation="create").observe(elapsed_ms / 1000)
+    if not result.success:
+        node_operation_errors.labels(operation="create").inc()
+
     return CreateNodeResponse(
         success=result.success,
         container_name=provider_instance.get_container_name(lab_id, node_name) if hasattr(provider_instance, "get_container_name") else f"archetype-{lab_id}-{node_name}",
         status=result.new_status.value if result.new_status else "unknown",
         error=result.error,
+        duration_ms=elapsed_ms,
     )
 
 
@@ -3275,12 +3291,18 @@ async def start_node(
         },
     )
 
+    from agent.metrics import node_operation_duration, node_operation_errors
+    node_operation_duration.labels(operation="start").observe(elapsed_ms / 1000)
+    if not result.success:
+        node_operation_errors.labels(operation="start").inc()
+
     return StartNodeResponse(
         success=result.success,
         status=result.new_status.value if result.new_status else "unknown",
         endpoints_repaired=endpoints_repaired,
         interfaces_fixed=interfaces_fixed,
         error=result.error,
+        duration_ms=elapsed_ms,
     )
 
 
@@ -3314,10 +3336,16 @@ async def stop_node(lab_id: str, node_name: str, provider: str = "docker") -> St
         },
     )
 
+    from agent.metrics import node_operation_duration, node_operation_errors
+    node_operation_duration.labels(operation="stop").observe(elapsed_ms / 1000)
+    if not result.success:
+        node_operation_errors.labels(operation="stop").inc()
+
     return StopNodeResponse(
         success=result.success,
         status=result.new_status.value if result.new_status else "unknown",
         error=result.error,
+        duration_ms=elapsed_ms,
     )
 
 
@@ -3351,10 +3379,16 @@ async def destroy_node(lab_id: str, node_name: str, provider: str = "docker") ->
         },
     )
 
+    from agent.metrics import node_operation_duration, node_operation_errors
+    node_operation_duration.labels(operation="destroy").observe(elapsed_ms / 1000)
+    if not result.success:
+        node_operation_errors.labels(operation="destroy").inc()
+
     return DestroyNodeResponse(
         success=result.success,
         container_removed=result.success,
         error=result.error,
+        duration_ms=elapsed_ms,
     )
 
 

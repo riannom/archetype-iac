@@ -69,6 +69,20 @@ const Canvas: React.FC<CanvasProps> = ({
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
   const didPanRef = useRef(false);
 
+  // Elapsed timer: re-render every second when any node is in a transitional state
+  const hasTransitionalNodes = useMemo(() => {
+    return Object.values(nodeStates).some(ns => {
+      const ds = ns.display_state;
+      return ds === 'starting' || ds === 'stopping';
+    });
+  }, [nodeStates]);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!hasTransitionalNodes) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasTransitionalNodes]);
+
   // Memoized node map for O(1) lookups instead of O(n) .find() calls
   const nodeMap = useMemo(() => {
     const map = new Map<string, Node>();
@@ -615,7 +629,7 @@ const Canvas: React.FC<CanvasProps> = ({
             else if (status === 'stopping') { dotColor = '#f97316'; animate = true; } // orange-500
             else if (status === 'error') dotColor = '#ef4444'; // red-500
 
-            // Build tooltip with retry info when applicable
+            // Build tooltip with retry info and elapsed time
             let tooltip: string = status;
             const ns = nodeStates?.[node.id];
             if (ns?.will_retry && (ns.enforcement_attempts ?? 0) > 0) {
@@ -623,6 +637,16 @@ const Canvas: React.FC<CanvasProps> = ({
               tooltip = max > 0
                 ? `Starting (attempt ${ns.enforcement_attempts}/${max})`
                 : `Starting (attempt ${ns.enforcement_attempts})`;
+            }
+            // Add elapsed time for transitional states
+            if ((status === 'booting' || status === 'stopping') && ns?.starting_started_at) {
+              const elapsed = Math.floor((Date.now() - new Date(ns.starting_started_at).getTime()) / 1000);
+              if (elapsed > 0) {
+                const mins = Math.floor(elapsed / 60);
+                const secs = elapsed % 60;
+                const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                tooltip += ` (${timeStr})`;
+              }
             }
 
             return (

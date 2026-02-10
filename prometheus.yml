@@ -27,6 +27,13 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 30s
 
+  # Archetype Agent metrics (local agent via host-gateway)
+  - job_name: "archetype-agent"
+    static_configs:
+      - targets: ["local-agent:8001"]
+    metrics_path: /metrics
+    scrape_interval: 30s
+
   # Prometheus self-monitoring
   - job_name: "prometheus"
     static_configs:

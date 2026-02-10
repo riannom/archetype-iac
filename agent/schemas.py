@@ -994,6 +994,7 @@ class CreateNodeResponse(BaseModel):
     container_id: str | None = None
     status: str = "unknown"
     error: str | None = None
+    duration_ms: int | None = None
 
 
 class StartNodeRequest(BaseModel):
@@ -1009,6 +1010,7 @@ class StartNodeResponse(BaseModel):
     endpoints_repaired: int = 0
     interfaces_fixed: int = 0
     error: str | None = None
+    duration_ms: int | None = None
 
 
 class StopNodeResponse(BaseModel):
@@ -1016,6 +1018,7 @@ class StopNodeResponse(BaseModel):
     success: bool
     status: str = "unknown"
     error: str | None = None
+    duration_ms: int | None = None
 
 
 class DestroyNodeResponse(BaseModel):
@@ -1023,6 +1026,7 @@ class DestroyNodeResponse(BaseModel):
     success: bool
     container_removed: bool = False
     error: str | None = None
+    duration_ms: int | None = None
 
 
 # --- Endpoint Repair ---

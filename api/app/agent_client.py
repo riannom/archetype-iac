@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
+from app.metrics import agent_operation_duration
 from app.events.publisher import emit_agent_offline
 from app.utils.timeouts import AGENT_HTTP_TIMEOUT, AGENT_VTEP_TIMEOUT
 
@@ -1727,6 +1728,7 @@ async def create_node_on_agent(
             max_retries=0,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(operation="create_node", host_id=agent.id).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1737,12 +1739,14 @@ async def create_node_on_agent(
                 "node_name": node_name,
                 "status": "success" if result.get("success") else "error",
                 "duration_ms": elapsed_ms,
+                "agent_duration_ms": result.get("duration_ms"),
                 "error": result.get("error") if not result.get("success") else None,
             },
         )
         return result
     except Exception as e:
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(operation="create_node", host_id=agent.id).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1801,6 +1805,7 @@ async def start_node_on_agent(
             max_retries=0,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(operation="start_node", host_id=agent.id).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1811,12 +1816,14 @@ async def start_node_on_agent(
                 "node_name": node_name,
                 "status": "success" if result.get("success") else "error",
                 "duration_ms": elapsed_ms,
+                "agent_duration_ms": result.get("duration_ms"),
                 "error": result.get("error") if not result.get("success") else None,
             },
         )
         return result
     except Exception as e:
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(operation="start_node", host_id=agent.id).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1868,6 +1875,7 @@ async def stop_node_on_agent(
             max_retries=0,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(operation="stop_node", host_id=agent.id).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1878,12 +1886,14 @@ async def stop_node_on_agent(
                 "node_name": node_name,
                 "status": "success" if result.get("success") else "error",
                 "duration_ms": elapsed_ms,
+                "agent_duration_ms": result.get("duration_ms"),
                 "error": result.get("error") if not result.get("success") else None,
             },
         )
         return result
     except Exception as e:
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(operation="stop_node", host_id=agent.id).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1935,6 +1945,7 @@ async def destroy_node_on_agent(
             max_retries=0,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(operation="destroy_node", host_id=agent.id).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1945,12 +1956,14 @@ async def destroy_node_on_agent(
                 "node_name": node_name,
                 "status": "success" if result.get("success") else "error",
                 "duration_ms": elapsed_ms,
+                "agent_duration_ms": result.get("duration_ms"),
                 "error": result.get("error") if not result.get("success") else None,
             },
         )
         return result
     except Exception as e:
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(operation="destroy_node", host_id=agent.id).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={

@@ -259,6 +259,8 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./grafana/provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - loki
       - prometheus
@@ -269,6 +271,8 @@ services:
     image: prom/prometheus:v2.50.0
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
+    extra_hosts:
+      - "local-agent:host-gateway"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
