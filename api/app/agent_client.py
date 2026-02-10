@@ -1038,7 +1038,11 @@ def compute_vxlan_port_name(lab_id: str, link_name: str) -> str:
     return f"vxlan-{link_hash}"
 
 
-async def reconcile_vxlan_ports_on_agent(agent: models.Host, valid_port_names: list[str]) -> dict:
+async def reconcile_vxlan_ports_on_agent(
+    agent: models.Host,
+    valid_port_names: list[str],
+    force: bool = False,
+) -> dict:
     """Tell agent which VXLAN ports should exist; agent removes the rest.
 
     Args:
@@ -1053,7 +1057,7 @@ async def reconcile_vxlan_ports_on_agent(agent: models.Host, valid_port_names: l
         client = get_http_client()
         response = await client.post(
             url,
-            json={"valid_port_names": valid_port_names},
+            json={"valid_port_names": valid_port_names, "force": force},
             timeout=60.0,
         )
         response.raise_for_status()

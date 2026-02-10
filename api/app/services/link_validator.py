@@ -166,7 +166,14 @@ async def verify_cross_host_link(
         try:
             status = await agent_client.get_overlay_status_from_agent(agent)
             link_tunnels = status.get("link_tunnels", [])
-            found = any(t.get("link_id") == link_name for t in link_tunnels)
+            if not link_tunnels:
+                return False, f"Per-link VXLAN tunnel not found on {agent.name} for link {link_name}"
+            # Accept recovered tunnels that still have placeholder link_id but correct port name
+            expected_port = agent_client.compute_vxlan_port_name(link_state.lab_id, link_name)
+            found = any(
+                t.get("link_id") == link_name or t.get("interface_name") == expected_port
+                for t in link_tunnels
+            )
             if not found:
                 return False, f"Per-link VXLAN tunnel not found on {agent.name} for link {link_name}"
         except Exception as e:

@@ -2598,6 +2598,14 @@ async def reconcile_overlay_ports(request: dict):
     import asyncio
 
     valid_port_names = set(request.get("valid_port_names", []))
+    force = bool(request.get("force", False))
+    if not valid_port_names and not force:
+        return {
+            "removed_ports": [],
+            "valid_count": 0,
+            "skipped": True,
+            "reason": "empty valid_port_names",
+        }
     bridge = settings.ovs_bridge_name or "arch-ovs"
 
     async def run(cmd: str) -> tuple[int, str]:

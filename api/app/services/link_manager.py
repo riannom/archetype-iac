@@ -175,8 +175,8 @@ class LinkManager:
         lab_id = link_state.lab_id
 
         # Get agent IP addresses
-        agent_ip_a = await agent_client.resolve_agent_ip(agent_a.address)
-        agent_ip_b = await agent_client.resolve_agent_ip(agent_b.address)
+        agent_ip_a = await agent_client.resolve_data_plane_ip(self.session, agent_a)
+        agent_ip_b = await agent_client.resolve_data_plane_ip(self.session, agent_b)
 
         # Use new trunk VTEP model
         result = await agent_client.setup_cross_host_link_v2(
@@ -330,6 +330,8 @@ class LinkManager:
                     logger.error(f"Rollback failed for link {link_name}: {e}")
 
             tunnel.status = "failed"
+            link_state.source_vxlan_attached = False
+            link_state.target_vxlan_attached = False
             return False
 
         # Phase 3: Both sides detached successfully - delete tunnel record
