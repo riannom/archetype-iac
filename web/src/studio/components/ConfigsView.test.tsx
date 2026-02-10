@@ -114,14 +114,6 @@ describe("ConfigsView", () => {
       expect(screen.getByText("Extract Configs")).toBeInTheDocument();
     });
 
-    it("renders the refresh button", async () => {
-      render(<ConfigsView {...defaultProps} />);
-
-      // The refresh button has a rotate icon
-      const refreshButton = document.querySelector(".fa-rotate");
-      expect(refreshButton).toBeInTheDocument();
-    });
-
     it("renders the Nodes section header", async () => {
       render(<ConfigsView {...defaultProps} />);
 
@@ -843,15 +835,7 @@ describe("ConfigsView", () => {
         expect(mockStudioRequest).toHaveBeenCalled();
       });
 
-      // Clear the initial load call
-      mockStudioRequest.mockClear();
-
-      // Click refresh button
-      const refreshButton = document.querySelector(".fa-rotate")!.closest("button");
-      if (refreshButton) {
-        await user.click(refreshButton);
-      }
-
+      // Data is loaded on mount
       await waitFor(() => {
         expect(mockStudioRequest).toHaveBeenCalledWith(
           "/labs/test-lab-123/config-snapshots"

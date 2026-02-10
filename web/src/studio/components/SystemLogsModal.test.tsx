@@ -192,12 +192,6 @@ describe("SystemLogsModal", () => {
       expect(screen.getByRole("checkbox")).toBeChecked();
     });
 
-    it("renders manual refresh button", async () => {
-      render(<SystemLogsModal {...defaultProps} />);
-
-      const refreshButton = document.querySelector(".fa-rotate")?.closest("button");
-      expect(refreshButton).toBeInTheDocument();
-    });
   });
 
   describe("Service filter", () => {
@@ -375,44 +369,6 @@ describe("SystemLogsModal", () => {
 
       // Should not have fetched
       expect(mockGetSystemLogs).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("Manual refresh", () => {
-    it("fetches logs when refresh button is clicked", async () => {
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-
-      render(<SystemLogsModal {...defaultProps} />);
-
-      await waitFor(() => {
-        expect(mockGetSystemLogs).toHaveBeenCalled();
-      });
-
-      mockGetSystemLogs.mockClear();
-
-      const refreshButton = document.querySelector(".fa-rotate")?.closest("button");
-      await user.click(refreshButton!);
-
-      await waitFor(() => {
-        expect(mockGetSystemLogs).toHaveBeenCalled();
-      });
-    });
-
-    it("disables refresh button while loading", async () => {
-      mockGetSystemLogs.mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockLogResponse), 1000))
-      );
-
-      render(<SystemLogsModal {...defaultProps} />);
-
-      const refreshButton = document.querySelector(".fa-rotate")?.closest("button");
-      expect(refreshButton).toBeDisabled();
-
-      vi.advanceTimersByTime(1000);
-
-      await waitFor(() => {
-        expect(refreshButton).not.toBeDisabled();
-      });
     });
   });
 
@@ -615,26 +571,6 @@ describe("SystemLogsModal", () => {
     });
   });
 
-  describe("Loading state", () => {
-    it("shows loading spinner during fetch", async () => {
-      mockGetSystemLogs.mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockLogResponse), 1000))
-      );
-
-      render(<SystemLogsModal {...defaultProps} />);
-
-      const spinner = document.querySelector(".fa-rotate.animate-spin");
-      expect(spinner).toBeInTheDocument();
-
-      vi.advanceTimersByTime(1000);
-
-      await waitFor(() => {
-        const spinningIcon = document.querySelector(".fa-rotate.animate-spin");
-        expect(spinningIcon).not.toBeInTheDocument();
-      });
-    });
-  });
-
   describe("Filter combinations", () => {
     it("sends all filters when multiple are selected", async () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -676,20 +612,9 @@ describe("SystemLogsModal", () => {
     });
 
     it("does not send filter params when set to All", async () => {
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-
       render(<SystemLogsModal {...defaultProps} />);
 
-      await waitFor(() => {
-        expect(mockGetSystemLogs).toHaveBeenCalled();
-      });
-
-      mockGetSystemLogs.mockClear();
-
-      // Manually trigger refresh with defaults
-      const refreshButton = document.querySelector(".fa-rotate")?.closest("button");
-      await user.click(refreshButton!);
-
+      // Initial fetch uses default filters (no service or level)
       await waitFor(() => {
         expect(mockGetSystemLogs).toHaveBeenCalledWith({
           since: "1h",

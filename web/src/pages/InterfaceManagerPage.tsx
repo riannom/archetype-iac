@@ -323,14 +323,6 @@ export default function InterfaceManagerPage() {
           </div>
           <div className="flex items-center gap-2 ml-auto">
             <button
-              onClick={loadInterfaces}
-              disabled={loading}
-              className="px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-600 dark:text-stone-400 transition-colors"
-            >
-              <i className={`fa-solid fa-sync ${loading ? 'fa-spin' : ''} mr-1.5`}></i>
-              Refresh
-            </button>
-            <button
               onClick={() => setShowCreateModal(true)}
               className="px-3 py-1.5 text-sm rounded-lg bg-sage-600 hover:bg-sage-700 text-white font-medium transition-colors"
             >

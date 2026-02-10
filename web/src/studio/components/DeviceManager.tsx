@@ -470,12 +470,6 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
               >
                 <i className="fa-solid fa-compact-disc mr-2"></i> Import ISO
               </button>
-              <button
-                onClick={onRefresh}
-                className="px-3 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg text-xs font-bold transition-all"
-              >
-                <i className="fa-solid fa-rotate"></i>
-              </button>
               <input
                 ref={fileInputRef}
                 className="hidden"

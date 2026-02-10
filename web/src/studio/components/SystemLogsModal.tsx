@@ -174,14 +174,6 @@ const SystemLogsModal: React.FC<SystemLogsModalProps> = ({ isOpen, onClose }) =>
             <span className="text-xs text-stone-500 dark:text-stone-400">Auto-refresh</span>
           </label>
 
-          {/* Manual refresh */}
-          <button
-            onClick={fetchLogs}
-            disabled={loading}
-            className="px-3 py-1 text-sm bg-sage-600 hover:bg-sage-500 disabled:bg-stone-400 text-white rounded-md transition-colors"
-          >
-            <i className={`fa-solid fa-rotate ${loading ? 'animate-spin' : ''}`}></i>
-          </button>
         </div>
 
         {/* Error display */}

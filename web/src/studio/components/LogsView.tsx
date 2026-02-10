@@ -343,13 +343,6 @@ const LogsView: React.FC<LogsViewProps> = ({
               <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`} />
               {copied ? 'Copied!' : 'Copy All'}
             </button>
-            <button
-              onClick={loadLogs}
-              disabled={loading}
-              className="px-3 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg text-xs font-bold transition-all"
-            >
-              <i className={`fa-solid ${loading ? 'fa-spinner fa-spin' : 'fa-rotate'}`} />
-            </button>
           </div>
         </div>
       </header>

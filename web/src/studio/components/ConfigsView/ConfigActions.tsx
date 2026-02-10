@@ -4,7 +4,6 @@ interface ConfigActionsProps {
   extracting: boolean;
   orphanedCount: number;
   onExtract: () => void;
-  onRefresh: () => void;
   onDownloadAll: () => void;
   onDeleteAllOrphaned: () => void;
 }
@@ -13,7 +12,6 @@ export const ConfigActions: React.FC<ConfigActionsProps> = ({
   extracting,
   orphanedCount,
   onExtract,
-  onRefresh,
   onDownloadAll,
   onDeleteAllOrphaned,
 }) => {
@@ -73,14 +71,6 @@ export const ConfigActions: React.FC<ConfigActionsProps> = ({
           </button>
         )}
 
-        {/* Refresh */}
-        <button
-          onClick={onRefresh}
-          className="px-3 py-2 text-xs font-bold text-stone-700 dark:text-stone-300 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 rounded-lg transition-colors flex items-center gap-2"
-        >
-          <i className="fas fa-rotate" />
-          Refresh
-        </button>
       </div>
 
       {/* Delete Confirmation Dialog */}

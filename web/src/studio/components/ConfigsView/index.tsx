@@ -112,7 +112,6 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
               extracting={mgr.extracting}
               orphanedCount={mgr.orphanedSnapshots.length}
               onExtract={handleExtract}
-              onRefresh={mgr.loadSnapshots}
               onDownloadAll={handleDownloadAll}
               onDeleteAllOrphaned={handleBulkDeleteOrphaned}
             />
