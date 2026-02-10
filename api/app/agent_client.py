@@ -97,6 +97,31 @@ async def resolve_data_plane_ip(session: Session, agent: models.Host) -> str:
     return await resolve_agent_ip(agent.address)
 
 
+def _data_plane_mtu_ok(
+    session: Session,
+    agent_a_id: str,
+    agent_b_id: str,
+    required_mtu: int,
+) -> bool:
+    """Check if data-plane MTU tests succeeded for both directions."""
+    links = (
+        session.query(models.AgentLink)
+        .filter(
+            models.AgentLink.test_path == "data_plane",
+            models.AgentLink.test_status == "success",
+            models.AgentLink.tested_mtu.isnot(None),
+        )
+        .all()
+    )
+    # Build lookup for (src, dst) -> tested_mtu
+    mtus = {(l.source_agent_id, l.target_agent_id): l.tested_mtu for l in links}
+    a_to_b = mtus.get((agent_a_id, agent_b_id))
+    b_to_a = mtus.get((agent_b_id, agent_a_id))
+    if a_to_b is None or b_to_a is None:
+        return False
+    return a_to_b >= required_mtu and b_to_a >= required_mtu
+
+
 # Retry configuration (exported for backward compatibility)
 MAX_RETRIES = settings.agent_max_retries
 
@@ -1371,13 +1396,23 @@ async def setup_cross_host_link_v2(
     from app.services.link_manager import allocate_vni
     from app.routers.infrastructure import get_or_create_settings
 
-    # Prefer data plane addresses for VXLAN tunnels, fall back to management address
-    agent_ip_a = await resolve_data_plane_ip(database, agent_a)
-    agent_ip_b = await resolve_data_plane_ip(database, agent_b)
-
     # Read overlay MTU from infrastructure settings
     infra = get_or_create_settings(database)
     overlay_mtu = infra.overlay_mtu or 0
+
+    # Prefer data plane addresses for VXLAN tunnels, but only if MTU tests validate it.
+    required_mtu = overlay_mtu if overlay_mtu and overlay_mtu > 0 else 1500
+    if _data_plane_mtu_ok(database, agent_a.id, agent_b.id, required_mtu):
+        agent_ip_a = await resolve_data_plane_ip(database, agent_a)
+        agent_ip_b = await resolve_data_plane_ip(database, agent_b)
+    else:
+        logger.warning(
+            "Data-plane MTU test missing/insufficient between agents "
+            f"{agent_a.id} and {agent_b.id} (required_mtu={required_mtu}). "
+            "Using management IPs for VXLAN; run MTU tests to enable transport."
+        )
+        agent_ip_a = await resolve_agent_ip(agent_a.address)
+        agent_ip_b = await resolve_agent_ip(agent_b.address)
 
     # Allocate deterministic per-link VNI
     vni = allocate_vni(lab_id, link_id)

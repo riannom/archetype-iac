@@ -14,9 +14,10 @@ from app import models
 
 @pytest.fixture(autouse=True)
 def _disable_link_broadcasts():
-    """Disable background link broadcast tasks during reconciliation tests."""
+    """Disable background broadcast tasks during reconciliation tests."""
     with patch("app.tasks.reconciliation.broadcast_link_state_change", new_callable=AsyncMock):
-        yield
+        with patch("app.tasks.reconciliation.broadcast_node_state_change", new_callable=AsyncMock):
+            yield
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +28,16 @@ def _disable_external_reconcile_actions():
             with patch("app.tasks.reconciliation.agent_client.destroy_container_on_agent", new_callable=AsyncMock):
                 with patch("app.tasks.reconciliation.agent_client.repair_endpoints_on_agent", new_callable=AsyncMock):
                     yield
+
+
+@pytest.fixture(autouse=True)
+def _disable_reconcile_redis():
+    """Avoid real Redis calls during reconciliation tests."""
+    fake_redis = MagicMock()
+    fake_redis.set.return_value = True
+    fake_redis.delete.return_value = 1
+    with patch("app.tasks.reconciliation.get_redis", return_value=fake_redis):
+        yield
 
 
 def _add_node_defs(test_db: Session, lab_id: str, node_names: list[str]) -> None:

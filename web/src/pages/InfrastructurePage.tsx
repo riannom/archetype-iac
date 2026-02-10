@@ -1624,6 +1624,16 @@ const InfrastructurePage: React.FC = () => {
                               const needsAttention = config?.sync_status === 'mismatch' || config?.sync_status === 'error';
                               const effectiveDataPlaneIp = host.data_plane_address
                                 || (config?.transport_ip ? config.transport_ip.split('/')[0] : '');
+                              const requiredMtu = mesh?.settings?.overlay_mtu && mesh.settings.overlay_mtu > 0
+                                ? mesh.settings.overlay_mtu
+                                : 1500;
+                              const hasDataPlaneMtuTest = !!mesh?.links?.some(link =>
+                                link.test_path === 'data_plane'
+                                && link.test_status === 'success'
+                                && link.tested_mtu !== null
+                                && link.tested_mtu >= requiredMtu
+                                && (link.source_agent_id === host.id || link.target_agent_id === host.id)
+                              );
 
                               return (
                                 <tr
@@ -1639,13 +1649,25 @@ const InfrastructurePage: React.FC = () => {
                                     </div>
                                   </td>
                                   <td className="py-2 px-3">
-                                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
-                                      config?.transport_mode === 'subinterface' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                                      : config?.transport_mode === 'dedicated' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
-                                      : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
-                                    }`}>
+                                    <div className="flex flex-col gap-0.5">
+                                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                                        config?.transport_mode === 'subinterface' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                                        : config?.transport_mode === 'dedicated' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
+                                        : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
+                                      }`}>
                                       {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
                                     </span>
+                                      {config?.transport_mode && config.transport_mode !== 'management' && (
+                                        <span className="text-[10px] text-sage-600 dark:text-sage-400">
+                                          Transport selected
+                                        </span>
+                                      )}
+                                      {config?.transport_mode && config.transport_mode !== 'management' && !hasDataPlaneMtuTest && (
+                                        <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                                          Run MTU test to enable transport
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="py-2 px-3 font-mono text-xs text-stone-600 dark:text-stone-400">
                                     {config?.transport_mode === 'subinterface' && config?.parent_interface && config?.vlan_id
