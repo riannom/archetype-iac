@@ -11,6 +11,7 @@ from app import models
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from app.enums import LabRole
 
 
 def find_lab_by_prefix(
@@ -151,23 +152,36 @@ def update_lab_provider_from_nodes(session: Session, lab: models.Lab) -> str:
     return "docker"
 
 
+def get_lab_with_role(
+    lab_id: str, database: Session, user: models.User
+) -> tuple[models.Lab, LabRole]:
+    """Get a lab by ID with the user's effective role.
+
+    Returns:
+        Tuple of (lab, effective_role) where role is the user's LabRole.
+
+    Raises:
+        HTTPException 404 if lab not found.
+        HTTPException 403 if user has no access.
+    """
+    from app.services.permissions import PermissionService
+
+    lab = database.get(models.Lab, lab_id)
+    if not lab:
+        raise HTTPException(status_code=404, detail="Lab not found")
+    role = PermissionService.get_effective_lab_role(user, lab, database)
+    if role is None:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return lab, role
+
+
 def get_lab_or_404(lab_id: str, database: Session, user: models.User) -> models.Lab:
     """Get a lab by ID, checking permissions.
 
     Raises HTTPException 404 if lab not found, 403 if access denied.
+    Backward-compatible wrapper around get_lab_with_role.
     """
-    lab = database.get(models.Lab, lab_id)
-    if not lab:
-        raise HTTPException(status_code=404, detail="Lab not found")
-    if lab.owner_id == user.id or user.is_admin:
-        return lab
-    allowed = (
-        database.query(models.Permission)
-        .filter(models.Permission.lab_id == lab_id, models.Permission.user_id == user.id)
-        .count()
-    )
-    if not allowed:
-        raise HTTPException(status_code=403, detail="Access denied")
+    lab, _role = get_lab_with_role(lab_id, database, user)
     return lab
 
 
