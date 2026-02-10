@@ -46,20 +46,10 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const resizeRef = useRef<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
   const dragPerfRef = useRef<{ enabled: boolean; start: number; lastSample: number; frames: number } | null>(null);
-  const dragProfileRef = useRef<{
-    enabled: boolean;
-    lastFrameTs: number;
-    frameIntervals: number[];
-    longTasksTotal: number;
-    longTasksCount: number;
-    observer?: PerformanceObserver;
-  } | null>(null);
 
   // Boolean state for CSS shadow (only changes on start/end)
   const [isDragging, setIsDragging] = useState<string | null>(null);
   const [isResizing, setIsResizing] = useState<string | null>(null);
-  const [profileEnabled, setProfileEnabled] = useState(() => localStorage.getItem('consoleDragProfile') === '1');
-
   const [winSizes, setWinSizes] = useState<Record<string, { w: number; h: number }>>({});
 
   // Drop target detection state
@@ -141,48 +131,8 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     dragPerfRef.current = perfEnabled
       ? { enabled: true, start: performance.now(), lastSample: performance.now(), frames: 0 }
       : { enabled: false, start: 0, lastSample: 0, frames: 0 };
-    const profileEnabled = localStorage.getItem('consoleDragProfile') === '1';
-    if (profileEnabled) {
-      const profileState = {
-        enabled: true,
-        lastFrameTs: performance.now(),
-        frameIntervals: [] as number[],
-        longTasksTotal: 0,
-        longTasksCount: 0,
-        observer: undefined as PerformanceObserver | undefined,
-      };
-      if (typeof PerformanceObserver !== 'undefined') {
-        try {
-          const observer = new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-              profileState.longTasksTotal += entry.duration;
-              profileState.longTasksCount += 1;
-            }
-          });
-          observer.observe({ entryTypes: ['longtask'] });
-          profileState.observer = observer;
-        } catch {
-          // Ignore observer setup failures (not supported in some browsers)
-        }
-      }
-      dragProfileRef.current = profileState;
-    } else {
-      dragProfileRef.current = { enabled: false, lastFrameTs: 0, frameIntervals: [], longTasksTotal: 0, longTasksCount: 0 };
-    }
     setIsDragging(win.id);
   };
-
-  const toggleDragProfile = useCallback(() => {
-    setProfileEnabled((prev) => {
-      const next = !prev;
-      if (next) {
-        localStorage.setItem('consoleDragProfile', '1');
-      } else {
-        localStorage.removeItem('consoleDragProfile');
-      }
-      return next;
-    });
-  }, []);
 
   const handleResizeMouseDown = (e: React.MouseEvent, win: ConsoleWindow) => {
     e.stopPropagation();
@@ -293,12 +243,6 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
             }
           }
 
-          if (dragProfileRef.current?.enabled) {
-            const now = performance.now();
-            const interval = now - dragProfileRef.current.lastFrameTs;
-            dragProfileRef.current.frameIntervals.push(interval);
-            dragProfileRef.current.lastFrameTs = now;
-          }
         }
 
         // Handle window resize — direct DOM update
@@ -445,31 +389,6 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
       }
 
       dragRef.current = null;
-      if (dragProfileRef.current?.enabled) {
-        const { frameIntervals, longTasksCount, longTasksTotal, observer } = dragProfileRef.current;
-        if (observer) observer.disconnect();
-        if (frameIntervals.length > 1) {
-          const sorted = [...frameIntervals].sort((a, b) => a - b);
-          const avg = frameIntervals.reduce((sum, v) => sum + v, 0) / frameIntervals.length;
-          const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
-          const over16 = frameIntervals.filter((v) => v > 16.7).length;
-          const over33 = frameIntervals.filter((v) => v > 33.3).length;
-          const over50 = frameIntervals.filter((v) => v > 50).length;
-          console.groupCollapsed('[console-drag-profile]');
-          console.table({
-            frames: frameIntervals.length,
-            avgMs: Number(avg.toFixed(2)),
-            p95Ms: Number(p95.toFixed(2)),
-            over16ms: over16,
-            over33ms: over33,
-            over50ms: over50,
-            longTasks: longTasksCount,
-            longTasksMs: Number(longTasksTotal.toFixed(2)),
-          });
-          console.groupEnd();
-        }
-      }
-      dragProfileRef.current = null;
       dragPerfRef.current = null;
       resizeRef.current = null;
       setIsDragging(null);
@@ -607,18 +526,6 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                 )}
               </div>
               <div className="flex items-center px-2 gap-1.5 shrink-0 bg-stone-800 ml-auto border-l border-stone-700">
-                <button
-                  className={`w-8 h-6 flex items-center justify-center text-[9px] font-bold uppercase tracking-widest rounded transition-all ${
-                    profileEnabled
-                      ? 'text-sage-300 bg-sage-500/20 hover:bg-sage-500/30'
-                      : 'text-stone-500 hover:text-stone-300 hover:bg-stone-700'
-                  }`}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={toggleDragProfile}
-                  title="Toggle drag profiling (consoleDragProfile)"
-                >
-                  Perf
-                </button>
                 {!isMinimized && onDockWindow && (
                   <button
                     className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-sage-400 hover:bg-stone-700 rounded transition-all"
