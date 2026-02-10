@@ -6,6 +6,7 @@ from unittest.mock import patch
 import app.services.log_parser as log_parser
 import app.services.metrics_service as metrics_service
 from app import models
+from app.schemas import LabLogEntry
 
 
 def test_log_parser_extracts_hosts_and_levels() -> None:
@@ -26,7 +27,7 @@ Agent: a0b1c2d3-e4f5-0000-0000-000000000002 (agent-b)
 
 def test_log_parser_filtering() -> None:
     entries = [
-        log_parser.LogEntry(
+        LabLogEntry(
             timestamp=datetime.now(timezone.utc),
             level="info",
             message="hello",
@@ -35,7 +36,7 @@ def test_log_parser_filtering() -> None:
             job_id="job",
             source="job",
         ),
-        log_parser.LogEntry(
+        LabLogEntry(
             timestamp=datetime.now(timezone.utc),
             level="error",
             message="boom",

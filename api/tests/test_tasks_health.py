@@ -45,10 +45,15 @@ class TestAgentHealthMonitor:
     async def test_handles_no_stale_agents(self):
         """Should handle case when no agents are stale."""
         from app.tasks.health import agent_health_monitor
+        from contextlib import contextmanager
 
         mock_session = MagicMock()
 
-        with patch("app.tasks.health.SessionLocal", return_value=mock_session):
+        @contextmanager
+        def fake_get_session():
+            yield mock_session
+
+        with patch("app.tasks.health.get_session", fake_get_session):
             with patch("app.tasks.health.agent_client.update_stale_agents", new_callable=AsyncMock) as mock_update:
                 mock_update.return_value = []  # No stale agents
 
@@ -80,10 +85,15 @@ class TestAgentHealthMonitor:
     async def test_continues_on_general_exception(self):
         """Should continue running after handling an exception."""
         from app.tasks.health import agent_health_monitor
+        from contextlib import contextmanager
 
         mock_session = MagicMock()
 
-        with patch("app.tasks.health.SessionLocal", return_value=mock_session):
+        @contextmanager
+        def fake_get_session():
+            yield mock_session
+
+        with patch("app.tasks.health.get_session", fake_get_session):
             with patch("app.tasks.health.agent_client.update_stale_agents", new_callable=AsyncMock) as mock_update:
                 call_count = 0
                 async def update_with_error(session):

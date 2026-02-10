@@ -445,10 +445,14 @@ class TestExtractConfigsEndpoint:
         }
 
         with patch("app.routers.labs.agent_client") as mock_agent_client, \
-             patch("app.routers.labs._save_config_to_workspace"):
+             patch("app.routers.labs._save_config_to_workspace"), \
+             patch("app.utils.agents.agent_client") as mock_utils_agent_client:
             mock_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
             mock_agent_client.is_agent_online.return_value = True
             mock_agent_client.extract_configs_on_agent = AsyncMock(return_value=mock_result)
+            # Also mock in utils.agents where get_online_agent_for_lab lives
+            mock_utils_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
+            mock_utils_agent_client.is_agent_online.return_value = True
 
             response = test_client.post(
                 f"/labs/{lab.id}/extract-configs",
@@ -460,8 +464,8 @@ class TestExtractConfigsEndpoint:
         assert data["success"] is True
         assert data["extracted_count"] == 1
 
-        # Verify fallback was used
-        mock_agent_client.get_agent_for_lab.assert_called_once()
+        # Verify fallback was used (get_online_agent_for_lab lives in app.utils.agents)
+        mock_utils_agent_client.get_agent_for_lab.assert_called_once()
 
     def test_extract_configs_deduplication(
         self,

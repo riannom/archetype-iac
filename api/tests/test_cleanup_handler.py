@@ -120,8 +120,8 @@ class TestHandlerBehavior:
     """Test individual handler methods dispatch to correct cleanup functions."""
 
     @pytest.mark.asyncio
-    async def test_lab_deleted_runs_three_cleanup_tasks(self):
-        """LAB_DELETED should run workspace, config snapshots, and placements cleanup."""
+    async def test_lab_deleted_runs_four_cleanup_tasks(self):
+        """LAB_DELETED should run workspace, config snapshots, placements, and vxlan ports cleanup."""
         handler = CleanupEventHandler()
         event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
 
@@ -132,7 +132,7 @@ class TestHandlerBehavior:
 
             await handler._handle_lab_deleted(event)
 
-            assert mock_runner.run_task.call_count == 3
+            assert mock_runner.run_task.call_count == 4
 
     @pytest.mark.asyncio
     async def test_lab_deleted_skips_when_no_lab_id(self):
@@ -214,8 +214,8 @@ class TestHandlerBehavior:
             mock_runner.run_task.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_destroy_finished_cleans_placements(self):
-        """DESTROY_FINISHED should clean up orphaned placements."""
+    async def test_destroy_finished_cleans_placements_and_vxlan(self):
+        """DESTROY_FINISHED should clean up orphaned placements and vxlan ports."""
         handler = CleanupEventHandler()
         event = CleanupEvent(
             event_type=CleanupEventType.DESTROY_FINISHED, lab_id="lab-1",
@@ -226,7 +226,7 @@ class TestHandlerBehavior:
                 return_value=CleanupResult(task_name="test", deleted=3),
             )
             await handler._handle_destroy_finished(event)
-            mock_runner.run_task.assert_called_once()
+            assert mock_runner.run_task.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ class TestIdempotency:
             await handler._handle_lab_deleted(event)
 
             # Both calls succeed without error
-            assert mock_runner.run_task.call_count == 6  # 3 tasks × 2 calls
+            assert mock_runner.run_task.call_count == 8  # 4 tasks × 2 calls
 
     @pytest.mark.asyncio
     async def test_duplicate_node_removed_safe(self):

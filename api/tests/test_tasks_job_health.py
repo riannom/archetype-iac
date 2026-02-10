@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -12,6 +13,14 @@ from sqlalchemy.orm import Session
 from app import models
 
 
+def _fake_get_session(session):
+    """Create a fake get_session context manager that yields the test session."""
+    @contextmanager
+    def _get_session():
+        yield session
+    return _get_session
+
+
 class TestCheckStuckJobs:
     """Tests for the check_stuck_jobs function."""
 
@@ -20,7 +29,7 @@ class TestCheckStuckJobs:
         """Should return early when no active jobs exist."""
         from app.tasks.job_health import check_stuck_jobs
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             # No jobs in database - should complete without error
             await check_stuck_jobs()
 
@@ -41,7 +50,7 @@ class TestCheckStuckJobs:
         test_db.add(job)
         test_db.commit()
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_stuck_jobs()
             # Job should still be completed
             test_db.refresh(job)
@@ -52,7 +61,7 @@ class TestCheckStuckJobs:
         """Should skip jobs that are still within their timeout window."""
         from app.tasks.job_health import check_stuck_jobs
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_stuck_jobs()
             # Job should still be running
             test_db.refresh(running_job)
@@ -380,7 +389,7 @@ class TestCheckOrphanedQueuedJobs:
         """Should complete without error when no orphaned jobs exist."""
         from app.tasks.job_health import check_orphaned_queued_jobs
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_orphaned_queued_jobs()
 
     @pytest.mark.asyncio
@@ -388,7 +397,7 @@ class TestCheckOrphanedQueuedJobs:
         """Should not process recently queued jobs."""
         from app.tasks.job_health import check_orphaned_queued_jobs
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_orphaned_queued_jobs()
             # Job should still be queued
             test_db.refresh(sample_job)
@@ -404,7 +413,7 @@ class TestCheckJobsOnOfflineAgents:
         from app.tasks.job_health import check_jobs_on_offline_agents
 
         # sample_host is online by default
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_jobs_on_offline_agents()
 
     @pytest.mark.asyncio
@@ -412,7 +421,7 @@ class TestCheckJobsOnOfflineAgents:
         """Should handle offline agents with no jobs."""
         from app.tasks.job_health import check_jobs_on_offline_agents
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_jobs_on_offline_agents()
 
 
@@ -424,7 +433,7 @@ class TestCheckStuckImageSyncJobs:
         """Should return early when no active sync jobs exist."""
         from app.tasks.job_health import check_stuck_image_sync_jobs
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_stuck_image_sync_jobs()
 
     @pytest.mark.asyncio
@@ -443,7 +452,7 @@ class TestCheckStuckImageSyncJobs:
         test_db.add(job)
         test_db.commit()
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_stuck_image_sync_jobs()
             test_db.refresh(job)
             assert job.status == "completed"
@@ -484,7 +493,7 @@ class TestCheckStuckImageSyncJobs:
         """Should not fail recently created pending jobs."""
         from app.tasks.job_health import check_stuck_image_sync_jobs
 
-        with patch("app.tasks.job_health.SessionLocal", return_value=test_db):
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
             await check_stuck_image_sync_jobs()
             test_db.refresh(sample_image_sync_job)
             assert sample_image_sync_job.status == "pending"

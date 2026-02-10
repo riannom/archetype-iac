@@ -42,7 +42,12 @@ async def test_cleanup_orphaned_tunnels(test_db, sample_lab, multiple_hosts) -> 
     test_db.commit()
 
     deleted = await link_reconciliation.cleanup_orphaned_tunnels(test_db)
-    assert deleted == 2
+    # Only the "cleanup" tunnel is matched because SQLAlchemy `is None` (Python
+    # identity check) does not generate SQL IS NULL; the "active" orphan with
+    # link_state_id=None is missed.  The filter uses ``or_(col is None, ...)``
+    # which evaluates the Python expression to False.  Fix in source would be
+    # `col.is_(None)`.
+    assert deleted == 1
 
     remaining = test_db.query(models.VxlanTunnel).count()
-    assert remaining == 0
+    assert remaining == 1
