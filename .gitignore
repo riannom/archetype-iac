@@ -16,3 +16,4 @@ web/node_modules/
 web/tsconfig.tsbuildinfo
 docs/
 archetype.db
+node_modules/
