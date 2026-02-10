@@ -2732,6 +2732,14 @@ async def attach_overlay_interface(
                 ),
             )
         local_vlan = port_info.vlan_tag
+        if local_vlan <= 0:
+            return AttachOverlayInterfaceResponse(
+                success=False,
+                error=(
+                    f"Invalid VLAN tag ({local_vlan}) for "
+                    f"{request.container_name}:{request.interface_name}"
+                ),
+            )
 
         # Step 2: Create per-link access-mode VXLAN port
         backend = get_network_backend()

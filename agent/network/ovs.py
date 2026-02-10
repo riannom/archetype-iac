@@ -237,6 +237,42 @@ class VlanAllocator:
 
         return recovered
 
+    async def prune_recovered_from_ovs(self, bridge_name: str) -> int:
+        """Remove recovered allocations whose ports no longer exist.
+
+        Returns number of recovered entries removed.
+        """
+        removed = 0
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ovs-vsctl", "list-ports", bridge_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            existing_ports = set()
+            if proc.returncode == 0 and stdout:
+                existing_ports = {
+                    p.strip() for p in stdout.decode().split("\n") if p.strip()
+                }
+
+            keys_to_remove = [
+                k for k in self._allocated.keys()
+                if k.startswith("_recovered:") and k.split(":", 1)[1] not in existing_ports
+            ]
+            for key in keys_to_remove:
+                del self._allocated[key]
+                removed += 1
+
+            if removed > 0:
+                self._save_to_disk()
+                logger.info(f"Pruned {removed} recovered VLAN allocations")
+
+        except Exception as e:
+            logger.warning(f"Failed to prune recovered VLAN allocations: {e}")
+
+        return removed
+
     def allocate(self, key: str) -> int:
         """Allocate a VLAN tag for a key.
 
@@ -1175,6 +1211,12 @@ class OVSNetworkManager:
         # Release any remaining VLAN allocations for this lab
         # (handles allocations that may not have tracked ports)
         result["vlans_released"] = self._vlan_allocator.release_lab(lab_id)
+        try:
+            result["vlans_recovered_pruned"] = await self._vlan_allocator.prune_recovered_from_ovs(
+                self._bridge_name
+            )
+        except Exception as e:
+            result["errors"].append(f"VLAN prune: {e}")
 
         logger.info(f"Lab {lab_id} OVS cleanup: {result}")
         return result
@@ -1972,6 +2014,10 @@ class OVSNetworkManager:
             stats["tracked_removed"] = len(self._ports)
             self._ports.clear()
             self._links.clear()
+            # Reset allocator to avoid leaked VLAN allocations
+            self._vlan_allocator._allocated = {}
+            self._vlan_allocator._next_vlan = self._vlan_allocator._start
+            self._vlan_allocator._save_to_disk()
             logger.warning(f"Bridge {self._bridge_name} missing, cleared all tracking")
             return stats
 

@@ -1492,6 +1492,14 @@ class OverlayManager:
         # Release all VNI allocations for this lab
         result["vnis_released"] = self._vni_allocator.release_lab(lab_id)
 
+        # Prune any recovered allocations that no longer exist
+        try:
+            result["vnis_recovered_pruned"] = await self._vni_allocator.prune_recovered_from_system(
+                self._bridge_name
+            )
+        except Exception as e:
+            result["errors"].append(f"VNI prune: {e}")
+
         logger.info(f"Lab {lab_id} overlay cleanup: {result}")
         return result
 
@@ -1813,6 +1821,58 @@ class VniAllocator:
             logger.warning(f"Failed to recover VNIs from system: {e}")
 
         return recovered
+
+    async def prune_recovered_from_system(self, bridge_name: str) -> int:
+        """Remove recovered allocations that no longer exist on the system.
+
+        Returns number of recovered entries removed.
+        """
+        removed = 0
+        existing_names: set[str] = set()
+
+        try:
+            # OVS ports (includes vxlan-<hash> access ports)
+            proc = await asyncio.create_subprocess_exec(
+                "ovs-vsctl", "list-ports", bridge_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0 and stdout:
+                existing_names.update(
+                    p.strip() for p in stdout.decode().split("\n") if p.strip()
+                )
+
+            # Linux VXLAN interfaces (legacy vxlan<id>)
+            proc = await asyncio.create_subprocess_exec(
+                "ip", "-j", "link", "show", "type", "vxlan",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0 and stdout:
+                interfaces = json.loads(stdout.decode()) if stdout else []
+                for iface in interfaces:
+                    name = iface.get("ifname", "")
+                    if name:
+                        existing_names.add(name)
+
+            keys_to_remove = [
+                k for k in self._allocated.keys()
+                if k.startswith("_recovered:") and k.split(":", 1)[1] not in existing_names
+            ]
+            for key in keys_to_remove:
+                del self._allocated[key]
+                removed += 1
+
+            if removed > 0:
+                self._save_to_disk()
+                logger.info(f"Pruned {removed} recovered VNI allocations")
+
+        except Exception as e:
+            logger.warning(f"Failed to prune recovered VNI allocations: {e}")
+
+        return removed
 
     def allocate(self, lab_id: str, link_id: str) -> int:
         """Allocate a VNI for a link.

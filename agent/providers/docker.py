@@ -3114,9 +3114,9 @@ username admin privilege 15 role network-admin nopassword
                     continue
 
                 # Check if this lab_id is in the valid set
-                # Handle both exact matches and prefix matches (for truncated IDs)
+                # Only allow prefix matching when the stored lab_id is truncated
                 is_orphan = lab_id not in valid_lab_ids
-                if is_orphan:
+                if is_orphan and len(lab_id) < 20:
                     # Also check for prefix matches (lab IDs may be truncated)
                     is_orphan = not any(
                         vid.startswith(lab_id) or lab_id.startswith(vid[:20])
