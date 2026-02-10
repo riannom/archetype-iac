@@ -83,8 +83,12 @@ async def test_create_link_tunnel_adopts_existing_port(monkeypatch) -> None:
     async def _delete_vxlan_device(*args: str, **kwargs: str) -> None:
         calls["deleted"] += 1
 
+    async def _ovs_vsctl(*args: str) -> tuple[int, str, str]:
+        return 0, "", ""
+
     monkeypatch.setattr(manager, "_ensure_ovs_bridge", _noop)
     monkeypatch.setattr(manager, "_ovs_port_exists", _ovs_port_exists)
+    monkeypatch.setattr(manager, "_ovs_vsctl", _ovs_vsctl)
     monkeypatch.setattr(manager, "_read_vxlan_link_info", _read_vxlan_link_info)
     monkeypatch.setattr(manager, "_delete_vxlan_device", _delete_vxlan_device)
 
