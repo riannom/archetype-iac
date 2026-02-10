@@ -112,6 +112,29 @@ jobs:
           cd web
           npx tsc --noEmit
 
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      - name: Shellcheck
+        run: |
+          shellcheck install.sh install-controller.sh agent/install.sh \
+            scripts/upgrade.sh scripts/bump-version.sh scripts/backup.sh scripts/restore.sh
+
+  script-tests:
+    name: Script Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BATS
+        run: |
+          git clone --depth 1 https://github.com/bats-core/bats-core.git /tmp/bats
+          sudo /tmp/bats/install.sh /usr/local
+
+      - name: Run script tests
+        run: bats tests/scripts/
+
   version-check:
     name: Version Check
     runs-on: ubuntu-latest
@@ -133,7 +156,7 @@ jobs:
 
   create-release:
     name: Create Release
-    needs: [backend-tests, frontend-tests, lint, version-check]
+    needs: [backend-tests, frontend-tests, lint, version-check, script-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write
