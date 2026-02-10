@@ -1431,17 +1431,35 @@ class DockerOVSPlugin:
                 nonlocal subnet, gateway
 
                 # Check if network already exists
+                needs_create = False
                 try:
                     existing = client.networks.get(network_name)
-                    # Get existing network info
-                    network_id = existing.id
-                    config = existing.attrs.get("IPAM", {}).get("Config", [{}])[0]
-                    subnet = config.get("Subnet", subnet)
-                    gateway = config.get("Gateway", gateway)
-                    logger.info(f"Management network {network_name} already exists")
-                    return network_id, subnet, gateway
+                    labels = existing.attrs.get("Labels") or {}
+                    containers = existing.attrs.get("Containers") or {}
+                    if labels.get("archetype.mgmt_owner") != "ovs_plugin" and not containers:
+                        try:
+                            existing.remove()
+                            logger.info(
+                                f"Recreating management network {network_name} for ownership update"
+                            )
+                            needs_create = True
+                        except Exception:
+                            pass
+                    else:
+                        # Get existing network info
+                        network_id = existing.id
+                        config = existing.attrs.get("IPAM", {}).get("Config", [{}])[0]
+                        subnet = config.get("Subnet", subnet)
+                        gateway = config.get("Gateway", gateway)
+                        logger.info(f"Management network {network_name} already exists")
+                        return network_id, subnet, gateway
+                    if not needs_create:
+                        return network_id, subnet, gateway
                 except docker.errors.NotFound:
-                    # Create the network
+                    needs_create = True
+
+                # Create the network (new or recreated)
+                if needs_create:
                     ipam_pool = docker.types.IPAMPool(
                         subnet=subnet,
                         gateway=gateway,
@@ -1460,6 +1478,7 @@ class DockerOVSPlugin:
                         labels={
                             "archetype.lab_id": lab_id,
                             "archetype.type": "management",
+                            "archetype.mgmt_owner": "ovs_plugin",
                         },
                     )
                     logger.info(f"Created management network {network_name}: {subnet}")
