@@ -1650,7 +1650,7 @@ const InfrastructurePage: React.FC = () => {
                                   </td>
                                   <td className="py-2 px-3">
                                     <div className="flex flex-col gap-0.5">
-                                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                                      <span className={`inline-flex items-center self-start px-1.5 py-0.5 rounded text-xs font-medium ${
                                         config?.transport_mode === 'subinterface' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
                                         : config?.transport_mode === 'dedicated' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
                                         : 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400'
