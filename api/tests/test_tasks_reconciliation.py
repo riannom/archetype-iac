@@ -27,7 +27,9 @@ def _disable_external_reconcile_actions():
         with patch("app.tasks.reconciliation.agent_client.cleanup_lab_orphans", new_callable=AsyncMock):
             with patch("app.tasks.reconciliation.agent_client.destroy_container_on_agent", new_callable=AsyncMock):
                 with patch("app.tasks.reconciliation.agent_client.repair_endpoints_on_agent", new_callable=AsyncMock):
-                    yield
+                    with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                        mock_ready.return_value = {"is_ready": False}
+                        yield
 
 
 @pytest.fixture(autouse=True)

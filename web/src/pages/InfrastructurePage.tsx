@@ -311,6 +311,8 @@ const InfrastructurePage: React.FC = () => {
   const [selectedInterface, setSelectedInterface] = useState<string>('');
   const [desiredMtu, setDesiredMtu] = useState<number>(9000);
   const [savingMtuConfig, setSavingMtuConfig] = useState(false);
+  const [selectedTransportMode, setSelectedTransportMode] = useState<string>('management');
+  const [selectedTransportInterface, setSelectedTransportInterface] = useState<string>('');
 
   // ============================================================================
   // Data Loading
@@ -753,6 +755,10 @@ const InfrastructurePage: React.FC = () => {
         currentConfig: existingConfig || null,
       });
 
+      const transportIfaces = managedInterfaces.filter(i => i.host_id === agentId && i.interface_type === 'transport');
+      const subifaces = transportIfaces.filter(i => i.parent_interface && i.vlan_id !== null);
+      const dedicatedIfaces = transportIfaces.filter(i => !i.vlan_id);
+
       // Pre-fill form with existing config or defaults
       if (existingConfig?.data_plane_interface) {
         setSelectedInterface(existingConfig.data_plane_interface);
@@ -765,6 +771,23 @@ const InfrastructurePage: React.FC = () => {
         setSelectedInterface(firstPhysical?.name || '');
         setDesiredMtu(9000);
       }
+
+      setSelectedTransportMode(existingConfig?.transport_mode || 'management');
+      if (existingConfig?.transport_mode === 'subinterface') {
+        const matched = subifaces.find(i =>
+          (existingConfig.parent_interface && existingConfig.vlan_id !== null
+            && i.parent_interface === existingConfig.parent_interface
+            && i.vlan_id === existingConfig.vlan_id)
+          || (existingConfig.transport_ip && i.ip_address
+            && existingConfig.transport_ip.split('/')[0] === i.ip_address.split('/')[0])
+        );
+        setSelectedTransportInterface(matched?.name || subifaces[0]?.name || '');
+      } else if (existingConfig?.transport_mode === 'dedicated') {
+        const matched = dedicatedIfaces.find(i => i.name === existingConfig.data_plane_interface);
+        setSelectedTransportInterface(matched?.name || dedicatedIfaces[0]?.name || '');
+      } else {
+        setSelectedTransportInterface('');
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to load interface details');
     } finally {
@@ -776,6 +799,8 @@ const InfrastructurePage: React.FC = () => {
     setConfigModalData(null);
     setSelectedInterface('');
     setDesiredMtu(9000);
+    setSelectedTransportMode('management');
+    setSelectedTransportInterface('');
   };
 
   const saveMtuConfig = async () => {
@@ -783,12 +808,36 @@ const InfrastructurePage: React.FC = () => {
 
     setSavingMtuConfig(true);
     try {
+      const transportIfaces = managedInterfaces.filter(
+        i => i.host_id === configModalData.agentId && i.interface_type === 'transport'
+      );
+      const subifaces = transportIfaces.filter(i => i.parent_interface && i.vlan_id !== null);
+      const dedicatedIfaces = transportIfaces.filter(i => !i.vlan_id);
+      const chosenSub = subifaces.find(i => i.name === selectedTransportInterface);
+      const chosenDedicated = dedicatedIfaces.find(i => i.name === selectedTransportInterface);
+
+      const payload: Record<string, unknown> = {
+        data_plane_interface: selectedInterface,
+        desired_mtu: desiredMtu,
+        transport_mode: selectedTransportMode,
+      };
+
+      if (selectedTransportMode === 'subinterface' && chosenSub) {
+        payload.parent_interface = chosenSub.parent_interface;
+        payload.vlan_id = chosenSub.vlan_id;
+        payload.transport_ip = chosenSub.ip_address;
+      } else if (selectedTransportMode === 'dedicated' && chosenDedicated) {
+        payload.data_plane_interface = chosenDedicated.name;
+        payload.transport_ip = chosenDedicated.ip_address;
+      } else if (selectedTransportMode === 'management') {
+        payload.parent_interface = null;
+        payload.vlan_id = null;
+        payload.transport_ip = null;
+      }
+
       await apiRequest(`/infrastructure/agents/${configModalData.agentId}/network-config`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          data_plane_interface: selectedInterface,
-          desired_mtu: desiredMtu,
-        }),
+        body: JSON.stringify(payload),
       });
       await loadNetworkConfigs();
       closeMtuConfigModal();
@@ -817,6 +866,24 @@ const InfrastructurePage: React.FC = () => {
   // ============================================================================
   // Helpers
   // ============================================================================
+
+  useEffect(() => {
+    if (!configModalData) return;
+    const transportIfaces = managedInterfaces.filter(
+      i => i.host_id === configModalData.agentId && i.interface_type === 'transport'
+    );
+    const subifaces = transportIfaces.filter(i => i.parent_interface && i.vlan_id !== null);
+    const dedicatedIfaces = transportIfaces.filter(i => !i.vlan_id);
+
+    if (selectedTransportMode === 'subinterface' && !selectedTransportInterface && subifaces.length > 0) {
+      setSelectedTransportInterface(subifaces[0].name);
+      setSelectedInterface(subifaces[0].name);
+    }
+    if (selectedTransportMode === 'dedicated' && !selectedTransportInterface && dedicatedIfaces.length > 0) {
+      setSelectedTransportInterface(dedicatedIfaces[0].name);
+      setSelectedInterface(dedicatedIfaces[0].name);
+    }
+  }, [configModalData, managedInterfaces, selectedTransportMode, selectedTransportInterface]);
 
   const getStatusBadgeStyle = (status: string): string => {
     switch (status) {
@@ -1657,16 +1724,14 @@ const InfrastructurePage: React.FC = () => {
                                       }`}>
                                         {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
                                       </span>
-                                      <span className={`text-[10px] ${
-                                        hasDataPlaneMtuTest
-                                          ? 'text-emerald-600 dark:text-emerald-400'
-                                          : 'text-stone-400 dark:text-stone-500'
-                                      }`}>
-                                        Effective: {hasDataPlaneMtuTest ? 'Transport' : 'Management'}
-                                      </span>
                                       {config?.transport_mode && config.transport_mode !== 'management' && !hasDataPlaneMtuTest && (
                                         <span className="text-[10px] text-amber-600 dark:text-amber-400">
                                           Run MTU test to enable transport
+                                        </span>
+                                      )}
+                                      {config?.transport_mode && config.transport_mode !== 'management' && hasDataPlaneMtuTest && (
+                                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                                          Transport enabled
                                         </span>
                                       )}
                                     </div>
@@ -2264,6 +2329,118 @@ const InfrastructurePage: React.FC = () => {
                   )}
                 </div>
               )}
+
+              {/* Transport Mode */}
+              {(() => {
+                const transportIfaces = managedInterfaces.filter(
+                  i => i.host_id === configModalData.agentId && i.interface_type === 'transport'
+                );
+                const subifaces = transportIfaces.filter(i => i.parent_interface && i.vlan_id !== null);
+                const dedicatedIfaces = transportIfaces.filter(i => !i.vlan_id);
+                const canSubinterface = subifaces.length > 0;
+                const canDedicated = dedicatedIfaces.length > 0;
+                const requiredMtu = mesh?.settings?.overlay_mtu && mesh.settings.overlay_mtu > 0
+                  ? mesh.settings.overlay_mtu
+                  : 1500;
+                const hasDataPlaneMtuTest = !!mesh?.links?.some(link =>
+                  link.test_path === 'data_plane'
+                  && link.test_status === 'success'
+                  && link.tested_mtu !== null
+                  && link.tested_mtu >= requiredMtu
+                  && (link.source_agent_id === configModalData.agentId || link.target_agent_id === configModalData.agentId)
+                );
+
+                return (
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                      Transport Mode
+                    </label>
+                    <select
+                      value={selectedTransportMode}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setSelectedTransportMode(next);
+                        if (next === 'subinterface' && subifaces.length > 0) {
+                          setSelectedTransportInterface(subifaces[0].name);
+                          setSelectedInterface(subifaces[0].name);
+                        }
+                        if (next === 'dedicated' && dedicatedIfaces.length > 0) {
+                          setSelectedTransportInterface(dedicatedIfaces[0].name);
+                          setSelectedInterface(dedicatedIfaces[0].name);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                    >
+                      <option value="management">Management</option>
+                      <option value="subinterface" disabled={!canSubinterface}>
+                        Subinterface
+                      </option>
+                      <option value="dedicated" disabled={!canDedicated}>
+                        Dedicated
+                      </option>
+                    </select>
+                    {!canSubinterface && (
+                      <p className="text-xs text-stone-400 mt-2">
+                        Subinterface disabled: create a transport subinterface in Managed Interfaces.
+                      </p>
+                    )}
+                    {!canDedicated && (
+                      <p className="text-xs text-stone-400 mt-2">
+                        Dedicated disabled: create a transport interface in Managed Interfaces.
+                      </p>
+                    )}
+                    {selectedTransportMode !== 'management' && !hasDataPlaneMtuTest && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                        Transport selected but MTU not verified. VXLAN will stay on management until tests pass.
+                      </p>
+                    )}
+
+                    {selectedTransportMode === 'subinterface' && canSubinterface && (
+                      <div className="mt-3">
+                        <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                          Transport Subinterface
+                        </label>
+                        <select
+                          value={selectedTransportInterface}
+                          onChange={(e) => {
+                            setSelectedTransportInterface(e.target.value);
+                            setSelectedInterface(e.target.value);
+                          }}
+                          className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                        >
+                          {subifaces.map((iface) => (
+                            <option key={iface.id} value={iface.name}>
+                              {iface.parent_interface}.{iface.vlan_id} ({iface.ip_address || 'no IP'})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {selectedTransportMode === 'dedicated' && canDedicated && (
+                      <div className="mt-3">
+                        <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                          Transport Interface
+                        </label>
+                        <select
+                          value={selectedTransportInterface}
+                          onChange={(e) => {
+                            setSelectedTransportInterface(e.target.value);
+                            setSelectedInterface(e.target.value);
+                          }}
+                          className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                        >
+                          {dedicatedIfaces.map((iface) => (
+                            <option key={iface.id} value={iface.name}>
+                              {iface.name} ({iface.ip_address || 'no IP'})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Interface Selection */}
               <div>
