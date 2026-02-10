@@ -1,6 +1,7 @@
 """Agent configuration."""
 
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
@@ -132,8 +133,7 @@ class Settings(BaseSettings):
     lab_ttl_seconds: int = 86400  # 24 hours
     lab_ttl_check_interval: int = 3600  # Check every hour
 
-    class Config:
-        env_prefix = "ARCHETYPE_AGENT_"
+    model_config = ConfigDict(env_prefix="ARCHETYPE_AGENT_")
 
 
 settings = Settings()
