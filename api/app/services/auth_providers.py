@@ -13,8 +13,6 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import verify_password
 from app.config import settings
-from app.enums import GlobalRole
-
 
 class AuthProvider(ABC):
     """Base class for authentication providers."""
