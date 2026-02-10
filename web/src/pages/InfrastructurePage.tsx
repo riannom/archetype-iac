@@ -136,6 +136,32 @@ interface ManagedInterfacesResponse {
   total: number;
 }
 
+interface NicGroupMember {
+  id: string;
+  nic_group_id: string;
+  managed_interface_id: string;
+  interface_name: string | null;
+  interface_type: string | null;
+  role: string | null;
+  created_at: string;
+}
+
+interface NicGroup {
+  id: string;
+  host_id: string;
+  host_name: string | null;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  members: NicGroupMember[];
+}
+
+interface NicGroupsResponse {
+  groups: NicGroup[];
+  total: number;
+}
+
 interface LabInfo {
   id: string;
   name: string;
@@ -263,6 +289,20 @@ const InfrastructurePage: React.FC = () => {
   const [managedInterfaces, setManagedInterfaces] = useState<ManagedInterface[]>([]);
   const [managedInterfacesLoading, setManagedInterfacesLoading] = useState(false);
 
+  // NIC groups state (future interface affinity)
+  const [nicGroups, setNicGroups] = useState<NicGroup[]>([]);
+  const [nicGroupsLoading, setNicGroupsLoading] = useState(false);
+  const [showNicGroupModal, setShowNicGroupModal] = useState(false);
+  const [newNicGroupHostId, setNewNicGroupHostId] = useState<string>('');
+  const [newNicGroupName, setNewNicGroupName] = useState<string>('');
+  const [newNicGroupDescription, setNewNicGroupDescription] = useState<string>('');
+  const [creatingNicGroup, setCreatingNicGroup] = useState(false);
+  const [showNicGroupMemberModal, setShowNicGroupMemberModal] = useState(false);
+  const [memberGroup, setMemberGroup] = useState<NicGroup | null>(null);
+  const [memberInterfaceId, setMemberInterfaceId] = useState<string>('');
+  const [memberRole, setMemberRole] = useState<string>('transport');
+  const [addingNicGroupMember, setAddingNicGroupMember] = useState(false);
+
   // Testing state
   const [testingAll, setTestingAll] = useState(false);
   const [testingLink, setTestingLink] = useState<string | null>(null);
@@ -378,23 +418,38 @@ const InfrastructurePage: React.FC = () => {
     }
   }, []);
 
+  const loadNicGroups = useCallback(async () => {
+    setNicGroupsLoading(true);
+    try {
+      const data = await apiRequest<NicGroupsResponse>('/infrastructure/nic-groups');
+      setNicGroups(data.groups);
+    } catch (err) {
+      console.error('Failed to load NIC groups:', err);
+    } finally {
+      setNicGroupsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadMesh();
     loadHosts();
     loadLatestVersion();
     loadNetworkConfigs();
     loadManagedInterfaces();
+    loadNicGroups();
     const meshInterval = setInterval(loadMesh, 30000);
     const hostsInterval = setInterval(loadHosts, 10000);
     const networkConfigsInterval = setInterval(loadNetworkConfigs, 30000);
     const managedIfacesInterval = setInterval(loadManagedInterfaces, 30000);
+    const nicGroupsInterval = setInterval(loadNicGroups, 30000);
     return () => {
       clearInterval(meshInterval);
       clearInterval(hostsInterval);
       clearInterval(networkConfigsInterval);
       clearInterval(managedIfacesInterval);
+      clearInterval(nicGroupsInterval);
     };
-  }, [loadMesh, loadHosts, loadLatestVersion, loadNetworkConfigs, loadManagedInterfaces]);
+  }, [loadMesh, loadHosts, loadLatestVersion, loadNetworkConfigs, loadManagedInterfaces, loadNicGroups]);
 
   // Poll update status for agents being updated
   useEffect(() => {
@@ -865,6 +920,78 @@ const InfrastructurePage: React.FC = () => {
         return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', icon: 'fa-minus', text: 'Not Configured' };
       default:
         return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', icon: 'fa-question', text: 'Unknown' };
+    }
+  };
+
+  // ============================================================================
+  // NIC Group Handlers
+  // ============================================================================
+
+  const openNicGroupModal = () => {
+    setShowNicGroupModal(true);
+    setNewNicGroupHostId(hosts[0]?.id || '');
+    setNewNicGroupName('');
+    setNewNicGroupDescription('');
+  };
+
+  const closeNicGroupModal = () => {
+    setShowNicGroupModal(false);
+    setNewNicGroupHostId('');
+    setNewNicGroupName('');
+    setNewNicGroupDescription('');
+  };
+
+  const createNicGroup = async () => {
+    if (!newNicGroupHostId || !newNicGroupName.trim()) return;
+    setCreatingNicGroup(true);
+    try {
+      await apiRequest(`/infrastructure/hosts/${newNicGroupHostId}/nic-groups`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newNicGroupName.trim(),
+          description: newNicGroupDescription.trim() || null,
+        }),
+      });
+      await loadNicGroups();
+      closeNicGroupModal();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create NIC group');
+    } finally {
+      setCreatingNicGroup(false);
+    }
+  };
+
+  const openNicGroupMemberModal = (group: NicGroup) => {
+    setMemberGroup(group);
+    setMemberInterfaceId('');
+    setMemberRole('transport');
+    setShowNicGroupMemberModal(true);
+  };
+
+  const closeNicGroupMemberModal = () => {
+    setShowNicGroupMemberModal(false);
+    setMemberGroup(null);
+    setMemberInterfaceId('');
+    setMemberRole('transport');
+  };
+
+  const addNicGroupMember = async () => {
+    if (!memberGroup || !memberInterfaceId) return;
+    setAddingNicGroupMember(true);
+    try {
+      await apiRequest(`/infrastructure/nic-groups/${memberGroup.id}/members`, {
+        method: 'POST',
+        body: JSON.stringify({
+          managed_interface_id: memberInterfaceId,
+          role: memberRole || null,
+        }),
+      });
+      await loadNicGroups();
+      closeNicGroupMemberModal();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to add NIC group member');
+    } finally {
+      setAddingNicGroupMember(false);
     }
   };
 
@@ -1928,6 +2055,108 @@ const InfrastructurePage: React.FC = () => {
                         </div>
                       </div>
                     )}
+
+                    {/* NIC Groups (Preview) */}
+                    <div className="mt-6 pt-6 border-t border-stone-200 dark:border-stone-800">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-300 flex items-center gap-2">
+                          <i className="fa-solid fa-layer-group text-stone-400 text-xs"></i>
+                          NIC Groups (Preview)
+                          <span className="text-xs font-normal text-stone-400">({nicGroups.length})</span>
+                        </h3>
+                        <button
+                          onClick={openNicGroupModal}
+                          disabled={hosts.length === 0}
+                          className={`px-2 py-1 rounded text-xs font-medium transition-all ${
+                            hosts.length > 0
+                              ? 'bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400'
+                              : 'bg-stone-100 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <i className="fa-solid fa-plus mr-1"></i>
+                          Create Group
+                        </button>
+                      </div>
+                      <p className="text-xs text-stone-500 dark:text-stone-400 mb-3">
+                        Group managed interfaces per host. This is a skeleton for future NIC/VLAN affinity and external network placement.
+                      </p>
+
+                      {nicGroupsLoading ? (
+                        <div className="flex items-center gap-2 text-xs text-stone-500">
+                          <i className="fa-solid fa-spinner fa-spin"></i>
+                          Loading NIC groups...
+                        </div>
+                      ) : nicGroups.length === 0 ? (
+                        <div className="text-xs text-stone-500">
+                          No NIC groups yet.
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b border-stone-200 dark:border-stone-700">
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Agent</th>
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Group</th>
+                                <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Members</th>
+                                <th className="text-right py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {nicGroups.map((group) => {
+                                const hostLabel = group.host_name || group.host_id.slice(0, 8);
+                                const availableIfaces = managedInterfaces.filter(i => i.host_id === group.host_id);
+                                return (
+                                  <tr key={group.id} className="border-b border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/30">
+                                    <td className="py-2 px-3">
+                                      <span className="font-medium text-stone-700 dark:text-stone-300">{hostLabel}</span>
+                                    </td>
+                                    <td className="py-2 px-3">
+                                      <div className="flex flex-col">
+                                        <span className="font-medium text-stone-700 dark:text-stone-300">{group.name}</span>
+                                        {group.description && (
+                                          <span className="text-[10px] text-stone-500 dark:text-stone-400">{group.description}</span>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="py-2 px-3">
+                                      {group.members.length === 0 ? (
+                                        <span className="text-xs text-stone-400">No members</span>
+                                      ) : (
+                                        <div className="flex flex-wrap gap-1">
+                                          {group.members.map(member => (
+                                            <span
+                                              key={member.id}
+                                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400"
+                                            >
+                                              {member.interface_name || member.managed_interface_id.slice(0, 8)}
+                                              {member.role ? ` (${member.role})` : ''}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="py-2 px-3 text-right">
+                                      <button
+                                        onClick={() => openNicGroupMemberModal(group)}
+                                        disabled={availableIfaces.length === 0}
+                                        className={`px-2 py-1 rounded text-xs font-medium transition-all ${
+                                          availableIfaces.length > 0
+                                            ? 'bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400'
+                                            : 'bg-stone-100 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
+                                        }`}
+                                      >
+                                        <i className="fa-solid fa-plus mr-1"></i>
+                                        Add Member
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Agent Mesh */}
@@ -2424,10 +2653,20 @@ const InfrastructurePage: React.FC = () => {
                           }}
                           className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
                         >
-                          {subifaces.map((iface) => (
-                            <option key={iface.id} value={iface.name}>
-                              {iface.parent_interface}.{iface.vlan_id} ({iface.ip_address || 'no IP'})
-                            </option>
+                          {Object.entries(
+                            subifaces.reduce((groups, iface) => {
+                              const key = iface.parent_interface || 'unknown';
+                              (groups[key] ||= []).push(iface);
+                              return groups;
+                            }, {} as Record<string, ManagedInterface[]>)
+                          ).map(([parent, ifaces]) => (
+                            <optgroup key={parent} label={`Parent: ${parent}`}>
+                              {ifaces.map((iface) => (
+                                <option key={iface.id} value={iface.name}>
+                                  {iface.parent_interface}.{iface.vlan_id} ({iface.ip_address || 'no IP'})
+                                </option>
+                              ))}
+                            </optgroup>
                           ))}
                         </select>
                       </div>
@@ -2448,10 +2687,20 @@ const InfrastructurePage: React.FC = () => {
                           }}
                           className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
                         >
-                          {dedicatedIfaces.map((iface) => (
-                            <option key={iface.id} value={iface.name}>
-                              {iface.name} ({iface.ip_address || 'no IP'})
-                            </option>
+                          {Object.entries(
+                            dedicatedIfaces.reduce((groups, iface) => {
+                              const key = iface.parent_interface || 'physical';
+                              (groups[key] ||= []).push(iface);
+                              return groups;
+                            }, {} as Record<string, ManagedInterface[]>)
+                          ).map(([parent, ifaces]) => (
+                            <optgroup key={parent} label={`NIC: ${parent}`}>
+                              {ifaces.map((iface) => (
+                                <option key={iface.id} value={iface.name}>
+                                  {iface.name} ({iface.ip_address || 'no IP'})
+                                </option>
+                              ))}
+                            </optgroup>
                           ))}
                         </select>
                       </div>
@@ -2616,6 +2865,198 @@ const InfrastructurePage: React.FC = () => {
                   <>
                     <i className="fa-solid fa-check mr-2"></i>
                     Apply MTU
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NIC Group Create Modal */}
+      {showNicGroupModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl w-full max-w-md mx-4">
+            <div className="p-6 border-b border-stone-200 dark:border-stone-800">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
+                  <i className="fa-solid fa-layer-group text-sage-600 dark:text-sage-400"></i>
+                  Create NIC Group
+                </h2>
+                <button
+                  onClick={closeNicGroupModal}
+                  className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
+                >
+                  <i className="fa-solid fa-times text-lg"></i>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  Host
+                </label>
+                <select
+                  value={newNicGroupHostId}
+                  onChange={(e) => setNewNicGroupHostId(e.target.value)}
+                  className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                >
+                  <option value="">Select a host...</option>
+                  {hosts.map(host => (
+                    <option key={host.id} value={host.id}>
+                      {host.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  Group Name
+                </label>
+                <input
+                  type="text"
+                  value={newNicGroupName}
+                  onChange={(e) => setNewNicGroupName(e.target.value)}
+                  placeholder="e.g. uplink-a"
+                  className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  Description
+                </label>
+                <input
+                  type="text"
+                  value={newNicGroupDescription}
+                  onChange={(e) => setNewNicGroupDescription(e.target.value)}
+                  placeholder="Optional"
+                  className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                />
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
+              <button
+                onClick={closeNicGroupModal}
+                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createNicGroup}
+                disabled={!newNicGroupHostId || !newNicGroupName.trim() || creatingNicGroup}
+                className={`px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                  newNicGroupHostId && newNicGroupName.trim() && !creatingNicGroup
+                    ? 'bg-sage-600 hover:bg-sage-700 text-white'
+                    : 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
+                }`}
+              >
+                {creatingNicGroup ? (
+                  <>
+                    <i className="fa-solid fa-spinner fa-spin mr-2"></i>
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <i className="fa-solid fa-check mr-2"></i>
+                    Create
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NIC Group Member Modal */}
+      {showNicGroupMemberModal && memberGroup && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl w-full max-w-md mx-4">
+            <div className="p-6 border-b border-stone-200 dark:border-stone-800">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
+                  <i className="fa-solid fa-plug text-sage-600 dark:text-sage-400"></i>
+                  Add NIC Group Member
+                </h2>
+                <button
+                  onClick={closeNicGroupMemberModal}
+                  className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
+                >
+                  <i className="fa-solid fa-times text-lg"></i>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="text-xs text-stone-500 dark:text-stone-400">
+                Group: <span className="text-stone-700 dark:text-stone-300 font-medium">{memberGroup.name}</span>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  Managed Interface
+                </label>
+                <select
+                  value={memberInterfaceId}
+                  onChange={(e) => setMemberInterfaceId(e.target.value)}
+                  className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                >
+                  <option value="">Select an interface...</option>
+                  {managedInterfaces
+                    .filter(i => i.host_id === memberGroup.host_id)
+                    .map((iface) => (
+                      <option key={iface.id} value={iface.id}>
+                        {iface.name} ({iface.interface_type}{iface.ip_address ? `, ${iface.ip_address}` : ''})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
+                  Role
+                </label>
+                <select
+                  value={memberRole}
+                  onChange={(e) => setMemberRole(e.target.value)}
+                  className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
+                >
+                  <option value="transport">transport</option>
+                  <option value="external">external</option>
+                  <option value="custom">custom</option>
+                  <option value="other">other</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
+              <button
+                onClick={closeNicGroupMemberModal}
+                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addNicGroupMember}
+                disabled={!memberInterfaceId || addingNicGroupMember}
+                className={`px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                  memberInterfaceId && !addingNicGroupMember
+                    ? 'bg-sage-600 hover:bg-sage-700 text-white'
+                    : 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
+                }`}
+              >
+                {addingNicGroupMember ? (
+                  <>
+                    <i className="fa-solid fa-spinner fa-spin mr-2"></i>
+                    Adding...
+                  </>
+                ) : (
+                  <>
+                    <i className="fa-solid fa-check mr-2"></i>
+                    Add Member
                   </>
                 )}
               </button>

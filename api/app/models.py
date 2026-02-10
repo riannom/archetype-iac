@@ -872,3 +872,47 @@ class AgentManagedInterface(Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class HostNicGroup(Base):
+    """Grouping of managed interfaces on a host (future NIC/VLAN affinity)."""
+    __tablename__ = "host_nic_groups"
+    __table_args__ = (UniqueConstraint("host_id", "name", name="uq_host_nic_group_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class HostNicGroupMember(Base):
+    """Member interface inside a NIC group."""
+    __tablename__ = "host_nic_group_members"
+    __table_args__ = (UniqueConstraint("nic_group_id", "managed_interface_id", name="uq_nic_group_member"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    nic_group_id: Mapped[str] = mapped_column(String(36), ForeignKey("host_nic_groups.id", ondelete="CASCADE"), index=True)
+    managed_interface_id: Mapped[str] = mapped_column(String(36), ForeignKey("agent_managed_interfaces.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str | None] = mapped_column(String(50), nullable=True)  # transport/external/custom
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExternalNetworkAffinity(Base):
+    """Preference mapping from external network nodes to NIC groups/interfaces."""
+    __tablename__ = "external_network_affinities"
+    __table_args__ = (UniqueConstraint("lab_id", "external_node_id", name="uq_external_affinity"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+    external_node_id: Mapped[str] = mapped_column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), index=True)
+    preferred_nic_group_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("host_nic_groups.id", ondelete="SET NULL"), nullable=True
+    )
+    preferred_managed_interface_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_managed_interfaces.id", ondelete="SET NULL"), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

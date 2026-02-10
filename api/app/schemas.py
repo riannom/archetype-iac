@@ -1078,3 +1078,58 @@ class AgentManagedInterfacesResponse(BaseModel):
 
     interfaces: list[AgentManagedInterfaceOut]
     total: int
+
+
+# =============================================================================
+# NIC Group Schemas (future interface affinity)
+# =============================================================================
+
+
+class HostNicGroupOut(BaseModel):
+    """Output schema for a NIC group on a host."""
+
+    id: str
+    host_id: str
+    host_name: str | None = None
+    name: str
+    description: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    members: list["HostNicGroupMemberOut"] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HostNicGroupCreate(BaseModel):
+    """Request to create a NIC group on a host."""
+
+    name: str
+    description: str | None = None
+
+
+class HostNicGroupMemberOut(BaseModel):
+    """Output schema for a NIC group member."""
+
+    id: str
+    nic_group_id: str
+    managed_interface_id: str
+    interface_name: str | None = None
+    interface_type: str | None = None
+    role: str | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HostNicGroupMemberCreate(BaseModel):
+    """Request to add a managed interface to a NIC group."""
+
+    managed_interface_id: str
+    role: str | None = None
+
+
+class HostNicGroupsResponse(BaseModel):
+    """Response for listing NIC groups."""
+
+    groups: list[HostNicGroupOut]
+    total: int
