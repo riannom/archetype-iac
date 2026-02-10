@@ -22,7 +22,9 @@ from app.agent_client import (
     AgentUnavailableError,
     AgentJobError,
     with_retry,
+    is_agent_online,
 )
+from app.config import settings
 
 
 # --- Unit Tests for Retry Logic ---
@@ -196,6 +198,18 @@ def test_agent_unavailable_error():
     assert error.message == "Agent unreachable"
     assert error.agent_id == "agent1"
     assert error.retriable is True
+
+
+def test_is_agent_online_uses_settings_cutoff(monkeypatch):
+    """Uses settings.agent_stale_timeout for online cutoff."""
+    monkeypatch.setattr(settings, "agent_stale_timeout", 5)
+    agent = MagicMock()
+    agent.status = "online"
+    agent.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=4)
+    assert is_agent_online(agent) is True
+
+    agent.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=6)
+    assert is_agent_online(agent) is False
 
 
 def test_agent_job_error():

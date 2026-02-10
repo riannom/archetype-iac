@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Callable, Any
 
 import httpx
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
@@ -163,6 +164,42 @@ async def close_http_client() -> None:
         _http_client = None
 
 
+async def _agent_request(
+    method: str,
+    url: str,
+    *,
+    json_body: dict | None = None,
+    params: dict | None = None,
+    timeout: float | None = None,
+    max_retries: int | None = None,
+) -> dict:
+    """Make an agent HTTP request with standardized retry/error handling."""
+    client = get_http_client()
+
+    async def _do_request() -> dict:
+        response = await client.request(
+            method,
+            url,
+            json=json_body,
+            params=params,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        if response.status_code == 204:
+            return {}
+        return response.json()
+
+    return await with_retry(_do_request, max_retries=max_retries)
+
+
+def _agent_online_cutoff(timeout_seconds: int | None = None) -> datetime:
+    from datetime import timezone
+
+    if timeout_seconds is None:
+        timeout_seconds = settings.agent_stale_timeout
+    return datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+
+
 class AgentError(Exception):
     """Base exception for agent communication errors."""
     def __init__(self, message: str, agent_id: str | None = None, retriable: bool = False):
@@ -299,6 +336,22 @@ def count_active_jobs(database: Session, agent_id: str) -> int:
     )
 
 
+def count_active_jobs_by_agent(database: Session, agent_ids: list[str]) -> dict[str, int]:
+    """Count active jobs for a batch of agents."""
+    if not agent_ids:
+        return {}
+    rows = (
+        database.query(models.Job.agent_id, func.count(models.Job.id))
+        .filter(
+            models.Job.agent_id.in_(agent_ids),
+            models.Job.status.in_(["queued", "running"]),
+        )
+        .group_by(models.Job.agent_id)
+        .all()
+    )
+    return {agent_id: count for agent_id, count in rows}
+
+
 async def get_healthy_agent(
     database: Session,
     required_provider: str | None = None,
@@ -322,9 +375,8 @@ async def get_healthy_agent(
     Returns:
         A healthy agent with capacity, or None if none available.
     """
-    # Find agents that have sent heartbeat recently (within 60 seconds)
-    from datetime import timezone
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+    # Find agents that have sent heartbeat recently
+    cutoff = _agent_online_cutoff()
     exclude_agents = exclude_agents or []
 
     query = database.query(models.Host).filter(
@@ -341,6 +393,8 @@ async def get_healthy_agent(
     if not agents:
         return None
 
+    active_job_counts = count_active_jobs_by_agent(database, [agent.id for agent in agents])
+
     # Filter by required provider capability
     if required_provider:
         agents = [a for a in agents if required_provider in get_agent_providers(a)]
@@ -351,7 +405,7 @@ async def get_healthy_agent(
     # Filter by capacity (max_concurrent_jobs)
     agents_with_capacity = []
     for agent in agents:
-        active_jobs = count_active_jobs(database, agent.id)
+        active_jobs = active_job_counts.get(agent.id, 0)
         max_jobs = get_agent_max_jobs(agent)
         if active_jobs < max_jobs:
             agents_with_capacity.append((agent, active_jobs, max_jobs))
@@ -534,39 +588,6 @@ def get_agent_url(agent: models.Host) -> str:
     return address
 
 
-async def _do_deploy(
-    url: str,
-    job_id: str,
-    lab_id: str,
-    topology: dict,
-    provider: str = "docker",
-) -> dict:
-    """Internal deploy request (for retry wrapper).
-
-    Args:
-        url: Agent deploy endpoint URL
-        job_id: Job identifier
-        lab_id: Lab identifier
-        topology: Structured topology dict
-        provider: Provider to use
-    """
-    payload: dict = {
-        "job_id": job_id,
-        "lab_id": lab_id,
-        "provider": provider,
-        "topology": topology,
-    }
-
-    client = get_http_client()
-    response = await client.post(
-        url,
-        json=payload,
-        timeout=settings.agent_deploy_timeout,
-    )
-    response.raise_for_status()
-    return response.json()
-
-
 async def deploy_to_agent(
     agent: models.Host,
     job_id: str,
@@ -606,8 +627,18 @@ async def deploy_to_agent(
     _t0 = _time.monotonic()
     try:
         # Reduce retries for deploy since it's a long operation and agent has its own deduplication
-        result = await with_retry(
-            _do_deploy, url, job_id, lab_id, topology, provider, max_retries=1
+        payload: dict = {
+            "job_id": job_id,
+            "lab_id": lab_id,
+            "provider": provider,
+            "topology": topology,
+        }
+        result = await _agent_request(
+            "POST",
+            url,
+            json_body=payload,
+            timeout=settings.agent_deploy_timeout,
+            max_retries=1,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
         logger.info(
@@ -640,21 +671,6 @@ async def deploy_to_agent(
         raise
 
 
-async def _do_destroy(url: str, job_id: str, lab_id: str) -> dict:
-    """Internal destroy request (for retry wrapper)."""
-    client = get_http_client()
-    response = await client.post(
-        url,
-        json={
-            "job_id": job_id,
-            "lab_id": lab_id,
-        },
-        timeout=settings.agent_destroy_timeout,
-    )
-    response.raise_for_status()
-    return response.json()
-
-
 async def destroy_on_agent(
     agent: models.Host,
     job_id: str,
@@ -665,23 +681,17 @@ async def destroy_on_agent(
     logger.info(f"Destroying lab {lab_id} via agent {agent.id}")
 
     try:
-        result = await with_retry(_do_destroy, url, job_id, lab_id)
+        result = await _agent_request(
+            "POST",
+            url,
+            json_body={"job_id": job_id, "lab_id": lab_id},
+            timeout=settings.agent_destroy_timeout,
+        )
         logger.info(f"Destroy completed for lab {lab_id}: {result.get('status')}")
         return result
     except AgentError as e:
         e.agent_id = agent.id
         raise
-
-
-async def _do_get_status(url: str) -> dict:
-    """Internal status request (for retry wrapper)."""
-    client = get_http_client()
-    response = await client.get(
-        url,
-        timeout=settings.agent_status_timeout,
-    )
-    response.raise_for_status()
-    return response.json()
 
 
 async def get_lab_status_from_agent(
@@ -692,7 +702,12 @@ async def get_lab_status_from_agent(
     url = f"{get_agent_url(agent)}/labs/{lab_id}/status"
 
     try:
-        return await with_retry(_do_get_status, url, max_retries=1)
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=settings.agent_status_timeout,
+            max_retries=1,
+        )
     except AgentError as e:
         e.agent_id = agent.id
         raise
@@ -714,26 +729,19 @@ async def reconcile_nodes_on_agent(
         Dict with 'lab_id', 'results' list, and optionally 'error' key
     """
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/reconcile"
-    client = get_http_client()
-
     try:
-        response = await client.post(
+        return await _agent_request(
+            "POST",
             url,
-            json={"nodes": nodes},
+            json_body={"nodes": nodes},
             timeout=settings.agent_deploy_timeout,
+            max_retries=0,
         )
-        response.raise_for_status()
-        return response.json()
-    except httpx.HTTPStatusError as e:
-        raise AgentError(
-            f"Reconcile request failed: {e.response.status_code}",
-            agent_id=agent.id,
-        )
-    except httpx.RequestError as e:
+    except AgentError as e:
         raise AgentError(
             f"Reconcile request failed: {e}",
             agent_id=agent.id,
-        )
+        ) from e
 
 
 def get_agent_console_url(agent: models.Host, lab_id: str, node_name: str) -> str:
@@ -807,9 +815,8 @@ async def get_agent_by_name(
     Returns:
         Agent if found and healthy, None otherwise
     """
-    from datetime import timezone
     from sqlalchemy import or_
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+    cutoff = _agent_online_cutoff()
 
     # Check both name and ID since topology may store either
     agent = (
@@ -841,10 +848,8 @@ async def update_stale_agents(database: Session, timeout_seconds: int | None = N
     """
     if timeout_seconds is None:
         timeout_seconds = settings.agent_stale_timeout
-    from datetime import timezone
     from sqlalchemy import or_
-
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+    cutoff = _agent_online_cutoff(timeout_seconds)
 
     # Mark as stale if:
     # 1. last_heartbeat is older than cutoff, OR
@@ -899,17 +904,16 @@ async def destroy_lab_on_agent(
     logger.info(f"Cleaning up orphan containers for lab {lab_id} on agent {agent.id}")
 
     try:
-        client = get_http_client()
-        response = await client.post(
+        result = await _agent_request(
+            "POST",
             url,
-            json={
+            json_body={
                 "job_id": f"orphan-cleanup-{uuid4()}",
                 "lab_id": lab_id,
             },
             timeout=120.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        result = response.json()
         logger.info(f"Orphan cleanup completed for lab {lab_id} on agent {agent.id}")
         return result
     except Exception as e:
@@ -939,13 +943,12 @@ async def destroy_container_on_agent(
     logger.info(f"Destroying container {container_name} for lab {lab_id} on agent {agent.id}")
 
     try:
-        client = get_http_client()
-        response = await client.delete(
+        result = await _agent_request(
+            "DELETE",
             url,
             timeout=60.0,
+            max_retries=0,
         )
-        response.raise_for_status()
-        result = response.json()
         logger.info(f"Container {container_name} destroyed on agent {agent.id}")
         return {"success": True, **result}
     except Exception as e:
@@ -964,10 +967,12 @@ async def get_agent_lock_status(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/locks/status"
 
     try:
-        client = get_http_client()
-        response = await client.get(url, timeout=10.0)
-        response.raise_for_status()
-        return response.json()
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"Failed to get lock status from agent {agent.id}: {e}")
         return {"locks": [], "error": str(e)}
@@ -986,10 +991,12 @@ async def release_agent_lock(agent: models.Host, lab_id: str) -> dict:
     url = f"{get_agent_url(agent)}/locks/{lab_id}/release"
 
     try:
-        client = get_http_client()
-        response = await client.post(url, timeout=10.0)
-        response.raise_for_status()
-        result = response.json()
+        result = await _agent_request(
+            "POST",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
         if result.get("status") == "cleared":
             logger.info(f"Released stuck lock for lab {lab_id} on agent {agent.id}")
         return result
@@ -1004,16 +1011,13 @@ force_release_lock = release_agent_lock
 
 def is_agent_online(agent: models.Host) -> bool:
     """Check if an agent is considered online based on heartbeat."""
-    from datetime import timezone
-
     if agent.status != "online":
         return False
 
     if not agent.last_heartbeat:
         return False
 
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
-    return agent.last_heartbeat >= cutoff
+    return agent.last_heartbeat >= _agent_online_cutoff()
 
 
 # --- Reconciliation Functions ---
@@ -1026,10 +1030,12 @@ async def discover_labs_on_agent(agent: models.Host) -> dict:
     url = f"{get_agent_url(agent)}/discover-labs"
 
     try:
-        client = get_http_client()
-        response = await client.get(url, timeout=30.0)
-        response.raise_for_status()
-        return response.json()
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=30.0,
+            max_retries=0,
+        )
     except Exception as e:
         logger.error(f"Failed to discover labs on agent {agent.id}: {e}")
         return {"labs": [], "error": str(e)}

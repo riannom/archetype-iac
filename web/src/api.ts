@@ -1,5 +1,16 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
+function buildQueryString(params: Record<string, string | number | undefined | null>): string {
+  const queryParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      queryParams.set(key, String(value));
+    }
+  }
+  const queryString = queryParams.toString();
+  return queryString ? `?${queryString}` : "";
+}
+
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("token");
   const { headers: customHeaders, ...restOptions } = options;
@@ -55,15 +66,14 @@ export interface LogQueryParams {
 }
 
 export async function getSystemLogs(params: LogQueryParams = {}): Promise<LogQueryResponse> {
-  const queryParams = new URLSearchParams();
-  if (params.service) queryParams.set("service", params.service);
-  if (params.level) queryParams.set("level", params.level);
-  if (params.since) queryParams.set("since", params.since);
-  if (params.search) queryParams.set("search", params.search);
-  if (params.limit) queryParams.set("limit", params.limit.toString());
-
-  const queryString = queryParams.toString();
-  const path = `/logs${queryString ? `?${queryString}` : ""}`;
+  const queryString = buildQueryString({
+    service: params.service,
+    level: params.level,
+    since: params.since,
+    search: params.search,
+    limit: params.limit,
+  });
+  const path = `/logs${queryString}`;
 
   return apiRequest<LogQueryResponse>(path);
 }
@@ -137,16 +147,15 @@ export async function getLabLogs(
   labId: string,
   params: LabLogsQueryParams = {}
 ): Promise<LabLogsResponse> {
-  const queryParams = new URLSearchParams();
-  if (params.job_id) queryParams.set("job_id", params.job_id);
-  if (params.host_id) queryParams.set("host_id", params.host_id);
-  if (params.level) queryParams.set("level", params.level);
-  if (params.since) queryParams.set("since", params.since);
-  if (params.search) queryParams.set("search", params.search);
-  if (params.limit) queryParams.set("limit", params.limit.toString());
-
-  const queryString = queryParams.toString();
-  const path = `/labs/${labId}/logs${queryString ? `?${queryString}` : ""}`;
+  const queryString = buildQueryString({
+    job_id: params.job_id,
+    host_id: params.host_id,
+    level: params.level,
+    since: params.since,
+    search: params.search,
+    limit: params.limit,
+  });
+  const path = `/labs/${labId}/logs${queryString}`;
 
   return apiRequest<LabLogsResponse>(path);
 }

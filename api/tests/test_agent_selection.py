@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
+from app.config import settings
 
 
 class TestGetHealthyAgent:
@@ -47,14 +48,16 @@ class TestGetHealthyAgent:
     @pytest.mark.asyncio
     async def test_stale_heartbeat_excluded(self, test_db: Session):
         """Agents with stale heartbeats are excluded."""
-        # Agent with stale heartbeat (> 60 seconds ago)
+        # Agent with stale heartbeat
         host = models.Host(
             id="stale-agent",
             name="Stale Agent",
             address="localhost:8080",
             status="online",
             capabilities=json.dumps({"providers": ["docker"]}),
-            last_heartbeat=datetime.now(timezone.utc) - timedelta(seconds=120),
+            last_heartbeat=datetime.now(timezone.utc) - timedelta(
+                seconds=settings.agent_stale_timeout + 10
+            ),
         )
         test_db.add(host)
         test_db.commit()
@@ -597,3 +600,20 @@ class TestCountActiveJobs:
         """Returns 0 when no active jobs."""
         count = agent_client.count_active_jobs(test_db, "nonexistent-agent")
         assert count == 0
+
+    def test_count_active_jobs_by_agent(self, test_db: Session):
+        """Counts active jobs for multiple agents in one query."""
+        jobs = [
+            models.Job(agent_id="agent-1", action="up", status="queued"),
+            models.Job(agent_id="agent-1", action="up", status="running"),
+            models.Job(agent_id="agent-2", action="down", status="running"),
+            models.Job(agent_id="agent-2", action="down", status="completed"),
+        ]
+        for job in jobs:
+            test_db.add(job)
+        test_db.commit()
+
+        counts = agent_client.count_active_jobs_by_agent(test_db, ["agent-1", "agent-2", "agent-3"])
+        assert counts["agent-1"] == 2
+        assert counts["agent-2"] == 1
+        assert counts.get("agent-3", 0) == 0
