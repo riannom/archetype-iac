@@ -57,29 +57,29 @@ class TestUserSchemas:
     """Tests for User schemas."""
 
     def test_user_create_valid(self):
-        """UserCreate with valid data."""
-        user = schemas.UserCreate(
-            email="test@example.com",
+        """UserCreateAdmin with valid data."""
+        user = schemas.UserCreateAdmin(
+            username="testuser",
             password="securepassword123"
         )
-        assert user.email == "test@example.com"
+        assert user.username == "testuser"
 
-    def test_user_create_invalid_email(self):
-        """UserCreate rejects invalid email."""
+    def test_user_create_invalid_username(self):
+        """UserCreateAdmin rejects invalid username format."""
         with pytest.raises(ValidationError):
-            schemas.UserCreate(email="not-an-email", password="password123")
+            schemas.UserCreateAdmin(username="1badname", password="password123")
 
     def test_user_create_short_password(self):
-        """UserCreate rejects short password."""
+        """UserCreateAdmin rejects short password."""
         with pytest.raises(ValidationError):
-            schemas.UserCreate(email="test@example.com", password="short")
+            schemas.UserCreateAdmin(username="testuser", password="short")
 
     def test_user_create_long_password(self):
-        """UserCreate rejects overly long password."""
+        """UserCreateAdmin rejects overly long password."""
         with pytest.raises(ValidationError):
-            schemas.UserCreate(
-                email="test@example.com",
-                password="a" * 100  # Exceeds max_length=72
+            schemas.UserCreateAdmin(
+                username="testuser",
+                password="a" * 73  # Exceeds max_length=72
             )
 
     def test_user_out_from_model(self):
@@ -318,21 +318,16 @@ class TestPermissionSchemas:
     def test_permission_create(self):
         """PermissionCreate with valid data."""
         perm = schemas.PermissionCreate(
-            user_email="collab@example.com",
+            user_identifier="collab@example.com",
             role="editor",
         )
-        assert perm.user_email == "collab@example.com"
+        assert perm.user_identifier == "collab@example.com"
         assert perm.role == "editor"
 
     def test_permission_create_default_role(self):
         """PermissionCreate defaults to viewer role."""
-        perm = schemas.PermissionCreate(user_email="viewer@example.com")
+        perm = schemas.PermissionCreate(user_identifier="viewer@example.com")
         assert perm.role == "viewer"
-
-    def test_permission_create_invalid_email(self):
-        """PermissionCreate rejects invalid email."""
-        with pytest.raises(ValidationError):
-            schemas.PermissionCreate(user_email="not-an-email", role="viewer")
 
 
 class TestLayoutSchemas:

@@ -195,7 +195,7 @@ class TestGetLabOr404EdgeCases:
     def test_multiple_permissions_for_same_lab(
         self, test_db: Session, sample_lab: models.Lab
     ):
-        """Multiple permission records for same lab/user still grants access."""
+        """Single permission record for lab/user grants access."""
         other_user = models.User(
             username="multiuser",
             email="multi@example.com",
@@ -207,11 +207,9 @@ class TestGetLabOr404EdgeCases:
         test_db.commit()
         test_db.refresh(other_user)
 
-        # Add multiple permissions (shouldn't happen, but handle gracefully)
-        perm1 = models.Permission(lab_id=sample_lab.id, user_id=other_user.id, role="viewer")
-        perm2 = models.Permission(lab_id=sample_lab.id, user_id=other_user.id, role="editor")
-        test_db.add(perm1)
-        test_db.add(perm2)
+        # Add single permission (unique constraint prevents duplicates)
+        perm = models.Permission(lab_id=sample_lab.id, user_id=other_user.id, role="editor")
+        test_db.add(perm)
         test_db.commit()
 
         result = get_lab_or_404(sample_lab.id, test_db, other_user)

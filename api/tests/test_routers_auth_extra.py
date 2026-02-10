@@ -3,19 +3,24 @@ from __future__ import annotations
 
 import app.routers.auth as auth_router  # noqa: F401
 
-from app import models
-
 
 def test_register_and_login_flow(test_client, test_db, monkeypatch) -> None:
     monkeypatch.setattr("app.config.settings.local_auth_enabled", True)
 
-    payload = {"email": "new@example.com", "password": "pass1234"}
-    resp = test_client.post("/auth/register", json=payload)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["email"] == payload["email"]
+    from app.auth import hash_password
+    from app import models
 
-    login = test_client.post("/auth/login", data={"username": payload["email"], "password": payload["password"]})
+    user = models.User(
+        username="newuser",
+        email="new@example.com",
+        hashed_password=hash_password("pass1234"),
+        is_active=True,
+        global_role="operator",
+    )
+    test_db.add(user)
+    test_db.commit()
+
+    login = test_client.post("/auth/login", data={"username": "new@example.com", "password": "pass1234"})
     assert login.status_code == 200
     token = login.json().get("access_token")
     assert token
@@ -24,22 +29,26 @@ def test_register_and_login_flow(test_client, test_db, monkeypatch) -> None:
 def test_register_duplicate_and_password_length(test_client, test_db, monkeypatch) -> None:
     monkeypatch.setattr("app.config.settings.local_auth_enabled", True)
 
-    user = models.User(email="dup@example.com", hashed_password="hash")
+    from app.auth import hash_password
+    from app import models
+
+    # Login with nonexistent user returns 401
+    resp = test_client.post("/auth/login", data={"username": "nosuch@example.com", "password": "password123"})
+    assert resp.status_code == 401
+
+    # Login with wrong password returns 401
+    user = models.User(
+        username="existing",
+        email="existing@example.com",
+        hashed_password=hash_password("correctpassword"),
+        is_active=True,
+        global_role="operator",
+    )
     test_db.add(user)
     test_db.commit()
 
-    # Duplicate email with valid password length (min 8 chars)
-    resp = test_client.post("/auth/register", json={"email": "dup@example.com", "password": "password123"})
-    assert resp.status_code == 409
-
-    # Password too short (< 8 chars) returns 422 validation error
-    resp = test_client.post("/auth/register", json={"email": "short@example.com", "password": "pass"})
-    assert resp.status_code == 422
-
-    # Password too long (> 72 bytes) returns 422 validation error (Pydantic max_length=72)
-    long_pw = "a" * 73
-    resp = test_client.post("/auth/register", json={"email": "long@example.com", "password": long_pw})
-    assert resp.status_code == 422
+    resp = test_client.post("/auth/login", data={"username": "existing@example.com", "password": "wrongpassword"})
+    assert resp.status_code == 401
 
 
 def test_login_invalid_credentials(test_client, monkeypatch) -> None:

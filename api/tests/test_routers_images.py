@@ -97,7 +97,8 @@ class TestUpdateImageLibrary:
     def test_update_image_metadata(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         mock_manifest,
         monkeypatch,
     ):
@@ -121,14 +122,15 @@ class TestUpdateImageLibrary:
         response = test_client.post(
             "/images/library/docker:ceos:4.28.0",
             json={"version": "4.28.1", "notes": "Updated version"},
-            headers=auth_headers,
+            headers=admin_auth_headers,
         )
         assert response.status_code == 200
 
     def test_update_image_not_found(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         mock_manifest,
         monkeypatch,
     ):
@@ -144,7 +146,7 @@ class TestUpdateImageLibrary:
         response = test_client.post(
             "/images/library/nonexistent-image",
             json={"version": "1.0.0"},
-            headers=auth_headers,
+            headers=admin_auth_headers,
         )
         assert response.status_code == 404
 
@@ -155,7 +157,8 @@ class TestDeleteImage:
     def test_delete_docker_image(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         mock_manifest,
         monkeypatch,
     ):
@@ -174,7 +177,7 @@ class TestDeleteImage:
         monkeypatch.setattr(images_router, "delete_image_entry", lambda m, id: True)
 
         response = test_client.delete(
-            "/images/library/docker:ceos:4.28.0", headers=auth_headers
+            "/images/library/docker:ceos:4.28.0", headers=admin_auth_headers
         )
         assert response.status_code == 200
         assert "deleted" in response.json()["message"].lower()
@@ -182,7 +185,8 @@ class TestDeleteImage:
     def test_delete_qcow2_removes_file(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         tmp_path,
         monkeypatch,
     ):
@@ -216,7 +220,7 @@ class TestDeleteImage:
         monkeypatch.setattr(images_router, "delete_image_entry", lambda m, id: True)
 
         response = test_client.delete(
-            "/images/library/qcow2:test.qcow2", headers=auth_headers
+            "/images/library/qcow2:test.qcow2", headers=admin_auth_headers
         )
         assert response.status_code == 200
         assert not qcow2_file.exists()
@@ -224,7 +228,8 @@ class TestDeleteImage:
     def test_delete_image_not_found(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         monkeypatch,
     ):
         """Test deleting non-existent image."""
@@ -234,7 +239,7 @@ class TestDeleteImage:
         monkeypatch.setattr(images_router, "find_image_by_id", lambda m, id: None)
 
         response = test_client.delete(
-            "/images/library/nonexistent", headers=auth_headers
+            "/images/library/nonexistent", headers=admin_auth_headers
         )
         assert response.status_code == 404
 
@@ -245,7 +250,8 @@ class TestAssignImage:
     def test_assign_image_to_device(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         mock_manifest,
         monkeypatch,
     ):
@@ -269,14 +275,15 @@ class TestAssignImage:
         response = test_client.post(
             "/images/library/docker:ceos:4.28.0/assign",
             json={"device_id": "ceos", "is_default": True},
-            headers=auth_headers,
+            headers=admin_auth_headers,
         )
         assert response.status_code == 200
 
     def test_assign_image_requires_device_id(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         monkeypatch,
     ):
         """Test assign endpoint requires device_id."""
@@ -287,7 +294,7 @@ class TestAssignImage:
         response = test_client.post(
             "/images/library/docker:ceos:4.28.0/assign",
             json={},
-            headers=auth_headers,
+            headers=admin_auth_headers,
         )
         assert response.status_code == 400
         assert "device_id" in response.json()["detail"].lower()
@@ -299,7 +306,8 @@ class TestUnassignImage:
     def test_unassign_image(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         mock_manifest,
         monkeypatch,
     ):
@@ -321,7 +329,7 @@ class TestUnassignImage:
         monkeypatch.setattr(images_router, "update_image_entry", mock_update)
 
         response = test_client.post(
-            "/images/library/docker:ceos:4.28.0/unassign", headers=auth_headers
+            "/images/library/docker:ceos:4.28.0/unassign", headers=admin_auth_headers
         )
         assert response.status_code == 200
 
@@ -486,7 +494,8 @@ class TestImageHostsAndSync:
     def test_sync_image_only_docker(
         self,
         test_client: TestClient,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         monkeypatch,
     ):
         """Test that only Docker images can be synced."""
@@ -508,7 +517,7 @@ class TestImageHostsAndSync:
         response = test_client.post(
             "/images/library/qcow2:test.qcow2/push",
             json={},
-            headers=auth_headers,
+            headers=admin_auth_headers,
         )
         assert response.status_code == 400
         assert "docker" in response.json()["detail"].lower()
@@ -594,7 +603,8 @@ class TestSyncJobs:
         self,
         test_client: TestClient,
         test_db: Session,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         sample_host: models.Host,
     ):
         """Test cancelling a sync job."""
@@ -608,7 +618,7 @@ class TestSyncJobs:
         test_db.commit()
 
         response = test_client.delete(
-            f"/images/sync-jobs/{job.id}", headers=auth_headers
+            f"/images/sync-jobs/{job.id}", headers=admin_auth_headers
         )
         assert response.status_code == 200
         assert response.json()["status"] == "cancelled"
@@ -620,7 +630,8 @@ class TestSyncJobs:
         self,
         test_client: TestClient,
         test_db: Session,
-        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
         sample_host: models.Host,
     ):
         """Test that completed sync jobs cannot be cancelled."""
@@ -634,7 +645,7 @@ class TestSyncJobs:
         test_db.commit()
 
         response = test_client.delete(
-            f"/images/sync-jobs/{job.id}", headers=auth_headers
+            f"/images/sync-jobs/{job.id}", headers=admin_auth_headers
         )
         assert response.status_code == 400
         assert "cannot cancel" in response.json()["detail"].lower()

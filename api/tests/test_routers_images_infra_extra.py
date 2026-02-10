@@ -7,7 +7,7 @@ import app.routers.infrastructure as infrastructure_router  # noqa: F401
 from app import models
 
 
-def test_images_library_assign_unassign_and_list(test_client, auth_headers, monkeypatch) -> None:
+def test_images_library_assign_unassign_and_list(test_client, admin_user, admin_auth_headers, monkeypatch) -> None:
     manifest = {
         "images": [
             {"id": "docker:img1", "kind": "docker", "reference": "img1:latest", "device_id": None},
@@ -27,27 +27,27 @@ def test_images_library_assign_unassign_and_list(test_client, auth_headers, monk
     monkeypatch.setattr("app.routers.images.update_image_entry", fake_update_image_entry)
     monkeypatch.setattr("app.routers.images.find_image_by_id", lambda m, image_id: m["images"][0])
 
-    resp = test_client.get("/images/library", headers=auth_headers)
+    resp = test_client.get("/images/library", headers=admin_auth_headers)
     assert resp.status_code == 200
     assert len(resp.json()["images"]) == 1
 
     assign = test_client.post(
         "/images/library/docker:img1/assign",
         json={"device_id": "eos", "is_default": True},
-        headers=auth_headers,
+        headers=admin_auth_headers,
     )
     assert assign.status_code == 200
     assert assign.json()["image"]["device_id"] == "eos"
 
     unassign = test_client.post(
         "/images/library/docker:img1/unassign",
-        headers=auth_headers,
+        headers=admin_auth_headers,
     )
     assert unassign.status_code == 200
     assert unassign.json()["image"]["device_id"] is None
 
 
-def test_images_hosts_and_sync_jobs(test_client, test_db, auth_headers, monkeypatch) -> None:
+def test_images_hosts_and_sync_jobs(test_client, test_db, admin_user, admin_auth_headers, monkeypatch) -> None:
     host = models.Host(
         id="h1",
         name="Host",
@@ -66,27 +66,27 @@ def test_images_hosts_and_sync_jobs(test_client, test_db, auth_headers, monkeypa
     monkeypatch.setattr("app.routers.images.load_manifest", lambda: manifest)
     monkeypatch.setattr("app.routers.images.find_image_by_id", lambda m, image_id: m["images"][0])
 
-    resp = test_client.get("/images/library/docker:img1/hosts", headers=auth_headers)
+    resp = test_client.get("/images/library/docker:img1/hosts", headers=admin_auth_headers)
     assert resp.status_code == 200
     assert resp.json()["hosts"][0]["status"] == "unknown"
 
     push = test_client.post(
         "/images/library/docker:img1/push",
         json={},
-        headers=auth_headers,
+        headers=admin_auth_headers,
     )
     assert push.status_code == 200
     assert push.json()["count"] == 1
 
-    jobs = test_client.get("/images/sync-jobs", headers=auth_headers)
+    jobs = test_client.get("/images/sync-jobs", headers=admin_auth_headers)
     assert jobs.status_code == 200
     assert len(jobs.json()) == 1
 
     job_id = jobs.json()[0]["id"]
-    job_details = test_client.get(f"/images/sync-jobs/{job_id}", headers=auth_headers)
+    job_details = test_client.get(f"/images/sync-jobs/{job_id}", headers=admin_auth_headers)
     assert job_details.status_code == 200
 
-    cancelled = test_client.delete(f"/images/sync-jobs/{job_id}", headers=auth_headers)
+    cancelled = test_client.delete(f"/images/sync-jobs/{job_id}", headers=admin_auth_headers)
     assert cancelled.status_code == 200
 
 

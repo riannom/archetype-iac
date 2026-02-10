@@ -143,25 +143,25 @@ class TestAgentHeartbeat:
 class TestListAgents:
     """Tests for agent listing endpoints."""
 
-    def test_list_agents_empty(self, test_client: TestClient, test_db: Session):
+    def test_list_agents_empty(self, test_client: TestClient, test_db: Session, auth_headers: dict):
         """List agents returns empty list when none registered."""
-        response = test_client.get("/agents")
+        response = test_client.get("/agents", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data == []
 
-    def test_list_agents(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_list_agents(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """List agents returns registered agents."""
-        response = test_client.get("/agents")
+        response = test_client.get("/agents", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
         assert data[0]["id"] == sample_host.id
         assert data[0]["name"] == sample_host.name
 
-    def test_list_agents_detailed(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_list_agents_detailed(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """Detailed list includes resource usage and labs."""
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
@@ -170,17 +170,17 @@ class TestListAgents:
         assert "labs" in agent
         assert "role" in agent
 
-    def test_get_single_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_get_single_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """Get single agent by ID."""
-        response = test_client.get(f"/agents/{sample_host.id}")
+        response = test_client.get(f"/agents/{sample_host.id}", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == sample_host.id
         assert data["name"] == sample_host.name
 
-    def test_get_nonexistent_agent(self, test_client: TestClient):
+    def test_get_nonexistent_agent(self, test_client: TestClient, auth_headers: dict):
         """Get nonexistent agent returns 404."""
-        response = test_client.get("/agents/nonexistent")
+        response = test_client.get("/agents/nonexistent", headers=auth_headers)
         assert response.status_code == 404
 
 
@@ -207,11 +207,12 @@ class TestUnregisterAgent:
 class TestSyncStrategy:
     """Tests for sync strategy management."""
 
-    def test_update_sync_strategy(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_update_sync_strategy(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """Update agent's sync strategy."""
         response = test_client.put(
             f"/agents/{sample_host.id}/sync-strategy",
-            json={"strategy": "pull"}
+            json={"strategy": "pull"},
+            headers=auth_headers,
         )
         assert response.status_code == 200
         data = response.json()
@@ -220,21 +221,23 @@ class TestSyncStrategy:
         test_db.refresh(sample_host)
         assert sample_host.image_sync_strategy == "pull"
 
-    def test_update_sync_strategy_invalid(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_update_sync_strategy_invalid(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """Invalid sync strategy returns error."""
         response = test_client.put(
             f"/agents/{sample_host.id}/sync-strategy",
-            json={"strategy": "invalid_strategy"}
+            json={"strategy": "invalid_strategy"},
+            headers=auth_headers,
         )
         assert response.status_code == 400
 
-    def test_update_sync_strategy_all_valid(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_update_sync_strategy_all_valid(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """All valid strategies are accepted."""
         valid_strategies = ["push", "pull", "on_demand", "disabled"]
         for strategy in valid_strategies:
             response = test_client.put(
                 f"/agents/{sample_host.id}/sync-strategy",
-                json={"strategy": strategy}
+                json={"strategy": strategy},
+                headers=auth_headers,
             )
             assert response.status_code == 200
 
@@ -242,15 +245,15 @@ class TestSyncStrategy:
 class TestAgentImages:
     """Tests for agent image management."""
 
-    def test_list_agent_images_empty(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_list_agent_images_empty(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """List images returns empty when none synced."""
-        response = test_client.get(f"/agents/{sample_host.id}/images")
+        response = test_client.get(f"/agents/{sample_host.id}/images", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["agent_id"] == sample_host.id
         assert data["images"] == []
 
-    def test_list_agent_images(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_list_agent_images(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """List images returns synced images."""
         # Add image host record
         image_host = models.ImageHost(
@@ -263,7 +266,7 @@ class TestAgentImages:
         test_db.add(image_host)
         test_db.commit()
 
-        response = test_client.get(f"/agents/{sample_host.id}/images")
+        response = test_client.get(f"/agents/{sample_host.id}/images", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data["images"]) == 1
@@ -273,38 +276,38 @@ class TestAgentImages:
 class TestAgentUpdates:
     """Tests for agent software updates."""
 
-    def test_get_latest_version(self, test_client: TestClient):
+    def test_get_latest_version(self, test_client: TestClient, auth_headers: dict):
         """Get latest agent version."""
         with patch("app.routers.agents.get_latest_agent_version", return_value="1.2.3"):
-            response = test_client.get("/agents/updates/latest")
+            response = test_client.get("/agents/updates/latest", headers=auth_headers)
             assert response.status_code == 200
             data = response.json()
             assert data["version"] == "1.2.3"
 
-    def test_trigger_update_offline_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_trigger_update_offline_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """Trigger update on offline agent returns error."""
         sample_host.status = "offline"
         test_db.commit()
 
-        response = test_client.post(f"/agents/{sample_host.id}/update")
+        response = test_client.post(f"/agents/{sample_host.id}/update", headers=auth_headers)
         assert response.status_code == 503
 
-    def test_trigger_update_already_current(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_trigger_update_already_current(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """Trigger update when already at target version."""
         with patch("app.routers.agents.get_latest_agent_version", return_value=sample_host.version):
-            response = test_client.post(f"/agents/{sample_host.id}/update")
+            response = test_client.post(f"/agents/{sample_host.id}/update", headers=auth_headers)
             assert response.status_code == 400
             assert "already at version" in response.json()["detail"].lower()
 
-    def test_get_update_status_no_jobs(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_get_update_status_no_jobs(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """Get update status when no jobs exist."""
-        response = test_client.get(f"/agents/{sample_host.id}/update-status")
+        response = test_client.get(f"/agents/{sample_host.id}/update-status", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() is None
 
-    def test_list_update_jobs_empty(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_list_update_jobs_empty(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """List update jobs returns empty list."""
-        response = test_client.get(f"/agents/{sample_host.id}/update-jobs")
+        response = test_client.get(f"/agents/{sample_host.id}/update-jobs", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() == []
 
@@ -312,7 +315,7 @@ class TestAgentUpdates:
 class TestAgentRoleDetermination:
     """Tests for agent role determination logic."""
 
-    def test_agent_role_local(self, test_client: TestClient, test_db: Session):
+    def test_agent_role_local(self, test_client: TestClient, test_db: Session, auth_headers: dict):
         """Local agent gets agent+controller role."""
         host = models.Host(
             id="local-agent",
@@ -325,13 +328,13 @@ class TestAgentRoleDetermination:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         local = [a for a in data if a["id"] == "local-agent"][0]
         assert local["role"] == "agent+controller"
 
-    def test_agent_role_remote(self, test_client: TestClient, test_db: Session):
+    def test_agent_role_remote(self, test_client: TestClient, test_db: Session, auth_headers: dict):
         """Remote agent gets agent role."""
         host = models.Host(
             id="remote-agent",
@@ -343,13 +346,13 @@ class TestAgentRoleDetermination:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         remote = [a for a in data if a["id"] == "remote-agent"][0]
         assert remote["role"] == "agent"
 
-    def test_agent_role_no_providers(self, test_client: TestClient, test_db: Session):
+    def test_agent_role_no_providers(self, test_client: TestClient, test_db: Session, auth_headers: dict):
         """Agent without providers gets controller role."""
         host = models.Host(
             id="controller-only",
@@ -361,7 +364,7 @@ class TestAgentRoleDetermination:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/agents/detailed")
+        response = test_client.get("/agents/detailed", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         controller = [a for a in data if a["id"] == "controller-only"][0]

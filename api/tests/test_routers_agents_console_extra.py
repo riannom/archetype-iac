@@ -100,7 +100,7 @@ def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypat
     assert lab.state == "error"
 
 
-def test_heartbeat_and_list_get_delete(test_client, test_db, admin_auth_headers) -> None:
+def test_heartbeat_and_list_get_delete(test_client, test_db, auth_headers, admin_auth_headers) -> None:
     host = models.Host(
         id="agent-3",
         name="Agent Three",
@@ -118,18 +118,18 @@ def test_heartbeat_and_list_get_delete(test_client, test_db, admin_auth_headers)
     )
     assert hb.status_code == 200
 
-    agents = test_client.get("/agents")
+    agents = test_client.get("/agents", headers=auth_headers)
     assert agents.status_code == 200
     assert len(agents.json()) == 1
 
-    agent = test_client.get("/agents/agent-3")
+    agent = test_client.get("/agents/agent-3", headers=auth_headers)
     assert agent.status_code == 200
 
     deleted = test_client.delete("/agents/agent-3", headers=admin_auth_headers)
     assert deleted.status_code == 200
 
 
-def test_sync_strategy_validation(test_client, test_db) -> None:
+def test_sync_strategy_validation(test_client, test_db, auth_headers) -> None:
     host = models.Host(
         id="agent-4",
         name="Agent Four",
@@ -141,14 +141,14 @@ def test_sync_strategy_validation(test_client, test_db) -> None:
     test_db.add(host)
     test_db.commit()
 
-    bad = test_client.put("/agents/agent-4/sync-strategy", json={"strategy": "bad"})
+    bad = test_client.put("/agents/agent-4/sync-strategy", json={"strategy": "bad"}, headers=auth_headers)
     assert bad.status_code == 400
 
-    good = test_client.put("/agents/agent-4/sync-strategy", json={"strategy": "push"})
+    good = test_client.put("/agents/agent-4/sync-strategy", json={"strategy": "push"}, headers=auth_headers)
     assert good.status_code == 200
 
 
-def test_agent_images_and_reconcile(test_client, test_db, monkeypatch) -> None:
+def test_agent_images_and_reconcile(test_client, test_db, auth_headers, monkeypatch) -> None:
     host = models.Host(
         id="agent-5",
         name="Agent Five",
@@ -168,7 +168,7 @@ def test_agent_images_and_reconcile(test_client, test_db, monkeypatch) -> None:
     )
     test_db.commit()
 
-    images = test_client.get("/agents/agent-5/images")
+    images = test_client.get("/agents/agent-5/images", headers=auth_headers)
     assert images.status_code == 200
     assert images.json()["images"][0]["image_id"] == "img1"
 
@@ -177,11 +177,11 @@ def test_agent_images_and_reconcile(test_client, test_db, monkeypatch) -> None:
 
     monkeypatch.setattr("app.tasks.image_sync.reconcile_agent_images", fake_reconcile)
 
-    rec = test_client.post("/agents/agent-5/images/reconcile")
+    rec = test_client.post("/agents/agent-5/images/reconcile", headers=auth_headers)
     assert rec.status_code == 200
 
 
-def test_agent_interfaces_offline(test_client, test_db) -> None:
+def test_agent_interfaces_offline(test_client, test_db, auth_headers) -> None:
     host = models.Host(
         id="agent-6",
         name="Agent Six",
@@ -193,5 +193,5 @@ def test_agent_interfaces_offline(test_client, test_db) -> None:
     test_db.add(host)
     test_db.commit()
 
-    resp = test_client.get("/agents/agent-6/interfaces")
+    resp = test_client.get("/agents/agent-6/interfaces", headers=auth_headers)
     assert resp.status_code == 503

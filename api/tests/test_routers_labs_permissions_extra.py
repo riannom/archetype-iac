@@ -102,7 +102,7 @@ def test_permissions_flow(test_client, test_db, test_user, admin_user, auth_head
     # Non-owner/non-admin (viewer) cannot add permissions
     denied = test_client.post(
         f"/labs/{lab.id}/permissions",
-        json={"user_email": test_user.email, "role": "editor"},
+        json={"user_identifier": test_user.email, "role": "editor"},
         headers=auth_headers,
     )
     assert denied.status_code == 403
@@ -110,7 +110,7 @@ def test_permissions_flow(test_client, test_db, test_user, admin_user, auth_head
     # Owner can add
     added = test_client.post(
         f"/labs/{lab.id}/permissions",
-        json={"user_email": test_user.email, "role": "editor"},
+        json={"user_identifier": test_user.email, "role": "editor"},
         headers=admin_auth_headers,
     )
     assert added.status_code == 200

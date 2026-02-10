@@ -114,7 +114,7 @@ class TestAddPermission:
         """Test owner can add permissions."""
         response = test_client.post(
             f"/labs/{sample_lab.id}/permissions",
-            json={"user_email": admin_user.email, "role": "editor"},
+            json={"user_identifier": admin_user.email, "role": "editor"},
             headers=auth_headers,
         )
         assert response.status_code == 200
@@ -153,7 +153,7 @@ class TestAddPermission:
 
         response = test_client.post(
             f"/labs/{lab.id}/permissions",
-            json={"user_email": other_user.email, "role": "viewer"},
+            json={"user_identifier": other_user.email, "role": "viewer"},
             headers=admin_auth_headers,
         )
         assert response.status_code == 200
@@ -183,6 +183,7 @@ class TestAddPermission:
 
         # Create another user
         other_user = models.User(
+            username="otheruser",
             email="other@example.com",
             hashed_password=hash_password("password123"),
             is_active=True,
@@ -192,7 +193,7 @@ class TestAddPermission:
 
         response = test_client.post(
             f"/labs/{lab.id}/permissions",
-            json={"user_email": other_user.email, "role": "viewer"},
+            json={"user_identifier": other_user.email, "role": "viewer"},
             headers=auth_headers,
         )
         assert response.status_code == 403
@@ -206,7 +207,7 @@ class TestAddPermission:
         """Test adding permission for non-existent user fails."""
         response = test_client.post(
             f"/labs/{sample_lab.id}/permissions",
-            json={"user_email": "nonexistent@example.com", "role": "viewer"},
+            json={"user_identifier": "nonexistent@example.com", "role": "viewer"},
             headers=auth_headers,
         )
         assert response.status_code == 404
@@ -233,6 +234,7 @@ class TestAddPermission:
         """Test adding permissions with different roles."""
         for role in ["viewer", "editor", "admin"]:
             user = models.User(
+                username=f"{role}user",
                 email=f"{role}user@example.com",
                 hashed_password=hash_password("password123"),
                 is_active=True,
@@ -242,7 +244,7 @@ class TestAddPermission:
 
             response = test_client.post(
                 f"/labs/{sample_lab.id}/permissions",
-                json={"user_email": user.email, "role": role},
+                json={"user_identifier": user.email, "role": role},
                 headers=auth_headers,
             )
             assert response.status_code == 200
@@ -298,6 +300,7 @@ class TestDeletePermission:
 
         # Add permission
         other_user = models.User(
+            username="otheruser",
             email="other@example.com",
             hashed_password=hash_password("password123"),
             is_active=True,
@@ -343,6 +346,7 @@ class TestDeletePermission:
 
         # Create another permission to try to delete
         other_user = models.User(
+            username="otheruser2",
             email="other@example.com",
             hashed_password=hash_password("password123"),
             is_active=True,
