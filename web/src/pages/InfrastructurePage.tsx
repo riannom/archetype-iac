@@ -1657,15 +1657,13 @@ const InfrastructurePage: React.FC = () => {
                                       }`}>
                                         {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
                                       </span>
-                                      {config?.transport_mode && config.transport_mode !== 'management' ? (
-                                        <span className="text-[10px] text-sage-600 dark:text-sage-400">
-                                          Transport selected
-                                        </span>
-                                      ) : (
-                                        <span className="text-[10px] text-stone-400 dark:text-stone-500">
-                                          Management mode
-                                        </span>
-                                      )}
+                                      <span className={`text-[10px] ${
+                                        hasDataPlaneMtuTest
+                                          ? 'text-emerald-600 dark:text-emerald-400'
+                                          : 'text-stone-400 dark:text-stone-500'
+                                      }`}>
+                                        Effective: {hasDataPlaneMtuTest ? 'Transport' : 'Management'}
+                                      </span>
                                       {config?.transport_mode && config.transport_mode !== 'management' && !hasDataPlaneMtuTest && (
                                         <span className="text-[10px] text-amber-600 dark:text-amber-400">
                                           Run MTU test to enable transport
