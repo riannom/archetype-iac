@@ -313,6 +313,7 @@ const InfrastructurePage: React.FC = () => {
   const [savingMtuConfig, setSavingMtuConfig] = useState(false);
   const [selectedTransportMode, setSelectedTransportMode] = useState<string>('management');
   const [selectedTransportInterface, setSelectedTransportInterface] = useState<string>('');
+  const [useTransportInterface, setUseTransportInterface] = useState<boolean>(true);
 
   // ============================================================================
   // Data Loading
@@ -773,6 +774,9 @@ const InfrastructurePage: React.FC = () => {
       }
 
       setSelectedTransportMode(existingConfig?.transport_mode || 'management');
+      setUseTransportInterface(
+        (existingConfig?.transport_mode && existingConfig.transport_mode !== 'management') ? true : false
+      );
       if (existingConfig?.transport_mode === 'subinterface') {
         const matched = subifaces.find(i =>
           (existingConfig.parent_interface && existingConfig.vlan_id !== null
@@ -801,6 +805,7 @@ const InfrastructurePage: React.FC = () => {
     setDesiredMtu(9000);
     setSelectedTransportMode('management');
     setSelectedTransportInterface('');
+    setUseTransportInterface(true);
   };
 
   const saveMtuConfig = async () => {
@@ -875,15 +880,23 @@ const InfrastructurePage: React.FC = () => {
     const subifaces = transportIfaces.filter(i => i.parent_interface && i.vlan_id !== null);
     const dedicatedIfaces = transportIfaces.filter(i => !i.vlan_id);
 
+    if (selectedTransportMode === 'management') {
+      setUseTransportInterface(false);
+    }
+
     if (selectedTransportMode === 'subinterface' && !selectedTransportInterface && subifaces.length > 0) {
       setSelectedTransportInterface(subifaces[0].name);
-      setSelectedInterface(subifaces[0].name);
+      if (useTransportInterface) {
+        setSelectedInterface(subifaces[0].name);
+      }
     }
     if (selectedTransportMode === 'dedicated' && !selectedTransportInterface && dedicatedIfaces.length > 0) {
       setSelectedTransportInterface(dedicatedIfaces[0].name);
-      setSelectedInterface(dedicatedIfaces[0].name);
+      if (useTransportInterface) {
+        setSelectedInterface(dedicatedIfaces[0].name);
+      }
     }
-  }, [configModalData, managedInterfaces, selectedTransportMode, selectedTransportInterface]);
+  }, [configModalData, managedInterfaces, selectedTransportMode, selectedTransportInterface, useTransportInterface]);
 
   const getStatusBadgeStyle = (status: string): string => {
     switch (status) {
@@ -2360,6 +2373,7 @@ const InfrastructurePage: React.FC = () => {
                       onChange={(e) => {
                         const next = e.target.value;
                         setSelectedTransportMode(next);
+                        setUseTransportInterface(next !== 'management');
                         if (next === 'subinterface' && subifaces.length > 0) {
                           setSelectedTransportInterface(subifaces[0].name);
                           setSelectedInterface(subifaces[0].name);
@@ -2404,7 +2418,9 @@ const InfrastructurePage: React.FC = () => {
                           value={selectedTransportInterface}
                           onChange={(e) => {
                             setSelectedTransportInterface(e.target.value);
-                            setSelectedInterface(e.target.value);
+                            if (useTransportInterface) {
+                              setSelectedInterface(e.target.value);
+                            }
                           }}
                           className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
                         >
@@ -2426,7 +2442,9 @@ const InfrastructurePage: React.FC = () => {
                           value={selectedTransportInterface}
                           onChange={(e) => {
                             setSelectedTransportInterface(e.target.value);
-                            setSelectedInterface(e.target.value);
+                            if (useTransportInterface) {
+                              setSelectedInterface(e.target.value);
+                            }
                           }}
                           className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
                         >
@@ -2447,12 +2465,29 @@ const InfrastructurePage: React.FC = () => {
                 <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
                   Physical Interface
                 </label>
+                {selectedTransportMode !== 'management' && (
+                  <label className="flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400 mb-2">
+                    <input
+                      type="checkbox"
+                      checked={useTransportInterface}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setUseTransportInterface(checked);
+                        if (checked && selectedTransportInterface) {
+                          setSelectedInterface(selectedTransportInterface);
+                        }
+                      }}
+                    />
+                    Use transport interface for MTU (recommended)
+                  </label>
+                )}
                 {configModalData.interfaces.length === 0 ? (
                   <p className="text-sm text-stone-500">No physical interfaces found on this agent.</p>
                 ) : (
                   <select
                     value={selectedInterface}
                     onChange={(e) => setSelectedInterface(e.target.value)}
+                    disabled={selectedTransportMode !== 'management' && useTransportInterface}
                     className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
                   >
                     <option value="">Select an interface...</option>
