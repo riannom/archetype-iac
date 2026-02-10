@@ -3502,9 +3502,11 @@ async def _resolve_ovs_port(
                 lab_id, node_name, intf_index,
             )
             if port_name:
-                # Get current VLAN tag from OVS
-                vlans = libvirt_provider.get_node_vlans(lab_id, node_name)
-                vlan_tag = vlans[intf_index] if intf_index < len(vlans) else 0
+                # Prefer actual OVS tag (libvirt allocations can be stale)
+                vlan_tag = await _ovs_get_port_vlan(port_name)
+                if vlan_tag is None:
+                    vlans = libvirt_provider.get_node_vlans(lab_id, node_name)
+                    vlan_tag = vlans[intf_index] if intf_index < len(vlans) else 0
                 return OVSPortInfo(
                     port_name=port_name,
                     vlan_tag=vlan_tag,
@@ -3528,6 +3530,25 @@ async def _ovs_set_port_vlan(port_name: str, vlan_tag: int) -> bool:
         logger.error(f"Failed to set VLAN {vlan_tag} on port {port_name}: {stderr.decode().strip()}")
         return False
     return True
+
+
+async def _ovs_get_port_vlan(port_name: str) -> int | None:
+    """Get VLAN tag from an OVS port."""
+    proc = await asyncio.create_subprocess_exec(
+        "ovs-vsctl", "get", "port", port_name, "tag",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return None
+    tag = stdout.decode().strip()
+    if not tag or tag == "[]":
+        return None
+    try:
+        return int(tag)
+    except ValueError:
+        return None
 
 
 async def _ovs_allocate_unique_vlan(port_name: str) -> int | None:
