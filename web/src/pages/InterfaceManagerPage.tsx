@@ -275,21 +275,23 @@ export default function InterfaceManagerPage() {
       <header className="h-20 bg-white/30 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800 px-10 flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3 mb-2">
-            <button
-              onClick={() => navigate('/infrastructure?tab=network')}
-              className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
-              title="Back to infrastructure"
-            >
-              <i className="fa-solid fa-arrow-left"></i>
-            </button>
             <h1 className="text-2xl font-bold text-stone-900 dark:text-white">Interface Manager</h1>
           </div>
-          <p className="text-stone-500 text-sm ml-7">
+          <p className="text-stone-500 text-sm">
             Manage provisioned network interfaces across all agent hosts.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate('/infrastructure?tab=network')}
+            className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
+            title="Back to infrastructure"
+          >
+            <i className="fa-solid fa-arrow-left text-xs"></i>
+            <span className="text-[10px] font-bold uppercase">Back</span>
+          </button>
+
           <AdminMenuButton />
         </div>
       </header>

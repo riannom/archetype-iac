@@ -181,7 +181,7 @@ class NodeLifecycleManager:
         # Phase: Resolve agents (may spawn sub-jobs for other agents)
         if not await self._resolve_agents():
             if self.job.status == JobStatus.FAILED.value:
-                record_job_failed(self.job.action)
+                record_job_failed(self.job.action, failure_message=self.job.log_path)
             return LifecycleResult(success=False, log=self.log_parts)
 
         # Mark job running
@@ -189,7 +189,11 @@ class NodeLifecycleManager:
         self.job.agent_id = self.agent.id
         self.job.started_at = datetime.now(timezone.utc)
         self.session.commit()
-        record_job_started(self.job.action)
+        queue_wait = (
+            (self.job.started_at - self.job.created_at).total_seconds()
+            if self.job.started_at and self.job.created_at else None
+        )
+        record_job_started(self.job.action, queue_wait_seconds=queue_wait)
 
         await self._broadcast_job_progress(
             "running",
@@ -212,7 +216,11 @@ class NodeLifecycleManager:
                     (self.job.completed_at - self.job.started_at).total_seconds()
                     if self.job.completed_at and self.job.started_at else None
                 )
-                record_job_failed(self.job.action, duration_seconds=duration)
+                record_job_failed(
+                    self.job.action,
+                    duration_seconds=duration,
+                    failure_message=self.job.log_path,
+                )
             return LifecycleResult(success=False, log=self.log_parts)
 
         # Categorize nodes by action
@@ -255,7 +263,11 @@ class NodeLifecycleManager:
                         (self.job.completed_at - self.job.started_at).total_seconds()
                         if self.job.completed_at and self.job.started_at else None
                     )
-                    record_job_failed(self.job.action, duration_seconds=duration)
+                    record_job_failed(
+                        self.job.action,
+                        duration_seconds=duration,
+                        failure_message=self.job.log_path,
+                    )
                 return LifecycleResult(success=True, log=self.log_parts)
             nodes_need_deploy, nodes_need_start = result
 
@@ -2348,7 +2360,11 @@ class NodeLifecycleManager:
         if self.job.status == JobStatus.COMPLETED.value:
             record_job_completed(self.job.action, duration_seconds=duration or 0.0)
         elif self.job.status == JobStatus.FAILED.value:
-            record_job_failed(self.job.action, duration_seconds=duration)
+            record_job_failed(
+                self.job.action,
+                duration_seconds=duration,
+                failure_message=self.job.log_path,
+            )
 
         logger.info(
             f"Job {self.job.id} completed with status: {self.job.status}"

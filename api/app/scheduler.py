@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from sqlalchemy import text
@@ -76,6 +76,14 @@ async def healthz(request: Request) -> JSONResponse:
     except Exception:
         pass
     return JSONResponse(result)
+
+
+async def metrics(_: Request) -> Response:
+    """Prometheus metrics endpoint for scheduler process."""
+    from app.metrics import get_metrics
+
+    content, content_type = get_metrics()
+    return Response(content=content, media_type=content_type)
 
 
 async def startup():
@@ -145,7 +153,7 @@ async def shutdown():
 
 
 app = Starlette(
-    routes=[Route("/healthz", healthz)],
+    routes=[Route("/healthz", healthz), Route("/metrics", metrics)],
     on_startup=[startup],
     on_shutdown=[shutdown],
 )

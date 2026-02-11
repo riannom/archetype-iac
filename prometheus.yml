@@ -34,6 +34,20 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 30s
 
+  # Archetype Scheduler metrics
+  - job_name: "archetype-scheduler"
+    static_configs:
+      - targets: ["scheduler:8002"]
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # Archetype Worker metrics (host network)
+  - job_name: "archetype-worker"
+    static_configs:
+      - targets: ["host.docker.internal:8003"]
+    metrics_path: /metrics
+    scrape_interval: 30s
+
   # Prometheus self-monitoring
   - job_name: "prometheus"
     static_configs:

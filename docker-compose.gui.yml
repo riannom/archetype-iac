@@ -116,7 +116,7 @@ services:
       dockerfile: Dockerfile.api
       args:
         NETLAB_REF: ${NETLAB_REF:-release_26.01.01}
-    command: ["rq", "worker", "archetype"]
+    command: ["python", "-m", "app.worker"]
     network_mode: host
     privileged: true
     depends_on:
@@ -130,6 +130,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - WORKER_METRICS_PORT=${WORKER_METRICS_PORT:-8003}
       - VRNETLAB_PATH=${VRNETLAB_PATH:-/opt/vrnetlab}
       - QCOW2_STORE=${QCOW2_STORE:-/var/lib/archetype/images}
     volumes:
@@ -273,6 +274,7 @@ services:
       - "${PROMETHEUS_PORT:-9090}:9090"
     extra_hosts:
       - "local-agent:host-gateway"
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro

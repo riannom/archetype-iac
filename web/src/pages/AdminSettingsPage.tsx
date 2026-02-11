@@ -104,6 +104,15 @@ export default function AdminSettingsPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate("/")}
+            className="flex items-center gap-2 px-3 py-2 glass-control text-stone-700 dark:text-stone-100 rounded-lg transition-all"
+            title="Back to workspace"
+          >
+            <i className="fa-solid fa-arrow-left text-xs"></i>
+            <span className="text-[10px] font-bold uppercase">Back</span>
+          </button>
+
           <AdminMenuButton />
 
           <button
@@ -112,14 +121,6 @@ export default function AdminSettingsPage() {
             title={`Switch to ${effectiveMode === "dark" ? "light" : "dark"} mode`}
           >
             <i className={`fa-solid ${effectiveMode === "dark" ? "fa-sun" : "fa-moon"} text-sm`}></i>
-          </button>
-          <button
-            onClick={() => navigate("/")}
-            className="flex items-center gap-2 px-3 py-2 glass-control text-stone-700 dark:text-stone-100 rounded-lg transition-all"
-            title="Back to workspace"
-          >
-            <i className="fa-solid fa-arrow-left text-xs"></i>
-            <span className="text-[10px] font-bold uppercase">Back</span>
           </button>
         </div>
       </header>

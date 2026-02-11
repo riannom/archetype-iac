@@ -87,8 +87,6 @@ const NodesPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            <AdminMenuButton />
-
             <button
               onClick={() => navigate('/')}
               className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
@@ -96,6 +94,8 @@ const NodesPage: React.FC = () => {
               <i className="fa-solid fa-arrow-left text-xs"></i>
               <span className="text-[10px] font-bold uppercase">Back</span>
             </button>
+
+            <AdminMenuButton />
 
             <button
               onClick={() => setShowThemeSelector(true)}

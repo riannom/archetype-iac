@@ -18,6 +18,7 @@ The /metrics endpoint exposes these in Prometheus format.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 try:
@@ -72,6 +73,19 @@ if PROMETHEUS_AVAILABLE:
         "Job execution duration in seconds",
         ["action"],
         buckets=(5, 10, 30, 60, 120, 300, 600, 900, 1200, 1800, float("inf")),
+    )
+
+    job_queue_wait = Histogram(
+        "archetype_job_queue_wait_seconds",
+        "Time jobs spend queued before execution",
+        ["action"],
+        buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, float("inf")),
+    )
+
+    job_failures = Counter(
+        "archetype_job_failures_total",
+        "Total failed jobs categorized by reason",
+        ["action", "reason"],
     )
 
     jobs_active = Gauge(
@@ -197,6 +211,8 @@ else:
     nodes_by_host = DummyMetric()
     jobs_total = DummyMetric()
     job_duration = DummyMetric()
+    job_queue_wait = DummyMetric()
+    job_failures = DummyMetric()
     jobs_active = DummyMetric()
     agents_online = DummyMetric()
     agents_total = DummyMetric()
@@ -499,11 +515,47 @@ def get_metrics() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
 
 
-def record_job_started(action: str) -> None:
+def _normalize_reason_label(value: str) -> str:
+    lowered = value.strip().lower()
+    lowered = re.sub(r"[^a-z0-9_]+", "_", lowered)
+    lowered = re.sub(r"_+", "_", lowered).strip("_")
+    if not lowered:
+        return "unknown"
+    return lowered[:64]
+
+
+def infer_job_failure_reason(message: str | None) -> str:
+    """Infer a bounded failure-reason label from log/error text."""
+    if not message:
+        return "unknown"
+
+    text = message.lower()
+    checks: list[tuple[str, str]] = [
+        ("timed out after 1200s", "timeout_1200s"),
+        ("timed out after 300s", "timeout_300s"),
+        ("timed out after", "timeout"),
+        ("no healthy agent available", "no_healthy_agent"),
+        ("assigned host", "host_assignment_offline"),
+        ("explicit host assignments failed", "host_assignment_failed"),
+        ("no image found", "missing_image"),
+        ("parent job completed or missing", "orphaned_child"),
+        ("agent became unavailable", "agent_unavailable"),
+        ("insufficient resources", "insufficient_resources"),
+        ("capacity", "capacity_check_failed"),
+    ]
+    for needle, reason in checks:
+        if needle in text:
+            return reason
+    return "unknown"
+
+
+def record_job_started(action: str, queue_wait_seconds: float | None = None) -> None:
     """Record a job start event."""
     if not PROMETHEUS_AVAILABLE:
         return
     jobs_total.labels(action=action, status="started").inc()
+    if queue_wait_seconds is not None:
+        job_queue_wait.labels(action=action).observe(max(0.0, queue_wait_seconds))
 
 
 def record_job_completed(action: str, duration_seconds: float) -> None:
@@ -514,11 +566,18 @@ def record_job_completed(action: str, duration_seconds: float) -> None:
     job_duration.labels(action=action).observe(duration_seconds)
 
 
-def record_job_failed(action: str, duration_seconds: float | None = None) -> None:
+def record_job_failed(
+    action: str,
+    duration_seconds: float | None = None,
+    reason: str | None = None,
+    failure_message: str | None = None,
+) -> None:
     """Record a job failure event."""
     if not PROMETHEUS_AVAILABLE:
         return
     jobs_total.labels(action=action, status="failed").inc()
+    resolved_reason = reason or infer_job_failure_reason(failure_message)
+    job_failures.labels(action=action, reason=_normalize_reason_label(resolved_reason)).inc()
     if duration_seconds is not None:
         job_duration.labels(action=action).observe(duration_seconds)
 
