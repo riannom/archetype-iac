@@ -13,7 +13,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_job_duration_seconds_bucket[5m])) by (le, action))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_job_duration_seconds_bucket{job=\"archetype-worker\"}[5m])) by (le, action))",
           "legendFormat": "P95 {{action}}",
           "refId": "A"
         }
@@ -31,7 +31,7 @@
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "sum(archetype_jobs_active)",
+          "expr": "sum(archetype_jobs_active{job=\"archetype-api\"})",
           "refId": "A"
         }
       ],
@@ -57,7 +57,7 @@
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "targets": [
         {
-          "expr": "archetype_agents_online",
+          "expr": "archetype_agents_online{job=\"archetype-api\"}",
           "refId": "A"
         }
       ],
@@ -82,17 +82,17 @@
       "gridPos": { "h": 4, "w": 12, "x": 12, "y": 4 },
       "targets": [
         {
-          "expr": "archetype_enforcement_pending",
+          "expr": "archetype_enforcement_pending{job=\"archetype-api\"}",
           "legendFormat": "Pending",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(archetype_enforcement_total{result=\"success\"}[5m]))",
+          "expr": "sum(rate(archetype_enforcement_total{job=\"archetype-api\",result=\"success\"}[5m]))",
           "legendFormat": "Success/s",
           "refId": "B"
         },
         {
-          "expr": "sum(rate(archetype_enforcement_total{result=\"failed\"}[5m]))",
+          "expr": "sum(rate(archetype_enforcement_total{job=\"archetype-api\",result=\"failed\"}[5m]))",
           "legendFormat": "Failed/s",
           "refId": "C"
         }
@@ -110,7 +110,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "sum(archetype_nodes_total) by (state)",
+          "expr": "sum(archetype_nodes_total{job=\"archetype-api\"}) by (state)",
           "legendFormat": "{{state}}",
           "refId": "A"
         }
@@ -137,7 +137,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_job_queue_wait_seconds_bucket[5m])) by (le, action))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_job_queue_wait_seconds_bucket{job=\"archetype-worker\"}[5m])) by (le, action))",
           "legendFormat": "P95 {{action}}",
           "refId": "A"
         }
@@ -155,9 +155,42 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "targets": [
         {
-          "expr": "sum by (action, reason) (increase(archetype_job_failures_total[1h]))",
+          "expr": "sum by (action, reason) (increase(archetype_job_failures_total{job=\"archetype-worker\"}[1h]))",
           "legendFormat": "{{action}} / {{reason}}",
           "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "datasource": { "type": "prometheus", "uid": "prometheus" }
+    },
+    {
+      "id": 9,
+      "title": "Metrics Coverage Health (2h)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(increase(archetype_jobs_total{job=\"archetype-worker\",status=\"started\"}[2h]))",
+          "legendFormat": "jobs_started",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(archetype_job_duration_seconds_count{job=\"archetype-worker\"}[2h]))",
+          "legendFormat": "job_duration_samples",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(increase(archetype_job_queue_wait_seconds_count{job=\"archetype-worker\"}[2h]))",
+          "legendFormat": "job_queue_wait_samples",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(increase(archetype_nlm_phase_duration_seconds_count{job=\"archetype-worker\"}[2h]))",
+          "legendFormat": "nlm_phase_samples",
+          "refId": "D"
         }
       ],
       "fieldConfig": {

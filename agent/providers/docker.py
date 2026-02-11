@@ -2627,12 +2627,12 @@ username admin privilege 15 role network-admin nopassword
             container = await asyncio.to_thread(self.docker.containers.get, container_name)
 
             # First attempt to start
+            import time as _time
+            from agent.metrics import docker_api_duration
+            _docker_t0 = _time.monotonic()
+            _docker_status = "success"
             try:
-                import time as _time
-                from agent.metrics import docker_api_duration
-                _docker_t0 = _time.monotonic()
                 await asyncio.to_thread(container.start)
-                docker_api_duration.labels(operation="start", status="success").observe(_time.monotonic() - _docker_t0)
             except APIError as e:
                 # Check if this is a stale network error
                 error_msg = str(e).lower()
@@ -2649,9 +2649,18 @@ username admin privilege 15 role network-admin nopassword
                         await asyncio.to_thread(container.start)
                         logger.info(f"Successfully started {container_name} after network recovery")
                     else:
+                        _docker_status = "error"
                         raise  # Re-raise if recovery didn't help
                 else:
+                    _docker_status = "error"
                     raise  # Re-raise non-network errors
+            except Exception:
+                _docker_status = "error"
+                raise
+            finally:
+                docker_api_duration.labels(operation="start", status=_docker_status).observe(
+                    _time.monotonic() - _docker_t0
+                )
 
             await asyncio.sleep(1)
             await asyncio.to_thread(container.reload)
@@ -2722,8 +2731,16 @@ username admin privilege 15 role network-admin nopassword
             import time as _time
             from agent.metrics import docker_api_duration
             _docker_t0 = _time.monotonic()
-            await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
-            docker_api_duration.labels(operation="stop", status="success").observe(_time.monotonic() - _docker_t0)
+            _docker_status = "success"
+            try:
+                await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
+            except Exception:
+                _docker_status = "error"
+                raise
+            finally:
+                docker_api_duration.labels(operation="stop", status=_docker_status).observe(
+                    _time.monotonic() - _docker_t0
+                )
             await asyncio.to_thread(container.reload)
 
             # Clear post-boot state so commands run again on restart
@@ -2848,38 +2865,44 @@ username admin privilege 15 role network-admin nopassword
 
             import time as _time
             from agent.metrics import docker_api_duration
+            _docker_t0 = _time.monotonic()
+            _docker_status = "success"
 
-            if self.use_ovs_plugin:
-                # Attach to first OVS network during creation
-                first_network = f"{self._lab_network_prefix(lab_id)}-eth1"
-                container_config["network"] = first_network
-                logger.info(f"Creating container {log_name} with image {container_config['image']}")
+            try:
+                if self.use_ovs_plugin:
+                    # Attach to first OVS network during creation
+                    first_network = f"{self._lab_network_prefix(lab_id)}-eth1"
+                    container_config["network"] = first_network
+                    logger.info(f"Creating container {log_name} with image {container_config['image']}")
 
-                _docker_t0 = _time.monotonic()
-                container = await asyncio.to_thread(
-                    lambda cfg=container_config: self.docker.containers.create(**cfg)
+                    container = await asyncio.to_thread(
+                        lambda cfg=container_config: self.docker.containers.create(**cfg)
+                    )
+
+                    # Attach to remaining interface networks (eth2, eth3, ...)
+                    await self._attach_container_to_networks(
+                        container=container,
+                        lab_id=lab_id,
+                        interface_count=iface_count - 1,
+                        interface_prefix="eth",
+                        start_index=2,
+                    )
+
+                    await asyncio.sleep(0.5)
+                else:
+                    container_config["network_mode"] = "none"
+                    logger.info(f"Creating container {log_name} with image {container_config['image']}")
+
+                    container = await asyncio.to_thread(
+                        lambda cfg=container_config: self.docker.containers.create(**cfg)
+                    )
+            except Exception:
+                _docker_status = "error"
+                raise
+            finally:
+                docker_api_duration.labels(operation="create", status=_docker_status).observe(
+                    _time.monotonic() - _docker_t0
                 )
-                docker_api_duration.labels(operation="create", status="success").observe(_time.monotonic() - _docker_t0)
-
-                # Attach to remaining interface networks (eth2, eth3, ...)
-                await self._attach_container_to_networks(
-                    container=container,
-                    lab_id=lab_id,
-                    interface_count=iface_count - 1,
-                    interface_prefix="eth",
-                    start_index=2,
-                )
-
-                await asyncio.sleep(0.5)
-            else:
-                container_config["network_mode"] = "none"
-                logger.info(f"Creating container {log_name} with image {container_config['image']}")
-
-                _docker_t0 = _time.monotonic()
-                container = await asyncio.to_thread(
-                    lambda cfg=container_config: self.docker.containers.create(**cfg)
-                )
-                docker_api_duration.labels(operation="create", status="success").observe(_time.monotonic() - _docker_t0)
 
             return NodeActionResult(
                 success=True,
@@ -2921,8 +2944,16 @@ username admin privilege 15 role network-admin nopassword
                 import time as _time
                 from agent.metrics import docker_api_duration
                 _docker_t0 = _time.monotonic()
-                await asyncio.to_thread(container.remove, force=True, v=True)
-                docker_api_duration.labels(operation="remove", status="success").observe(_time.monotonic() - _docker_t0)
+                _docker_status = "success"
+                try:
+                    await asyncio.to_thread(container.remove, force=True, v=True)
+                except Exception:
+                    _docker_status = "error"
+                    raise
+                finally:
+                    docker_api_duration.labels(operation="remove", status=_docker_status).observe(
+                        _time.monotonic() - _docker_t0
+                    )
                 logger.info(f"Removed container {container_name}")
             except NotFound:
                 logger.info(f"Container {container_name} not found, already removed")

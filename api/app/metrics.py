@@ -531,17 +531,31 @@ def infer_job_failure_reason(message: str | None) -> str:
 
     text = message.lower()
     checks: list[tuple[str, str]] = [
+        ("job timed out after maximum retries", "timeout_retries_exhausted"),
         ("timed out after 1200s", "timeout_1200s"),
         ("timed out after 300s", "timeout_300s"),
         ("timed out after", "timeout"),
+        ("retry failed: no healthy agent available", "no_healthy_agent"),
         ("no healthy agent available", "no_healthy_agent"),
-        ("assigned host", "host_assignment_offline"),
-        ("explicit host assignments failed", "host_assignment_failed"),
-        ("no image found", "missing_image"),
-        ("parent job completed or missing", "orphaned_child"),
         ("agent became unavailable", "agent_unavailable"),
+        ("agent unavailable", "agent_unavailable"),
+        ("connection refused", "agent_connection_refused"),
+        ("name or service not known", "agent_dns_failure"),
+        ("host unreachable", "agent_unreachable"),
+        ("network is unreachable", "agent_unreachable"),
+        ("cannot deploy - explicit host assignments failed", "host_assignment_failed"),
+        ("missing or unhealthy agents for hosts", "host_assignment_failed"),
+        ("assigned host", "host_assignment_offline"),
+        ("no image found", "missing_image"),
+        ("docker image not found", "missing_image"),
+        ("required images not available on agent", "missing_image"),
+        ("parent job completed or missing", "orphaned_child"),
         ("insufficient resources", "insufficient_resources"),
         ("capacity", "capacity_check_failed"),
+        ("link setup failed", "link_setup_failed"),
+        ("deployment failed on one or more hosts", "deploy_partial_failure"),
+        ("rollback failed", "deploy_rollback_failed"),
+        ("stale - cleared after api restart", "stale_after_restart"),
     ]
     for needle, reason in checks:
         if needle in text:

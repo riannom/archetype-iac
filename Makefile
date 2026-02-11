@@ -1,4 +1,4 @@
-.PHONY: audit audit-ovs test-agent test-api
+.PHONY: audit audit-ovs test-agent test-api observability-canary
 
 audit:
 	python3 scripts/cleanup_audit.py
@@ -11,3 +11,6 @@ test-agent:
 
 test-api:
 	pytest -q api/tests
+
+observability-canary:
+	python3 scripts/observability_canary.py

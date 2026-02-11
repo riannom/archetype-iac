@@ -9,10 +9,10 @@ groups:
       # Alert when a job has been running for more than 20 minutes
       - alert: StuckJob
         expr: |
-          sum(archetype_jobs_active) > 0
+          sum(archetype_jobs_active{job="archetype-api"}) > 0
           and
           (
-            (sum(increase(archetype_jobs_total{status=~"completed|failed"}[20m])) or on() vector(0)) == 0
+            (sum(increase(archetype_jobs_total{job="archetype-worker",status=~"completed|failed"}[20m])) or on() vector(0)) == 0
           )
         for: 20m
         labels:
@@ -25,8 +25,8 @@ groups:
       - alert: HighJobFailureRate
         expr: |
           (
-            sum(rate(archetype_jobs_total{status="failed"}[5m])) /
-            sum(rate(archetype_jobs_total[5m]))
+            sum(rate(archetype_jobs_total{job="archetype-worker",status="failed"}[5m])) /
+            sum(rate(archetype_jobs_total{job="archetype-worker"}[5m]))
           ) > 0.3
         for: 5m
         labels:
@@ -35,11 +35,47 @@ groups:
           summary: "High job failure rate detected"
           description: "More than 30% of jobs are failing in the last 5 minutes."
 
+      # Alert when worker is executing jobs but key latency metrics are missing
+      - alert: JobMetricsCoverageGap
+        expr: |
+          (
+            sum(increase(archetype_jobs_total{job="archetype-worker",status="started"}[2h])) > 0
+          )
+          and
+          (
+            (sum(increase(archetype_job_duration_seconds_count{job="archetype-worker"}[2h])) == 0)
+            or
+            (sum(increase(archetype_job_queue_wait_seconds_count{job="archetype-worker"}[2h])) == 0)
+          )
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job metrics coverage gap detected"
+          description: "Worker processed jobs in the last 2h but duration/queue-wait histograms had no samples."
+
+      # Alert when sync activity exists but NLM phase timings are missing
+      - alert: NlmMetricsCoverageGap
+        expr: |
+          (
+            sum(increase(archetype_jobs_total{job="archetype-worker",action="sync",status="started"}[2h])) > 0
+          )
+          and
+          (
+            sum(increase(archetype_nlm_phase_duration_seconds_count{job="archetype-worker"}[2h])) == 0
+          )
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NLM timing metrics coverage gap detected"
+          description: "Sync jobs ran in the last 2h but NLM phase histograms had no samples."
+
   - name: archetype-agents
     rules:
       # Alert when no agents are online
       - alert: NoHealthyAgents
-        expr: archetype_agents_online == 0
+        expr: archetype_agents_online{job="archetype-api"} == 0
         for: 2m
         labels:
           severity: critical
@@ -49,7 +85,7 @@ groups:
 
       # Alert when agent is experiencing high CPU
       - alert: AgentHighCPU
-        expr: archetype_agent_cpu_percent > 90
+        expr: archetype_agent_cpu_percent{job="archetype-api"} > 90
         for: 5m
         labels:
           severity: warning
@@ -59,7 +95,7 @@ groups:
 
       # Alert when agent is experiencing high memory usage
       - alert: AgentHighMemory
-        expr: archetype_agent_memory_percent > 90
+        expr: archetype_agent_memory_percent{job="archetype-api"} > 90
         for: 5m
         labels:
           severity: warning
@@ -71,7 +107,7 @@ groups:
     rules:
       # Alert when enforcement failure rate is high
       - alert: HighEnforcementFailures
-        expr: rate(archetype_enforcement_failures_total[5m]) > 0.1
+        expr: rate(archetype_enforcement_failures_total{job="archetype-api"}[5m]) > 0.1
         for: 10m
         labels:
           severity: warning
@@ -81,7 +117,7 @@ groups:
 
       # Alert when many nodes have pending enforcement
       - alert: ManyPendingEnforcements
-        expr: archetype_enforcement_pending > 10
+        expr: archetype_enforcement_pending{job="archetype-api"} > 10
         for: 10m
         labels:
           severity: warning
@@ -93,7 +129,7 @@ groups:
     rules:
       # Alert when labs are stuck in transitional states
       - alert: LabsStuckInTransition
-        expr: sum(archetype_labs_total{state=~"starting|stopping"}) > 0
+        expr: sum(archetype_labs_total{job="archetype-api",state=~"starting|stopping"}) > 0
         for: 30m
         labels:
           severity: warning
@@ -103,7 +139,7 @@ groups:
 
       # Alert when many labs are in error state
       - alert: ManyLabsInError
-        expr: sum(archetype_labs_total{state="error"}) > 3
+        expr: sum(archetype_labs_total{job="archetype-api",state="error"}) > 3
         for: 5m
         labels:
           severity: warning
@@ -115,7 +151,7 @@ groups:
     rules:
       # Alert when idle-in-transaction connections accumulate (potential leak)
       - alert: IdleInTransactionConnections
-        expr: archetype_db_idle_in_transaction > 2
+        expr: archetype_db_idle_in_transaction{job="archetype-api"} > 2
         for: 2m
         labels:
           severity: warning
@@ -125,7 +161,7 @@ groups:
 
       # Critical: Many idle-in-transaction connections
       - alert: IdleInTransactionConnectionsCritical
-        expr: archetype_db_idle_in_transaction > 5
+        expr: archetype_db_idle_in_transaction{job="archetype-api"} > 5
         for: 1m
         labels:
           severity: critical
@@ -137,7 +173,7 @@ groups:
     rules:
       # Alert when node deploy phase P95 is slow
       - alert: SlowNodeDeploy
-        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{phase="container_deploy",status="success"}[10m])) by (le)) > 120
+        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job="archetype-worker",phase="container_deploy",status="success"}[10m])) by (le)) > 120
         for: 10m
         labels:
           severity: warning
@@ -145,15 +181,15 @@ groups:
           summary: "Slow node deploy operations"
           description: "P95 container deploy duration exceeds 120 seconds for the last 10 minutes."
 
-      # Alert when boot wait P95 is very slow
+      # Alert when container start P95 is very slow
       - alert: SlowBootWait
-        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{phase="boot_wait",status="success"}[15m])) by (le)) > 300
+        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job="archetype-worker",phase="container_start",status="success"}[15m])) by (le)) > 300
         for: 15m
         labels:
           severity: warning
         annotations:
-          summary: "Slow node boot wait times"
-          description: "P95 boot wait duration exceeds 300 seconds for the last 15 minutes."
+          summary: "Slow node start times"
+          description: "P95 container start duration exceeds 300 seconds for the last 15 minutes."
 
       # Alert when agent operation errors are high
       - alert: HighAgentOperationErrors
