@@ -1402,11 +1402,102 @@ const StudioPage: React.FC = () => {
   };
 
   const handleUpdateLink = (id: string, updates: Partial<Link>) => {
-    setLinks((prev) => prev.map((link) => (link.id === id ? { ...link, ...updates } : link)));
+    const prevLink = linksRef.current.find((link) => link.id === id);
+    if (!prevLink) return;
+
+    const nextLink = { ...prevLink, ...updates };
+    setLinks((prev) => prev.map((link) => (link.id === id ? nextLink : link)));
+
     // Auto-save topology if interface assignments changed
-    if (updates.sourceInterface || updates.targetInterface) {
+    const interfacesChanged = updates.sourceInterface || updates.targetInterface;
+    if (interfacesChanged) {
       triggerTopologySave();
     }
+
+    if (!interfacesChanged || !activeLab) return;
+
+    const sourceNode = nodesRef.current.find((node) => node.id === nextLink.source);
+    const targetNode = nodesRef.current.find((node) => node.id === nextLink.target);
+    if (!sourceNode || !targetNode) return;
+    if (!isDeviceNode(sourceNode) || !isDeviceNode(targetNode)) return;
+
+    const sourceState = runtimeStates[sourceNode.id];
+    const targetState = runtimeStates[targetNode.id];
+    const isRunning = sourceState === 'running' && targetState === 'running';
+
+    if (!isRunning) {
+      return;
+    }
+
+    const sourceName = sourceNode.container_name || sourceNode.name;
+    const targetName = targetNode.container_name || targetNode.name;
+
+    const oldSourceIface = prevLink.sourceInterface || '';
+    const oldTargetIface = prevLink.targetInterface || '';
+    const newSourceIface = nextLink.sourceInterface || '';
+    const newTargetIface = nextLink.targetInterface || '';
+
+    if (oldSourceIface === newSourceIface && oldTargetIface === newTargetIface) {
+      return;
+    }
+
+    if (!newSourceIface || !newTargetIface) {
+      return;
+    }
+
+    const hotSwapLink = async () => {
+      try {
+        if (oldSourceIface && oldTargetIface) {
+          const oldLinkId = `${sourceName}:${oldSourceIface}-${targetName}:${oldTargetIface}`;
+          await studioRequest(`/labs/${activeLab.id}/hot-disconnect/${encodeURIComponent(oldLinkId)}`, {
+            method: 'DELETE',
+          });
+        }
+
+        const response = await studioRequest<{ success: boolean; error?: string }>(
+          `/labs/${activeLab.id}/hot-connect`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              source_node: sourceName,
+              source_interface: newSourceIface,
+              target_node: targetName,
+              target_interface: newTargetIface,
+            }),
+          }
+        );
+
+        if (!response.success) {
+          throw new Error(response.error || 'Hot-connect failed');
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Hot-connect failed';
+        console.error('Hot-connect failed:', error);
+        addTaskLogEntry('error', `Hot-connect failed for ${sourceName} ↔ ${targetName}: ${message}`);
+        addNotification('error', 'Hot-connect failed', message);
+
+        setLinks((prev) => prev.map((link) => (link.id === id ? prevLink : link)));
+        triggerTopologySave();
+
+        if (oldSourceIface && oldTargetIface) {
+          try {
+            await studioRequest(`/labs/${activeLab.id}/hot-connect`, {
+              method: 'POST',
+              body: JSON.stringify({
+                source_node: sourceName,
+                source_interface: oldSourceIface,
+                target_node: targetName,
+                target_interface: oldTargetIface,
+              }),
+            });
+          } catch (restoreError) {
+            console.error('Failed to restore previous link after hot-connect failure:', restoreError);
+          }
+        }
+      }
+    };
+
+    void hotSwapLink();
   };
 
   const handleUpdateAnnotation = (id: string, updates: Partial<Annotation>) => {
