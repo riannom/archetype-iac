@@ -281,12 +281,12 @@ export function useBioluminescentBeach(
       // Beach/shore (sandy area)
       const beachGradient = ctx.createLinearGradient(0, shoreY - 20, 0, shoreY + 30);
       if (darkMode) {
-        beachGradient.addColorStop(0, '#1a1510');
-        beachGradient.addColorStop(0.5, '#1f1a14');
+        beachGradient.addColorStop(0, '#100e1e');
+        beachGradient.addColorStop(0.5, '#0e1225');
         beachGradient.addColorStop(1, 'transparent');
       } else {
-        beachGradient.addColorStop(0, '#2a2520');
-        beachGradient.addColorStop(0.5, '#252018');
+        beachGradient.addColorStop(0, '#1a1830');
+        beachGradient.addColorStop(0.5, '#161428');
         beachGradient.addColorStop(1, 'transparent');
       }
 
