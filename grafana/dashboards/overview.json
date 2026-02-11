@@ -155,7 +155,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "targets": [
         {
-          "expr": "sum by (action, reason) (increase(archetype_job_failures_total{job=\"archetype-api\"}[1h]))",
+          "expr": "sum by (action, reason) (increase(archetype_job_failures_total{job=\"archetype-worker\"}[1h]))",
           "legendFormat": "{{action}} / {{reason}}",
           "refId": "A"
         }

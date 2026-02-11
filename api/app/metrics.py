@@ -524,6 +524,22 @@ def _normalize_reason_label(value: str) -> str:
     return lowered[:64]
 
 
+def _normalize_action_label(action: str | None) -> str:
+    """Normalize verbose action strings to bounded metric labels."""
+    if not action:
+        return "unknown"
+    action = action.strip().lower()
+    if not action:
+        return "unknown"
+    if action.startswith("sync:"):
+        return "sync"
+    if action.startswith("node:"):
+        return "node"
+    if action.startswith("links:"):
+        return "links"
+    return action.split(":")[0]
+
+
 def infer_job_failure_reason(message: str | None) -> str:
     """Infer a bounded failure-reason label from log/error text."""
     if not message:
@@ -559,8 +575,15 @@ def infer_job_failure_reason(message: str | None) -> str:
         ("link setup failed", "link_setup_failed"),
         ("deployment failed on one or more hosts", "deploy_partial_failure"),
         ("rollback failed", "deploy_rollback_failed"),
+        ("per-link tunnel creation failed", "link_tunnel_creation_failed"),
+        ("could not find ovs port", "ovs_port_missing"),
         ("stale - cleared after api restart", "stale_after_restart"),
         ("docker api error", "docker_api_error"),
+        ("domain not found", "libvirt_domain_not_found"),
+        ("unsupported configuration", "libvirt_unsupported_configuration"),
+        ("libvirt error", "libvirt_error"),
+        ("completed with 1 error", "partial_failure"),
+        ("completed with ", "partial_failure"),
         ("container creation failed", "container_create_failed"),
         ("unknown action", "unknown_action"),
         ("job execution failed on agent", "agent_job_error"),
@@ -582,17 +605,19 @@ def record_job_started(action: str, queue_wait_seconds: float | None = None) -> 
     """Record a job start event."""
     if not PROMETHEUS_AVAILABLE:
         return
-    jobs_total.labels(action=action, status="started").inc()
+    normalized_action = _normalize_action_label(action)
+    jobs_total.labels(action=normalized_action, status="started").inc()
     if queue_wait_seconds is not None:
-        job_queue_wait.labels(action=action).observe(max(0.0, queue_wait_seconds))
+        job_queue_wait.labels(action=normalized_action).observe(max(0.0, queue_wait_seconds))
 
 
 def record_job_completed(action: str, duration_seconds: float) -> None:
     """Record a job completion event with duration."""
     if not PROMETHEUS_AVAILABLE:
         return
-    jobs_total.labels(action=action, status="completed").inc()
-    job_duration.labels(action=action).observe(duration_seconds)
+    normalized_action = _normalize_action_label(action)
+    jobs_total.labels(action=normalized_action, status="completed").inc()
+    job_duration.labels(action=normalized_action).observe(duration_seconds)
 
 
 def record_job_failed(
@@ -604,11 +629,12 @@ def record_job_failed(
     """Record a job failure event."""
     if not PROMETHEUS_AVAILABLE:
         return
-    jobs_total.labels(action=action, status="failed").inc()
+    normalized_action = _normalize_action_label(action)
+    jobs_total.labels(action=normalized_action, status="failed").inc()
     resolved_reason = reason or infer_job_failure_reason(failure_message)
-    job_failures.labels(action=action, reason=_normalize_reason_label(resolved_reason)).inc()
+    job_failures.labels(action=normalized_action, reason=_normalize_reason_label(resolved_reason)).inc()
     if duration_seconds is not None:
-        job_duration.labels(action=action).observe(duration_seconds)
+        job_duration.labels(action=normalized_action).observe(duration_seconds)
 
 
 def record_enforcement_action(result: str) -> None:

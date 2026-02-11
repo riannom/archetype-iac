@@ -13,7 +13,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-api\",status=\"success\"}[5m])) by (le, phase))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-worker\",status=\"success\"}[5m])) by (le, phase))",
           "legendFormat": "{{phase}}",
           "refId": "A"
         }
@@ -42,7 +42,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-api\",status=\"success\"}[1h])) by (le, device_type, phase))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-worker\",status=\"success\"}[1h])) by (le, device_type, phase))",
           "legendFormat": "{{device_type}} - {{phase}}",
           "refId": "A"
         }
@@ -60,12 +60,12 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-api\",phase=\"container_deploy\",status=\"success\"}[5m])) by (le, device_type))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-worker\",phase=\"container_deploy\",status=\"success\"}[5m])) by (le, device_type))",
           "legendFormat": "P95 deploy - {{device_type}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-api\",phase=\"container_deploy\",status=\"success\"}[5m])) by (le, device_type))",
+          "expr": "histogram_quantile(0.50, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-worker\",phase=\"container_deploy\",status=\"success\"}[5m])) by (le, device_type))",
           "legendFormat": "P50 deploy - {{device_type}}",
           "refId": "B"
         }
@@ -83,7 +83,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-api\",phase=\"container_start\",status=\"success\"}[5m])) by (le, device_type))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=\"archetype-worker\",phase=\"container_start\",status=\"success\"}[5m])) by (le, device_type))",
           "legendFormat": "P95 start - {{device_type}}",
           "refId": "A"
         }

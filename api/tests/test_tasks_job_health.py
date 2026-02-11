@@ -21,6 +21,31 @@ def _fake_get_session(session):
     return _get_session
 
 
+def test_timed_out_job_is_non_retryable_signatures() -> None:
+    from app.tasks.job_health import _timed_out_job_is_non_retryable
+
+    non_retryable, reason = _timed_out_job_is_non_retryable(
+        "up",
+        "ERROR: Preflight image check failed. No image available for node.",
+    )
+    assert non_retryable is True
+    assert reason == "missing_image"
+
+    non_retryable, reason = _timed_out_job_is_non_retryable(
+        "sync:lab",
+        "Completed with 1 error(s) during sync",
+    )
+    assert non_retryable is True
+    assert reason == "sync_partial_failure"
+
+    non_retryable, reason = _timed_out_job_is_non_retryable(
+        "up",
+        "Transient HTTP timeout contacting agent",
+    )
+    assert non_retryable is False
+    assert reason is None
+
+
 class TestCheckStuckJobs:
     """Tests for the check_stuck_jobs function."""
 

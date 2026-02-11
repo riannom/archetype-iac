@@ -30,6 +30,60 @@ from app.state import (
 logger = logging.getLogger(__name__)
 
 
+def _timed_out_job_is_non_retryable(action: str, log_text: str | None) -> tuple[bool, str | None]:
+    """Detect timeout failures that are deterministic and unlikely to recover by retrying."""
+    if not log_text:
+        return False, None
+
+    text = log_text.lower()
+    checks: list[tuple[tuple[str, ...], str]] = [
+        (
+            (
+                "no image found",
+                "no image available",
+                "required images not available on agent",
+                "upload/sync required images",
+            ),
+            "missing_image",
+        ),
+        (
+            (
+                "explicit host assignments failed",
+                "missing or unhealthy agents for hosts",
+                "assigned host",
+                "no healthy agent available",
+            ),
+            "host_assignment_or_agent_unavailable",
+        ),
+        (
+            (
+                "libvirt error",
+                "domain not found",
+                "unsupported configuration",
+            ),
+            "libvirt_runtime_error",
+        ),
+        (
+            (
+                "per-link tunnel creation failed",
+                "could not find ovs port",
+            ),
+            "link_tunnel_creation_failed",
+        ),
+    ]
+
+    for needles, reason in checks:
+        if any(needle in text for needle in needles):
+            return True, reason
+
+    # Sync retries are especially expensive; avoid retrying known partial-failure signatures.
+    if action.startswith("sync:") or action == "sync":
+        if "completed with " in text and "error" in text:
+            return True, "sync_partial_failure"
+
+    return False, None
+
+
 def _is_file_path(value: str | None) -> bool:
     """Check if a string is a valid file path (not inline content).
 
@@ -50,6 +104,19 @@ def _is_file_path(value: str | None) -> bool:
         return Path(value).is_file()
     except OSError:
         return False
+
+
+def _read_log_for_classification(value: str | None) -> str | None:
+    """Return inline log content or a tail of file-backed logs for signature checks."""
+    if not value:
+        return None
+    if not _is_file_path(value):
+        return value
+    try:
+        text = Path(value).read_text(errors="ignore")
+        return text[-12000:] if len(text) > 12000 else text
+    except Exception:
+        return None
 
 
 async def check_stuck_jobs():
@@ -130,6 +197,21 @@ async def _check_single_job(session, job: models.Job, now: datetime):
         if agent and agent.status != "online":
             agent_offline = True
             logger.warning(f"Job {job.id} agent {job.agent_id} is offline")
+
+    non_retryable, non_retryable_reason = _timed_out_job_is_non_retryable(
+        job.action,
+        _read_log_for_classification(job.log_path),
+    )
+    if non_retryable:
+        await _fail_job(
+            session,
+            job,
+            reason=(
+                "Job timed out with non-retryable failure signature "
+                f"({non_retryable_reason}); skipping retry"
+            ),
+        )
+        return
 
     # Determine if we should retry or fail
     if job.retry_count < settings.job_max_retries:
