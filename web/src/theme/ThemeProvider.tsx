@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { Theme, ThemePreferences, ThemeContextValue } from './types';
 import { builtInThemes, DEFAULT_THEME_ID, getBuiltInTheme } from './presets';
 import {
@@ -8,6 +8,7 @@ import {
 } from './backgrounds';
 import { getSuggestedBackgroundForTheme } from './backgroundPairs';
 import { AnimatedBackground } from '../components/backgrounds/AnimatedBackground';
+import { API_BASE_URL } from '../api';
 
 // Storage keys
 const PREFS_KEY = 'archetype_theme_prefs';
@@ -21,6 +22,8 @@ const defaultPreferences: ThemePreferences = {
   backgroundOpacity: 50,
   taskLogOpacity: 92,
   favoriteBackgrounds: [],
+  favoriteThemeIds: [],
+  customThemes: [],
 };
 
 // Create context
@@ -41,12 +44,44 @@ function loadPreferences(): ThemePreferences {
         backgroundOpacity: typeof parsed.backgroundOpacity === 'number' ? parsed.backgroundOpacity : 50,
         taskLogOpacity: typeof parsed.taskLogOpacity === 'number' ? parsed.taskLogOpacity : 92,
         favoriteBackgrounds: Array.isArray(parsed.favoriteBackgrounds) ? parsed.favoriteBackgrounds : [],
+        favoriteThemeIds: Array.isArray(parsed.favoriteThemeIds) ? parsed.favoriteThemeIds : [],
+        customThemes: Array.isArray(parsed.customThemes) ? parsed.customThemes.filter(validateTheme) : [],
       };
     }
   } catch (e) {
     console.warn('Failed to load theme preferences:', e);
   }
   return defaultPreferences;
+}
+
+function normalizePreferences(raw: unknown): ThemePreferences {
+  if (!raw || typeof raw !== 'object') {
+    return defaultPreferences;
+  }
+  const parsed = raw as Record<string, unknown>;
+  const themeId = typeof parsed.themeId === 'string' ? parsed.themeId : DEFAULT_THEME_ID;
+  const backgroundId = typeof parsed.backgroundId === 'string'
+    ? parsed.backgroundId
+    : getSuggestedBackgroundForTheme(themeId);
+  return {
+    themeId,
+    mode:
+      parsed.mode === 'light' || parsed.mode === 'dark' || parsed.mode === 'system'
+        ? parsed.mode
+        : 'system',
+    backgroundId: getBackgroundById(backgroundId) ? backgroundId : getSuggestedBackgroundForTheme(themeId),
+    backgroundOpacity:
+      typeof parsed.backgroundOpacity === 'number' ? Math.max(0, Math.min(100, parsed.backgroundOpacity)) : 50,
+    taskLogOpacity:
+      typeof parsed.taskLogOpacity === 'number' ? Math.max(0, Math.min(100, parsed.taskLogOpacity)) : 92,
+    favoriteBackgrounds: Array.isArray(parsed.favoriteBackgrounds)
+      ? parsed.favoriteBackgrounds.filter((id): id is string => typeof id === 'string')
+      : [],
+    favoriteThemeIds: Array.isArray(parsed.favoriteThemeIds)
+      ? parsed.favoriteThemeIds.filter((id): id is string => typeof id === 'string')
+      : [],
+    customThemes: Array.isArray(parsed.customThemes) ? parsed.customThemes.filter(validateTheme) : [],
+  };
 }
 
 /**
@@ -194,11 +229,20 @@ interface ThemeProviderProps {
 }
 
 export function ThemeProvider({ children }: ThemeProviderProps) {
-  const [preferences, setPreferences] = useState<ThemePreferences>(loadPreferences);
-  const [customThemes, setCustomThemes] = useState<Theme[]>(loadCustomThemes);
+  const [preferences, setPreferences] = useState<ThemePreferences>(() => loadPreferences());
+  const [customThemes, setCustomThemes] = useState<Theme[]>(() => {
+    const fromPrefs = preferences.customThemes;
+    if (Array.isArray(fromPrefs) && fromPrefs.length > 0) {
+      return fromPrefs;
+    }
+    return loadCustomThemes();
+  });
   const [systemDark, setSystemDark] = useState<boolean>(
     window.matchMedia('(prefers-color-scheme: dark)').matches
   );
+  const [serverSyncReady, setServerSyncReady] = useState(false);
+  const [serverSyncEnabled, setServerSyncEnabled] = useState(false);
+  const syncTimeoutRef = useRef<number | null>(null);
 
   // All available themes (built-in + custom)
   const availableThemes = useMemo(() => {
@@ -232,6 +276,47 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     return () => mediaQuery.removeEventListener('change', handler);
   }, []);
 
+  // Hydrate theme settings from API for authenticated users.
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setServerSyncEnabled(false);
+      setServerSyncReady(true);
+      return;
+    }
+
+    let cancelled = false;
+    setServerSyncEnabled(true);
+    const hydratePreferences = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/auth/preferences`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          return;
+        }
+
+        const data = await res.json();
+        const normalized = normalizePreferences(data?.theme_settings);
+        if (!cancelled) {
+          setPreferences((prev) => ({ ...prev, ...normalized }));
+          setCustomThemes(normalized.customThemes || []);
+        }
+      } catch (error) {
+        console.warn('Failed to load theme settings from API:', error);
+      } finally {
+        if (!cancelled) {
+          setServerSyncReady(true);
+        }
+      }
+    };
+
+    hydratePreferences();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Apply theme to DOM whenever theme or mode changes
   useEffect(() => {
     applyThemeToDOM(theme, effectiveMode, preferences.taskLogOpacity);
@@ -243,13 +328,53 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
   // Save preferences whenever they change
   useEffect(() => {
-    savePreferences(preferences);
-  }, [preferences]);
+    savePreferences({ ...preferences, customThemes });
+  }, [preferences, customThemes]);
 
   // Save custom themes whenever they change
   useEffect(() => {
     saveCustomThemes(customThemes);
   }, [customThemes]);
+
+  // Persist theme settings to API whenever they change for authenticated users.
+  useEffect(() => {
+    if (!serverSyncEnabled || !serverSyncReady) {
+      return;
+    }
+    const token = localStorage.getItem('token');
+    if (!token) {
+      return;
+    }
+
+    if (syncTimeoutRef.current) {
+      window.clearTimeout(syncTimeoutRef.current);
+    }
+    syncTimeoutRef.current = window.setTimeout(async () => {
+      try {
+        await fetch(`${API_BASE_URL}/auth/preferences`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            theme_settings: {
+              ...preferences,
+              customThemes,
+            },
+          }),
+        });
+      } catch (error) {
+        console.warn('Failed to persist theme settings to API:', error);
+      }
+    }, 300);
+
+    return () => {
+      if (syncTimeoutRef.current) {
+        window.clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, [preferences, customThemes, serverSyncEnabled, serverSyncReady]);
 
   // Set theme by ID
   const setTheme = useCallback((themeId: string) => {
@@ -291,6 +416,20 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
       return {
         ...prev,
         favoriteBackgrounds: nextFavorites,
+      };
+    });
+  }, []);
+
+  const toggleFavoriteTheme = useCallback((themeId: string) => {
+    setPreferences(prev => {
+      const favorites = prev.favoriteThemeIds || [];
+      const nextFavorites = favorites.includes(themeId)
+        ? favorites.filter(id => id !== themeId)
+        : [...favorites, themeId];
+
+      return {
+        ...prev,
+        favoriteThemeIds: nextFavorites,
       };
     });
   }, []);
@@ -366,7 +505,16 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
     // If current theme was removed, switch to default
     if (preferences.themeId === themeId) {
-      setPreferences(prev => ({ ...prev, themeId: DEFAULT_THEME_ID }));
+      setPreferences(prev => ({
+        ...prev,
+        themeId: DEFAULT_THEME_ID,
+        favoriteThemeIds: (prev.favoriteThemeIds || []).filter(id => id !== themeId),
+      }));
+    } else {
+      setPreferences(prev => ({
+        ...prev,
+        favoriteThemeIds: (prev.favoriteThemeIds || []).filter(id => id !== themeId),
+      }));
     }
 
     return true;
@@ -387,6 +535,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setBackgroundOpacity,
     setTaskLogOpacity,
     toggleFavoriteBackground,
+    toggleFavoriteTheme,
     setMode,
     toggleMode,
     importTheme,
@@ -404,6 +553,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setBackgroundOpacity,
     setTaskLogOpacity,
     toggleFavoriteBackground,
+    toggleFavoriteTheme,
     setTheme,
     setMode,
     toggleMode,

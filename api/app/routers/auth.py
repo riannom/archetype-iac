@@ -141,13 +141,16 @@ def get_preferences(
     try:
         notification_settings = json.loads(prefs.notification_settings) if prefs.notification_settings else {}
         canvas_settings = json.loads(prefs.canvas_settings) if prefs.canvas_settings else {}
+        theme_settings = json.loads(prefs.theme_settings) if prefs.theme_settings else {}
     except json.JSONDecodeError:
         notification_settings = {}
         canvas_settings = {}
+        theme_settings = {}
 
     return schemas.UserPreferencesOut(
         notification_settings=schemas.NotificationSettings(**notification_settings) if notification_settings else schemas.NotificationSettings(),
         canvas_settings=schemas.CanvasSettings(**canvas_settings) if canvas_settings else schemas.CanvasSettings(),
+        theme_settings=schemas.ThemeSettings(**theme_settings) if theme_settings else schemas.ThemeSettings(),
     )
 
 
@@ -157,7 +160,7 @@ def update_preferences(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.UserPreferencesOut:
-    """Update current user's notification and canvas preferences."""
+    """Update current user's notification, canvas, and theme preferences."""
     prefs = database.query(models.UserPreferences).filter(
         models.UserPreferences.user_id == current_user.id
     ).first()
@@ -197,6 +200,21 @@ def update_preferences(
                 existing[key] = value
         prefs.canvas_settings = json.dumps(existing)
 
+    if update.theme_settings:
+        existing = {}
+        try:
+            existing = json.loads(prefs.theme_settings) if prefs.theme_settings else {}
+        except json.JSONDecodeError:
+            pass
+        # Deep merge the settings
+        new_settings = update.theme_settings.model_dump()
+        for key, value in new_settings.items():
+            if isinstance(value, dict) and key in existing and isinstance(existing[key], dict):
+                existing[key].update(value)
+            else:
+                existing[key] = value
+        prefs.theme_settings = json.dumps(existing)
+
     database.commit()
     database.refresh(prefs)
 
@@ -204,11 +222,14 @@ def update_preferences(
     try:
         notification_settings = json.loads(prefs.notification_settings) if prefs.notification_settings else {}
         canvas_settings = json.loads(prefs.canvas_settings) if prefs.canvas_settings else {}
+        theme_settings = json.loads(prefs.theme_settings) if prefs.theme_settings else {}
     except json.JSONDecodeError:
         notification_settings = {}
         canvas_settings = {}
+        theme_settings = {}
 
     return schemas.UserPreferencesOut(
         notification_settings=schemas.NotificationSettings(**notification_settings) if notification_settings else schemas.NotificationSettings(),
         canvas_settings=schemas.CanvasSettings(**canvas_settings) if canvas_settings else schemas.CanvasSettings(),
+        theme_settings=schemas.ThemeSettings(**theme_settings) if theme_settings else schemas.ThemeSettings(),
     )

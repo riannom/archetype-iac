@@ -64,6 +64,23 @@ describe("ThemeSelector", () => {
     });
   });
 
+  describe("background mode filter", () => {
+    it("defaults to light-mode filter in light mode", () => {
+      renderWithProvider(true);
+      const lightFilterButton = screen.getByRole("button", { name: "Light mode" });
+      expect(lightFilterButton.className).toContain("bg-sage-600");
+    });
+
+    it("auto-switches mode filter when appearance mode changes", async () => {
+      const user = userEvent.setup();
+      renderWithProvider(true);
+
+      await user.click(screen.getByText("Dark"));
+      const darkFilterButton = screen.getByRole("button", { name: "Dark mode" });
+      expect(darkFilterButton.className).toContain("bg-sage-600");
+    });
+  });
+
   describe("color themes", () => {
     it("renders built-in theme options", () => {
       renderWithProvider(true);
@@ -85,6 +102,23 @@ describe("ThemeSelector", () => {
       await waitFor(() => {
         const stored = JSON.parse(localStorage.getItem("archetype_theme_prefs") || "{}");
         expect(stored.themeId).toBe("ocean");
+      });
+    });
+
+    it("allows favoriting a theme", async () => {
+      const user = userEvent.setup();
+      renderWithProvider(true);
+
+      const oceanCard = screen.getByText("Ocean").closest("div.relative");
+      const favoriteButton = oceanCard?.querySelector('button[title="Add favorite theme"]');
+      expect(favoriteButton).toBeTruthy();
+      if (!favoriteButton) return;
+
+      await user.click(favoriteButton);
+
+      await waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem("archetype_theme_prefs") || "{}");
+        expect(stored.favoriteThemeIds).toContain("ocean");
       });
     });
   });

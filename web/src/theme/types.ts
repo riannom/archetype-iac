@@ -62,6 +62,8 @@ export interface ThemePreferences {
   backgroundOpacity: number; // 0-100
   taskLogOpacity: number; // 0-100
   favoriteBackgrounds?: string[];
+  favoriteThemeIds?: string[];
+  customThemes?: Theme[];
 }
 
 /**
@@ -88,6 +90,7 @@ export interface ThemeContextValue {
   setBackgroundOpacity: (opacity: number) => void;
   setTaskLogOpacity: (opacity: number) => void;
   toggleFavoriteBackground: (backgroundId: string) => void;
+  toggleFavoriteTheme: (themeId: string) => void;
   setMode: (mode: 'light' | 'dark' | 'system') => void;
   toggleMode: () => void;
   importTheme: (themeJson: string) => Theme | null;

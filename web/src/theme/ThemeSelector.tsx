@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState, useCallback } from 'react';
+import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useTheme } from './ThemeProvider';
 import type { Theme } from './types';
 import { builtInThemes } from './presets';
@@ -29,16 +29,20 @@ function ThemeCard({
   theme,
   iconClass,
   isSelected,
+  isFavorite,
   isCustom,
   onSelect,
+  onToggleFavorite,
   onExport,
   onRemove,
 }: {
   theme: Theme;
   iconClass: string;
   isSelected: boolean;
+  isFavorite: boolean;
   isCustom: boolean;
   onSelect: () => void;
+  onToggleFavorite: () => void;
   onExport: () => void;
   onRemove?: () => void;
 }) {
@@ -59,11 +63,17 @@ function ThemeCard({
       </div>
       <div className="text-sm font-medium text-stone-900 dark:text-stone-100">{theme.name}</div>
       {isCustom && <span className="text-xs text-stone-500 dark:text-stone-400">Custom</span>}
-      {isSelected && (
-        <div className="absolute top-2 right-2">
-          <i className="fa-solid fa-check text-sage-500 text-sm" />
-        </div>
-      )}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleFavorite();
+        }}
+        className={`absolute top-2 right-2 text-xs ${isFavorite ? 'text-rose-500' : 'text-stone-400'}`}
+        title={isFavorite ? 'Remove favorite theme' : 'Add favorite theme'}
+      >
+        <i className={`${isFavorite ? 'fa-solid' : 'fa-regular'} fa-heart`} />
+      </button>
+      {isSelected && <i className="fa-solid fa-check absolute top-2 right-7 text-sage-500 text-sm" />}
       <div className="absolute bottom-2 right-2 flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
         <button
           onClick={(e) => {
@@ -107,6 +117,7 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
     setBackgroundOpacity,
     setTaskLogOpacity,
     toggleFavoriteBackground,
+    toggleFavoriteTheme,
     setMode,
     importTheme,
     exportTheme,
@@ -115,12 +126,17 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
 
   const [importError, setImportError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<BackgroundCategory | 'favorites'>('all');
-  const [modeFilter, setModeFilter] = useState<'all' | 'light' | 'dark'>('all');
+  const [modeFilter, setModeFilter] = useState<'all' | 'light' | 'dark'>(effectiveMode);
   const [animationFilter, setAnimationFilter] = useState<'all' | 'animated' | 'static'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const favoriteSet = useMemo(() => new Set(preferences.favoriteBackgrounds || []), [preferences.favoriteBackgrounds]);
+  const favoriteThemeSet = useMemo(() => new Set(preferences.favoriteThemeIds || []), [preferences.favoriteThemeIds]);
   const suggestedBackgroundId = useMemo(() => getSuggestedBackgroundForTheme(theme.id), [theme.id]);
+
+  useEffect(() => {
+    setModeFilter(effectiveMode);
+  }, [effectiveMode]);
 
   const getThemeIconClass = (themeId: string) => {
     const icons: Record<string, string> = {
@@ -282,8 +298,10 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
                   theme={t}
                   iconClass={getThemeIconClass(t.id)}
                   isSelected={theme.id === t.id}
+                  isFavorite={favoriteThemeSet.has(t.id)}
                   isCustom={false}
                   onSelect={() => setTheme(t.id)}
+                  onToggleFavorite={() => toggleFavoriteTheme(t.id)}
                   onExport={() => handleExport(t.id)}
                 />
               ))}
@@ -300,8 +318,10 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
                     theme={t}
                     iconClass={getThemeIconClass(t.id)}
                     isSelected={theme.id === t.id}
+                    isFavorite={favoriteThemeSet.has(t.id)}
                     isCustom={true}
                     onSelect={() => setTheme(t.id)}
+                    onToggleFavorite={() => toggleFavoriteTheme(t.id)}
                     onExport={() => handleExport(t.id)}
                     onRemove={() => removeCustomTheme(t.id)}
                   />

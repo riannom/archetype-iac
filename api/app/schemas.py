@@ -717,16 +717,30 @@ class CanvasSettings(BaseModel):
     metricsBarExpanded: bool = False
 
 
+class ThemeSettings(BaseModel):
+    """Theme customization preferences."""
+    themeId: str = "sage-stone"
+    mode: str = "system"  # 'light' | 'dark' | 'system'
+    backgroundId: str = "breath"
+    backgroundOpacity: int = 50
+    taskLogOpacity: int = 92
+    favoriteBackgrounds: list[str] = Field(default_factory=list)
+    favoriteThemeIds: list[str] = Field(default_factory=list)
+    customThemes: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class UserPreferencesOut(BaseModel):
     """Output schema for user preferences."""
     notification_settings: NotificationSettings = NotificationSettings()
     canvas_settings: CanvasSettings = CanvasSettings()
+    theme_settings: ThemeSettings = ThemeSettings()
 
 
 class UserPreferencesUpdate(BaseModel):
     """Input schema for updating user preferences."""
     notification_settings: NotificationSettings | None = None
     canvas_settings: CanvasSettings | None = None
+    theme_settings: ThemeSettings | None = None
 
 
 # =============================================================================

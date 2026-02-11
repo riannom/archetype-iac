@@ -33,6 +33,8 @@ class UserPreferences(Base):
     notification_settings: Mapped[str] = mapped_column(Text, default="{}")
     # Canvas display preferences as JSON
     canvas_settings: Mapped[str] = mapped_column(Text, default="{}")
+    # Theme and background preferences as JSON
+    theme_settings: Mapped[str] = mapped_column(Text, default="{}")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 

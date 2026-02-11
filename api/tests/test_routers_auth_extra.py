@@ -67,10 +67,21 @@ def test_me_and_preferences(test_client, test_db, test_user, auth_headers) -> No
     assert prefs.status_code == 200
     assert "notification_settings" in prefs.json()
     assert "canvas_settings" in prefs.json()
+    assert "theme_settings" in prefs.json()
 
     update = {
         "notification_settings": {"bell": {"enabled": False}},
         "canvas_settings": {"showAgentIndicators": False, "consoleInBottomPanel": True},
+        "theme_settings": {
+            "themeId": "ocean",
+            "mode": "dark",
+            "backgroundId": "stargazing",
+            "backgroundOpacity": 80,
+            "taskLogOpacity": 70,
+            "favoriteBackgrounds": ["stargazing", "constellation"],
+            "favoriteThemeIds": ["ocean", "midnight"],
+            "customThemes": [{"id": "custom-theme", "name": "Custom Theme"}],
+        },
     }
     patched = test_client.patch("/auth/preferences", json=update, headers=auth_headers)
     assert patched.status_code == 200
@@ -78,8 +89,13 @@ def test_me_and_preferences(test_client, test_db, test_user, auth_headers) -> No
     assert body["notification_settings"]["bell"]["enabled"] is False
     assert body["canvas_settings"]["showAgentIndicators"] is False
     assert body["canvas_settings"]["consoleInBottomPanel"] is True
+    assert body["theme_settings"]["themeId"] == "ocean"
+    assert body["theme_settings"]["mode"] == "dark"
+    assert body["theme_settings"]["favoriteThemeIds"] == ["ocean", "midnight"]
+    assert body["theme_settings"]["customThemes"][0]["id"] == "custom-theme"
 
     prefs_again = test_client.get("/auth/preferences", headers=auth_headers)
     assert prefs_again.status_code == 200
     body = prefs_again.json()
     assert body["notification_settings"]["bell"]["enabled"] is False
+    assert body["theme_settings"]["themeId"] == "ocean"
