@@ -985,6 +985,12 @@ class CreateNodeRequest(BaseModel):
     binds: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     startup_config: str | None = None
+    # Hardware spec overrides (API-resolved, take priority over VENDOR_CONFIGS)
+    memory: int | None = Field(None, gt=0, description="RAM in MB")
+    cpu: int | None = Field(None, gt=0, description="vCPU count")
+    disk_driver: str | None = Field(None, description="Disk bus: virtio, ide, sata")
+    nic_driver: str | None = Field(None, description="NIC model: virtio, e1000, rtl8139")
+    machine_type: str | None = Field(None, description="QEMU machine type")
 
 
 class CreateNodeResponse(BaseModel):

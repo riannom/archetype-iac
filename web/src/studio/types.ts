@@ -61,6 +61,9 @@ export interface DeviceModel {
   // Additional config fields
   memory?: number;
   cpu?: number;
+  diskDriver?: string;
+  nicDriver?: string;
+  machineType?: string;
   kind?: string;
   consoleShell?: string;
   notes?: string;
@@ -123,6 +126,9 @@ export interface DeviceNode extends BaseNode {
   version: string;
   cpu?: number;
   memory?: number;
+  disk_driver?: string;
+  nic_driver?: string;
+  machine_type?: string;
   config?: string;
   host?: string; // Agent ID for multi-host placement
 }

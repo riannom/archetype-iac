@@ -1245,6 +1245,11 @@ class LibvirtProvider(Provider):
         binds: list[str] | None = None,
         env: dict[str, str] | None = None,
         startup_config: str | None = None,
+        memory: int | None = None,
+        cpu: int | None = None,
+        disk_driver: str | None = None,
+        nic_driver: str | None = None,
+        machine_type: str | None = None,
     ) -> NodeActionResult:
         """Create (define) a single VM without starting it."""
         domain_name = self._domain_name(lab_id, node_name)
@@ -1264,15 +1269,15 @@ class LibvirtProvider(Provider):
             except libvirt.libvirtError:
                 pass  # Domain doesn't exist, we'll create it
 
-            # Build node_config from vendor registry
+            # Build node_config from vendor registry, with API-resolved overrides
             libvirt_config = get_libvirt_config(kind)
             node_config: dict[str, Any] = {
                 "image": image,
-                "memory": libvirt_config.memory_mb,
-                "cpu": libvirt_config.cpu_count,
-                "machine_type": libvirt_config.machine_type,
-                "disk_driver": libvirt_config.disk_driver,
-                "nic_driver": libvirt_config.nic_driver,
+                "memory": memory or libvirt_config.memory_mb,
+                "cpu": cpu or libvirt_config.cpu_count,
+                "machine_type": machine_type or libvirt_config.machine_type,
+                "disk_driver": disk_driver or libvirt_config.disk_driver,
+                "nic_driver": nic_driver or libvirt_config.nic_driver,
                 "data_volume_gb": libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,

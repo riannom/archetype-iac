@@ -24,6 +24,12 @@ export interface GraphNode {
   role?: string | null;
   mgmt?: Record<string, unknown> | null;
   vars?: Record<string, unknown> | null;
+  // Hardware spec overrides (per-node)
+  cpu?: number | null;
+  memory?: number | null;
+  disk_driver?: string | null;
+  nic_driver?: string | null;
+  machine_type?: string | null;
 }
 
 export interface TopologyGraph {

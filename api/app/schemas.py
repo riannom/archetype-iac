@@ -91,6 +91,12 @@ class GraphNode(BaseModel):
     host: str | None = None  # Agent ID for multi-host placement
     network_mode: str | None = None  # Container network mode (e.g., "bridge", "host", "none")
     container_name: str | None = None  # Container name (YAML key), may differ from display name
+    # Hardware spec overrides (per-node, takes priority over device defaults)
+    memory: int | None = None      # RAM in MB
+    cpu: int | None = None         # vCPU count
+    disk_driver: str | None = None  # Disk bus: virtio, ide, sata
+    nic_driver: str | None = None   # NIC model: virtio, e1000, rtl8139
+    machine_type: str | None = None  # QEMU machine type
     # External network fields (when node_type="external")
     managed_interface_id: str | None = None  # FK to AgentManagedInterface
     # Derived fields (populated server-side for frontend display)

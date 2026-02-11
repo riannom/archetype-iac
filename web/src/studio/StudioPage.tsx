@@ -105,8 +105,11 @@ const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] =>
       version: node.version || model?.versions?.[0] || 'default',
       x: 220 + column * 160,
       y: 180 + row * 140,
-      cpu: 1,
-      memory: 1024,
+      cpu: node.cpu || model?.cpu || 1,
+      memory: node.memory || model?.memory || 1024,
+      disk_driver: node.disk_driver || model?.diskDriver,
+      nic_driver: node.nic_driver || model?.nicDriver,
+      machine_type: node.machine_type || model?.machineType,
       host: (node as any).host, // Preserve host from backend for multi-host placement
     };
     return deviceNode;
@@ -517,6 +520,12 @@ const StudioPage: React.FC = () => {
             device: deviceNode.model,
             version: deviceNode.version,
             host: deviceNode.host,
+            // Hardware spec overrides
+            cpu: deviceNode.cpu,
+            memory: deviceNode.memory,
+            disk_driver: deviceNode.disk_driver,
+            nic_driver: deviceNode.nic_driver,
+            machine_type: deviceNode.machine_type,
           };
         }),
         links: currentLinks.map((link) => ({
@@ -970,8 +979,11 @@ const StudioPage: React.FC = () => {
       version: model.versions[0],
       x: x ?? 300 + Math.random() * 50,
       y: y ?? 200 + Math.random() * 50,
-      cpu: 1,
-      memory: 1024,
+      cpu: model.cpu || 1,
+      memory: model.memory || 1024,
+      disk_driver: model.diskDriver,
+      nic_driver: model.nicDriver,
+      machine_type: model.machineType,
     };
     setNodes((prev) => [...prev, newNode]);
     // Don't set any status for new nodes - they should show no status icon until deployed
@@ -1367,7 +1379,8 @@ const StudioPage: React.FC = () => {
     setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, ...updates } as Node : node)));
     // Auto-save topology if name, model, version, or host changed (device nodes only)
     const deviceUpdates = updates as Partial<DeviceNode>;
-    if (updates.name || deviceUpdates.model || deviceUpdates.version || deviceUpdates.host) {
+    if (updates.name || deviceUpdates.model || deviceUpdates.version || deviceUpdates.host
+        || deviceUpdates.cpu !== undefined || deviceUpdates.memory !== undefined) {
       triggerTopologySave();
     }
     // Also save if external network fields change

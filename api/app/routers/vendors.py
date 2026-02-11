@@ -334,6 +334,9 @@ def get_device_config(
             "maxPorts": config.max_ports,
             "memory": config.memory,
             "cpu": config.cpu,
+            "diskDriver": config.disk_driver,
+            "nicDriver": config.nic_driver,
+            "machineType": config.machine_type,
             "requiresImage": config.requires_image,
             "supportedImageKinds": config.supported_image_kinds,
             "documentationUrl": config.documentation_url,
@@ -395,7 +398,8 @@ def update_device_config(
     # Allowed override fields
     ALLOWED_OVERRIDE_FIELDS = {
         "memory", "cpu", "maxPorts", "portNaming", "portStartIndex",
-        "readinessTimeout", "vendorOptions"
+        "readinessTimeout", "vendorOptions",
+        "diskDriver", "nicDriver", "machineType",
     }
 
     # Filter payload to only allowed fields

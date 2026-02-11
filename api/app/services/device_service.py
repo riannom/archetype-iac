@@ -291,6 +291,9 @@ class DeviceService:
                 "maxPorts": config.max_ports,
                 "memory": config.memory,
                 "cpu": config.cpu,
+                "diskDriver": config.disk_driver,
+                "nicDriver": config.nic_driver,
+                "machineType": config.machine_type,
                 "requiresImage": config.requires_image,
                 "supportedImageKinds": config.supported_image_kinds,
                 "documentationUrl": config.documentation_url,
@@ -343,7 +346,8 @@ class DeviceService:
         # Allowed override fields
         ALLOWED_OVERRIDE_FIELDS = {
             "memory", "cpu", "maxPorts", "portNaming", "portStartIndex",
-            "readinessTimeout", "vendorOptions"
+            "readinessTimeout", "vendorOptions",
+            "diskDriver", "nicDriver", "machineType",
         }
 
         # Filter payload to only allowed fields
@@ -403,6 +407,67 @@ class DeviceService:
             return {"message": f"Device '{device_id}' has no overrides to reset"}
 
         return {"message": f"Device '{device_id}' reset to defaults"}
+
+    def resolve_hardware_specs(self, device_id: str, node_config_json: dict | None = None) -> dict:
+        """Resolve hardware specs for a device. Per-node overrides > device definition > defaults.
+
+        Args:
+            device_id: Device type identifier (e.g., "cat9000v-uadp", "ceos")
+            node_config_json: Per-node config_json dict with optional hardware overrides
+
+        Returns:
+            Dict with resolved memory, cpu, disk_driver, nic_driver, machine_type
+            (keys present only when values are non-default / explicitly set)
+        """
+        from app.image_store import find_custom_device, get_device_override
+        from agent.vendors import _get_config_by_kind, get_kind_for_device
+
+        specs: dict = {}
+
+        # Layer 1: Built-in vendor config
+        config = _get_config_by_kind(device_id)
+        if not config:
+            canonical = get_kind_for_device(device_id)
+            config = _get_config_by_kind(canonical)
+
+        if config:
+            specs["memory"] = config.memory
+            specs["cpu"] = config.cpu
+            specs["disk_driver"] = config.disk_driver
+            specs["nic_driver"] = config.nic_driver
+            specs["machine_type"] = config.machine_type
+        else:
+            # Layer 1b: Custom device definition
+            custom = find_custom_device(device_id)
+            if custom:
+                for field in ("memory", "cpu", "diskDriver", "nicDriver", "machineType"):
+                    val = custom.get(field)
+                    if val is not None:
+                        # Normalize camelCase to snake_case for API consistency
+                        key = {
+                            "diskDriver": "disk_driver",
+                            "nicDriver": "nic_driver",
+                            "machineType": "machine_type",
+                        }.get(field, field)
+                        specs[key] = val
+
+        # Layer 2: Device overrides (device_overrides.json)
+        overrides = get_device_override(device_id) or {}
+        for field, key in [("memory", "memory"), ("cpu", "cpu"),
+                           ("diskDriver", "disk_driver"), ("nicDriver", "nic_driver"),
+                           ("machineType", "machine_type")]:
+            val = overrides.get(field)
+            if val is not None:
+                specs[key] = val
+
+        # Layer 3: Per-node config_json overrides (highest priority)
+        if node_config_json:
+            for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type"):
+                val = node_config_json.get(key)
+                if val is not None:
+                    specs[key] = val
+
+        return specs
 
     def list_hidden_devices(self) -> list[str]:
         """List all hidden built-in device IDs."""

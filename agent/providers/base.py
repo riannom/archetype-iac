@@ -205,6 +205,11 @@ class Provider(ABC):
         binds: list[str] | None = None,
         env: dict[str, str] | None = None,
         startup_config: str | None = None,
+        memory: int | None = None,
+        cpu: int | None = None,
+        disk_driver: str | None = None,
+        nic_driver: str | None = None,
+        machine_type: str | None = None,
     ) -> NodeActionResult:
         """Create a single node container without starting it.
 

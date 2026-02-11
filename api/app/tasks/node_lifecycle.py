@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -1571,6 +1572,11 @@ class NodeLifecycleManager:
         # Determine provider from image type (qcow2 → libvirt, else docker)
         node_provider = get_image_provider(image)
 
+        # Resolve hardware specs: per-node config > device overrides > vendor defaults
+        from app.services.device_service import get_device_service
+        node_config = json.loads(db_node.config_json) if db_node.config_json else None
+        hw_specs = get_device_service().resolve_hardware_specs(kind, node_config)
+
         try:
             # Create container/VM
             create_result = await agent_client.create_node_on_agent(
@@ -1583,6 +1589,11 @@ class NodeLifecycleManager:
                 interface_count=iface_count,
                 startup_config=startup_config,
                 provider=node_provider,
+                memory=hw_specs.get("memory"),
+                cpu=hw_specs.get("cpu"),
+                disk_driver=hw_specs.get("disk_driver"),
+                nic_driver=hw_specs.get("nic_driver"),
+                machine_type=hw_specs.get("machine_type"),
             )
 
             if not create_result.get("success"):

@@ -448,9 +448,9 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               <div className="flex justify-between text-[8px] font-bold text-stone-400 dark:text-stone-600"><span>1 Core</span><span>16 Cores</span></div>
             </div>
             <div className="space-y-4">
-              <div className="flex justify-between items-end"><label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">RAM Allocation</label><span className="text-xs font-black text-sage-600 dark:text-sage-400">{(node.memory || 1024) / 1024} GB</span></div>
-              <input type="range" min="512" max="16384" step="512" value={node.memory || 1024} onChange={(e) => onUpdateNode(node.id, { memory: parseInt(e.target.value) })} className="w-full h-1.5 bg-stone-200 dark:bg-stone-800 rounded-lg appearance-none cursor-pointer accent-sage-500" />
-              <div className="flex justify-between text-[8px] font-bold text-stone-400 dark:text-stone-600"><span>512MB</span><span>16GB</span></div>
+              <div className="flex justify-between items-end"><label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">RAM Allocation</label><input type="number" min="512" max="65536" step="512" value={node.memory || 1024} onChange={(e) => { const v = parseInt(e.target.value); if (v >= 512 && v <= 65536) onUpdateNode(node.id, { memory: v }); }} className="w-16 text-right text-xs font-black text-sage-600 dark:text-sage-400 bg-transparent border border-stone-300 dark:border-stone-700 rounded px-1" /><span className="text-xs font-black text-sage-600 dark:text-sage-400 ml-1">MB</span></div>
+              <input type="range" min="512" max="32768" step="1024" value={node.memory || 1024} onChange={(e) => onUpdateNode(node.id, { memory: parseInt(e.target.value) })} className="w-full h-1.5 bg-stone-200 dark:bg-stone-800 rounded-lg appearance-none cursor-pointer accent-sage-500" />
+              <div className="flex justify-between text-[8px] font-bold text-stone-400 dark:text-stone-600"><span>512MB</span><span>32GB</span></div>
             </div>
           </div>
         )}

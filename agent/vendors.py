@@ -1678,6 +1678,10 @@ def get_vendors_for_ui() -> list[dict]:
             # Resource requirements
             "memory": config.memory,
             "cpu": config.cpu,
+            # Libvirt/QEMU VM settings
+            "diskDriver": config.disk_driver,
+            "nicDriver": config.nic_driver,
+            "machineType": config.machine_type,
             # Image configuration
             "requiresImage": config.requires_image,
             "supportedImageKinds": config.supported_image_kinds,

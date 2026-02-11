@@ -646,6 +646,17 @@ class TopologyService:
                 config["mgmt"] = graph_node.mgmt
             if graph_node.vars:
                 config["vars"] = graph_node.vars
+            # Hardware spec overrides (per-node)
+            if graph_node.memory:
+                config["memory"] = graph_node.memory
+            if graph_node.cpu:
+                config["cpu"] = graph_node.cpu
+            if graph_node.disk_driver:
+                config["disk_driver"] = graph_node.disk_driver
+            if graph_node.nic_driver:
+                config["nic_driver"] = graph_node.nic_driver
+            if graph_node.machine_type:
+                config["machine_type"] = graph_node.machine_type
             config_json = json.dumps(config) if config else None
 
             # Resolve host name to host_id
@@ -956,6 +967,12 @@ class TopologyService:
                 role=config.get("role"),
                 mgmt=config.get("mgmt"),
                 vars=config.get("vars"),
+                # Hardware spec overrides (persisted in config_json)
+                memory=config.get("memory"),
+                cpu=config.get("cpu"),
+                disk_driver=config.get("disk_driver"),
+                nic_driver=config.get("nic_driver"),
+                machine_type=config.get("machine_type"),
             ))
 
         graph_links: list[GraphLink] = []

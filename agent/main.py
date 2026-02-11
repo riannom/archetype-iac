@@ -3206,6 +3206,11 @@ async def create_node(
         binds=request.binds,
         env=request.env,
         startup_config=request.startup_config,
+        memory=request.memory,
+        cpu=request.cpu,
+        disk_driver=request.disk_driver,
+        nic_driver=request.nic_driver,
+        machine_type=request.machine_type,
     )
 
     elapsed_ms = int((_time.monotonic() - _t0) * 1000)

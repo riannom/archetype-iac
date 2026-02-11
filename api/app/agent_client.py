@@ -1684,6 +1684,11 @@ async def create_node_on_agent(
     env: dict[str, str] | None = None,
     startup_config: str | None = None,
     provider: str = "docker",
+    memory: int | None = None,
+    cpu: int | None = None,
+    disk_driver: str | None = None,
+    nic_driver: str | None = None,
+    machine_type: str | None = None,
 ) -> dict:
     """Create a single node container on an agent without starting it.
 
@@ -1716,6 +1721,16 @@ async def create_node_on_agent(
         payload["env"] = env
     if startup_config:
         payload["startup_config"] = startup_config
+    if memory:
+        payload["memory"] = memory
+    if cpu:
+        payload["cpu"] = cpu
+    if disk_driver:
+        payload["disk_driver"] = disk_driver
+    if nic_driver:
+        payload["nic_driver"] = nic_driver
+    if machine_type:
+        payload["machine_type"] = machine_type
 
     import time as _time
     _t0 = _time.monotonic()

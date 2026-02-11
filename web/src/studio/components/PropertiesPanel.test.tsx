@@ -608,12 +608,16 @@ describe("PropertiesPanel", () => {
       it("displays RAM slider with current value", async () => {
         const user = userEvent.setup();
 
-        render(<PropertiesPanel {...defaultProps} />);
+        const { container } = render(<PropertiesPanel {...defaultProps} />);
 
         await user.click(screen.getByText("hardware"));
 
         expect(screen.getByText("RAM Allocation")).toBeInTheDocument();
-        expect(screen.getByText("2 GB")).toBeInTheDocument();
+        // RAM displays as numeric input (MB) + slider
+        const ramInput = container.querySelector('input[type="number"]') as HTMLInputElement;
+        expect(ramInput).toBeInTheDocument();
+        expect(ramInput.value).toBe("2048");
+        expect(screen.getByText("MB")).toBeInTheDocument();
       });
 
       it("updates CPU when slider is changed", async () => {
