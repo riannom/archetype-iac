@@ -256,7 +256,7 @@ describe("Dashboard", () => {
       localStorage.removeItem('token');
     });
 
-    it("shows Infrastructure button for admin users", async () => {
+    it("shows Admin button for admin users", async () => {
       render(
         <TestWrapper>
           <Dashboard {...defaultProps} />
@@ -264,11 +264,11 @@ describe("Dashboard", () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText("Infrastructure")).toBeInTheDocument();
+        expect(screen.getByText("Admin")).toBeInTheDocument();
       });
     });
 
-    it("navigates to infrastructure page when Infrastructure is clicked", async () => {
+    it("navigates to infrastructure page from admin dropdown", async () => {
       const user = userEvent.setup();
 
       render(
@@ -278,13 +278,12 @@ describe("Dashboard", () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText("Infrastructure")).toBeInTheDocument();
+        expect(screen.getByText("Admin")).toBeInTheDocument();
       });
 
-      const infraButton = screen.getByText("Infrastructure").closest("button");
-      if (infraButton) {
-        await user.click(infraButton);
-      }
+      await user.click(screen.getByTitle("Admin menu"));
+      const infraButton = screen.getByTitle("Infrastructure Settings");
+      await user.click(infraButton);
 
       expect(mockNavigate).toHaveBeenCalledWith("/infrastructure");
     });

@@ -67,6 +67,10 @@ vi.mock('./pages/NodesPage', () => ({
   default: () => <div data-testid="nodes" />,
 }));
 
+vi.mock('./pages/AdminSettingsPage', () => ({
+  default: () => <div data-testid="admin-settings" />,
+}));
+
 vi.mock('./studio/StudioPage', () => ({
   default: () => <div data-testid="studio" />,
 }));

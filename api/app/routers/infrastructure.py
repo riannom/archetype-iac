@@ -89,6 +89,18 @@ async def update_infrastructure_settings(
         settings.overlay_preserve_container_mtu = update.overlay_preserve_container_mtu
     if update.overlay_clamp_host_mtu is not None:
         settings.overlay_clamp_host_mtu = update.overlay_clamp_host_mtu
+    if update.login_dark_theme_id is not None:
+        settings.login_dark_theme_id = update.login_dark_theme_id
+    if update.login_dark_background_id is not None:
+        settings.login_dark_background_id = update.login_dark_background_id
+    if update.login_dark_background_opacity is not None:
+        settings.login_dark_background_opacity = update.login_dark_background_opacity
+    if update.login_light_theme_id is not None:
+        settings.login_light_theme_id = update.login_light_theme_id
+    if update.login_light_background_id is not None:
+        settings.login_light_background_id = update.login_light_background_id
+    if update.login_light_background_opacity is not None:
+        settings.login_light_background_opacity = update.login_light_background_opacity
 
     settings.updated_by_id = current_user.id
     settings.updated_at = datetime.now(timezone.utc)

@@ -5,6 +5,7 @@ import { useUser } from '../contexts/UserContext';
 import { canViewInfrastructure } from '../utils/permissions';
 import { apiRequest } from '../api';
 import { ArchetypeIcon } from '../components/icons';
+import AdminMenuButton from '../components/AdminMenuButton';
 import { formatSize, formatStorageSize, formatTimestamp, formatUptimeFromBoot } from '../utils/format';
 import {
   getCpuColor,
@@ -1106,6 +1107,8 @@ const InfrastructurePage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            <AdminMenuButton />
+
             <button
               onClick={() => navigate('/')}
               className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"

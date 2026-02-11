@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app import db, models
 from app.config import settings
-from app.schemas import UpdateInfo, VersionInfo
+from app.schemas import LoginDefaultsOut, UpdateInfo, VersionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,16 @@ _update_cache: dict = {
     "data": None,
     "timestamp": 0,
 }
+
+
+def get_or_create_infra_settings(database: Session) -> models.InfraSettings:
+    settings_row = database.get(models.InfraSettings, "global")
+    if not settings_row:
+        settings_row = models.InfraSettings(id="global")
+        database.add(settings_row)
+        database.commit()
+        database.refresh(settings_row)
+    return settings_row
 
 
 def get_version() -> str:
@@ -179,6 +189,24 @@ async def check_for_updates() -> UpdateInfo:
     _update_cache["timestamp"] = now
 
     return UpdateInfo(**result)
+
+
+@router.get("/login-defaults", response_model=LoginDefaultsOut)
+def get_login_defaults(database: Session = Depends(db.get_db)) -> LoginDefaultsOut:
+    """Get public login screen defaults.
+
+    This endpoint is intentionally unauthenticated so the login page can load
+    global defaults before a user signs in.
+    """
+    settings_row = get_or_create_infra_settings(database)
+    return LoginDefaultsOut(
+        dark_theme_id=settings_row.login_dark_theme_id,
+        dark_background_id=settings_row.login_dark_background_id,
+        dark_background_opacity=settings_row.login_dark_background_opacity,
+        light_theme_id=settings_row.login_light_theme_id,
+        light_background_id=settings_row.login_light_background_id,
+        light_background_opacity=settings_row.login_light_background_opacity,
+    )
 
 
 def _compare_versions(v1: str, v2: str) -> int:

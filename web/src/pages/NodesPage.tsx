@@ -9,6 +9,7 @@ import DeviceManager from '../studio/components/DeviceManager';
 import DeviceConfigManager from '../studio/components/DeviceConfigManager';
 import ImageSyncProgress from '../components/ImageSyncProgress';
 import { ArchetypeIcon } from '../components/icons';
+import AdminMenuButton from '../components/AdminMenuButton';
 
 type TabType = 'devices' | 'images' | 'sync';
 
@@ -86,6 +87,8 @@ const NodesPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            <AdminMenuButton />
+
             <button
               onClick={() => navigate('/')}
               className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"

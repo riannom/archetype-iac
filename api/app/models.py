@@ -716,6 +716,14 @@ class InfraSettings(Base):
     overlay_preserve_container_mtu: Mapped[bool] = mapped_column(default=False)
     # Clamp host-side veth MTU for overlay links
     overlay_clamp_host_mtu: Mapped[bool] = mapped_column(default=True)
+    # Login screen defaults for dark mode
+    login_dark_theme_id: Mapped[str] = mapped_column(String(64), default="midnight")
+    login_dark_background_id: Mapped[str] = mapped_column(String(64), default="floating-lanterns")
+    login_dark_background_opacity: Mapped[int] = mapped_column(Integer, default=50)
+    # Login screen defaults for light mode
+    login_light_theme_id: Mapped[str] = mapped_column(String(64), default="sakura-sumie")
+    login_light_background_id: Mapped[str] = mapped_column(String(64), default="sakura-redux")
+    login_light_background_opacity: Mapped[int] = mapped_column(Integer, default=100)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     updated_by_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
 

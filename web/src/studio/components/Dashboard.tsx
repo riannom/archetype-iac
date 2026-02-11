@@ -1,13 +1,13 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../../theme/index';
 import { useUser } from '../../contexts/UserContext';
-import { canViewInfrastructure, canManageImages, canManageUsers } from '../../utils/permissions';
+import { canViewInfrastructure } from '../../utils/permissions';
 import SystemStatusStrip from './SystemStatusStrip';
 import SystemLogsModal from './SystemLogsModal';
 import { ArchetypeIcon } from '../../components/icons';
 import { VersionBadge } from '../../components/VersionBadge';
+import AdminMenuButton from '../../components/AdminMenuButton';
 
 interface LabSummary {
   id: string;
@@ -78,7 +78,6 @@ const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user } = useUser();
-  const navigate = useNavigate();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [showSystemLogs, setShowSystemLogs] = useState(false);
   const [editingLabId, setEditingLabId] = useState<string | null>(null);
@@ -86,7 +85,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const deleteTimeoutRef = useRef<number | null>(null);
   const showInfra = canViewInfrastructure(user ?? null);
-  const showUsers = canManageUsers(user ?? null);
 
   useEffect(() => {
     return () => {
@@ -162,24 +160,10 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
+          {showInfra && <AdminMenuButton />}
+
           {showInfra && (
             <>
-              <button
-                onClick={() => navigate('/infrastructure')}
-                className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
-                title="Infrastructure Settings"
-              >
-                <i className="fa-solid fa-network-wired text-xs"></i>
-                <span className="text-[10px] font-bold uppercase">Infrastructure</span>
-              </button>
-              <button
-                onClick={() => navigate('/nodes')}
-                className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
-                title="Manage Nodes"
-              >
-                <i className="fa-solid fa-microchip text-xs"></i>
-                <span className="text-[10px] font-bold uppercase">Nodes</span>
-              </button>
               <button
                 onClick={() => setShowSystemLogs(true)}
                 className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
@@ -189,16 +173,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <span className="text-[10px] font-bold uppercase">Logs</span>
               </button>
             </>
-          )}
-          {showUsers && (
-            <button
-              onClick={() => navigate('/admin/users')}
-              className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
-              title="User Management"
-            >
-              <i className="fa-solid fa-users text-xs"></i>
-              <span className="text-[10px] font-bold uppercase">Users</span>
-            </button>
           )}
 
           <button

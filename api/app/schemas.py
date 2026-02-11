@@ -841,6 +841,12 @@ class InfraSettingsOut(BaseModel):
     mtu_verification_enabled: bool = True
     overlay_preserve_container_mtu: bool = False
     overlay_clamp_host_mtu: bool = True
+    login_dark_theme_id: str = "midnight"
+    login_dark_background_id: str = "floating-lanterns"
+    login_dark_background_opacity: int = 50
+    login_light_theme_id: str = "sakura-sumie"
+    login_light_background_id: str = "sakura-redux"
+    login_light_background_opacity: int = 100
     updated_at: datetime | None = None
     updated_by_id: str | None = None
 
@@ -854,6 +860,23 @@ class InfraSettingsUpdate(BaseModel):
     mtu_verification_enabled: bool | None = None
     overlay_preserve_container_mtu: bool | None = None
     overlay_clamp_host_mtu: bool | None = None
+    login_dark_theme_id: str | None = None
+    login_dark_background_id: str | None = None
+    login_dark_background_opacity: int | None = Field(None, ge=0, le=100)
+    login_light_theme_id: str | None = None
+    login_light_background_id: str | None = None
+    login_light_background_opacity: int | None = Field(None, ge=0, le=100)
+
+
+class LoginDefaultsOut(BaseModel):
+    """Public login screen defaults for unauthenticated clients."""
+
+    dark_theme_id: str = "midnight"
+    dark_background_id: str = "floating-lanterns"
+    dark_background_opacity: int = 50
+    light_theme_id: str = "sakura-sumie"
+    light_background_id: str = "sakura-redux"
+    light_background_opacity: int = 100
 
 
 # =============================================================================

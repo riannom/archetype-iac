@@ -93,6 +93,8 @@ def test_images_hosts_and_sync_jobs(test_client, test_db, admin_user, admin_auth
 def test_infrastructure_settings_and_mesh(test_client, test_db, admin_user, admin_auth_headers) -> None:
     resp = test_client.get("/infrastructure/settings", headers=admin_auth_headers)
     assert resp.status_code == 200
+    assert resp.json()["login_dark_theme_id"] == "midnight"
+    assert resp.json()["login_light_theme_id"] == "sakura-sumie"
 
     patch = test_client.patch(
         "/infrastructure/settings",
@@ -101,6 +103,12 @@ def test_infrastructure_settings_and_mesh(test_client, test_db, admin_user, admi
             "mtu_verification_enabled": False,
             "overlay_preserve_container_mtu": True,
             "overlay_clamp_host_mtu": True,
+            "login_dark_theme_id": "midnight",
+            "login_dark_background_id": "floating-lanterns",
+            "login_dark_background_opacity": 45,
+            "login_light_theme_id": "sakura-sumie",
+            "login_light_background_id": "sakura-redux",
+            "login_light_background_opacity": 95,
         },
         headers=admin_auth_headers,
     )
@@ -108,6 +116,17 @@ def test_infrastructure_settings_and_mesh(test_client, test_db, admin_user, admi
     assert patch.json()["overlay_mtu"] == 1400
     assert patch.json()["overlay_preserve_container_mtu"] is True
     assert patch.json()["overlay_clamp_host_mtu"] is True
+    assert patch.json()["login_dark_background_opacity"] == 45
+    assert patch.json()["login_light_background_opacity"] == 95
+
+    public_defaults = test_client.get("/system/login-defaults")
+    assert public_defaults.status_code == 200
+    assert public_defaults.json()["dark_theme_id"] == "midnight"
+    assert public_defaults.json()["dark_background_id"] == "floating-lanterns"
+    assert public_defaults.json()["dark_background_opacity"] == 45
+    assert public_defaults.json()["light_theme_id"] == "sakura-sumie"
+    assert public_defaults.json()["light_background_id"] == "sakura-redux"
+    assert public_defaults.json()["light_background_opacity"] == 95
 
     host = models.Host(
         id="h1",

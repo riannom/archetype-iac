@@ -14,14 +14,16 @@ export const ArchetypeIcon: React.FC<ArchetypeIconProps> = ({
   <svg
     width={size}
     height={size}
-    viewBox="0 0 64 64"
+    viewBox="0 0 100 100"
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     className={className}
+    aria-hidden="true"
+    role="img"
   >
-    <polygon points="32,8 52,32 32,56 12,32" fill="none" stroke={color} strokeWidth="2.5"/>
-    <line x1="32" y1="8" x2="32" y2="56" stroke={color} strokeWidth="2" opacity="0.4"/>
-    <line x1="12" y1="32" x2="52" y2="32" stroke={color} strokeWidth="2" opacity="0.4"/>
+    <path d="M50 15L85 85H70L50 45L30 85H15L50 15Z" fill={color} />
+    <path d="M50 15V45" stroke={color} strokeWidth="2" strokeLinecap="round" opacity="0.35" />
+    <circle cx="50" cy="15" r="3" fill={color} opacity="0.35" />
   </svg>
 );
 

@@ -121,7 +121,7 @@ function renderWithRouter(initialPath: string) {
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
         <Route path="/studio/:labId/console/:nodeId" element={<StudioConsolePage />} />
-        <Route path="/auth/login" element={<div>Login Page</div>} />
+        <Route path="/" element={<div>Dashboard</div>} />
         <Route path="*" element={<div>Not Found</div>} />
       </Routes>
     </MemoryRouter>
@@ -147,10 +147,10 @@ describe("StudioConsolePage", () => {
   });
 
   describe("Authentication", () => {
-    it("redirects to login when no token is present", () => {
+    it("redirects to dashboard when no token is present", () => {
       renderWithRouter("/studio/lab-123/console/router1");
 
-      expect(screen.getByText("Login Page")).toBeInTheDocument();
+      expect(screen.getByText("Dashboard")).toBeInTheDocument();
     });
 
     it("renders console when token is present", () => {
@@ -158,7 +158,7 @@ describe("StudioConsolePage", () => {
 
       renderWithRouter("/studio/lab-123/console/router1");
 
-      expect(screen.queryByText("Login Page")).not.toBeInTheDocument();
+      expect(screen.queryByText("Dashboard")).not.toBeInTheDocument();
       expect(screen.getByText(/Console:/)).toBeInTheDocument();
     });
   });
@@ -232,7 +232,7 @@ describe("StudioConsolePage", () => {
 
       const { container } = renderWithRouter("/studio/lab-123/console/router1");
 
-      const terminalContainer = container.querySelector(".border-stone-800");
+      const terminalContainer = container.querySelector(".glass-surface");
       expect(terminalContainer).toBeInTheDocument();
     });
   });
@@ -370,8 +370,8 @@ describe("StudioConsolePage", () => {
 
       renderWithRouter("/studio/lab-123/console/router1");
 
-      // Empty token should be treated as no auth - redirect to login
-      expect(screen.getByText("Login Page")).toBeInTheDocument();
+      // Empty token should be treated as no auth - redirect to dashboard
+      expect(screen.getByText("Dashboard")).toBeInTheDocument();
     });
 
     it("handles whitespace-only token as valid authentication", () => {
@@ -380,7 +380,7 @@ describe("StudioConsolePage", () => {
       renderWithRouter("/studio/lab-123/console/router1");
 
       // Whitespace token is truthy, so should render console
-      expect(screen.queryByText("Login Page")).not.toBeInTheDocument();
+      expect(screen.queryByText("Dashboard")).not.toBeInTheDocument();
     });
   });
 

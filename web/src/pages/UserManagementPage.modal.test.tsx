@@ -22,6 +22,10 @@ vi.mock('../api', () => ({
   apiRequest: vi.fn(),
 }));
 
+vi.mock('../components/AdminMenuButton', () => ({
+  default: () => <div>AdminMenuButton</div>,
+}));
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<any>('react-router-dom');
   return {

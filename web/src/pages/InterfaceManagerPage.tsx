@@ -4,6 +4,7 @@ import { useUser } from '../contexts/UserContext';
 import { canViewInfrastructure } from '../utils/permissions';
 import { apiRequest } from '../api';
 import { formatTimestamp } from '../utils/format';
+import AdminMenuButton from '../components/AdminMenuButton';
 
 interface AgentManagedInterface {
   id: string;
@@ -271,12 +272,13 @@ export default function InterfaceManagerPage() {
   return (
     <div className="min-h-screen bg-stone-50/72 dark:bg-stone-900/72 backdrop-blur-[1px] flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="h-20 bg-white/30 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800 px-10 flex items-center">
-        <div className="max-w-7xl mx-auto">
+      <header className="h-20 bg-white/30 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800 px-10 flex items-center justify-between">
+        <div>
           <div className="flex items-center gap-3 mb-2">
             <button
               onClick={() => navigate('/infrastructure?tab=network')}
               className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
+              title="Back to infrastructure"
             >
               <i className="fa-solid fa-arrow-left"></i>
             </button>
@@ -285,6 +287,10 @@ export default function InterfaceManagerPage() {
           <p className="text-stone-500 text-sm ml-7">
             Manage provisioned network interfaces across all agent hosts.
           </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <AdminMenuButton />
         </div>
       </header>
 

@@ -3,6 +3,17 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Auth from "./Auth";
 
+const mockToggleMode = vi.fn();
+const mockSetMode = vi.fn();
+
+vi.mock("../../theme/index", () => ({
+  useTheme: () => ({
+    effectiveMode: "dark",
+    toggleMode: mockToggleMode,
+    setMode: mockSetMode,
+  }),
+}));
+
 // Mock ArchetypeIcon
 vi.mock("../../components/icons", () => ({
   ArchetypeIcon: ({ size, className }: { size: number; className: string }) => (
@@ -31,24 +42,19 @@ describe("Auth", () => {
       expect(screen.getByText("ARCHETYPE")).toBeInTheDocument();
     });
 
-    it("renders Network Studio subtitle", () => {
-      render(<Auth {...defaultProps} />);
-      expect(screen.getByText("Network Studio")).toBeInTheDocument();
-    });
-
     it("renders ArchetypeIcon", () => {
       render(<Auth {...defaultProps} />);
       expect(screen.getByTestId("archetype-icon")).toBeInTheDocument();
     });
 
-    it("renders Username label", () => {
+    it("renders Username field", () => {
       render(<Auth {...defaultProps} />);
-      expect(screen.getByText("Username")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Username")).toBeInTheDocument();
     });
 
-    it("renders Password label", () => {
+    it("renders Password field", () => {
       render(<Auth {...defaultProps} />);
-      expect(screen.getByText("Password")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("••••••••")).toBeInTheDocument();
     });
 
     it("renders Sign In button", () => {
@@ -58,7 +64,7 @@ describe("Auth", () => {
 
     it("renders version info", () => {
       render(<Auth {...defaultProps} />);
-      expect(screen.getByText(/v0.4.0/)).toBeInTheDocument();
+      expect(screen.getByText(/^v/)).toBeInTheDocument();
     });
   });
 
@@ -261,10 +267,9 @@ describe("Auth", () => {
       expect(lockIcon).toBeInTheDocument();
     });
 
-    it("renders network topology SVG decoration", () => {
+    it("renders theme toggle button", () => {
       render(<Auth {...defaultProps} />);
-      const svg = document.querySelector("svg[viewBox='0 0 1200 800']");
-      expect(svg).toBeInTheDocument();
+      expect(screen.getByTitle("Switch to light mode")).toBeInTheDocument();
     });
   });
 

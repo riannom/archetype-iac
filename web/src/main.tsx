@@ -12,6 +12,7 @@ import StudioConsolePage from "./pages/StudioConsolePage";
 import InfrastructurePage from "./pages/InfrastructurePage";
 import InterfaceManagerPage from "./pages/InterfaceManagerPage";
 import NodesPage from "./pages/NodesPage";
+import AdminSettingsPage from "./pages/AdminSettingsPage";
 import StudioPage from "./studio/StudioPage";
 import UserManagementPage from "./pages/UserManagementPage";
 
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
   { path: "/hosts", element: <Navigate to="/infrastructure" replace /> },
   { path: "/infrastructure", element: <InfrastructurePage /> },
   { path: "/admin/interfaces", element: <InterfaceManagerPage /> },
+  { path: "/admin/settings", element: <AdminSettingsPage /> },
   { path: "/admin/users", element: <UserManagementPage /> },
   { path: "/nodes", element: <NodesPage /> },
   { path: "/nodes/devices", element: <NodesPage /> },

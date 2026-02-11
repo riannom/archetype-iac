@@ -1,9 +1,5 @@
-<svg width="32" height="32" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background circle -->
-  <circle cx="32" cy="32" r="30" fill="#000000"/>
-  <!-- Diamond shape -->
-  <polygon points="32,12 48,32 32,52 16,32" fill="none" stroke="#6fcf7d" stroke-width="3"/>
-  <!-- Internal grid lines -->
-  <line x1="32" y1="12" x2="32" y2="52" stroke="#6fcf7d" stroke-width="2" opacity="0.6"/>
-  <line x1="16" y1="32" x2="48" y2="32" stroke="#6fcf7d" stroke-width="2" opacity="0.6"/>
+<svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M50 15L85 85H70L50 45L30 85H15L50 15Z" fill="#2563EB"/>
+  <path d="M50 15V45" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.35"/>
+  <circle cx="50" cy="15" r="3" fill="#FFFFFF" opacity="0.35"/>
 </svg>

@@ -96,12 +96,66 @@ export interface UpdateInfo {
   error?: string | null;
 }
 
+export interface LoginDefaults {
+  dark_theme_id: string;
+  dark_background_id: string;
+  dark_background_opacity: number;
+  light_theme_id: string;
+  light_background_id: string;
+  light_background_opacity: number;
+}
+
 export async function getVersionInfo(): Promise<VersionInfo> {
   return apiRequest<VersionInfo>("/system/version");
 }
 
 export async function checkForUpdates(): Promise<UpdateInfo> {
   return apiRequest<UpdateInfo>("/system/updates");
+}
+
+export async function getLoginDefaults(): Promise<LoginDefaults> {
+  return apiRequest<LoginDefaults>("/system/login-defaults");
+}
+
+export interface InfrastructureSettings {
+  overlay_mtu: number;
+  mtu_verification_enabled: boolean;
+  overlay_preserve_container_mtu: boolean;
+  overlay_clamp_host_mtu: boolean;
+  login_dark_theme_id: string;
+  login_dark_background_id: string;
+  login_dark_background_opacity: number;
+  login_light_theme_id: string;
+  login_light_background_id: string;
+  login_light_background_opacity: number;
+  updated_at?: string | null;
+  updated_by_id?: string | null;
+}
+
+export interface InfrastructureSettingsUpdate {
+  overlay_mtu?: number;
+  mtu_verification_enabled?: boolean;
+  overlay_preserve_container_mtu?: boolean;
+  overlay_clamp_host_mtu?: boolean;
+  login_dark_theme_id?: string;
+  login_dark_background_id?: string;
+  login_dark_background_opacity?: number;
+  login_light_theme_id?: string;
+  login_light_background_id?: string;
+  login_light_background_opacity?: number;
+}
+
+export async function getInfrastructureSettings(): Promise<InfrastructureSettings> {
+  return apiRequest<InfrastructureSettings>("/infrastructure/settings");
+}
+
+export async function updateInfrastructureSettings(
+  payload: InfrastructureSettingsUpdate
+): Promise<InfrastructureSettings> {
+  return apiRequest<InfrastructureSettings>("/infrastructure/settings", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 
