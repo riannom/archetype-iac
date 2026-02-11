@@ -6,6 +6,7 @@ import { useTheme } from '../../theme/index';
 import { getAgentColor, getAgentInitials } from '../../utils/agentColors';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { NodeStateEntry } from '../../types/nodeState';
+import { computeLinkLabelPlacements } from '../utils/linkLabelPlacement';
 
 interface CanvasProps {
   nodes: Node[];
@@ -91,6 +92,8 @@ const Canvas: React.FC<CanvasProps> = ({
     nodes.forEach(node => map.set(node.id, node));
     return map;
   }, [nodes]);
+
+  const linkLabelPlacements = useMemo(() => computeLinkLabelPlacements(nodes, links), [nodes, links]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -457,35 +460,7 @@ const Canvas: React.FC<CanvasProps> = ({
             );
           })}
 
-          {/* Build link index maps to avoid label overlap */}
-          {(() => {
-            // Count links per node and assign indices
-            const sourceLinkIndices = new Map<string, Map<string, number>>();
-            const targetLinkIndices = new Map<string, Map<string, number>>();
-            const sourceCounters = new Map<string, number>();
-            const targetCounters = new Map<string, number>();
-
-            links.forEach(link => {
-              // Track source side
-              if (!sourceLinkIndices.has(link.source)) {
-                sourceLinkIndices.set(link.source, new Map());
-                sourceCounters.set(link.source, 0);
-              }
-              const srcIdx = sourceCounters.get(link.source)!;
-              sourceLinkIndices.get(link.source)!.set(link.id, srcIdx);
-              sourceCounters.set(link.source, srcIdx + 1);
-
-              // Track target side
-              if (!targetLinkIndices.has(link.target)) {
-                targetLinkIndices.set(link.target, new Map());
-                targetCounters.set(link.target, 0);
-              }
-              const tgtIdx = targetCounters.get(link.target)!;
-              targetLinkIndices.get(link.target)!.set(link.id, tgtIdx);
-              targetCounters.set(link.target, tgtIdx + 1);
-            });
-
-            return links.map(link => {
+          {links.map(link => {
             const source = nodeMap.get(link.source);
             const target = nodeMap.get(link.target);
             if (!source || !target) return null;
@@ -507,33 +482,11 @@ const Canvas: React.FC<CanvasProps> = ({
                 : (isHovered ? (effectiveMode === 'dark' ? '#84CC16' : '#65A30D') : (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
             }
 
-            // Calculate port label positions (~60px along line from each node, offset perpendicular)
-            const dx = target.x - source.x;
-            const dy = target.y - source.y;
-            const len = Math.sqrt(dx * dx + dy * dy);
-            const unitX = len > 0 ? dx / len : 0;
-            const unitY = len > 0 ? dy / len : 0;
-            // Perpendicular offset (rotate 90 degrees)
-            const perpX = -unitY;
-            const perpY = unitX;
-            const labelOffset = 60;
-            // Dynamic perpendicular offset based on link index to avoid overlap
-            const srcLinkIdx = sourceLinkIndices.get(link.source)?.get(link.id) || 0;
-            const tgtLinkIdx = targetLinkIndices.get(link.target)?.get(link.id) || 0;
-            const srcLinkCount = sourceCounters.get(link.source) || 1;
-            const tgtLinkCount = targetCounters.get(link.target) || 1;
-            // Alternate offset direction and increase spacing when multiple links
-            const basePerpOffset = 10;
-            const srcPerpOffset = srcLinkCount > 1
-              ? basePerpOffset + (srcLinkIdx - (srcLinkCount - 1) / 2) * 14
-              : basePerpOffset;
-            const tgtPerpOffset = tgtLinkCount > 1
-              ? basePerpOffset + (tgtLinkIdx - (tgtLinkCount - 1) / 2) * 14
-              : basePerpOffset;
-            const sourceLabelX = source.x + unitX * labelOffset + perpX * srcPerpOffset;
-            const sourceLabelY = source.y + unitY * labelOffset + perpY * srcPerpOffset;
-            const targetLabelX = target.x - unitX * labelOffset + perpX * tgtPerpOffset;
-            const targetLabelY = target.y - unitY * labelOffset + perpY * tgtPerpOffset;
+            const labelPlacement = linkLabelPlacements.get(link.id);
+            const sourceLabelX = labelPlacement?.source?.x;
+            const sourceLabelY = labelPlacement?.source?.y;
+            const targetLabelX = labelPlacement?.target?.x;
+            const targetLabelY = labelPlacement?.target?.y;
 
             // Label styling for better contrast
             const labelColor = effectiveMode === 'dark' ? '#E7E5E4' : '#44403C';
@@ -553,7 +506,7 @@ const Canvas: React.FC<CanvasProps> = ({
                   className={draggingNode ? '' : 'transition-[stroke,stroke-width] duration-150'}
                 />
                 {/* Port labels */}
-                {link.sourceInterface && (
+                {link.sourceInterface && sourceLabelX !== undefined && sourceLabelY !== undefined && (
                   <text
                     x={sourceLabelX}
                     y={sourceLabelY}
@@ -571,7 +524,7 @@ const Canvas: React.FC<CanvasProps> = ({
                     {link.sourceInterface}
                   </text>
                 )}
-                {link.targetInterface && (
+                {link.targetInterface && targetLabelX !== undefined && targetLabelY !== undefined && (
                   <text
                     x={targetLabelX}
                     y={targetLabelY}
@@ -591,8 +544,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 )}
               </g>
             );
-          });
-          })()}
+          })}
 
           {linkingNode && (
             <line
