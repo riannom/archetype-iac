@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../../theme/index';
 import { useUser } from '../../contexts/UserContext';
@@ -79,8 +79,18 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [showSystemLogs, setShowSystemLogs] = useState(false);
   const [editingLabId, setEditingLabId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const deleteTimeoutRef = useRef<number | null>(null);
   const showInfra = canViewInfrastructure(user ?? null);
   const showUsers = canManageUsers(user ?? null);
+
+  useEffect(() => {
+    return () => {
+      if (deleteTimeoutRef.current) {
+        window.clearTimeout(deleteTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleStartEdit = (lab: LabSummary, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -106,6 +116,32 @@ const Dashboard: React.FC<DashboardProps> = ({
     } else if (e.key === 'Escape') {
       setEditingLabId(null);
       setEditName('');
+    }
+  };
+
+  const handleDeleteRequest = (labId: string) => {
+    if (pendingDeleteId === labId) {
+      setPendingDeleteId(null);
+      if (deleteTimeoutRef.current) {
+        window.clearTimeout(deleteTimeoutRef.current);
+      }
+      onDelete(labId);
+      return;
+    }
+
+    setPendingDeleteId(labId);
+    if (deleteTimeoutRef.current) {
+      window.clearTimeout(deleteTimeoutRef.current);
+    }
+    deleteTimeoutRef.current = window.setTimeout(() => {
+      setPendingDeleteId(null);
+    }, 3000);
+  };
+
+  const handleDeleteCancel = () => {
+    setPendingDeleteId(null);
+    if (deleteTimeoutRef.current) {
+      window.clearTimeout(deleteTimeoutRef.current);
     }
   };
 
@@ -211,12 +247,32 @@ const Dashboard: React.FC<DashboardProps> = ({
                 className="group relative bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 hover:border-sage-500/50 hover:shadow-2xl hover:shadow-sage-900/10 transition-all cursor-default overflow-hidden"
               >
                 <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                   <button
-                    onClick={(e) => { e.stopPropagation(); onDelete(lab.id); }}
-                    className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
-                   >
-                     <i className="fa-solid fa-trash-can text-xs"></i>
-                   </button>
+                  {pendingDeleteId === lab.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteRequest(lab.id); }}
+                        className="w-8 h-8 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-all border border-red-500/20"
+                        title="Confirm delete"
+                      >
+                        <i className="fa-solid fa-check text-xs"></i>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteCancel(); }}
+                        className="w-8 h-8 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-500 hover:bg-stone-200 dark:hover:bg-stone-700 transition-all border border-stone-300 dark:border-stone-700"
+                        title="Cancel"
+                      >
+                        <i className="fa-solid fa-xmark text-xs"></i>
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteRequest(lab.id); }}
+                      className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
+                      title="Delete lab"
+                    >
+                      <i className="fa-solid fa-trash-can text-xs"></i>
+                    </button>
+                  )}
                 </div>
 
                 <div className="w-12 h-12 bg-stone-100 dark:bg-stone-800 rounded-xl flex items-center justify-center mb-4 text-stone-500 dark:text-stone-400 group-hover:bg-sage-600 group-hover:text-white transition-all border border-stone-200 dark:border-stone-700">
