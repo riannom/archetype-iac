@@ -108,10 +108,10 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, annotations = [], onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, agents = [], nodeStates = {}
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'hardware' | 'connectivity' | 'config'>('general');
-  const [isHardwareLocked, setIsHardwareLocked] = useState(false);
+  const [isHardwareLocked, setIsHardwareLocked] = useState(true);
 
   useEffect(() => {
-    setIsHardwareLocked(false);
+    setIsHardwareLocked(true);
   }, [selectedItem?.id]);
 
   if (!selectedItem) {
