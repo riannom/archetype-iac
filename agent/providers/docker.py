@@ -2632,7 +2632,7 @@ username admin privilege 15 role network-admin nopassword
                 from agent.metrics import docker_api_duration
                 _docker_t0 = _time.monotonic()
                 await asyncio.to_thread(container.start)
-                docker_api_duration.labels(operation="start").observe(_time.monotonic() - _docker_t0)
+                docker_api_duration.labels(operation="start", status="success").observe(_time.monotonic() - _docker_t0)
             except APIError as e:
                 # Check if this is a stale network error
                 error_msg = str(e).lower()
@@ -2723,7 +2723,7 @@ username admin privilege 15 role network-admin nopassword
             from agent.metrics import docker_api_duration
             _docker_t0 = _time.monotonic()
             await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
-            docker_api_duration.labels(operation="stop").observe(_time.monotonic() - _docker_t0)
+            docker_api_duration.labels(operation="stop", status="success").observe(_time.monotonic() - _docker_t0)
             await asyncio.to_thread(container.reload)
 
             # Clear post-boot state so commands run again on restart
@@ -2859,7 +2859,7 @@ username admin privilege 15 role network-admin nopassword
                 container = await asyncio.to_thread(
                     lambda cfg=container_config: self.docker.containers.create(**cfg)
                 )
-                docker_api_duration.labels(operation="create").observe(_time.monotonic() - _docker_t0)
+                docker_api_duration.labels(operation="create", status="success").observe(_time.monotonic() - _docker_t0)
 
                 # Attach to remaining interface networks (eth2, eth3, ...)
                 await self._attach_container_to_networks(
@@ -2879,7 +2879,7 @@ username admin privilege 15 role network-admin nopassword
                 container = await asyncio.to_thread(
                     lambda cfg=container_config: self.docker.containers.create(**cfg)
                 )
-                docker_api_duration.labels(operation="create").observe(_time.monotonic() - _docker_t0)
+                docker_api_duration.labels(operation="create", status="success").observe(_time.monotonic() - _docker_t0)
 
             return NodeActionResult(
                 success=True,
@@ -2922,7 +2922,7 @@ username admin privilege 15 role network-admin nopassword
                 from agent.metrics import docker_api_duration
                 _docker_t0 = _time.monotonic()
                 await asyncio.to_thread(container.remove, force=True, v=True)
-                docker_api_duration.labels(operation="remove").observe(_time.monotonic() - _docker_t0)
+                docker_api_duration.labels(operation="remove", status="success").observe(_time.monotonic() - _docker_t0)
                 logger.info(f"Removed container {container_name}")
             except NotFound:
                 logger.info(f"Container {container_name} not found, already removed")

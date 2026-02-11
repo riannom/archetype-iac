@@ -19,7 +19,12 @@ from typing import Optional
 
 from app import agent_client, models
 from app.agent_client import AgentUnavailableError
-from app.metrics import nlm_phase_duration
+from app.metrics import (
+    nlm_phase_duration,
+    record_job_completed,
+    record_job_failed,
+    record_job_started,
+)
 from app.timing import AsyncTimedOperation
 from app.config import settings
 from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
@@ -147,10 +152,25 @@ class NodeLifecycleManager:
         most_common = Counter(types).most_common(1)[0][0]
         return most_common if most_common in self._KNOWN_DEVICE_TYPES else "other"
 
+    def _group_nodes_by_device_type(
+        self, node_states: list[models.NodeState],
+    ) -> list[tuple[str, list[models.NodeState]]]:
+        groups: dict[str, list[models.NodeState]] = {}
+        for ns in node_states:
+            db_node = self.db_nodes_map.get(ns.node_name)
+            raw_device = (db_node.device if db_node else "linux") or "linux"
+            device_type = raw_device.lower()
+            if device_type not in self._KNOWN_DEVICE_TYPES:
+                device_type = "other"
+            groups.setdefault(device_type, []).append(ns)
+        return [(k, groups[k]) for k in sorted(groups.keys())]
+
     async def execute(self) -> LifecycleResult:
         """Main orchestrator — calls phases in order."""
         # Phase: Load and validate
         if not await self._load_and_validate():
+            if self.job.status == JobStatus.COMPLETED.value:
+                record_job_completed(self.job.action, duration_seconds=0.0)
             return LifecycleResult(
                 success=True, log=self.log_parts or ["No action needed"]
             )
@@ -160,6 +180,8 @@ class NodeLifecycleManager:
 
         # Phase: Resolve agents (may spawn sub-jobs for other agents)
         if not await self._resolve_agents():
+            if self.job.status == JobStatus.FAILED.value:
+                record_job_failed(self.job.action)
             return LifecycleResult(success=False, log=self.log_parts)
 
         # Mark job running
@@ -167,6 +189,7 @@ class NodeLifecycleManager:
         self.job.agent_id = self.agent.id
         self.job.started_at = datetime.now(timezone.utc)
         self.session.commit()
+        record_job_started(self.job.action)
 
         await self._broadcast_job_progress(
             "running",
@@ -184,6 +207,12 @@ class NodeLifecycleManager:
 
         # Phase: Resource check (BEFORE migration — Phase 2.2)
         if not await self._check_resources():
+            if self.job.status == JobStatus.FAILED.value:
+                duration = (
+                    (self.job.completed_at - self.job.started_at).total_seconds()
+                    if self.job.completed_at and self.job.started_at else None
+                )
+                record_job_failed(self.job.action, duration_seconds=duration)
             return LifecycleResult(success=False, log=self.log_parts)
 
         # Categorize nodes by action
@@ -199,7 +228,11 @@ class NodeLifecycleManager:
         if nodes_to_start_or_deploy:
             async with AsyncTimedOperation(
                 histogram=nlm_phase_duration,
-                labels={"phase": "image_sync", "device_type": self._dominant_device_type(nodes_to_start_or_deploy)},
+                labels={
+                    "phase": "image_sync",
+                    "device_type": self._dominant_device_type(nodes_to_start_or_deploy),
+                    "status": "auto",
+                },
                 log_event="nlm_phase",
                 log_extras={**_timing_extras, "phase": "image_sync"},
             ):
@@ -211,43 +244,86 @@ class NodeLifecycleManager:
                 )
             if result is None:
                 # All nodes syncing/failed, nothing left to do this pass
+                if self.job.status == JobStatus.COMPLETED.value:
+                    duration = (
+                        (self.job.completed_at - self.job.started_at).total_seconds()
+                        if self.job.completed_at and self.job.started_at else 0.0
+                    )
+                    record_job_completed(self.job.action, duration_seconds=duration)
+                elif self.job.status == JobStatus.FAILED.value:
+                    duration = (
+                        (self.job.completed_at - self.job.started_at).total_seconds()
+                        if self.job.completed_at and self.job.started_at else None
+                    )
+                    record_job_failed(self.job.action, duration_seconds=duration)
                 return LifecycleResult(success=True, log=self.log_parts)
             nodes_need_deploy, nodes_need_start = result
 
         # Phase: Deploy undeployed nodes
         if nodes_need_deploy:
-            async with AsyncTimedOperation(
-                histogram=nlm_phase_duration,
-                labels={"phase": "container_deploy", "device_type": self._dominant_device_type(nodes_need_deploy)},
-                log_event="nlm_phase",
-                log_extras={**_timing_extras, "phase": "container_deploy"},
-            ):
-                await self._deploy_nodes(nodes_need_deploy)
+            for device_type, grouped_nodes in self._group_nodes_by_device_type(nodes_need_deploy):
+                async with AsyncTimedOperation(
+                    histogram=nlm_phase_duration,
+                    labels={
+                        "phase": "container_deploy",
+                        "device_type": device_type,
+                        "status": "auto",
+                    },
+                    log_event="nlm_phase",
+                    log_extras={
+                        **_timing_extras,
+                        "phase": "container_deploy",
+                        "device_type": device_type,
+                    },
+                ):
+                    await self._deploy_nodes(grouped_nodes)
 
         # Phase: Start stopped nodes (via redeploy)
         if nodes_need_start:
-            async with AsyncTimedOperation(
-                histogram=nlm_phase_duration,
-                labels={"phase": "container_start", "device_type": self._dominant_device_type(nodes_need_start)},
-                log_event="nlm_phase",
-                log_extras={**_timing_extras, "phase": "container_start"},
-            ):
-                await self._start_nodes(nodes_need_start)
+            for device_type, grouped_nodes in self._group_nodes_by_device_type(nodes_need_start):
+                async with AsyncTimedOperation(
+                    histogram=nlm_phase_duration,
+                    labels={
+                        "phase": "container_start",
+                        "device_type": device_type,
+                        "status": "auto",
+                    },
+                    log_event="nlm_phase",
+                    log_extras={
+                        **_timing_extras,
+                        "phase": "container_start",
+                        "device_type": device_type,
+                    },
+                ):
+                    await self._start_nodes(grouped_nodes)
 
         # Phase: Stop running nodes
         if nodes_need_stop:
-            async with AsyncTimedOperation(
-                histogram=nlm_phase_duration,
-                labels={"phase": "container_stop", "device_type": self._dominant_device_type(nodes_need_stop)},
-                log_event="nlm_phase",
-                log_extras={**_timing_extras, "phase": "container_stop"},
-            ):
-                await self._stop_nodes(nodes_need_stop)
+            for device_type, grouped_nodes in self._group_nodes_by_device_type(nodes_need_stop):
+                async with AsyncTimedOperation(
+                    histogram=nlm_phase_duration,
+                    labels={
+                        "phase": "container_stop",
+                        "device_type": device_type,
+                        "status": "auto",
+                    },
+                    log_event="nlm_phase",
+                    log_extras={
+                        **_timing_extras,
+                        "phase": "container_stop",
+                        "device_type": device_type,
+                    },
+                ):
+                    await self._stop_nodes(grouped_nodes)
 
         # Phase: Post-operation cleanup (cross-host links)
         async with AsyncTimedOperation(
             histogram=nlm_phase_duration,
-            labels={"phase": "post_cleanup", "device_type": self._dominant_device_type()},
+            labels={
+                "phase": "post_cleanup",
+                "device_type": self._dominant_device_type(),
+                "status": "auto",
+            },
             log_event="nlm_phase",
             log_extras={**_timing_extras, "phase": "post_cleanup"},
         ):
@@ -2265,6 +2341,14 @@ class NodeLifecycleManager:
         self.job.completed_at = datetime.now(timezone.utc)
         self.job.log_path = "\n".join(self.log_parts)
         self.session.commit()
+        duration = (
+            (self.job.completed_at - self.job.started_at).total_seconds()
+            if self.job.completed_at and self.job.started_at else None
+        )
+        if self.job.status == JobStatus.COMPLETED.value:
+            record_job_completed(self.job.action, duration_seconds=duration or 0.0)
+        elif self.job.status == JobStatus.FAILED.value:
+            record_job_failed(self.job.action, duration_seconds=duration)
 
         logger.info(
             f"Job {self.job.id} completed with status: {self.job.status}"

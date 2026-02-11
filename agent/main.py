@@ -3230,7 +3230,10 @@ async def create_node(
 
     # Record metrics
     from agent.metrics import node_operation_duration, node_operation_errors
-    node_operation_duration.labels(operation="create").observe(elapsed_ms / 1000)
+    node_operation_duration.labels(
+        operation="create",
+        status="success" if result.success else "error",
+    ).observe(elapsed_ms / 1000)
     if not result.success:
         node_operation_errors.labels(operation="create").inc()
 
@@ -3297,7 +3300,10 @@ async def start_node(
     )
 
     from agent.metrics import node_operation_duration, node_operation_errors
-    node_operation_duration.labels(operation="start").observe(elapsed_ms / 1000)
+    node_operation_duration.labels(
+        operation="start",
+        status="success" if result.success else "error",
+    ).observe(elapsed_ms / 1000)
     if not result.success:
         node_operation_errors.labels(operation="start").inc()
 
@@ -3342,7 +3348,10 @@ async def stop_node(lab_id: str, node_name: str, provider: str = "docker") -> St
     )
 
     from agent.metrics import node_operation_duration, node_operation_errors
-    node_operation_duration.labels(operation="stop").observe(elapsed_ms / 1000)
+    node_operation_duration.labels(
+        operation="stop",
+        status="success" if result.success else "error",
+    ).observe(elapsed_ms / 1000)
     if not result.success:
         node_operation_errors.labels(operation="stop").inc()
 
@@ -3385,7 +3394,10 @@ async def destroy_node(lab_id: str, node_name: str, provider: str = "docker") ->
     )
 
     from agent.metrics import node_operation_duration, node_operation_errors
-    node_operation_duration.labels(operation="destroy").observe(elapsed_ms / 1000)
+    node_operation_duration.labels(
+        operation="destroy",
+        status="success" if result.success else "error",
+    ).observe(elapsed_ms / 1000)
     if not result.success:
         node_operation_errors.labels(operation="destroy").inc()
 

@@ -8,7 +8,12 @@ groups:
     rules:
       # Alert when a job has been running for more than 20 minutes
       - alert: StuckJob
-        expr: archetype_jobs_active > 0 and archetype_job_duration_seconds_count == 0
+        expr: |
+          sum(archetype_jobs_active) > 0
+          and
+          (
+            (sum(increase(archetype_jobs_total{status=~"completed|failed"}[20m])) or on() vector(0)) == 0
+          )
         for: 20m
         labels:
           severity: warning
@@ -132,7 +137,7 @@ groups:
     rules:
       # Alert when node deploy phase P95 is slow
       - alert: SlowNodeDeploy
-        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{phase="container_deploy"}[10m])) by (le)) > 120
+        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{phase="container_deploy",status="success"}[10m])) by (le)) > 120
         for: 10m
         labels:
           severity: warning
@@ -142,7 +147,7 @@ groups:
 
       # Alert when boot wait P95 is very slow
       - alert: SlowBootWait
-        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{phase="boot_wait"}[15m])) by (le)) > 300
+        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{phase="boot_wait",status="success"}[15m])) by (le)) > 300
         for: 15m
         labels:
           severity: warning

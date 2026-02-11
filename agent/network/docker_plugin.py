@@ -177,7 +177,33 @@ class DockerOVSPlugin:
 
     async def _ovs_vsctl(self, *args: str) -> tuple[int, str, str]:
         """Run ovs-vsctl command."""
-        return await self._run_cmd(["ovs-vsctl", *args])
+        import time as _time
+
+        status = "success"
+        start = _time.monotonic()
+        try:
+            code, stdout, stderr = await self._run_cmd(["ovs-vsctl", *args])
+            if code != 0:
+                status = "error"
+            return code, stdout, stderr
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            try:
+                from agent.metrics import ovs_operation_duration
+
+                operation = "unknown"
+                for arg in args:
+                    if not arg.startswith("-"):
+                        operation = arg
+                        break
+                ovs_operation_duration.labels(
+                    operation=operation,
+                    status=status,
+                ).observe(_time.monotonic() - start)
+            except Exception:
+                pass
 
     async def _validate_endpoint_exists(self, ep: EndpointState) -> bool:
         """Check if endpoint's host veth actually exists as an OVS port.

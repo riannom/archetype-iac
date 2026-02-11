@@ -139,7 +139,7 @@ if PROMETHEUS_AVAILABLE:
     nlm_phase_duration = Histogram(
         "archetype_nlm_phase_duration_seconds",
         "Duration of NLM lifecycle phases",
-        ["phase", "device_type"],
+        ["phase", "device_type", "status"],
         buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
     )
 
@@ -148,7 +148,7 @@ if PROMETHEUS_AVAILABLE:
     agent_operation_duration = Histogram(
         "archetype_agent_operation_duration_seconds",
         "API-to-agent operation round-trip duration",
-        ["operation", "host_id"],
+        ["operation", "host_id", "status"],
         buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
     )
 

@@ -59,7 +59,10 @@ class TimedOperation:
 
         try:
             if self.histogram is not None:
-                self.histogram.labels(**self.labels).observe(elapsed)
+                metric_labels = dict(self.labels)
+                if metric_labels.get("status") in ("auto", "__auto__"):
+                    metric_labels["status"] = "success" if self.success else "error"
+                self.histogram.labels(**metric_labels).observe(elapsed)
         except Exception as e:
             logger.warning("Failed to record metric: %s", e)
 
@@ -112,7 +115,10 @@ class AsyncTimedOperation:
 
         try:
             if self.histogram is not None:
-                self.histogram.labels(**self.labels).observe(elapsed)
+                metric_labels = dict(self.labels)
+                if metric_labels.get("status") in ("auto", "__auto__"):
+                    metric_labels["status"] = "success" if self.success else "error"
+                self.histogram.labels(**metric_labels).observe(elapsed)
         except Exception as e:
             logger.warning("Failed to record metric: %s", e)
 

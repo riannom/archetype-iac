@@ -173,6 +173,8 @@ async def _agent_request(
     params: dict | None = None,
     timeout: float | None = None,
     max_retries: int | None = None,
+    metric_operation: str | None = None,
+    metric_host_id: str | None = None,
 ) -> dict:
     """Make an agent HTTP request with standardized retry/error handling."""
     client = get_http_client()
@@ -190,7 +192,24 @@ async def _agent_request(
             return {}
         return response.json()
 
-    return await with_retry(_do_request, max_retries=max_retries)
+    status = "success"
+    import time as _time
+    _t0 = _time.monotonic()
+    try:
+        return await with_retry(_do_request, max_retries=max_retries)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        if metric_operation and metric_host_id:
+            try:
+                agent_operation_duration.labels(
+                    operation=metric_operation,
+                    host_id=metric_host_id,
+                    status=status,
+                ).observe(_time.monotonic() - _t0)
+            except Exception:
+                pass
 
 
 def _agent_online_cutoff(timeout_seconds: int | None = None) -> datetime:
@@ -710,6 +729,8 @@ async def get_lab_status_from_agent(
             url,
             timeout=settings.agent_status_timeout,
             max_retries=1,
+            metric_operation="get_lab_status",
+            metric_host_id=agent.id,
         )
     except AgentError as e:
         e.agent_id = agent.id
@@ -790,6 +811,8 @@ async def check_node_readiness(
             params=params or None,
             timeout=10.0,
             max_retries=0,
+            metric_operation="check_node_readiness",
+            metric_host_id=agent.id,
         )
     except Exception as e:
         logger.error(f"Failed to check readiness for {node_name} on agent {agent.id}: {e}")
@@ -815,6 +838,8 @@ async def get_node_runtime_profile(
         params=params,
         timeout=10.0,
         max_retries=0,
+        metric_operation="get_node_runtime",
+        metric_host_id=agent.id,
     )
 
 
@@ -1761,7 +1786,9 @@ async def create_node_on_agent(
             max_retries=0,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(operation="create_node", host_id=agent.id).observe(elapsed_ms / 1000)
+        agent_operation_duration.labels(
+            operation="create_node", host_id=agent.id, status="success",
+        ).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1779,7 +1806,9 @@ async def create_node_on_agent(
         return result
     except Exception as e:
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(operation="create_node", host_id=agent.id).observe(elapsed_ms / 1000)
+        agent_operation_duration.labels(
+            operation="create_node", host_id=agent.id, status="error",
+        ).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1838,7 +1867,9 @@ async def start_node_on_agent(
             max_retries=0,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(operation="start_node", host_id=agent.id).observe(elapsed_ms / 1000)
+        agent_operation_duration.labels(
+            operation="start_node", host_id=agent.id, status="success",
+        ).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1856,7 +1887,9 @@ async def start_node_on_agent(
         return result
     except Exception as e:
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(operation="start_node", host_id=agent.id).observe(elapsed_ms / 1000)
+        agent_operation_duration.labels(
+            operation="start_node", host_id=agent.id, status="error",
+        ).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1908,7 +1941,9 @@ async def stop_node_on_agent(
             max_retries=0,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(operation="stop_node", host_id=agent.id).observe(elapsed_ms / 1000)
+        agent_operation_duration.labels(
+            operation="stop_node", host_id=agent.id, status="success",
+        ).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1926,7 +1961,9 @@ async def stop_node_on_agent(
         return result
     except Exception as e:
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(operation="stop_node", host_id=agent.id).observe(elapsed_ms / 1000)
+        agent_operation_duration.labels(
+            operation="stop_node", host_id=agent.id, status="error",
+        ).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1978,7 +2015,9 @@ async def destroy_node_on_agent(
             max_retries=0,
         )
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(operation="destroy_node", host_id=agent.id).observe(elapsed_ms / 1000)
+        agent_operation_duration.labels(
+            operation="destroy_node", host_id=agent.id, status="success",
+        ).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -1996,7 +2035,9 @@ async def destroy_node_on_agent(
         return result
     except Exception as e:
         elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(operation="destroy_node", host_id=agent.id).observe(elapsed_ms / 1000)
+        agent_operation_duration.labels(
+            operation="destroy_node", host_id=agent.id, status="error",
+        ).observe(elapsed_ms / 1000)
         logger.info(
             "Agent response",
             extra={
@@ -2035,6 +2076,8 @@ async def extract_configs_on_agent(
             url,
             timeout=120.0,
             max_retries=0,
+            metric_operation="extract_configs",
+            metric_host_id=agent.id,
         )
         if result.get("success"):
             logger.info(f"Extracted {result.get('extracted_count', 0)} configs for lab {lab_id}")
@@ -2076,6 +2119,8 @@ async def update_config_on_agent(
             json_body={"content": content},
             timeout=30.0,
             max_retries=0,
+            metric_operation="update_config",
+            metric_host_id=agent.id,
         )
         if result.get("success"):
             logger.debug(f"Pushed config for {node_name} to agent {agent.id}")
@@ -2204,6 +2249,8 @@ async def get_agent_interface_details(agent: models.Host) -> dict:
             url,
             timeout=30.0,
             max_retries=0,
+            metric_operation="get_interface_details",
+            metric_host_id=agent.id,
         )
     except Exception as e:
         logger.error(f"Failed to get interface details from agent {agent.id}: {e}")

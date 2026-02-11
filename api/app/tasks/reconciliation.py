@@ -603,7 +603,7 @@ async def _check_readiness_for_nodes(session, nodes: list):
                             boot_secs = (datetime.now(timezone.utc) - ns.boot_started_at).total_seconds()
                             _boot_device = (node_devices.get(ns.node_name) or "linux").lower()
                             nlm_phase_duration.labels(
-                                phase="boot_wait", device_type=_boot_device,
+                                phase="boot_wait", device_type=_boot_device, status="success",
                             ).observe(boot_secs)
                         logger.info(f"Node {ns.node_name} in lab {lab_id} is now ready")
                 except Exception as e:
@@ -1011,7 +1011,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                                     boot_secs = (datetime.now(timezone.utc) - ns.boot_started_at).total_seconds()
                                     _boot_device = (device_kind or "linux").lower()
                                     nlm_phase_duration.labels(
-                                        phase="boot_wait", device_type=_boot_device,
+                                        phase="boot_wait", device_type=_boot_device, status="success",
                                     ).observe(boot_secs)
                                 logger.info(
                                     f"Node {ns.node_name} in lab {lab_id} is now ready"

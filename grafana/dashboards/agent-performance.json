@@ -13,7 +13,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_agent_docker_api_seconds_bucket[5m])) by (le, operation))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_agent_docker_api_seconds_bucket{status=\"success\"}[5m])) by (le, operation))",
           "legendFormat": "P95 {{operation}}",
           "refId": "A"
         }
@@ -31,7 +31,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_agent_ovs_operation_seconds_bucket[5m])) by (le, operation))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_agent_ovs_operation_seconds_bucket{status=\"success\"}[5m])) by (le, operation))",
           "legendFormat": "P95 {{operation}}",
           "refId": "A"
         }
@@ -49,12 +49,12 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_agent_node_operation_seconds_bucket[5m])) by (le, operation))",
+          "expr": "histogram_quantile(0.95, sum(rate(archetype_agent_node_operation_seconds_bucket{status=\"success\"}[5m])) by (le, operation))",
           "legendFormat": "P95 {{operation}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(archetype_agent_node_operation_seconds_bucket[5m])) by (le, operation))",
+          "expr": "histogram_quantile(0.50, sum(rate(archetype_agent_node_operation_seconds_bucket{status=\"success\"}[5m])) by (le, operation))",
           "legendFormat": "P50 {{operation}}",
           "refId": "B"
         }

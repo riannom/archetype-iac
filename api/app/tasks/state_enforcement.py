@@ -27,6 +27,7 @@ from app import models
 from app.config import settings
 from app.db import get_async_redis, get_session
 from app import agent_client
+from app.metrics import record_enforcement_action, record_enforcement_exhausted
 from app.utils.async_tasks import safe_create_task
 from app.state import (
     JobStatus,
@@ -317,6 +318,7 @@ async def enforce_node_state(
         logger.debug(
             f"No enforcement action for {node_name}: desired={desired}, actual={actual}"
         )
+        record_enforcement_action("skipped")
         return False
 
     # Check if enforcement should be skipped (max retries, backoff, cooldown)
@@ -341,18 +343,23 @@ async def enforce_node_state(
                 _notify_enforcement_failure(lab_id, node_state),
                 name=f"notify:enforcement:{lab_id}:{node_name}"
             )
+            record_enforcement_action("failed")
+            record_enforcement_exhausted()
         else:
             logger.debug(f"Node {node_name} in lab {lab_id}: {reason}")
+            record_enforcement_action("skipped")
         return False
 
     # Check legacy Redis cooldown (for backward compatibility)
     if await _is_on_cooldown(lab_id, node_name):
         logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
+        record_enforcement_action("skipped")
         return False
 
     # Check for active jobs
     if _has_active_job(session, lab_id, node_name):
         logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
+        record_enforcement_action("skipped")
         return False
 
     # Check for lab-wide active jobs (deploy/destroy)
@@ -363,6 +370,7 @@ async def enforce_node_state(
     ).first()
     if lab_job:
         logger.debug(f"Lab {lab_id} has active deploy/destroy job, skipping enforcement")
+        record_enforcement_action("skipped")
         return False
 
     # Get agent for this node
@@ -371,6 +379,7 @@ async def enforce_node_state(
         logger.warning(
             f"Cannot enforce state for {node_name} in lab {lab_id}: no healthy agent"
         )
+        record_enforcement_action("skipped")
         return False
 
     # Ensure placement record matches the agent we're using
@@ -419,6 +428,7 @@ async def enforce_node_state(
             f"Desired state changed for {node_name} ({desired} -> {current_desired}), "
             f"skipping enforcement"
         )
+        record_enforcement_action("skipped")
         return False
 
     # Set cooldown BEFORE creating job to prevent race with concurrent iterations
@@ -464,6 +474,7 @@ async def enforce_node_state(
         run_node_reconcile(job.id, lab_id, [node_id], provider=provider),
         name=f"enforce:sync:{job.id}"
     )
+    record_enforcement_action("success")
 
     return True
 
@@ -515,6 +526,7 @@ async def _is_enforceable(
         logger.debug(
             f"No enforcement action for {node_name}: desired={desired}, actual={actual}"
         )
+        record_enforcement_action("skipped")
         return False
 
     # Check if enforcement should be skipped (max retries, backoff, cooldown)
@@ -537,23 +549,29 @@ async def _is_enforceable(
                 _notify_enforcement_failure(lab_id, node_state),
                 name=f"notify:enforcement:{lab_id}:{node_name}"
             )
+            record_enforcement_action("failed")
+            record_enforcement_exhausted()
         else:
             logger.debug(f"Node {node_name} in lab {lab_id}: {reason}")
+            record_enforcement_action("skipped")
         return False
 
     # Check legacy Redis cooldown
     if await _is_on_cooldown(lab_id, node_name):
         logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
+        record_enforcement_action("skipped")
         return False
 
     # D.1: Check for active per-node jobs using pre-loaded set or fallback to DB query
     if active_job_nodes is not None:
         if (lab_id, node_name) in active_job_nodes:
             logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
+            record_enforcement_action("skipped")
             return False
     else:
         if _has_active_job(session, lab_id, node_name):
             logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
+            record_enforcement_action("skipped")
             return False
 
     return True
@@ -854,6 +872,8 @@ async def enforce_lab_states():
                         run_node_reconcile(job.id, lab_id, node_ids, provider=provider),
                         name=f"enforce:batch:{job.id}"
                     )
+                    for _ in node_ids:
+                        record_enforcement_action("success")
 
                     enforced_count += len(node_ids)
                 except Exception as e:

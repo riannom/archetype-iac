@@ -37,21 +37,21 @@ if PROMETHEUS_AVAILABLE:
     docker_api_duration = Histogram(
         "archetype_agent_docker_api_seconds",
         "Duration of Docker API calls",
-        ["operation"],
+        ["operation", "status"],
         buckets=(0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, float("inf")),
     )
 
     ovs_operation_duration = Histogram(
         "archetype_agent_ovs_operation_seconds",
         "Duration of OVS operations",
-        ["operation"],
+        ["operation", "status"],
         buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, float("inf")),
     )
 
     node_operation_duration = Histogram(
         "archetype_agent_node_operation_seconds",
         "Duration of node lifecycle operations",
-        ["operation"],
+        ["operation", "status"],
         buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
     )
 

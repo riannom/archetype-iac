@@ -28,6 +28,7 @@ from app.services.broadcaster import get_broadcaster
 from app.services.topology import TopologyService
 from app.utils.lab import update_lab_state
 from app.events.publisher import emit_deploy_finished, emit_destroy_finished, emit_job_failed
+from app.metrics import record_job_completed, record_job_failed, record_job_started
 from app.state import (
     HostStatus,
     JobStatus,
@@ -36,6 +37,23 @@ from app.state import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalized_job_action(action: str) -> str:
+    """Normalize verbose action strings to bounded metric labels."""
+    if not action:
+        return "unknown"
+    if action.startswith("sync:"):
+        return "sync"
+    if action.startswith("node:"):
+        return "node"
+    return action.split(":")[0]
+
+
+def _job_duration_seconds(job: models.Job) -> float | None:
+    if job.started_at and job.completed_at:
+        return max(0.0, (job.completed_at - job.started_at).total_seconds())
+    return None
 
 
 def acquire_deploy_lock(lab_id: str, node_names: list[str], agent_id: str, timeout: int = 300) -> tuple[bool, list[str]]:
@@ -490,6 +508,7 @@ async def run_agent_job(
                 job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Lab {lab_id} not found"
+                record_job_failed(_normalized_job_action(action))
                 session.commit()
                 return
 
@@ -532,6 +551,7 @@ async def run_agent_job(
                     f"Check agent status and connectivity."
                 )
                 update_lab_state(session, lab_id, LabState.ERROR.value, error="No healthy agent available")
+                record_job_failed(_normalized_job_action(action))
                 session.commit()
                 logger.warning(f"Job {job_id} failed: no healthy agent available for provider {provider}")
                 return
@@ -541,6 +561,7 @@ async def run_agent_job(
             job.agent_id = agent.id
             job.started_at = datetime.now(timezone.utc)
             session.commit()
+            record_job_started(_normalized_job_action(action))
 
             # Broadcast job started
             await _broadcast_job_progress(
@@ -633,6 +654,17 @@ async def run_agent_job(
                     log_content += f"=== STDERR ===\n{stderr}\n"
 
                 job.log_path = log_content.strip()
+                duration_seconds = _job_duration_seconds(job)
+                if job.status == JobStatus.COMPLETED.value:
+                    record_job_completed(
+                        _normalized_job_action(action),
+                        duration_seconds=duration_seconds or 0.0,
+                    )
+                elif job.status == JobStatus.FAILED.value:
+                    record_job_failed(
+                        _normalized_job_action(action),
+                        duration_seconds=duration_seconds,
+                    )
                 session.commit()
                 logger.info(f"Job {job_id} completed with status: {job.status}")
 
@@ -650,6 +682,10 @@ async def run_agent_job(
                 # Update lab state to unknown (we don't know what state it's in)
                 update_lab_state(session, lab_id, LabState.UNKNOWN.value, error=f"Agent unavailable: {e.message}")
 
+                record_job_failed(
+                    _normalized_job_action(action),
+                    duration_seconds=_job_duration_seconds(job),
+                )
                 session.commit()
                 logger.error(f"Job {job_id} failed: agent unavailable - {e.message}")
 
@@ -670,6 +706,10 @@ async def run_agent_job(
                 # Update lab state to error
                 update_lab_state(session, lab_id, LabState.ERROR.value, error=e.message)
 
+                record_job_failed(
+                    _normalized_job_action(action),
+                    duration_seconds=_job_duration_seconds(job),
+                )
                 session.commit()
                 logger.error(f"Job {job_id} failed: agent job error - {e.message}")
 
@@ -686,6 +726,10 @@ async def run_agent_job(
                 # Update lab state to error
                 update_lab_state(session, lab_id, LabState.ERROR.value, error=str(e))
 
+                record_job_failed(
+                    _normalized_job_action(action),
+                    duration_seconds=_job_duration_seconds(job),
+                )
                 session.commit()
                 logger.exception(f"Job {job_id} failed with unexpected error: {e}")
 
@@ -728,6 +772,7 @@ async def run_multihost_deploy(
                 job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Lab {lab_id} not found"
+                record_job_failed("up")
                 session.commit()
                 return
 
@@ -763,6 +808,7 @@ async def run_multihost_deploy(
                         f"and no default agent is available"
                     )
                     update_lab_state(session, lab_id, LabState.ERROR.value, error="No agent for unplaced nodes")
+                    record_job_failed("up")
                     session.commit()
                     return
 
@@ -779,6 +825,7 @@ async def run_multihost_deploy(
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.now(timezone.utc)
             session.commit()
+            record_job_started("up")
 
             # Broadcast job started
             await _broadcast_job_progress(
@@ -808,6 +855,7 @@ async def run_multihost_deploy(
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: {error_msg}"
                 update_lab_state(session, lab_id, LabState.ERROR.value, error=error_msg)
+                record_job_failed("up", duration_seconds=_job_duration_seconds(job))
                 session.commit()
                 logger.error(f"Job {job_id} failed: {error_msg}")
                 return
@@ -841,6 +889,7 @@ async def run_multihost_deploy(
                     job.completed_at = datetime.now(timezone.utc)
                     job.log_path = f"ERROR: {error_msg}"
                     update_lab_state(session, lab_id, LabState.ERROR.value, error="Insufficient resources")
+                    record_job_failed("up", duration_seconds=_job_duration_seconds(job))
                     session.commit()
                     return
 
@@ -932,6 +981,7 @@ async def run_multihost_deploy(
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = "\n".join(log_parts)
                 update_lab_state(session, lab_id, LabState.ERROR.value, error="Deployment failed on one or more hosts")
+                record_job_failed("up", duration_seconds=_job_duration_seconds(job))
                 session.commit()
                 logger.error(f"Job {job_id} failed: deployment error on one or more hosts (rollback completed)")
                 return
@@ -953,6 +1003,7 @@ async def run_multihost_deploy(
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = "\n".join(log_parts)
                 update_lab_state(session, lab_id, LabState.ERROR.value, error=f"Link setup failed: {links_failed} link(s)")
+                record_job_failed("up", duration_seconds=_job_duration_seconds(job))
                 session.commit()
                 logger.error(f"Job {job_id} failed: {links_failed} link(s) failed")
                 return
@@ -968,6 +1019,7 @@ async def run_multihost_deploy(
             job.status = JobStatus.COMPLETED.value
             job.completed_at = datetime.now(timezone.utc)
             job.log_path = "\n".join(log_parts)
+            record_job_completed("up", duration_seconds=_job_duration_seconds(job) or 0.0)
 
             # Broadcast job completed
             await _broadcast_job_progress(
@@ -1004,6 +1056,7 @@ async def run_multihost_deploy(
                     job.completed_at = datetime.now(timezone.utc)
                     job.log_path = f"ERROR: Unexpected error: {e}"
                     update_lab_state(session, lab_id, LabState.ERROR.value, error=str(e))
+                    record_job_failed("up", duration_seconds=_job_duration_seconds(job))
                     session.commit()
                     # Dispatch webhook for failed deploy
                     if lab:
@@ -1045,6 +1098,7 @@ async def run_multihost_destroy(
                 job.status = JobStatus.FAILED.value
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: Lab {lab_id} not found"
+                record_job_failed("down")
                 session.commit()
                 return
 
@@ -1061,6 +1115,7 @@ async def run_multihost_destroy(
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.now(timezone.utc)
             session.commit()
+            record_job_started("down")
 
             update_lab_state(session, lab_id, LabState.STOPPING.value)
 
@@ -1082,6 +1137,7 @@ async def run_multihost_destroy(
                 job.completed_at = datetime.now(timezone.utc)
                 job.log_path = f"ERROR: {error_msg}"
                 update_lab_state(session, lab_id, LabState.ERROR.value, error=error_msg)
+                record_job_failed("down", duration_seconds=_job_duration_seconds(job))
                 session.commit()
                 logger.error(f"Job {job_id} failed: {error_msg}")
                 return
@@ -1149,6 +1205,11 @@ async def run_multihost_destroy(
 
             job.completed_at = datetime.now(timezone.utc)
             job.log_path = "\n".join(log_parts)
+            if job.status == JobStatus.COMPLETED.value:
+                record_job_completed("down", duration_seconds=_job_duration_seconds(job) or 0.0)
+            else:
+                # completed_with_warnings still reflects a completed destroy action.
+                record_job_completed("down", duration_seconds=_job_duration_seconds(job) or 0.0)
             session.commit()
 
             # Dispatch webhook for destroy complete
@@ -1166,6 +1227,7 @@ async def run_multihost_destroy(
                     job.completed_at = datetime.now(timezone.utc)
                     job.log_path = f"ERROR: Unexpected error: {e}"
                     update_lab_state(session, lab_id, LabState.ERROR.value, error=str(e))
+                    record_job_failed("down", duration_seconds=_job_duration_seconds(job))
                     session.commit()
             except Exception as inner_e:
                 logger.exception(f"Critical error handling job {job_id} failure: {inner_e}")
