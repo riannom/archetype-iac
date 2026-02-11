@@ -3,6 +3,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { DeviceModel, AnnotationType, ImageLibraryEntry } from '../types';
 import SidebarFilters, { ImageStatus } from './SidebarFilters';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { getImageDeviceIds } from '../../utils/deviceModels';
 
 interface SidebarProps {
   categories: { name: string; models?: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
@@ -105,18 +106,18 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     return devices;
   }, [categories]);
 
-  // Build device image status map
+  // Build device image status map (uses compatible_devices for shared images)
   const deviceImageStatus = useMemo(() => {
     const statusMap = new Map<string, { hasImage: boolean; hasDefault: boolean }>();
     imageLibrary.forEach((img) => {
-      if (img.device_id) {
-        const existing = statusMap.get(img.device_id) || { hasImage: false, hasDefault: false };
+      getImageDeviceIds(img).forEach((devId) => {
+        const existing = statusMap.get(devId) || { hasImage: false, hasDefault: false };
         existing.hasImage = true;
         if (img.is_default) {
           existing.hasDefault = true;
         }
-        statusMap.set(img.device_id, existing);
-      }
+        statusMap.set(devId, existing);
+      });
     });
     return statusMap;
   }, [imageLibrary]);

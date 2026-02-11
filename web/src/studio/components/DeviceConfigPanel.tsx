@@ -3,6 +3,7 @@ import { apiRequest } from '../../api';
 import { DeviceModel, DeviceConfig, ImageLibraryEntry } from '../types';
 import VendorOptionsPanel from './VendorOptionsPanel';
 import { formatSize } from '../../utils/format';
+import { getImageDeviceIds } from '../../utils/deviceModels';
 
 interface DeviceConfigPanelProps {
   device: DeviceModel;
@@ -114,9 +115,9 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
   // Local edit state
   const [editValues, setEditValues] = useState<Record<string, unknown>>({});
 
-  // Filter images assigned to this device
+  // Filter images compatible with this device
   const deviceImages = useMemo(() => {
-    return imageLibrary.filter((img) => img.device_id === device.id);
+    return imageLibrary.filter((img) => getImageDeviceIds(img).includes(device.id));
   }, [imageLibrary, device.id]);
 
   const loadConfig = useCallback(async () => {

@@ -9,6 +9,15 @@ import { DeviceModel, ImageLibraryEntry } from '../studio/types';
 import { DeviceCategory } from '../studio/constants';
 
 /**
+ * Get all device IDs an image is compatible with.
+ * Uses compatible_devices when available, falls back to device_id.
+ */
+export function getImageDeviceIds(image: ImageLibraryEntry): string[] {
+  if (image.compatible_devices?.length) return image.compatible_devices;
+  return image.device_id ? [image.device_id] : [];
+}
+
+/**
  * Flatten vendor categories into a flat list of DeviceModels
  */
 export function flattenVendorCategories(categories: DeviceCategory[]): DeviceModel[] {
@@ -39,17 +48,18 @@ export function buildDeviceModels(
   const vendorDevices = flattenVendorCategories(vendorCategories);
   const vendorDeviceMap = new Map(vendorDevices.map(d => [d.id, d]));
 
-  // Collect versions from image library
+  // Collect versions from image library (uses compatible_devices for shared images)
   const versionsByDevice = new Map<string, Set<string>>();
   const imageDeviceIds = new Set<string>();
   images.forEach((image) => {
-    if (!image.device_id) return;
-    imageDeviceIds.add(image.device_id);
-    const versions = versionsByDevice.get(image.device_id) || new Set<string>();
-    if (image.version) {
-      versions.add(image.version);
-    }
-    versionsByDevice.set(image.device_id, versions);
+    getImageDeviceIds(image).forEach((devId) => {
+      imageDeviceIds.add(devId);
+      const versions = versionsByDevice.get(devId) || new Set<string>();
+      if (image.version) {
+        versions.add(image.version);
+      }
+      versionsByDevice.set(devId, versions);
+    });
   });
 
   // Start with vendor devices, merging in image versions

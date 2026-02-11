@@ -8,6 +8,7 @@ import ImageFilterBar, { ImageAssignmentFilter, ImageSortOption } from './ImageF
 import FilterChip from './FilterChip';
 import ISOImportModal from '../../components/ISOImportModal';
 import { usePersistedState, usePersistedSet } from '../hooks/usePersistedState';
+import { getImageDeviceIds } from '../../utils/deviceModels';
 
 interface ImageCatalogEntry {
   clab?: string;
@@ -57,14 +58,15 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
 
-  // Build device to images map
+  // Build device to images map (uses compatible_devices for shared images)
   const imagesByDevice = useMemo(() => {
     const map = new Map<string, ImageLibraryEntry[]>();
     imageLibrary.forEach((img) => {
-      if (!img.device_id) return;
-      const list = map.get(img.device_id) || [];
-      list.push(img);
-      map.set(img.device_id, list);
+      getImageDeviceIds(img).forEach((devId) => {
+        const list = map.get(devId) || [];
+        list.push(img);
+        map.set(devId, list);
+      });
     });
     return map;
   }, [imageLibrary]);
@@ -170,18 +172,22 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     });
   }, [imageLibrary, imageSearch, selectedImageVendors, selectedImageKinds, imageAssignmentFilter, imageSort]);
 
-  // Group images for display
+  // Group images for display (uses compatible_devices for shared images)
   const { unassignedImages, assignedImagesByDevice } = useMemo(() => {
     const unassigned: ImageLibraryEntry[] = [];
     const byDevice = new Map<string, ImageLibraryEntry[]>();
+    const seen = new Set<string>(); // avoid duplicating unassigned
 
     filteredImages.forEach((img) => {
-      if (!img.device_id) {
+      const deviceIds = getImageDeviceIds(img);
+      if (deviceIds.length === 0) {
         unassigned.push(img);
       } else {
-        const list = byDevice.get(img.device_id) || [];
-        list.push(img);
-        byDevice.set(img.device_id, list);
+        deviceIds.forEach((devId) => {
+          const list = byDevice.get(devId) || [];
+          list.push(img);
+          byDevice.set(devId, list);
+        });
       }
     });
 

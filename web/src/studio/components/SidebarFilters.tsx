@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import FilterChip from './FilterChip';
 import { DeviceModel, ImageLibraryEntry } from '../types';
+import { getImageDeviceIds } from '../../utils/deviceModels';
 
 export type ImageStatus = 'all' | 'has_image' | 'has_default' | 'no_image';
 
@@ -64,16 +65,16 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
     const counts = { has_image: 0, has_default: 0, no_image: 0 };
     const deviceImageMap = new Map<string, { hasImage: boolean; hasDefault: boolean }>();
 
-    // Build a map of device_id to image info
+    // Build a map of device_id to image info (uses compatible_devices for shared images)
     imageLibrary.forEach((img) => {
-      if (img.device_id) {
-        const existing = deviceImageMap.get(img.device_id) || { hasImage: false, hasDefault: false };
+      getImageDeviceIds(img).forEach((devId) => {
+        const existing = deviceImageMap.get(devId) || { hasImage: false, hasDefault: false };
         existing.hasImage = true;
         if (img.is_default) {
           existing.hasDefault = true;
         }
-        deviceImageMap.set(img.device_id, existing);
-      }
+        deviceImageMap.set(devId, existing);
+      });
     });
 
     devices.forEach((device) => {
