@@ -82,6 +82,62 @@ def _record_failed(
     )
 
 
+async def _run_job_preflight_checks(
+    session,
+    lab: models.Lab,
+    agent: models.Host,
+    action: str,
+) -> tuple[bool, str | None]:
+    """Fail fast on preconditions that would otherwise become long timeouts."""
+    if action not in {"up", "down"}:
+        return True, None
+
+    try:
+        await agent_client.get_lab_status_from_agent(agent, lab.id)
+    except Exception as e:
+        return False, (
+            "ERROR: Agent preflight connectivity check failed.\n\n"
+            f"Agent: {agent.name or agent.id}\n"
+            f"Details: {e}\n\n"
+            "Aborting before deployment/destroy to avoid long timeout."
+        )
+
+    if action == "up" and settings.image_sync_enabled and settings.image_sync_pre_deploy_check:
+        try:
+            from app.tasks.image_sync import ensure_images_for_deployment
+
+            topo_service = TopologyService(session)
+            image_refs = topo_service.get_required_images(lab.id)
+            if image_refs:
+                image_to_nodes = topo_service.get_image_to_nodes_map(lab.id)
+                all_ready, missing, _ = await ensure_images_for_deployment(
+                    agent.id,
+                    image_refs,
+                    timeout=min(settings.image_sync_timeout, 300),
+                    database=session,
+                    lab_id=lab.id,
+                    image_to_nodes=image_to_nodes,
+                )
+                if not all_ready and missing:
+                    missing_str = ", ".join(missing[:5])
+                    if len(missing) > 5:
+                        missing_str += f" (+{len(missing) - 5} more)"
+                    return False, (
+                        "ERROR: Preflight image check failed.\n\n"
+                        f"Agent: {agent.name or agent.id}\n"
+                        f"Missing images: {missing_str}\n\n"
+                        "Upload/sync required images before retrying."
+                    )
+        except Exception as e:
+            return False, (
+                "ERROR: Preflight image validation failed unexpectedly.\n\n"
+                f"Details: {e}\n\n"
+                "Aborting before deployment to avoid long timeout."
+            )
+
+    return True, None
+
+
 def acquire_deploy_lock(lab_id: str, node_names: list[str], agent_id: str, timeout: int = 300) -> tuple[bool, list[str]]:
     """Acquire distributed locks for deploying specific nodes.
 
@@ -582,6 +638,19 @@ async def run_agent_job(
                 logger.warning(f"Job {job_id} failed: no healthy agent available for provider {provider}")
                 return
 
+            preflight_ok, preflight_error = await _run_job_preflight_checks(
+                session, lab, agent, action,
+            )
+            if not preflight_ok:
+                job.status = JobStatus.FAILED.value
+                job.completed_at = datetime.now(timezone.utc)
+                job.log_path = preflight_error or "ERROR: Preflight check failed"
+                update_lab_state(session, lab_id, LabState.ERROR.value, error="Preflight check failed")
+                _record_failed(job, action)
+                session.commit()
+                logger.warning(f"Job {job_id} failed preflight on agent {agent.id}")
+                return
+
             # Update job with agent assignment and start time
             job.status = JobStatus.RUNNING.value
             job.agent_id = agent.id
@@ -859,6 +928,11 @@ async def run_multihost_deploy(
             for host_id in analysis.placements:
                 agent = session.get(models.Host, host_id)
                 if agent and agent_client.is_agent_online(agent):
+                    try:
+                        await agent_client.get_lab_status_from_agent(agent, lab_id)
+                    except Exception as e:
+                        missing_hosts.append(f"{host_id} (preflight connectivity failed: {e})")
+                        continue
                     host_to_agent[host_id] = agent
                 else:
                     missing_hosts.append(host_id)

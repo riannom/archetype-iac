@@ -531,6 +531,9 @@ def infer_job_failure_reason(message: str | None) -> str:
 
     text = message.lower()
     checks: list[tuple[str, str]] = [
+        ("preflight connectivity check failed", "preflight_connectivity_failed"),
+        ("preflight image check failed", "preflight_image_check_failed"),
+        ("preflight image validation failed", "preflight_image_validation_failed"),
         ("job timed out after maximum retries", "timeout_retries_exhausted"),
         ("timed out after 1200s", "timeout_1200s"),
         ("timed out after 300s", "timeout_300s"),
@@ -549,6 +552,7 @@ def infer_job_failure_reason(message: str | None) -> str:
         ("no image found", "missing_image"),
         ("docker image not found", "missing_image"),
         ("required images not available on agent", "missing_image"),
+        ("upload/sync required images", "missing_image"),
         ("parent job completed or missing", "orphaned_child"),
         ("insufficient resources", "insufficient_resources"),
         ("capacity", "capacity_check_failed"),
@@ -556,6 +560,17 @@ def infer_job_failure_reason(message: str | None) -> str:
         ("deployment failed on one or more hosts", "deploy_partial_failure"),
         ("rollback failed", "deploy_rollback_failed"),
         ("stale - cleared after api restart", "stale_after_restart"),
+        ("docker api error", "docker_api_error"),
+        ("container creation failed", "container_create_failed"),
+        ("unknown action", "unknown_action"),
+        ("job execution failed on agent", "agent_job_error"),
+        ("unexpected error during job execution", "unexpected_job_error"),
+        ("failed to create node", "create_node_failed"),
+        ("failed to start node", "start_node_failed"),
+        ("failed to stop node", "stop_node_failed"),
+        ("failed to destroy node", "destroy_node_failed"),
+        ("missing or unhealthy agents for hosts", "host_assignment_failed"),
+        ("no agents found for multi-host destroy", "no_agents_for_multihost_destroy"),
     ]
     for needle, reason in checks:
         if needle in text:

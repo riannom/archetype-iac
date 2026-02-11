@@ -57,4 +57,6 @@ def test_infer_job_failure_reason() -> None:
     assert metrics_module.infer_job_failure_reason("Job timed out after 300s") == "timeout_300s"
     assert metrics_module.infer_job_failure_reason("No healthy agent available") == "no_healthy_agent"
     assert metrics_module.infer_job_failure_reason("No image found for node") == "missing_image"
+    assert metrics_module.infer_job_failure_reason("ERROR: Preflight connectivity check failed") == "preflight_connectivity_failed"
+    assert metrics_module.infer_job_failure_reason("ERROR: Job execution failed on agent") == "agent_job_error"
     assert metrics_module.infer_job_failure_reason("random error") == "unknown"
