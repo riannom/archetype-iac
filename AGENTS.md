@@ -22,7 +22,7 @@
 - No testing framework is configured yet.
 - When tests are added, keep them colocated in `tests/` or alongside modules (for example, `src/foo.test.ts`).
 - Name tests with a clear suffix (`*.test.*` or `*_test.*`) and ensure tests are runnable via a single command.
-- Bugs: add regression test when it fits.
+- If you spot a bug, write a non-regression test first, then fix it.
 
 ## Commit & Pull Request Guidelines
 - No Git history is available to infer conventions. Use Conventional Commits by default (for example, `feat: add user login`).
