@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -42,6 +44,11 @@ from app.events.publisher import emit_lab_deleted, emit_link_removed, emit_node_
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["labs"])
+
+
+def _zip_safe_name(value: str) -> str:
+    """Prevent zip path traversal and invalid separators."""
+    return (value or "unknown").replace("/", "_").replace("\\", "_")
 
 
 def _require_lab_editor(lab_id: str, database: Session, user: models.User) -> models.Lab:
@@ -717,6 +724,121 @@ def export_graph(
         layout = read_layout(lab.id)
         return TopologyGraphWithLayout(**graph.model_dump(), layout=layout)
     return graph
+
+
+@router.get("/labs/{lab_id}/download-bundle")
+def download_lab_bundle(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Download a full lab bundle zip with topology, layout, and configs."""
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    service = TopologyService(database)
+    has_topology = service.has_nodes(lab.id)
+    topology_yaml = service.export_to_yaml(lab.id) if has_topology else "nodes: {}\nlinks: []\n"
+    topology_graph = (
+        service.export_to_graph(lab.id).model_dump(mode="json")
+        if has_topology
+        else {"nodes": [], "links": []}
+    )
+
+    layout = read_layout(lab.id)
+    layout_json = layout.model_dump(mode="json") if layout else None
+
+    from app.services.config_service import ConfigService, MAX_ZIP_SIZE_BYTES
+
+    config_svc = ConfigService(database)
+    snapshots = config_svc.list_configs_with_orphan_status(lab_id=lab_id)
+
+    total_config_size = sum(len((s.get("content") or "").encode()) for s in snapshots)
+    if total_config_size > MAX_ZIP_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Bundle would exceed {MAX_ZIP_SIZE_BYTES // (1024 * 1024)}MB limit "
+                f"({total_config_size // (1024 * 1024)}MB estimated). "
+                "Try downloading configs separately."
+            ),
+        )
+
+    buf = io.BytesIO()
+    metadata_by_bucket: dict[str, dict[str, list[dict]]] = {
+        "configs": {},
+        "orphaned configs": {},
+    }
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("topology/topology.yaml", topology_yaml)
+        zf.writestr("topology/topology.json", json.dumps(topology_graph, indent=2))
+        zf.writestr("topology/layout.json", json.dumps(layout_json, indent=2))
+
+        for snap in snapshots:
+            node_name = _zip_safe_name(str(snap.get("node_name") or "unknown"))
+            bucket = "orphaned configs" if snap.get("is_orphaned") else "configs"
+            created_at = snap.get("created_at")
+            ts = created_at.strftime("%Y%m%d_%H%M%S") if created_at else "unknown"
+            snapshot_type = _zip_safe_name(str(snap.get("snapshot_type") or "snapshot"))
+
+            zf.writestr(
+                f"{bucket}/{node_name}/{ts}_{snapshot_type}_startup-config",
+                str(snap.get("content") or ""),
+            )
+
+            metadata_by_bucket[bucket].setdefault(node_name, []).append(
+                {
+                    "id": snap.get("id"),
+                    "node_name": snap.get("node_name"),
+                    "timestamp": created_at.isoformat() if created_at else None,
+                    "type": snap.get("snapshot_type"),
+                    "content_hash": snap.get("content_hash"),
+                    "device_kind": snap.get("device_kind"),
+                    "is_active": bool(snap.get("is_active")),
+                }
+            )
+
+        for bucket, node_map in metadata_by_bucket.items():
+            for node_name, entries in node_map.items():
+                zf.writestr(
+                    f"{bucket}/{node_name}/metadata.json",
+                    json.dumps(entries, indent=2),
+                )
+
+        zf.writestr(
+            "bundle-metadata.json",
+            json.dumps(
+                {
+                    "lab_id": lab.id,
+                    "lab_name": lab.name,
+                    "exported_at": datetime.now(timezone.utc).isoformat(),
+                    "topology_included": True,
+                    "layout_included": True,
+                    "snapshot_count": len(snapshots),
+                    "configs_count": sum(
+                        len(entries) for entries in metadata_by_bucket["configs"].values()
+                    ),
+                    "orphaned_configs_count": sum(
+                        len(entries)
+                        for entries in metadata_by_bucket["orphaned configs"].values()
+                    ),
+                    "directories": ["topology", "configs", "orphaned configs"],
+                },
+                indent=2,
+            ),
+        )
+
+    buf.seek(0)
+    lab_name = _zip_safe_name(lab.name or lab.id).replace(" ", "_")
+    filename = f"{lab_name}_bundle.zip"
+
+    from starlette.responses import StreamingResponse
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @router.get("/labs/{lab_id}/layout")

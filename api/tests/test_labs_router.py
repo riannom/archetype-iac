@@ -1,6 +1,10 @@
 """Tests for labs router endpoints."""
 from __future__ import annotations
 
+import io
+import json
+import zipfile
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -469,6 +473,70 @@ links:
         assert "nodes" in data
         assert "links" in data
         assert len(data["nodes"]) == 2
+
+    def test_download_bundle_includes_topology_and_configs(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        auth_headers: dict,
+    ):
+        """Test full bundle export includes topology, layout, configs, and orphaned configs."""
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="r1",
+            container_name="r1",
+            device="linux",
+        )
+        orphaned_node = "old-r2"
+        active_snapshot = models.ConfigSnapshot(
+            lab_id=sample_lab.id,
+            node_name="r1",
+            content="hostname r1",
+            content_hash="h1",
+            snapshot_type="manual",
+        )
+        orphaned_snapshot = models.ConfigSnapshot(
+            lab_id=sample_lab.id,
+            node_name=orphaned_node,
+            content="hostname old-r2",
+            content_hash="h2",
+            snapshot_type="manual",
+        )
+        test_db.add_all([node, active_snapshot, orphaned_snapshot])
+        test_db.commit()
+
+        response = test_client.get(
+            f"/labs/{sample_lab.id}/download-bundle", headers=auth_headers
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/zip"
+        assert "attachment; filename=" in response.headers["content-disposition"]
+
+        zf = zipfile.ZipFile(io.BytesIO(response.content))
+        names = set(zf.namelist())
+
+        assert "topology/topology.yaml" in names
+        assert "topology/topology.json" in names
+        assert "topology/layout.json" in names
+        assert "bundle-metadata.json" in names
+
+        active_file = next(
+            n for n in names if n.startswith("configs/r1/") and n.endswith("_startup-config")
+        )
+        orphaned_file = next(
+            n
+            for n in names
+            if n.startswith("orphaned configs/old-r2/") and n.endswith("_startup-config")
+        )
+        assert zf.read(active_file).decode() == "hostname r1"
+        assert zf.read(orphaned_file).decode() == "hostname old-r2"
+
+        metadata = json.loads(zf.read("bundle-metadata.json").decode())
+        assert metadata["snapshot_count"] == 2
+        assert metadata["configs_count"] == 1
+        assert metadata["orphaned_configs_count"] == 1
 
 
 class TestNodeStates:

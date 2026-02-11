@@ -1539,30 +1539,50 @@ const StudioPage: React.FC = () => {
     setShowYamlModal(true);
   };
 
+  const handleDownloadBundle = async (lab: LabSummary) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/v1/labs/${lab.id}/download-bundle`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!response.ok) {
+        let errorMessage = 'Bundle download failed';
+        try {
+          const err = await response.json();
+          if (err?.detail) {
+            errorMessage = String(err.detail);
+          }
+        } catch {
+          // Ignore parse failures and use default message.
+        }
+        throw new Error(errorMessage);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download =
+        response.headers.get('Content-Disposition')?.split('filename=')[1] ||
+        `${lab.name.replace(/\s+/g, '_')}_bundle.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bundle download failed';
+      addNotification('error', 'Download failed', message);
+      console.error('Bundle download failed:', error);
+    }
+  };
+
   const handleExportFull = async () => {
     if (!activeLab) return;
-    // Save layout first to ensure we have the latest
+    // Save layout first to include the latest canvas state.
     await saveLayout(activeLab.id, nodes, annotations);
-    // Get both YAML and layout
-    const [yamlData, layoutData] = await Promise.all([
-      studioRequest<{ content: string }>(`/labs/${activeLab.id}/export-yaml`),
-      studioRequest<LabLayout>(`/labs/${activeLab.id}/layout`).catch(() => null),
-    ]);
-    // Create a combined export object
-    const exportData = {
-      topology: yamlData.content,
-      layout: layoutData,
-    };
-    // Download as JSON file
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${activeLab.name.replace(/\s+/g, '_')}_full_export.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    await handleDownloadBundle(activeLab);
   };
 
   const handleDeploy = async () => {
@@ -1854,6 +1874,7 @@ const StudioPage: React.FC = () => {
         labStatuses={labStatuses}
         systemMetrics={systemMetrics}
         onSelect={handleSelectLab}
+        onDownload={handleDownloadBundle}
         onCreate={handleCreateLab}
         onDelete={handleDeleteLab}
         onRename={handleRenameLab}

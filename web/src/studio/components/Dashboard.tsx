@@ -58,6 +58,7 @@ interface DashboardProps {
   labStatuses?: Record<string, LabStatus>;
   systemMetrics?: SystemMetrics | null;
   onSelect: (lab: LabSummary) => void;
+  onDownload?: (lab: LabSummary) => void;
   onCreate: () => void;
   onDelete: (labId: string) => void;
   onRename?: (labId: string, newName: string) => void;
@@ -69,6 +70,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   labStatuses,
   systemMetrics,
   onSelect,
+  onDownload,
   onCreate,
   onDelete,
   onRename,
@@ -333,7 +335,11 @@ const Dashboard: React.FC<DashboardProps> = ({
                   >
                     Open Designer
                   </button>
-                  <button className="w-10 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all flex items-center justify-center">
+                  <button
+                    onClick={() => onDownload?.(lab)}
+                    className="w-10 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all flex items-center justify-center"
+                    title="Download lab bundle"
+                  >
                     <i className="fa-solid fa-download"></i>
                   </button>
                 </div>

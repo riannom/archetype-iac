@@ -85,7 +85,7 @@ describe("TopBar", () => {
 
     it("renders export button", () => {
       render(<TopBar {...defaultProps} />);
-      expect(screen.getByText("EXPORT")).toBeInTheDocument();
+      expect(screen.getByTitle("Export / Download")).toBeInTheDocument();
     });
 
     it("shows Lab: prefix before lab name", () => {
@@ -140,7 +140,7 @@ describe("TopBar", () => {
       const user = userEvent.setup();
       render(<TopBar {...defaultProps} />);
 
-      await user.click(screen.getByText("EXPORT"));
+      await user.click(screen.getByTitle("Export / Download"));
       expect(screen.getByText("Export YAML")).toBeInTheDocument();
     });
 
@@ -148,7 +148,7 @@ describe("TopBar", () => {
       const user = userEvent.setup();
       render(<TopBar {...defaultProps} />);
 
-      await user.click(screen.getByText("EXPORT"));
+      await user.click(screen.getByTitle("Export / Download"));
       await user.click(screen.getByText("Export YAML"));
       expect(defaultProps.onExport).toHaveBeenCalledTimes(1);
     });
@@ -157,37 +157,37 @@ describe("TopBar", () => {
       const user = userEvent.setup();
       render(<TopBar {...defaultProps} />);
 
-      await user.click(screen.getByText("EXPORT"));
+      await user.click(screen.getByTitle("Export / Download"));
       await user.click(screen.getByText("Export YAML"));
 
       // Dropdown should be closed
       expect(screen.queryByText("IAC only")).not.toBeInTheDocument();
     });
 
-    it("shows Export Full option when onExportFull is provided", async () => {
+    it("shows Download Bundle option when onExportFull is provided", async () => {
       const user = userEvent.setup();
       const onExportFull = vi.fn();
       render(<TopBar {...defaultProps} onExportFull={onExportFull} />);
 
-      await user.click(screen.getByText("EXPORT"));
-      expect(screen.getByText("Export Full")).toBeInTheDocument();
+      await user.click(screen.getByTitle("Export / Download"));
+      expect(screen.getByText("Download Bundle")).toBeInTheDocument();
     });
 
-    it("does not show Export Full option when onExportFull is not provided", async () => {
+    it("does not show Download Bundle option when onExportFull is not provided", async () => {
       const user = userEvent.setup();
       render(<TopBar {...defaultProps} />);
 
-      await user.click(screen.getByText("EXPORT"));
-      expect(screen.queryByText("Export Full")).not.toBeInTheDocument();
+      await user.click(screen.getByTitle("Export / Download"));
+      expect(screen.queryByText("Download Bundle")).not.toBeInTheDocument();
     });
 
-    it("calls onExportFull when Export Full is clicked", async () => {
+    it("calls onExportFull when Download Bundle is clicked", async () => {
       const user = userEvent.setup();
       const onExportFull = vi.fn();
       render(<TopBar {...defaultProps} onExportFull={onExportFull} />);
 
-      await user.click(screen.getByText("EXPORT"));
-      await user.click(screen.getByText("Export Full"));
+      await user.click(screen.getByTitle("Export / Download"));
+      await user.click(screen.getByText("Download Bundle"));
       expect(onExportFull).toHaveBeenCalledTimes(1);
     });
 
@@ -195,7 +195,7 @@ describe("TopBar", () => {
       const user = userEvent.setup();
       render(<TopBar {...defaultProps} />);
 
-      await user.click(screen.getByText("EXPORT"));
+      await user.click(screen.getByTitle("Export / Download"));
       expect(screen.getByText("Export YAML")).toBeInTheDocument();
 
       // Click outside (on the document)

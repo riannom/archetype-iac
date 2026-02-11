@@ -80,6 +80,7 @@ describe("Dashboard", () => {
   const mockOnSelect = vi.fn();
   const mockOnCreate = vi.fn();
   const mockOnDelete = vi.fn();
+  const mockOnDownload = vi.fn();
   const mockOnRename = vi.fn();
   const mockOnLogout = vi.fn();
 
@@ -88,6 +89,7 @@ describe("Dashboard", () => {
     labStatuses: mockLabStatuses,
     systemMetrics: mockSystemMetrics,
     onSelect: mockOnSelect,
+    onDownload: mockOnDownload,
     onCreate: mockOnCreate,
     onDelete: mockOnDelete,
     onRename: mockOnRename,
@@ -299,6 +301,20 @@ describe("Dashboard", () => {
       // Look for Open Designer button on lab cards
       const openDesignerButtons = screen.getAllByText("Open Designer");
       expect(openDesignerButtons.length).toBeGreaterThan(0);
+    });
+
+    it("calls onDownload when lab card download is clicked", async () => {
+      const user = userEvent.setup();
+      render(
+        <TestWrapper>
+          <Dashboard {...defaultProps} />
+        </TestWrapper>
+      );
+
+      const downloadButtons = screen.getAllByTitle("Download lab bundle");
+      await user.click(downloadButtons[0]);
+      expect(mockOnDownload).toHaveBeenCalledTimes(1);
+      expect(mockOnDownload).toHaveBeenCalledWith(expect.objectContaining({ id: "lab-1" }));
     });
   });
 });

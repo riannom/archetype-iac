@@ -150,11 +150,10 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
           <div className="relative" ref={exportDropdownRef}>
             <button
               onClick={() => setShowExportDropdown(!showExportDropdown)}
-              className="flex items-center gap-2 px-3 py-1.5 glass-control text-stone-700 dark:text-stone-100 text-xs font-semibold rounded-lg transition-all active:scale-95 shadow-sm"
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-700 dark:text-stone-100 rounded-lg transition-all active:scale-95 shadow-sm"
+              title="Export / Download"
             >
-              <i className="fa-solid fa-file-code text-sage-600 dark:text-sage-400"></i>
-              EXPORT
-              <i className={`fa-solid fa-chevron-down text-[8px] transition-transform ${showExportDropdown ? 'rotate-180' : ''}`}></i>
+              <i className="fa-solid fa-download text-sage-600 dark:text-sage-400"></i>
             </button>
             {showExportDropdown && (
               <div className="absolute right-0 mt-1 w-48 glass-surface-elevated border border-stone-200 dark:border-black/80 rounded-lg shadow-lg overflow-hidden z-50">
@@ -177,9 +176,9 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
                     }}
                     className="w-full px-3 py-2 text-left text-xs text-stone-700 dark:text-stone-100 hover:bg-stone-50 dark:hover:bg-black/80 flex items-center gap-2 border-t border-stone-100 dark:border-black/70"
                   >
-                    <i className="fa-solid fa-file-zipper text-blue-600 dark:text-blue-400 w-4"></i>
-                    Export Full
-                    <span className="text-[9px] text-stone-400 dark:text-stone-400 ml-auto">+ Layout</span>
+                    <i className="fa-solid fa-download text-blue-600 dark:text-blue-400 w-4"></i>
+                    Download Bundle
+                    <span className="text-[9px] text-stone-400 dark:text-stone-400 ml-auto">Topo + Configs</span>
                   </button>
                 )}
               </div>
