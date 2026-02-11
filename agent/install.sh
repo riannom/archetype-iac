@@ -509,6 +509,10 @@ ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
 # local_mtu: Used for local veth pairs (no physical constraint)
 ARCHETYPE_AGENT_OVERLAY_MTU=$OVERLAY_MTU
 ARCHETYPE_AGENT_LOCAL_MTU=$LOCAL_MTU
+
+# Logging
+ARCHETYPE_AGENT_LOG_FORMAT=json
+ARCHETYPE_AGENT_LOG_LEVEL=INFO
 EOF
 
 # Create workspace directory
@@ -577,6 +581,8 @@ fi
 if [ "$INSTALL_LIBVIRT" = true ]; then
     echo "Libvirt:       Enabled (VM support for IOSv, CSR1000v, etc.)"
 fi
+echo ""
+echo "Metrics endpoint:  http://$LOCAL_IP:$AGENT_PORT/metrics"
 echo ""
 echo "Useful commands:"
 echo "  Check status:    systemctl status $SERVICE_NAME"

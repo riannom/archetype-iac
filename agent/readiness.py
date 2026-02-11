@@ -409,6 +409,8 @@ def get_libvirt_probe(
     kind: str,
     domain_name: str,
     uri: str = "qemu:///system",
+    readiness_probe: str | None = None,
+    readiness_pattern: str | None = None,
 ) -> ReadinessProbe:
     """Get the appropriate readiness probe for a VM device.
 
@@ -416,17 +418,24 @@ def get_libvirt_probe(
         kind: The device kind (e.g., "cisco_iosv", "cisco_csr1000v")
         domain_name: Libvirt domain name for the VM
         uri: Libvirt connection URI
+        readiness_probe: Optional explicit probe type override
+        readiness_pattern: Optional explicit readiness pattern override
 
     Returns:
         ReadinessProbe instance configured for this VM
     """
     config = get_vendor_config(kind)
+    probe_type = readiness_probe if readiness_probe is not None else (config.readiness_probe if config else None)
+    pattern = readiness_pattern if readiness_pattern is not None else (config.readiness_pattern if config else None)
 
-    if config is None or config.readiness_probe == "none":
+    if config is None and probe_type is None:
         return NoopProbe()
 
-    if config.readiness_probe == "log_pattern":
-        if config.readiness_pattern is None:
+    if probe_type == "none":
+        return NoopProbe()
+
+    if probe_type == "log_pattern":
+        if pattern is None:
             return NoopProbe()
 
         # Select progress patterns based on device kind
@@ -440,7 +449,7 @@ def get_libvirt_probe(
             progress_patterns = JUNIPER_PROGRESS_PATTERNS
 
         return LibvirtLogPatternProbe(
-            pattern=config.readiness_pattern,
+            pattern=pattern,
             domain_name=domain_name,
             uri=uri,
             progress_patterns=progress_patterns,
@@ -449,7 +458,11 @@ def get_libvirt_probe(
     return NoopProbe()
 
 
-def get_probe_for_vendor(kind: str) -> ReadinessProbe:
+def get_probe_for_vendor(
+    kind: str,
+    readiness_probe: str | None = None,
+    readiness_pattern: str | None = None,
+) -> ReadinessProbe:
     """Get the appropriate readiness probe for a vendor/device kind.
 
     Args:
@@ -459,12 +472,17 @@ def get_probe_for_vendor(kind: str) -> ReadinessProbe:
         ReadinessProbe instance configured for this vendor
     """
     config = get_vendor_config(kind)
+    probe_type = readiness_probe if readiness_probe is not None else (config.readiness_probe if config else None)
+    pattern = readiness_pattern if readiness_pattern is not None else (config.readiness_pattern if config else None)
 
-    if config is None or config.readiness_probe == "none":
+    if config is None and probe_type is None:
         return NoopProbe()
 
-    if config.readiness_probe == "log_pattern":
-        if config.readiness_pattern is None:
+    if probe_type == "none":
+        return NoopProbe()
+
+    if probe_type == "log_pattern":
+        if pattern is None:
             return NoopProbe()
 
         # Add progress patterns for cEOS
@@ -473,17 +491,17 @@ def get_probe_for_vendor(kind: str) -> ReadinessProbe:
             progress_patterns = CEOS_PROGRESS_PATTERNS
 
         return LogPatternProbe(
-            pattern=config.readiness_pattern,
+            pattern=pattern,
             progress_patterns=progress_patterns,
         )
 
-    if config.readiness_probe == "cli_probe":
-        if config.readiness_pattern is None:
+    if probe_type == "cli_probe":
+        if pattern is None:
             return NoopProbe()
         # For CLI probe, use console_shell as the command
         return CliProbe(
-            cli_command=config.console_shell,
-            expected_pattern=config.readiness_pattern,
+            cli_command=config.console_shell if config else "sh",
+            expected_pattern=pattern,
         )
 
     return NoopProbe()

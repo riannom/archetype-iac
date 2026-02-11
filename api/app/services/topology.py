@@ -203,6 +203,23 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         else:
             if_override = None
 
+        # Resolve hardware specs using the same priority chain as per-node lifecycle:
+        # per-node override > device override/custom device > vendor defaults.
+        # This keeps topology deploy path behavior consistent with create-node path.
+        from app.services.device_service import get_device_service
+        per_node_hw = {
+            "memory": n.memory,
+            "cpu": n.cpu,
+            "disk_driver": n.disk_driver,
+            "nic_driver": n.nic_driver,
+            "machine_type": n.machine_type,
+        }
+        # Drop unset keys so resolver can fall back correctly.
+        per_node_hw = {k: v for k, v in per_node_hw.items() if v is not None}
+        readiness_probe = None
+        readiness_pattern = None
+        readiness_timeout = None
+
         # Resolve image using canonical 3-step fallback
         kind = resolve_device_kind(n.device)
         image = resolve_node_image(n.device, kind, n.image, n.version)
@@ -237,6 +254,26 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
             "startup_config": startup_config,
             "exec_cmds": exec_cmds,
         }
+        hw_specs = get_device_service().resolve_hardware_specs(
+            n.device or kind,
+            per_node_hw or None,
+        )
+        for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type"):
+            if hw_specs.get(key) is not None:
+                node_dict[key] = hw_specs[key]
+        try:
+            effective = get_device_service().get_device_config(n.device or kind).get("effective", {})
+            readiness_probe = effective.get("readinessProbe")
+            readiness_pattern = effective.get("readinessPattern")
+            readiness_timeout = effective.get("readinessTimeout")
+        except Exception:
+            pass
+        if readiness_probe:
+            node_dict["readiness_probe"] = readiness_probe
+        if readiness_pattern:
+            node_dict["readiness_pattern"] = readiness_pattern
+        if readiness_timeout:
+            node_dict["readiness_timeout"] = readiness_timeout
         if interface_count:
             node_dict["interface_count"] = interface_count
         nodes.append(node_dict)
@@ -1393,6 +1430,25 @@ class TopologyService:
             "startup_config": startup_config,
             "exec_cmds": exec_cmds,
         }
+        # Resolve hardware specs with the same precedence used by per-node lifecycle.
+        from app.services.device_service import get_device_service
+        hw_specs = get_device_service().resolve_hardware_specs(node.device or kind, config)
+        for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type"):
+            if hw_specs.get(key) is not None:
+                node_dict[key] = hw_specs[key]
+        try:
+            effective = get_device_service().get_device_config(node.device or kind).get("effective", {})
+            readiness_probe = effective.get("readinessProbe")
+            readiness_pattern = effective.get("readinessPattern")
+            readiness_timeout = effective.get("readinessTimeout")
+            if readiness_probe:
+                node_dict["readiness_probe"] = readiness_probe
+            if readiness_pattern:
+                node_dict["readiness_pattern"] = readiness_pattern
+            if readiness_timeout:
+                node_dict["readiness_timeout"] = readiness_timeout
+        except Exception:
+            pass
         if interface_count and interface_count > 0:
             node_dict["interface_count"] = interface_count
         return node_dict

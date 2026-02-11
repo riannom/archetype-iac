@@ -149,45 +149,70 @@ export function useStargazing(
         });
       }
 
-      // Create constellations on sides
+      // Create constellations based on real star positions (RA/Dec → screen coords)
       constellations = [];
 
-      // Left side constellation (Orion-like)
       if (width > 600) {
-        const leftConstellation: Constellation = {
+        // Orion — left side (proportions from actual RA/Dec)
+        constellations.push({
           stars: [
-            { x: width * 0.1, y: height * 0.15 },
-            { x: width * 0.08, y: height * 0.25 },
-            { x: width * 0.12, y: height * 0.25 },
-            { x: width * 0.1, y: height * 0.3 },
-            { x: width * 0.07, y: height * 0.35 },
-            { x: width * 0.13, y: height * 0.35 },
-            { x: width * 0.1, y: height * 0.4 },
+            { x: width * 0.03,  y: height * 0.06  },  // Betelgeuse (left shoulder)
+            { x: width * 0.176, y: height * 0.087 },  // Bellatrix (right shoulder)
+            { x: width * 0.103, y: height * 0.301 },  // Alnitak (belt left)
+            { x: width * 0.123, y: height * 0.282 },  // Alnilam (belt center)
+            { x: width * 0.142, y: height * 0.258 },  // Mintaka (belt right)
+            { x: width * 0.069, y: height * 0.50  },  // Saiph (left foot)
+            { x: width * 0.23,  y: height * 0.462 },  // Rigel (right foot)
           ],
-          connections: [[0, 1], [0, 2], [1, 3], [2, 3], [3, 4], [3, 5], [4, 6], [5, 6]],
-        };
-        constellations.push(leftConstellation);
-      }
+          connections: [
+            [0, 1],  // shoulders
+            [0, 2],  // left torso
+            [1, 4],  // right torso
+            [2, 3],  // belt
+            [3, 4],  // belt
+            [2, 5],  // left leg
+            [4, 6],  // right leg
+          ],
+        });
 
-      // Right side constellation (Big Dipper / Ursa Major)
-      // Accurate shape: 4 bowl stars + 3 handle stars
-      if (width > 600) {
-        const rightConstellation: Constellation = {
+        // Big Dipper (Ursa Major) — right upper (proportions from actual RA/Dec)
+        constellations.push({
           stars: [
-            // Handle stars (curved line from bowl)
-            { x: width * 0.95, y: height * 0.08 },  // Alkaid (end of handle)
-            { x: width * 0.92, y: height * 0.11 },  // Mizar
-            { x: width * 0.89, y: height * 0.13 },  // Alioth
-            // Bowl stars (trapezoid shape)
-            { x: width * 0.86, y: height * 0.15 },  // Megrez (connects to handle)
-            { x: width * 0.83, y: height * 0.18 },  // Phecda (bottom-left of bowl)
-            { x: width * 0.85, y: height * 0.22 },  // Merak (bottom-right of bowl)
-            { x: width * 0.88, y: height * 0.19 },  // Dubhe (top-right of bowl)
+            { x: width * 0.733, y: height * 0.04  },  // Dubhe (bowl top-left)
+            { x: width * 0.73,  y: height * 0.144 },  // Merak (bowl bottom-left)
+            { x: width * 0.805, y: height * 0.196 },  // Phecda (bowl bottom-right)
+            { x: width * 0.837, y: height * 0.131 },  // Megrez (bowl top-right → handle)
+            { x: width * 0.893, y: height * 0.152 },  // Alioth (handle)
+            { x: width * 0.935, y: height * 0.172 },  // Mizar (handle)
+            { x: width * 0.97,  y: height * 0.28  },  // Alkaid (handle end)
           ],
-          // Handle curve + bowl rectangle
-          connections: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 3]],
-        };
-        constellations.push(rightConstellation);
+          connections: [
+            [0, 1],  // bowl left
+            [1, 2],  // bowl bottom
+            [2, 3],  // bowl right
+            [3, 0],  // bowl top
+            [3, 4],  // handle start
+            [4, 5],  // handle middle
+            [5, 6],  // handle end
+          ],
+        });
+
+        // Cassiopeia (W shape) — right lower (proportions from actual RA/Dec)
+        constellations.push({
+          stars: [
+            { x: width * 0.75,  y: height * 0.432 },  // Caph
+            { x: width * 0.803, y: height * 0.48  },  // Schedar
+            { x: width * 0.831, y: height * 0.404 },  // Gamma Cas (Navi)
+            { x: width * 0.880, y: height * 0.413 },  // Ruchbah
+            { x: width * 0.93,  y: height * 0.35  },  // Segin
+          ],
+          connections: [
+            [0, 1],  // W segment
+            [1, 2],  // W segment
+            [2, 3],  // W segment
+            [3, 4],  // W segment
+          ],
+        });
       }
 
       // Create wispy clouds with pre-generated puffs

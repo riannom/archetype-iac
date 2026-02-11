@@ -605,6 +605,19 @@ def graph_to_topology_yaml(
         if node.network_mode:
             node_data["network-mode"] = node.network_mode
 
+        # Per-node hardware overrides (if provided by UI/imported graph).
+        # These are consumed by deploy paths that honor node-level runtime specs.
+        if node.memory is not None:
+            node_data["memory"] = node.memory
+        if node.cpu is not None:
+            node_data["cpu"] = node.cpu
+        if node.disk_driver is not None:
+            node_data["disk_driver"] = node.disk_driver
+        if node.nic_driver is not None:
+            node_data["nic_driver"] = node.nic_driver
+        if node.machine_type is not None:
+            node_data["machine_type"] = node.machine_type
+
         # Add startup-config and persistent storage for cEOS nodes
         # This enables config persistence across restarts and redeploys:
         # 1. Disables ZTP and configures AAA to allow 'copy run start'

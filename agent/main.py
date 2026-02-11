@@ -4826,9 +4826,24 @@ async def check_node_ready(
             container = client.containers.get(container_name)
             detected_kind = container.labels.get("archetype.node_kind", "")
             kind = kind or detected_kind
+            readiness_probe = container.labels.get("archetype.readiness_probe")
+            readiness_pattern = container.labels.get("archetype.readiness_pattern")
+            timeout_override = None
+            timeout_raw = container.labels.get("archetype.readiness_timeout")
+            if timeout_raw:
+                try:
+                    parsed_timeout = int(timeout_raw)
+                    if parsed_timeout > 0:
+                        timeout_override = parsed_timeout
+                except ValueError:
+                    timeout_override = None
 
             # Get and run the appropriate probe
-            probe = get_probe_for_vendor(kind)
+            probe = get_probe_for_vendor(
+                kind,
+                readiness_probe=readiness_probe,
+                readiness_pattern=readiness_pattern,
+            )
             result = await probe.check(container_name)
 
             # If ready, run post-boot commands (idempotent - only runs once per container)
@@ -4839,7 +4854,7 @@ async def check_node_ready(
                 "is_ready": result.is_ready,
                 "message": result.message,
                 "progress_percent": result.progress_percent,
-                "timeout": get_readiness_timeout(kind),
+                "timeout": timeout_override if timeout_override is not None else get_readiness_timeout(kind),
                 "provider": "docker",
             }
         except Exception:
@@ -4872,8 +4887,6 @@ async def _check_libvirt_readiness(
     Returns:
         Readiness status dict
     """
-    from agent.readiness import get_readiness_timeout
-
     libvirt_provider = get_provider("libvirt")
     if libvirt_provider is None:
         return {
@@ -4892,14 +4905,88 @@ async def _check_libvirt_readiness(
         }
 
     result = await libvirt_provider.check_readiness(lab_id, node_name, kind)
+    timeout = libvirt_provider.get_readiness_timeout(kind, lab_id, node_name)
 
     return {
         "is_ready": result.is_ready,
         "message": result.message,
         "progress_percent": result.progress_percent,
-        "timeout": get_readiness_timeout(kind),
+        "timeout": timeout,
         "provider": "libvirt",
     }
+
+
+@app.get("/labs/{lab_id}/nodes/{node_name}/runtime")
+async def get_node_runtime_profile(
+    lab_id: str,
+    node_name: str,
+    provider_type: str | None = None,
+) -> dict:
+    """Get runtime profile for a node from the active provider."""
+    if provider_type == "libvirt":
+        libvirt_provider = get_provider("libvirt")
+        if libvirt_provider is None:
+            raise HTTPException(status_code=404, detail="Libvirt provider not available")
+        try:
+            return libvirt_provider.get_runtime_profile(lab_id, node_name)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Libvirt node not found: {e}") from e
+
+    if provider_type == "docker":
+        try:
+            import docker
+            from docker.errors import NotFound
+            client = docker.from_env()
+
+            candidate_names = [node_name]
+            docker_provider = get_provider("docker")
+            if docker_provider and hasattr(docker_provider, "get_container_name"):
+                try:
+                    canonical = docker_provider.get_container_name(lab_id, node_name)
+                    if canonical and canonical not in candidate_names:
+                        candidate_names.append(canonical)
+                except Exception:
+                    pass
+
+            container = None
+            for candidate in candidate_names:
+                try:
+                    container = await asyncio.to_thread(client.containers.get, candidate)
+                    break
+                except NotFound:
+                    continue
+
+            if container is None:
+                raise HTTPException(status_code=404, detail=f"Docker node not found: {node_name}")
+
+            host_cfg = container.attrs.get("HostConfig", {})
+            memory_bytes = int(host_cfg.get("Memory") or 0)
+            memory_mb = int(memory_bytes / (1024 * 1024)) if memory_bytes > 0 else None
+            cpu_quota = int(host_cfg.get("CpuQuota") or 0)
+            cpu_period = int(host_cfg.get("CpuPeriod") or 0)
+            cpu = None
+            if cpu_quota > 0 and cpu_period > 0:
+                cpu = round(cpu_quota / cpu_period, 2)
+
+            return {
+                "provider": "docker",
+                "node_name": node_name,
+                "runtime_name": container.name,
+                "state": container.status,
+                "runtime": {
+                    "image": (container.image.tags[0] if container.image and container.image.tags else None),
+                    "memory": memory_mb,
+                    "cpu": cpu,
+                },
+            }
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Docker node not found: {e}") from e
+
+    # Auto-detect: try Docker first, then libvirt
+    try:
+        return await get_node_runtime_profile(lab_id, node_name, provider_type="docker")
+    except HTTPException:
+        return await get_node_runtime_profile(lab_id, node_name, provider_type="libvirt")
 
 
 # --- Network Interface Discovery Endpoints ---

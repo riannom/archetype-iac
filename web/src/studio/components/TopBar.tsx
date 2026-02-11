@@ -71,14 +71,6 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
     <>
       <div className="h-14 bg-white/40 dark:bg-black/40 backdrop-blur-xl border-b border-stone-200/70 dark:border-black/70 flex items-center justify-between px-6 z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
-          <button
-            onClick={onExit}
-            className="w-8 h-8 flex items-center justify-center text-stone-400 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-black/70 rounded-lg transition-all"
-            title="Back to Dashboard"
-          >
-            <i className="fa-solid fa-chevron-left"></i>
-          </button>
-
           <div className="flex items-center gap-3 group cursor-default">
             <ArchetypeIcon size={32} className="text-sage-600 dark:text-sage-400 group-hover:text-sage-500 dark:group-hover:text-sage-300 transition-colors" />
             <div className="flex flex-col leading-none">
@@ -120,6 +112,15 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
         </div>
 
         <div className="flex items-center gap-4">
+          <button
+            onClick={onExit}
+            className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-black/65 hover:bg-stone-200 dark:hover:bg-black/80 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-black/70 rounded-lg transition-all"
+            title="Back to Dashboard"
+          >
+            <i className="fa-solid fa-arrow-left text-xs"></i>
+            <span className="text-[10px] font-bold uppercase">Back</span>
+          </button>
+
           <NotificationCenter />
 
           <button

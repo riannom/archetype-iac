@@ -12,6 +12,7 @@
   - `make test-agent` — run agent test suite.
   - `make test-api` — run API test suite.
   - `python3 scripts/coverage_map.py` — generate test-to-source coverage mapping and gaps report (outputs under `reports/`).
+  - `python3 scripts/backfill_manifest_compatible_devices.py --manifest /var/lib/archetype/images/manifest.json` — dry-run manifest compatibility backfill for shared qcow2 images (`--apply` to write changes).
 
 ## Coding Style & Naming Conventions
 - Use consistent indentation (2 or 4 spaces) and enforce it with a formatter once a language is chosen.

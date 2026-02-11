@@ -1228,8 +1228,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="GigabitEthernet",
         port_start_index=1,
         max_ports=4,
-        memory=8192,  # 8GB required
+        # Cat9kv images (including cat9000v q200/uadp variants) are sensitive
+        # to VM chipset and bus/NIC model; i440fx/IDE/e1000 is more reliable.
+        memory=18432,  # 18GB for stable boot on newer Cat9kv images
         cpu=4,
+        machine_type="pc-i440fx-6.2",
+        disk_driver="ide",
+        nic_driver="e1000",
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/wireless/controller/9800/",

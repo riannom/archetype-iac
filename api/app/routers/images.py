@@ -33,6 +33,7 @@ from app.image_store import (
     detect_qcow2_device_type,
     ensure_image_store,
     find_image_by_id,
+    image_matches_device,
     load_manifest,
     qcow2_path,
     save_manifest,
@@ -1151,28 +1152,8 @@ def get_images_for_device(
 ) -> dict[str, list[dict]]:
     """Get all images assigned to or compatible with a device type."""
     manifest = load_manifest()
-    images = []
-
-    # Normalize device_id for matching
-    normalized = device_id.lower()
-    if normalized in ("ceos", "arista_ceos", "arista_eos"):
-        normalized = "eos"
-
-    for item in manifest.get("images", []):
-        item_device = (item.get("device_id") or "").lower()
-        if item_device in ("ceos", "arista_ceos", "arista_eos"):
-            item_device = "eos"
-
-        # Check if assigned to this device
-        if item_device == normalized:
-            images.append(item)
-            continue
-
-        # Check if in compatible_devices list
-        compatible = [d.lower() for d in item.get("compatible_devices", [])]
-        if normalized in compatible:
-            images.append(item)
-
+    images = [img for img in manifest.get("images", [])
+              if image_matches_device(img, device_id)]
     return {"images": images}
 
 

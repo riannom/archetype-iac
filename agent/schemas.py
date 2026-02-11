@@ -118,6 +118,16 @@ class DeployNode(BaseModel):
     ports: list[str] = Field(default_factory=list)
     startup_config: str | None = None
     exec_cmds: list[str] = Field(default_factory=list)
+    # Hardware spec overrides (controller-resolved, highest priority at runtime)
+    memory: int | None = Field(None, gt=0, description="RAM in MB")
+    cpu: int | None = Field(None, gt=0, description="vCPU count")
+    disk_driver: str | None = Field(None, description="Disk bus: virtio, ide, sata")
+    nic_driver: str | None = Field(None, description="NIC model: virtio, e1000, rtl8139")
+    machine_type: str | None = Field(None, description="QEMU machine type")
+    # Readiness overrides (controller-resolved, used for custom/imported kinds)
+    readiness_probe: str | None = None
+    readiness_pattern: str | None = None
+    readiness_timeout: int | None = Field(None, gt=0, description="Boot readiness timeout in seconds")
 
 
 class DeployLink(BaseModel):

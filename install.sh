@@ -456,6 +456,10 @@ WEB_PORT=8080
 ARCHETYPE_AGENT_NAME=local-agent
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 INTERNAL_URL=http://$LOCAL_IP:8000
+
+# Logging
+LOG_FORMAT=json
+LOG_LEVEL=INFO
 EOF
         chmod 644 .env
         log_info "Generated .env with admin password: $ADMIN_PASS"
@@ -598,6 +602,11 @@ if [ "$INSTALL_CONTROLLER" = true ]; then
     echo "  API:        http://$LOCAL_IP:8000"
     echo "  Admin:      admin@localhost"
     echo "  Password:   $ADMIN_PASS"
+    echo ""
+    echo -e "${GREEN}Observability:${NC}"
+    echo "  Grafana:    http://$LOCAL_IP:3000"
+    echo "  Prometheus: http://$LOCAL_IP:9090"
+    echo "  API metrics: http://$LOCAL_IP:8000/metrics"
     echo ""
     echo "  Logs:       cd $INSTALL_DIR && docker compose -f docker-compose.gui.yml logs -f"
     echo "  Restart:    cd $INSTALL_DIR && docker compose -f docker-compose.gui.yml restart"

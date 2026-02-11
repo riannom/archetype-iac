@@ -8,6 +8,7 @@ interface ConsoleManagerProps {
   windows: ConsoleWindow[];
   nodes: Node[];
   nodeStates?: Record<string, NodeStateEntry>;
+  isVisible?: boolean;
   onCloseWindow: (windowId: string) => void;
   onCloseTab: (windowId: string, nodeId: string) => void;
   onSetActiveTab: (windowId: string, nodeId: string) => void;
@@ -32,6 +33,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   windows,
   nodes,
   nodeStates = {},
+  isVisible = true,
   onCloseWindow,
   onCloseTab,
   onSetActiveTab,
@@ -42,6 +44,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   onToggleMinimize,
   onDockWindow,
 }) => {
+  const showConsoles = isVisible;
   // Ref-based drag/resize tracking (no re-renders during movement)
   const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const resizeRef = useRef<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
@@ -592,7 +595,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                         <TerminalSession
                           labId={labId}
                           nodeId={nodeId}
-                          isActive={win.activeDeviceId === nodeId}
+                          isActive={showConsoles && win.activeDeviceId === nodeId}
                           isReady={isReady}
                         />
                       </div>

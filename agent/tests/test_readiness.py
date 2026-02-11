@@ -261,6 +261,20 @@ class TestGetProbeForVendor:
         probe = get_probe_for_vendor("nokia_srlinux")
         assert isinstance(probe, LogPatternProbe)
 
+    def test_override_probe_for_unknown_kind(self):
+        """Explicit readiness overrides should work for unknown kinds."""
+        probe = get_probe_for_vendor(
+            "unknown_device",
+            readiness_probe="log_pattern",
+            readiness_pattern=r"READY",
+        )
+        assert isinstance(probe, LogPatternProbe)
+
+    def test_override_probe_none_for_known_kind(self):
+        """Explicit probe=none should disable readiness checks."""
+        probe = get_probe_for_vendor("ceos", readiness_probe="none")
+        assert isinstance(probe, NoopProbe)
+
 
 # --- get_readiness_timeout Tests ---
 

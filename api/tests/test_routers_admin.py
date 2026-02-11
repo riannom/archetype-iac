@@ -282,3 +282,4 @@ class TestAdminAccessControl:
         response = test_client.get(f"/labs/{lab.id}", headers=admin_auth_headers)
         assert response.status_code == 200
         assert response.json()["id"] == lab.id
+

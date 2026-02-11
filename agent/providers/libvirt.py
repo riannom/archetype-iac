@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import uuid
+from xml.sax.saxutils import escape as xml_escape
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -689,10 +690,23 @@ class LibvirtProvider(Provider):
         # Build metadata section with device kind for config extraction
         metadata_xml = ""
         if kind:
+            readiness_probe = node_config.get("readiness_probe")
+            readiness_pattern = node_config.get("readiness_pattern")
+            readiness_timeout = node_config.get("readiness_timeout")
+            readiness_xml = ""
+            if readiness_probe:
+                readiness_xml += f"\n      <archetype:readiness_probe>{xml_escape(str(readiness_probe))}</archetype:readiness_probe>"
+            if readiness_pattern:
+                readiness_xml += f"\n      <archetype:readiness_pattern>{xml_escape(str(readiness_pattern))}</archetype:readiness_pattern>"
+            if readiness_timeout:
+                try:
+                    readiness_xml += f"\n      <archetype:readiness_timeout>{int(readiness_timeout)}</archetype:readiness_timeout>"
+                except (TypeError, ValueError):
+                    logger.debug(f"Skipping invalid readiness_timeout value in metadata: {readiness_timeout}")
             metadata_xml = f'''
   <metadata>
     <archetype:node xmlns:archetype="http://archetype.io/libvirt/1">
-      <archetype:kind>{kind}</archetype:kind>
+      <archetype:kind>{xml_escape(kind)}</archetype:kind>{readiness_xml}
     </archetype:node>
   </metadata>'''
 
@@ -840,24 +854,44 @@ class LibvirtProvider(Provider):
             # Build node config dict for helper methods
             # interface_count comes from topology (based on links) or defaults to 1
             interface_count = node.interface_count or 1
+            resolved_memory = node.memory if node.memory is not None else libvirt_config.memory_mb
+            resolved_cpu = node.cpu if node.cpu is not None else libvirt_config.cpu_count
+            resolved_machine_type = (
+                node.machine_type if node.machine_type is not None else libvirt_config.machine_type
+            )
+            resolved_disk_driver = (
+                node.disk_driver if node.disk_driver is not None else libvirt_config.disk_driver
+            )
+            resolved_nic_driver = (
+                node.nic_driver if node.nic_driver is not None else libvirt_config.nic_driver
+            )
+            resolved_readiness_probe = (
+                node.readiness_probe if node.readiness_probe is not None else libvirt_config.readiness_probe
+            )
+            resolved_readiness_pattern = (
+                node.readiness_pattern if node.readiness_pattern is not None else libvirt_config.readiness_pattern
+            )
+            resolved_readiness_timeout = (
+                node.readiness_timeout if node.readiness_timeout is not None else libvirt_config.readiness_timeout
+            )
             node_config = {
                 "image": node.image,
-                "memory": libvirt_config.memory_mb,
-                "cpu": libvirt_config.cpu_count,
-                "machine_type": libvirt_config.machine_type,
-                "disk_driver": libvirt_config.disk_driver,
-                "nic_driver": libvirt_config.nic_driver,
+                "memory": resolved_memory,
+                "cpu": resolved_cpu,
+                "machine_type": resolved_machine_type,
+                "disk_driver": resolved_disk_driver,
+                "nic_driver": resolved_nic_driver,
                 "data_volume_gb": libvirt_config.data_volume_gb,
-                "readiness_probe": libvirt_config.readiness_probe,
-                "readiness_pattern": libvirt_config.readiness_pattern,
-                "readiness_timeout": libvirt_config.readiness_timeout,
+                "readiness_probe": resolved_readiness_probe,
+                "readiness_pattern": resolved_readiness_pattern,
+                "readiness_timeout": resolved_readiness_timeout,
                 "interface_count": interface_count,
                 "_display_name": display_name,
             }
             logger.info(
-                f"VM config for {log_name}: {libvirt_config.memory_mb}MB RAM, "
-                f"{libvirt_config.cpu_count} vCPU, disk={libvirt_config.disk_driver}, "
-                f"nic={libvirt_config.nic_driver}, interfaces={interface_count}"
+                f"VM config for {log_name}: {resolved_memory}MB RAM, "
+                f"{resolved_cpu} vCPU, disk={resolved_disk_driver}, "
+                f"nic={resolved_nic_driver}, interfaces={interface_count}"
             )
 
             try:
@@ -1759,8 +1793,15 @@ class LibvirtProvider(Provider):
                 progress_percent=0,
             )
 
-        # Get the appropriate probe for this device type
-        probe = get_libvirt_probe(kind, domain_name, self._uri)
+        # Apply per-node readiness metadata overrides when present.
+        overrides = self._get_domain_readiness_overrides(domain)
+        probe = get_libvirt_probe(
+            kind,
+            domain_name,
+            self._uri,
+            readiness_probe=overrides.get("readiness_probe"),
+            readiness_pattern=overrides.get("readiness_pattern"),
+        )
 
         # Run the probe
         result = await probe.check(node_name)
@@ -1771,7 +1812,12 @@ class LibvirtProvider(Provider):
 
         return result
 
-    def get_readiness_timeout(self, kind: str) -> int:
+    def get_readiness_timeout(
+        self,
+        kind: str,
+        lab_id: str | None = None,
+        node_name: str | None = None,
+    ) -> int:
         """Get the readiness timeout for a device type.
 
         Args:
@@ -1780,6 +1826,16 @@ class LibvirtProvider(Provider):
         Returns:
             Timeout in seconds
         """
+        if lab_id and node_name:
+            domain_name = self._domain_name(lab_id, node_name)
+            try:
+                domain = self.conn.lookupByName(domain_name)
+                overrides = self._get_domain_readiness_overrides(domain)
+                timeout = overrides.get("readiness_timeout")
+                if isinstance(timeout, int) and timeout > 0:
+                    return timeout
+            except Exception:
+                pass
         return get_readiness_timeout(kind)
 
     def get_node_kind(self, lab_id: str, node_name: str) -> str | None:
@@ -1811,25 +1867,157 @@ class LibvirtProvider(Provider):
             Device kind string, or None if not found
         """
         try:
-            xml = domain.XMLDesc()
-            # Parse XML and look for our metadata
-            import xml.etree.ElementTree as ET
-            root = ET.fromstring(xml)
-            metadata = root.find('metadata')
-            if metadata is not None:
-                # Look for archetype:kind in metadata
-                for child in metadata:
-                    if 'kind' in child.tag:
-                        return child.text
-                # Also look for nested archetype:node/archetype:kind
-                for node_elem in metadata:
-                    if 'node' in node_elem.tag:
-                        for kind_elem in node_elem:
-                            if 'kind' in kind_elem.tag:
-                                return kind_elem.text
+            metadata = self._get_domain_metadata_values(domain)
+            return metadata.get("kind")
         except Exception as e:
             logger.debug(f"Error getting domain kind: {e}")
         return None
+
+    def _get_domain_readiness_overrides(self, domain) -> dict[str, Any]:
+        """Read per-node readiness overrides from libvirt domain metadata."""
+        values = self._get_domain_metadata_values(domain)
+        overrides: dict[str, Any] = {}
+        probe = values.get("readiness_probe")
+        pattern = values.get("readiness_pattern")
+        timeout_raw = values.get("readiness_timeout")
+        if probe:
+            overrides["readiness_probe"] = probe
+        if pattern:
+            overrides["readiness_pattern"] = pattern
+        if timeout_raw:
+            try:
+                timeout = int(timeout_raw)
+                if timeout > 0:
+                    overrides["readiness_timeout"] = timeout
+            except (TypeError, ValueError):
+                logger.debug(f"Invalid readiness_timeout metadata value: {timeout_raw}")
+        return overrides
+
+    def _get_domain_metadata_values(self, domain) -> dict[str, str]:
+        """Extract archetype metadata values from domain XML by local tag name."""
+        import xml.etree.ElementTree as ET
+
+        xml = domain.XMLDesc()
+        root = ET.fromstring(xml)
+        metadata = root.find("metadata")
+        if metadata is None:
+            return {}
+
+        values: dict[str, str] = {}
+        for elem in metadata.iter():
+            local_tag = elem.tag.split("}")[-1] if isinstance(elem.tag, str) else ""
+            if local_tag in {
+                "kind",
+                "readiness_probe",
+                "readiness_pattern",
+                "readiness_timeout",
+            }:
+                text = (elem.text or "").strip()
+                if text:
+                    values[local_tag] = text
+        return values
+
+    def get_runtime_profile(self, lab_id: str, node_name: str) -> dict[str, Any]:
+        """Get runtime configuration for a VM node from live libvirt XML."""
+        import xml.etree.ElementTree as ET
+
+        domain_name = self._domain_name(lab_id, node_name)
+        domain = self.conn.lookupByName(domain_name)
+        state, _ = domain.state()
+        state_map = {
+            libvirt.VIR_DOMAIN_RUNNING: "running",
+            libvirt.VIR_DOMAIN_SHUTOFF: "stopped",
+            libvirt.VIR_DOMAIN_SHUTDOWN: "stopping",
+            libvirt.VIR_DOMAIN_PAUSED: "paused",
+            libvirt.VIR_DOMAIN_CRASHED: "crashed",
+            libvirt.VIR_DOMAIN_NOSTATE: "unknown",
+            libvirt.VIR_DOMAIN_BLOCKED: "blocked",
+            libvirt.VIR_DOMAIN_PMSUSPENDED: "suspended",
+        }
+        xml = domain.XMLDesc()
+        root = ET.fromstring(xml)
+
+        def _text(path: str) -> str | None:
+            el = root.find(path)
+            if el is None or el.text is None:
+                return None
+            txt = el.text.strip()
+            return txt if txt else None
+
+        memory_mb = None
+        memory_elem = root.find("memory")
+        memory_text = _text("memory")
+        if memory_text:
+            try:
+                memory_value = int(memory_text)
+                unit = (memory_elem.attrib.get("unit") if memory_elem is not None else "KiB") or "KiB"
+                unit_l = unit.lower()
+                if unit_l in ("kib", "kb"):
+                    memory_mb = int(memory_value / 1024)
+                elif unit_l in ("mib", "mb"):
+                    memory_mb = memory_value
+                elif unit_l in ("gib", "gb"):
+                    memory_mb = memory_value * 1024
+                else:
+                    memory_mb = int(memory_value / 1024)
+            except ValueError:
+                pass
+
+        cpu = None
+        vcpu_text = _text("vcpu")
+        if vcpu_text:
+            try:
+                cpu = int(vcpu_text)
+            except ValueError:
+                pass
+
+        machine_type = None
+        os_type = root.find("os/type")
+        if os_type is not None:
+            machine_type = os_type.attrib.get("machine")
+
+        disk_driver = None
+        disk_source = None
+        for disk in root.findall("devices/disk"):
+            if disk.attrib.get("device") != "disk":
+                continue
+            target = disk.find("target")
+            if target is not None:
+                disk_driver = target.attrib.get("bus")
+            source = disk.find("source")
+            if source is not None:
+                disk_source = source.attrib.get("file")
+            break
+
+        nic_driver = None
+        iface = root.find("devices/interface/model")
+        if iface is not None:
+            nic_driver = iface.attrib.get("type")
+
+        metadata = self._get_domain_metadata_values(domain)
+
+        return {
+            "provider": "libvirt",
+            "node_name": node_name,
+            "domain_name": domain_name,
+            "state": state_map.get(state, "unknown"),
+            "runtime": {
+                "memory": memory_mb,
+                "cpu": cpu,
+                "machine_type": machine_type,
+                "disk_driver": disk_driver,
+                "nic_driver": nic_driver,
+                "disk_source": disk_source,
+                "kind": metadata.get("kind"),
+                "readiness_probe": metadata.get("readiness_probe"),
+                "readiness_pattern": metadata.get("readiness_pattern"),
+                "readiness_timeout": (
+                    int(metadata["readiness_timeout"])
+                    if metadata.get("readiness_timeout", "").isdigit()
+                    else None
+                ),
+            },
+        }
 
     async def _extract_config(
         self,

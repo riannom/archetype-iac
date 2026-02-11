@@ -21,6 +21,7 @@ interface TaskLogPanelProps {
   onToggle: () => void;
   onClear: () => void;
   onEntryClick?: (entry: TaskLogEntry) => void;
+  showConsoles?: boolean;
   // Console tabs support
   consoleTabs?: DockedConsole[];
   activeTabId?: string; // 'log' | nodeId
@@ -46,6 +47,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   onToggle,
   onClear,
   onEntryClick,
+  showConsoles = true,
   consoleTabs = [],
   activeTabId = 'log',
   onSelectTab,
@@ -56,7 +58,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   nodeStates = {},
 }) => {
   const errorCount = entries.filter((e) => e.level === 'error').length;
-  const hasConsoleTabs = consoleTabs.length > 0;
+  const hasConsoleTabs = showConsoles && consoleTabs.length > 0;
 
   const [height, setHeight] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -244,6 +246,8 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   };
 
   const isLogTabActive = activeTabId === 'log';
+  const logTabActive = showConsoles ? isLogTabActive : true;
+  const showLogContent = isLogTabActive || !showConsoles;
 
   return (
     <div className="shrink-0 bg-white/95 dark:bg-stone-950/95 backdrop-blur-md border-t border-stone-200 dark:border-stone-800">
@@ -267,14 +271,14 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
           <span className="text-[10px] font-black uppercase tracking-widest text-stone-600 dark:text-stone-400">
             {hasConsoleTabs ? 'Panel' : 'Task Log'}
           </span>
-          {errorCount > 0 && isLogTabActive && (
+          {errorCount > 0 && logTabActive && (
             <span className="px-1.5 py-0.5 bg-red-600 text-white text-[9px] font-bold rounded-full">
               {errorCount}
             </span>
           )}
         </div>
         <div className="flex items-center gap-3">
-          {isVisible && isLogTabActive && (
+          {isVisible && logTabActive && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -306,7 +310,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
               <button
                 onClick={() => onSelectTab?.('log')}
                 className={`h-8 px-4 flex items-center gap-2 text-[10px] font-bold border-b-2 transition-all ${
-                  isLogTabActive
+                  logTabActive
                     ? 'text-sage-600 dark:text-sage-400 border-sage-500'
                     : 'text-stone-500 dark:text-stone-500 border-transparent hover:text-stone-700 dark:hover:text-stone-300'
                 }`}
@@ -321,7 +325,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
               </button>
 
               {/* Console tabs */}
-              {consoleTabs.map((tab, index) => {
+              {showConsoles && consoleTabs.map((tab, index) => {
                 const isActive = activeTabId === tab.nodeId;
                 const isBeingDragged = tabDragState?.nodeId === tab.nodeId && tabDragState.isDragging;
                 const isBeingReordered = tabDragState?.nodeId === tab.nodeId && tabDragState.isReordering;
@@ -388,7 +392,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
             style={{ height: `${height}px` }}
           >
             {/* Log content */}
-            {isLogTabActive && (
+            {showLogContent && (
               <div className="h-full overflow-y-auto font-mono text-[11px]">
                 {entries.length === 0 ? (
                   <div className="px-4 py-6 text-center text-stone-400 dark:text-stone-600">No task activity yet</div>
@@ -423,23 +427,27 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
             )}
 
             {/* Console content */}
-            {!isLogTabActive && labId && consoleTabs.map((tab) => {
-              if (activeTabId !== tab.nodeId) return null;
-              const nodeState = nodeStates[tab.nodeId];
-              const isRunning = nodeState?.actual_state === 'running';
-              const isReady = !isRunning || nodeState?.is_ready !== false;
+            {!isLogTabActive && labId && (
+              <div className={showConsoles ? '' : 'hidden'}>
+                {consoleTabs.map((tab) => {
+                  if (activeTabId !== tab.nodeId) return null;
+                  const nodeState = nodeStates[tab.nodeId];
+                  const isRunning = nodeState?.actual_state === 'running';
+                  const isReady = !isRunning || nodeState?.is_ready !== false;
 
-              return (
-                <div key={tab.nodeId} className="h-full bg-[#0b0f16]">
-                  <TerminalSession
-                    labId={labId}
-                    nodeId={tab.nodeId}
-                    isActive={true}
-                    isReady={isReady}
-                  />
-                </div>
-              );
-            })}
+                  return (
+                    <div key={tab.nodeId} className="h-full bg-[#0b0f16]">
+                      <TerminalSession
+                        labId={labId}
+                        nodeId={tab.nodeId}
+                        isActive={showConsoles}
+                        isReady={isReady}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </>
       )}

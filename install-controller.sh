@@ -220,6 +220,10 @@ OIDC_APP_REDIRECT_URL=http://localhost:$WEB_PORT/auth/callback
 ARCHETYPE_AGENT_NAME=local-agent
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 INTERNAL_URL=http://$LOCAL_IP:$API_PORT
+
+# Logging
+LOG_FORMAT=json
+LOG_LEVEL=INFO
 EOF
 
 # Make readable by docker group (or use 600 and run with sudo for tighter security)
@@ -255,6 +259,11 @@ echo -e "${CYAN}Access URLs:${NC}"
 echo "  Web UI:      http://$LOCAL_IP:$WEB_PORT"
 echo "  API:         http://$LOCAL_IP:$API_PORT"
 echo "  API Health:  http://$LOCAL_IP:$API_PORT/health"
+echo ""
+echo -e "${CYAN}Observability:${NC}"
+echo "  Grafana:     http://$LOCAL_IP:3000"
+echo "  Prometheus:  http://$LOCAL_IP:9090"
+echo "  API Metrics: http://$LOCAL_IP:$API_PORT/metrics"
 echo ""
 echo -e "${CYAN}Admin Credentials:${NC}"
 echo "  Email:       admin@localhost"

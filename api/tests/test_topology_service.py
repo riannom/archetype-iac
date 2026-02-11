@@ -15,7 +15,7 @@ from app.schemas import (
     GraphNode,
     TopologyGraph,
 )
-from app.services.topology import TopologyService
+from app.services.topology import TopologyService, graph_to_deploy_topology
 
 
 # --- Link Endpoint Ordering Tests ---
@@ -358,3 +358,113 @@ class TestImportFromGraphIdempotent:
         # Verify only one of each exists
         assert len(service.get_nodes(sample_lab.id)) == 2
         assert len(service.get_links(sample_lab.id)) == 1
+
+
+class TestDeployHardwareProfile:
+    """Tests for runtime hardware profile propagation into deploy payloads."""
+
+    def test_graph_to_deploy_topology_includes_resolved_hardware_specs(self, monkeypatch):
+        class _StubDeviceService:
+            def resolve_hardware_specs(self, _device_id, _node_cfg):
+                return {
+                    "memory": 18432,
+                    "cpu": 4,
+                    "disk_driver": "ide",
+                    "nic_driver": "e1000",
+                    "machine_type": "pc-i440fx-6.2",
+                }
+            def get_device_config(self, _device_id):
+                return {
+                    "effective": {
+                        "readinessProbe": "log_pattern",
+                        "readinessPattern": "Press RETURN",
+                        "readinessTimeout": 2400,
+                    }
+                }
+
+        monkeypatch.setattr(
+            "app.services.device_service.get_device_service",
+            lambda: _StubDeviceService(),
+        )
+
+        graph = TopologyGraph(
+            nodes=[
+                GraphNode(
+                    id="n1",
+                    name="cat9k-1",
+                    container_name="cat9k_1",
+                    device="cat9000v-uadp",
+                    image="/var/lib/archetype/images/cat9kv_prd.17.15.03.qcow2",
+                )
+            ],
+            links=[],
+        )
+
+        topology = graph_to_deploy_topology(graph)
+        assert len(topology["nodes"]) == 1
+        node = topology["nodes"][0]
+        assert node["memory"] == 18432
+        assert node["cpu"] == 4
+        assert node["disk_driver"] == "ide"
+        assert node["nic_driver"] == "e1000"
+        assert node["machine_type"] == "pc-i440fx-6.2"
+        assert node["readiness_probe"] == "log_pattern"
+        assert node["readiness_pattern"] == "Press RETURN"
+        assert node["readiness_timeout"] == 2400
+
+    def test_build_deploy_topology_includes_resolved_hardware_specs(
+        self, test_db, sample_lab, multiple_hosts, monkeypatch
+    ):
+        class _StubDeviceService:
+            def resolve_hardware_specs(self, _device_id, _node_cfg):
+                return {
+                    "memory": 12288,
+                    "cpu": 4,
+                    "disk_driver": "ide",
+                    "nic_driver": "e1000",
+                    "machine_type": "pc-i440fx-6.2",
+                }
+            def get_device_config(self, _device_id):
+                return {
+                    "effective": {
+                        "readinessProbe": "log_pattern",
+                        "readinessPattern": "Router>",
+                        "readinessTimeout": 1800,
+                    }
+                }
+
+        monkeypatch.setattr(
+            "app.services.device_service.get_device_service",
+            lambda: _StubDeviceService(),
+        )
+
+        host1, _, _ = multiple_hosts
+        graph = TopologyGraph(
+            nodes=[
+                GraphNode(
+                    id="n1",
+                    name="cat9k-q200",
+                    container_name="cat9k_q200",
+                    device="cat9000v-q200",
+                    image="/var/lib/archetype/images/cat9kv_prd.17.15.03.qcow2",
+                    host=host1.id,
+                )
+            ],
+            links=[],
+        )
+
+        service = TopologyService(test_db)
+        service.update_from_graph(sample_lab.id, graph)
+        test_db.commit()
+
+        deploy_topology = service.build_deploy_topology(sample_lab.id, host1.id)
+        assert len(deploy_topology["nodes"]) == 1
+        node = deploy_topology["nodes"][0]
+        assert node["memory"] == 12288
+        assert node["cpu"] == 4
+        assert node["disk_driver"] == "ide"
+        assert node["nic_driver"] == "e1000"
+        assert node["machine_type"] == "pc-i440fx-6.2"
+        assert node["readiness_probe"] == "log_pattern"
+        assert node["readiness_pattern"] == "Router>"
+        assert node["readiness_timeout"] == 1800

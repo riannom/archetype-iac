@@ -196,6 +196,7 @@ const StudioPage: React.FC = () => {
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
   const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime'>('designer');
+  const isDesignerView = view === 'designer';
   const [nodes, setNodes] = useState<Node[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -941,6 +942,16 @@ const StudioPage: React.FC = () => {
     setSelectedId(null);
     setView('designer');
   };
+
+  const handleExitLab = useCallback(() => {
+    if (!activeLab) return;
+    const confirmed = window.confirm('Are you sure you want to exit the lab?');
+    if (!confirmed) return;
+    setConsoleWindows([]);
+    setDockedConsoles([]);
+    setActiveBottomTabId('log');
+    setActiveLab(null);
+  }, [activeLab]);
 
   const handleDeleteLab = async (labId: string) => {
     await studioRequest(`/labs/${labId}`, { method: 'DELETE' });
@@ -1794,7 +1805,7 @@ const StudioPage: React.FC = () => {
 
   return (
     <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${view === 'designer' ? '' : backgroundGradient}`}>
-      <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onExit={() => setActiveLab(null)} onRename={(newName) => handleRenameLab(activeLab.id, newName)} />
+      <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onExit={handleExitLab} onRename={(newName) => handleRenameLab(activeLab.id, newName)} />
       <div className="h-10 bg-white/35 dark:bg-black/35 backdrop-blur-md border-b border-stone-200/70 dark:border-black/70 flex px-6 items-center gap-1 shrink-0">
         <button
           onClick={() => setView('designer')}
@@ -1833,21 +1844,24 @@ const StudioPage: React.FC = () => {
       <AgentAlertBanner />
       <div className="flex flex-1 overflow-hidden relative">
         {renderView()}
-        <ConsoleManager
-          labId={activeLab.id}
-          windows={consoleWindows}
-          nodes={nodes}
-          nodeStates={nodeStates}
-          onCloseWindow={handleCloseConsoleWindow}
-          onCloseTab={handleCloseConsoleTab}
-          onSetActiveTab={handleSetActiveConsoleTab}
-          onUpdateWindowPos={handleUpdateConsoleWindowPos}
-          onMergeWindows={handleMergeWindows}
-          onSplitTab={handleSplitTab}
-          onReorderTab={handleReorderTab}
-          onToggleMinimize={handleToggleMinimize}
-          onDockWindow={handleDockWindow}
-        />
+        <div className={isDesignerView ? '' : 'hidden'} aria-hidden={!isDesignerView}>
+          <ConsoleManager
+            labId={activeLab.id}
+            windows={consoleWindows}
+            nodes={nodes}
+            nodeStates={nodeStates}
+            isVisible={isDesignerView}
+            onCloseWindow={handleCloseConsoleWindow}
+            onCloseTab={handleCloseConsoleTab}
+            onSetActiveTab={handleSetActiveConsoleTab}
+            onUpdateWindowPos={handleUpdateConsoleWindowPos}
+            onMergeWindows={handleMergeWindows}
+            onSplitTab={handleSplitTab}
+            onReorderTab={handleReorderTab}
+            onToggleMinimize={handleToggleMinimize}
+            onDockWindow={handleDockWindow}
+          />
+        </div>
       </div>
       <StatusBar nodeStates={nodeStates} wsConnected={wsConnected} reconnectAttempts={wsReconnectAttempts} />
       <TaskLogPanel
@@ -1856,6 +1870,7 @@ const StudioPage: React.FC = () => {
         onToggle={() => setIsTaskLogVisible(!isTaskLogVisible)}
         onClear={clearTaskLog}
         onEntryClick={handleTaskLogEntryClick}
+        showConsoles={isDesignerView}
         consoleTabs={dockedConsoles}
         activeTabId={activeBottomTabId}
         onSelectTab={setActiveBottomTabId}

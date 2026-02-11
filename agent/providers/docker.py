@@ -186,6 +186,9 @@ LABEL_NODE_NAME = "archetype.node_name"
 LABEL_NODE_DISPLAY_NAME = "archetype.node_display_name"
 LABEL_NODE_KIND = "archetype.node_kind"
 LABEL_NODE_INTERFACE_COUNT = "archetype.node_interface_count"
+LABEL_NODE_READINESS_PROBE = "archetype.readiness_probe"
+LABEL_NODE_READINESS_PATTERN = "archetype.readiness_pattern"
+LABEL_NODE_READINESS_TIMEOUT = "archetype.readiness_timeout"
 LABEL_PROVIDER = "archetype.provider"
 
 
@@ -212,6 +215,9 @@ class TopologyNode:
     ports: list[str] = field(default_factory=list)
     startup_config: str | None = None
     exec_: list[str] = field(default_factory=list)  # Post-start commands
+    readiness_probe: str | None = None
+    readiness_pattern: str | None = None
+    readiness_timeout: int | None = None
 
     def log_name(self) -> str:
         """Format node name for logging: 'DisplayName(id)' or just 'id'."""
@@ -726,6 +732,12 @@ class DockerProvider(Provider):
             labels[LABEL_NODE_INTERFACE_COUNT] = str(interface_count)
         if node.display_name:
             labels[LABEL_NODE_DISPLAY_NAME] = node.display_name
+        if node.readiness_probe:
+            labels[LABEL_NODE_READINESS_PROBE] = node.readiness_probe
+        if node.readiness_pattern:
+            labels[LABEL_NODE_READINESS_PATTERN] = node.readiness_pattern
+        if node.readiness_timeout and node.readiness_timeout > 0:
+            labels[LABEL_NODE_READINESS_TIMEOUT] = str(node.readiness_timeout)
 
         # Process binds from runtime config and node-specific binds
         binds = list(runtime_config.binds)
@@ -1966,12 +1978,15 @@ username admin privilege 15 role network-admin nopassword
 
                 log_name = node.log_name()
                 config = get_config_by_device(node.kind)
-                if not config or config.readiness_probe == "none":
+                readiness_probe = node.readiness_probe or (config.readiness_probe if config else None)
+                readiness_pattern = node.readiness_pattern or (config.readiness_pattern if config else None)
+                readiness_timeout = node.readiness_timeout or (config.readiness_timeout if config else 120)
+                if not readiness_probe or readiness_probe == "none":
                     ready_status[node_name] = True
                     continue
 
                 # Check node-specific timeout
-                node_timeout = config.readiness_timeout
+                node_timeout = readiness_timeout
                 if elapsed > node_timeout:
                     logger.warning(f"Node {log_name} timed out waiting for readiness")
                     continue
@@ -1983,12 +1998,12 @@ username admin privilege 15 role network-admin nopassword
                         all_ready = False
                         continue
 
-                    if config.readiness_probe == "log_pattern":
+                    if readiness_probe == "log_pattern":
                         # Check logs for pattern - run in thread to avoid blocking
                         logs_bytes = await asyncio.to_thread(container.logs, tail=100)
                         logs = logs_bytes.decode(errors="replace")
-                        if config.readiness_pattern:
-                            if re.search(config.readiness_pattern, logs):
+                        if readiness_pattern:
+                            if re.search(readiness_pattern, logs):
                                 ready_status[node_name] = True
                                 logger.info(f"Node {log_name} is ready")
                                 # Run post-boot commands (e.g., remove cEOS iptables rules)
@@ -2087,6 +2102,9 @@ username admin privilege 15 role network-admin nopassword
                 ports=n.ports,
                 startup_config=n.startup_config,
                 exec_=n.exec_cmds,
+                readiness_probe=n.readiness_probe,
+                readiness_pattern=n.readiness_pattern,
+                readiness_timeout=n.readiness_timeout,
             )
 
         links = []

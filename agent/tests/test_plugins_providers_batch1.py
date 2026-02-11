@@ -256,7 +256,15 @@ def test_libvirt_generate_domain_xml(monkeypatch, tmp_path: Path) -> None:
 
     xml = provider._generate_domain_xml(
         "arch-lab-node1",
-        {"memory": 1024, "cpu": 2, "disk_driver": "virtio", "nic_driver": "virtio"},
+        {
+            "memory": 1024,
+            "cpu": 2,
+            "disk_driver": "virtio",
+            "nic_driver": "virtio",
+            "readiness_probe": "log_pattern",
+            "readiness_pattern": "Press RETURN",
+            "readiness_timeout": 2400,
+        },
         overlay,
         data_volume_path=data_volume,
         interface_count=2,
@@ -269,6 +277,156 @@ def test_libvirt_generate_domain_xml(monkeypatch, tmp_path: Path) -> None:
     assert "arch-ovs-test" in xml
     assert "<tag id='100'/>" in xml
     assert "<archetype:kind>ceos</archetype:kind>" in xml
+    assert "<archetype:readiness_probe>log_pattern</archetype:readiness_probe>" in xml
+    assert "<archetype:readiness_pattern>Press RETURN</archetype:readiness_pattern>" in xml
+    assert "<archetype:readiness_timeout>2400</archetype:readiness_timeout>" in xml
+
+
+def test_libvirt_parse_readiness_overrides_from_domain_metadata() -> None:
+    provider = _make_libvirt_provider()
+
+    class DummyDomain:
+        def XMLDesc(self):
+            return """<domain type='kvm'>
+  <name>arch-lab-node1</name>
+  <metadata>
+    <archetype:node xmlns:archetype="http://archetype.io/libvirt/1">
+      <archetype:kind>cat9000v-uadp</archetype:kind>
+      <archetype:readiness_probe>log_pattern</archetype:readiness_probe>
+      <archetype:readiness_pattern>Press RETURN</archetype:readiness_pattern>
+      <archetype:readiness_timeout>2400</archetype:readiness_timeout>
+    </archetype:node>
+  </metadata>
+</domain>"""
+
+    overrides = provider._get_domain_readiness_overrides(DummyDomain())
+    assert overrides == {
+        "readiness_probe": "log_pattern",
+        "readiness_pattern": "Press RETURN",
+        "readiness_timeout": 2400,
+    }
+
+
+def test_libvirt_get_runtime_profile(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+
+    class DummyLibvirt:
+        VIR_DOMAIN_RUNNING = 1
+        VIR_DOMAIN_SHUTOFF = 5
+        VIR_DOMAIN_SHUTDOWN = 4
+        VIR_DOMAIN_PAUSED = 3
+        VIR_DOMAIN_CRASHED = 6
+        VIR_DOMAIN_NOSTATE = 0
+        VIR_DOMAIN_BLOCKED = 2
+        VIR_DOMAIN_PMSUSPENDED = 7
+
+    class DummyDomain:
+        def state(self):
+            return (DummyLibvirt.VIR_DOMAIN_RUNNING, 0)
+
+        def XMLDesc(self):
+            return """<domain type='kvm'>
+  <name>arch-lab-node1</name>
+  <memory unit='MiB'>18432</memory>
+  <vcpu>4</vcpu>
+  <os><type arch='x86_64' machine='pc-i440fx-6.2'>hvm</type></os>
+  <devices>
+    <disk type='file' device='disk'>
+      <source file='/var/lib/archetype/disks/node1.qcow2'/>
+      <target dev='hda' bus='ide'/>
+    </disk>
+    <interface type='bridge'>
+      <model type='e1000'/>
+    </interface>
+  </devices>
+  <metadata>
+    <archetype:node xmlns:archetype='http://archetype.io/libvirt/1'>
+      <archetype:kind>cat9000v-uadp</archetype:kind>
+      <archetype:readiness_probe>log_pattern</archetype:readiness_probe>
+      <archetype:readiness_pattern>Press RETURN</archetype:readiness_pattern>
+      <archetype:readiness_timeout>2400</archetype:readiness_timeout>
+    </archetype:node>
+  </metadata>
+</domain>"""
+
+    class DummyConn:
+        def lookupByName(self, _name):
+            return DummyDomain()
+
+    monkeypatch.setattr(libvirt_provider, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "conn",
+        property(lambda self: DummyConn()),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_domain_name",
+        lambda self, _lab_id, _node_name: "arch-lab-node1",
+    )
+
+    profile = provider.get_runtime_profile("lab", "node1")
+    runtime = profile["runtime"]
+    assert profile["provider"] == "libvirt"
+    assert profile["state"] == "running"
+    assert runtime["memory"] == 18432
+    assert runtime["cpu"] == 4
+    assert runtime["disk_driver"] == "ide"
+    assert runtime["nic_driver"] == "e1000"
+    assert runtime["machine_type"] == "pc-i440fx-6.2"
+    assert runtime["kind"] == "cat9000v-uadp"
+    assert runtime["readiness_probe"] == "log_pattern"
+    assert runtime["readiness_timeout"] == 2400
+
+
+def test_libvirt_get_runtime_profile_kib_memory_conversion(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+
+    class DummyLibvirt:
+        VIR_DOMAIN_RUNNING = 1
+        VIR_DOMAIN_SHUTOFF = 5
+        VIR_DOMAIN_SHUTDOWN = 4
+        VIR_DOMAIN_PAUSED = 3
+        VIR_DOMAIN_CRASHED = 6
+        VIR_DOMAIN_NOSTATE = 0
+        VIR_DOMAIN_BLOCKED = 2
+        VIR_DOMAIN_PMSUSPENDED = 7
+
+    class DummyDomain:
+        def state(self):
+            return (DummyLibvirt.VIR_DOMAIN_RUNNING, 0)
+
+        def XMLDesc(self):
+            # libvirt default unit is KiB when omitted
+            return """<domain type='kvm'>
+  <name>arch-lab-node1</name>
+  <memory>2097152</memory>
+  <vcpu>1</vcpu>
+  <os><type arch='x86_64' machine='pc-q35-6.2'>hvm</type></os>
+  <devices>
+    <disk type='file' device='disk'><target dev='vda' bus='virtio'/></disk>
+    <interface type='bridge'><model type='virtio'/></interface>
+  </devices>
+</domain>"""
+
+    class DummyConn:
+        def lookupByName(self, _name):
+            return DummyDomain()
+
+    monkeypatch.setattr(libvirt_provider, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "conn",
+        property(lambda self: DummyConn()),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_domain_name",
+        lambda self, _lab_id, _node_name: "arch-lab-node1",
+    )
+
+    profile = provider.get_runtime_profile("lab", "node1")
+    assert profile["runtime"]["memory"] == 2048
 
 
 def test_libvirt_domain_status_mapping(monkeypatch) -> None:

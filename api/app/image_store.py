@@ -408,27 +408,34 @@ def ensure_custom_device_exists(device_id: str) -> Optional[dict]:
     return add_custom_device(custom_device)
 
 
+def image_matches_device(image: dict, device_id: str) -> bool:
+    """Check if an image matches a device via device_id or compatible_devices.
+
+    Handles EOS/cEOS alias normalization.
+    """
+    def _normalize(dev: str) -> str:
+        dev = dev.lower()
+        if dev in ("ceos", "arista_ceos", "arista_eos"):
+            dev = "eos"
+        return dev
+
+    target = _normalize(device_id)
+    if _normalize(image.get("device_id") or "") == target:
+        return True
+    for cd in image.get("compatible_devices") or []:
+        if _normalize(cd) == target:
+            return True
+    return False
+
+
 def get_device_image_count(device_id: str) -> int:
     """Count how many images are assigned to a device type.
 
     Checks both 'device_id' field and 'compatible_devices' list.
     """
     manifest = load_manifest()
-    count = 0
-    device_lower = device_id.lower()
-
-    for image in manifest.get("images", []):
-        # Check primary device assignment
-        if (image.get("device_id") or "").lower() == device_lower:
-            count += 1
-            continue
-
-        # Check compatible_devices list
-        compatible = [d.lower() for d in image.get("compatible_devices", [])]
-        if device_lower in compatible:
-            count += 1
-
-    return count
+    return sum(1 for img in manifest.get("images", [])
+               if image_matches_device(img, device_id))
 
 
 def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
@@ -670,11 +677,6 @@ def find_image_reference(device_id: str, version: str | None = None) -> str | No
     manifest = load_manifest()
     images = manifest.get("images", [])
 
-    # Normalize device_id for matching (eos and ceos are equivalent)
-    normalized_device = device_id.lower()
-    if normalized_device in ("ceos", "arista_ceos", "arista_eos"):
-        normalized_device = "eos"
-
     # Supported image kinds
     supported_kinds = ("docker", "qcow2", "iol")
 
@@ -684,31 +686,22 @@ def find_image_reference(device_id: str, version: str | None = None) -> str | No
         for img in images:
             if img.get("kind") not in supported_kinds:
                 continue
-            img_device = (img.get("device_id") or "").lower()
-            if img_device in ("ceos", "arista_ceos", "arista_eos"):
-                img_device = "eos"
             img_version = (img.get("version") or "").lower()
-            if img_device == normalized_device and img_version == version_lower:
+            if image_matches_device(img, device_id) and img_version == version_lower:
                 return img.get("reference")
 
     # Fall back to default image for this device type
     for img in images:
         if img.get("kind") not in supported_kinds:
             continue
-        img_device = (img.get("device_id") or "").lower()
-        if img_device in ("ceos", "arista_ceos", "arista_eos"):
-            img_device = "eos"
-        if img_device == normalized_device and img.get("is_default"):
+        if image_matches_device(img, device_id) and img.get("is_default"):
             return img.get("reference")
 
     # Fall back to any image for this device type
     for img in images:
         if img.get("kind") not in supported_kinds:
             continue
-        img_device = (img.get("device_id") or "").lower()
-        if img_device in ("ceos", "arista_ceos", "arista_eos"):
-            img_device = "eos"
-        if img_device == normalized_device:
+        if image_matches_device(img, device_id):
             return img.get("reference")
 
     return None

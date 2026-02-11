@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+import json
 import httpx
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -16,6 +17,24 @@ from app.utils.http import require_admin
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["admin"])
+
+
+def _safe_load_json(text: str | None) -> dict:
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _normalize_compare_value(value):
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return round(value, 3)
+    return value
 
 
 @router.post("/reconcile")
@@ -130,6 +149,194 @@ async def reconcile_state(
     logger.info(f"Reconciliation complete: {result['labs_updated']} labs updated")
 
     return result
+
+
+@router.get("/labs/{lab_id}/runtime-drift")
+async def audit_lab_runtime_drift(
+    lab_id: str,
+    include_stopped: bool = Query(
+        False,
+        description="Include nodes that are not currently running",
+    ),
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Compare expected node specs with live runtime specs to detect drift."""
+    require_admin(current_user)
+    get_lab_or_404(lab_id, database, current_user)
+
+    from app.image_store import get_image_provider
+    from app.services.device_service import get_device_service
+    from app.services.topology import resolve_device_kind, resolve_node_image
+
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id)
+        .all()
+    )
+    placement_by_node_id = {
+        p.node_definition_id: p
+        for p in placements
+        if p.node_definition_id
+    }
+    placement_by_name = {p.node_name: p for p in placements}
+
+    states = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab_id)
+        .all()
+    )
+    state_by_node_id = {
+        s.node_definition_id: s
+        for s in states
+        if s.node_definition_id
+    }
+    state_by_name = {s.node_name: s for s in states}
+
+    device_service = get_device_service()
+    nodes = database.query(models.Node).filter(models.Node.lab_id == lab_id).all()
+
+    results: list[dict] = []
+    drifted = 0
+    errors = 0
+    scanned = 0
+
+    for node in nodes:
+        if node.node_type != "device":
+            continue
+        scanned += 1
+        state = state_by_node_id.get(node.id) or state_by_name.get(node.container_name)
+        actual_state = state.actual_state if state else "unknown"
+        if not include_stopped and actual_state != "running":
+            continue
+
+        kind = resolve_device_kind(node.device)
+        image = resolve_node_image(node.device, kind, node.image, node.version)
+        provider = get_image_provider(image)
+        node_cfg = _safe_load_json(node.config_json)
+        hw = device_service.resolve_hardware_specs(node.device or kind, node_cfg)
+        effective = device_service.get_device_config(node.device or kind).get("effective", {})
+
+        expected = {
+            "provider": provider,
+            "kind": kind,
+            "image": image,
+            "memory": hw.get("memory"),
+            "cpu": hw.get("cpu"),
+            "disk_driver": hw.get("disk_driver"),
+            "nic_driver": hw.get("nic_driver"),
+            "machine_type": hw.get("machine_type"),
+            "readiness_probe": effective.get("readinessProbe"),
+            "readiness_pattern": effective.get("readinessPattern"),
+            "readiness_timeout": effective.get("readinessTimeout"),
+        }
+
+        placement = placement_by_node_id.get(node.id) or placement_by_name.get(node.container_name)
+        host_id = node.host_id or (placement.host_id if placement else None)
+        host = database.get(models.Host, host_id) if host_id else None
+
+        entry = {
+            "node_id": node.id,
+            "node_name": node.container_name,
+            "display_name": node.display_name,
+            "state": actual_state,
+            "expected": expected,
+            "host_id": host_id,
+            "host_name": host.name if host else None,
+            "runtime": None,
+            "issues": [],
+        }
+
+        if not host:
+            entry["issues"].append({
+                "field": "host",
+                "expected": host_id,
+                "actual": None,
+                "reason": "node has no resolved host placement",
+            })
+            drifted += 1
+            errors += 1
+            results.append(entry)
+            continue
+
+        if not agent_client.is_agent_online(host):
+            entry["issues"].append({
+                "field": "host_status",
+                "expected": "online",
+                "actual": host.status,
+                "reason": "host is offline or stale",
+            })
+            drifted += 1
+            errors += 1
+            results.append(entry)
+            continue
+
+        try:
+            runtime = await agent_client.get_node_runtime_profile(
+                host,
+                lab_id,
+                node.container_name,
+                provider_type=provider,
+            )
+            entry["runtime"] = runtime
+        except Exception as e:
+            entry["issues"].append({
+                "field": "runtime",
+                "expected": "runtime profile",
+                "actual": None,
+                "reason": str(e),
+            })
+            drifted += 1
+            errors += 1
+            results.append(entry)
+            continue
+
+        runtime_provider = runtime.get("provider")
+        if runtime_provider and runtime_provider != provider:
+            entry["issues"].append({
+                "field": "provider",
+                "expected": provider,
+                "actual": runtime_provider,
+                "reason": "provider mismatch",
+            })
+
+        runtime_fields = runtime.get("runtime") or {}
+        for field in (
+            "memory",
+            "cpu",
+            "disk_driver",
+            "nic_driver",
+            "machine_type",
+            "readiness_probe",
+            "readiness_pattern",
+            "readiness_timeout",
+        ):
+            expected_value = expected.get(field)
+            actual_value = runtime_fields.get(field)
+            if expected_value is None or actual_value is None:
+                continue
+            if _normalize_compare_value(expected_value) != _normalize_compare_value(actual_value):
+                entry["issues"].append({
+                    "field": field,
+                    "expected": expected_value,
+                    "actual": actual_value,
+                    "reason": "runtime differs from expected effective spec",
+                })
+
+        if entry["issues"]:
+            drifted += 1
+        results.append(entry)
+
+    return {
+        "lab_id": lab_id,
+        "summary": {
+            "scanned_nodes": scanned,
+            "audited_nodes": len(results),
+            "drifted_nodes": drifted,
+            "errors": errors,
+        },
+        "nodes": results,
+    }
 
 
 @router.post("/labs/{lab_id}/refresh-state")

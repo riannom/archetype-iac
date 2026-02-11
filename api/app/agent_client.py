@@ -800,6 +800,24 @@ async def check_node_readiness(
         }
 
 
+async def get_node_runtime_profile(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    provider_type: str | None = None,
+) -> dict:
+    """Get runtime profile for a node from an agent."""
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/runtime"
+    params = {"provider_type": provider_type} if provider_type else None
+    return await _agent_request(
+        "GET",
+        url,
+        params=params,
+        timeout=10.0,
+        max_retries=0,
+    )
+
+
 async def get_all_agents(database: Session) -> list[models.Host]:
     """Get all registered agents."""
     return database.query(models.Host).all()

@@ -838,10 +838,7 @@ async def _execute_import(session_id: str):
         # Multiple node definitions may reference the same qcow2 file
         # (e.g. cat9000v-q200 and cat9000v-uadp share cat9kv_prd.17.15.03.qcow2).
         filename_to_devices: dict[str, list[str]] = {}
-        for sel_image_id in session.selected_images:
-            img = next((i for i in session.manifest.images if i.id == sel_image_id), None)
-            if not img:
-                continue
+        for img in session.manifest.images:
             dev_id, _ = get_image_device_mapping(img, session.manifest.node_definitions)
             filename_to_devices.setdefault(img.disk_image_filename, [])
             if dev_id not in filename_to_devices[img.disk_image_filename]:
