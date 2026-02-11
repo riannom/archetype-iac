@@ -105,6 +105,44 @@ DEVICE_VENDOR_MAP = {
     "alpine": "Open Source",
 }
 
+# Legacy/simplified IDs seen in filenames/manifests that should map to canonical
+# vendor IDs returned by /vendors and used by the UI catalog.
+DEVICE_ID_ALIASES = {
+    "iosv": "cisco_iosv",
+}
+
+
+def canonicalize_device_id(device_id: str | None) -> str | None:
+    """Normalize a device ID to the canonical vendor/device key."""
+    if not device_id:
+        return None
+
+    normalized = device_id.strip().lower()
+    normalized = DEVICE_ID_ALIASES.get(normalized, normalized)
+
+    # Also let vendor alias resolution handle known aliases.
+    try:
+        from agent.vendors import get_kind_for_device
+        return get_kind_for_device(normalized)
+    except Exception:
+        return normalized
+
+
+def canonicalize_device_ids(device_ids: list[str] | None) -> list[str]:
+    """Normalize and deduplicate a list of device IDs."""
+    if not device_ids:
+        return []
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for device_id in device_ids:
+        canonical = canonicalize_device_id(device_id)
+        if not canonical or canonical in seen:
+            continue
+        seen.add(canonical)
+        result.append(canonical)
+    return result
+
 
 def image_store_root() -> Path:
     if settings.qcow2_store:
@@ -130,7 +168,24 @@ def load_manifest() -> dict:
     path = manifest_path()
     if not path.exists():
         return {"images": []}
-    return json.loads(path.read_text(encoding="utf-8"))
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+
+    # Normalize legacy device IDs in-memory so callers always see canonical IDs.
+    for image in manifest.get("images", []):
+        if not isinstance(image, dict):
+            continue
+
+        canonical_device_id = canonicalize_device_id(image.get("device_id"))
+        compatible_devices = canonicalize_device_ids(image.get("compatible_devices") or [])
+        if canonical_device_id and canonical_device_id not in compatible_devices:
+            compatible_devices.append(canonical_device_id)
+
+        image["device_id"] = canonical_device_id
+        image["compatible_devices"] = compatible_devices
+        if canonical_device_id:
+            image["vendor"] = get_vendor_for_device(canonical_device_id)
+
+    return manifest
 
 
 def save_manifest(data: dict) -> None:
@@ -411,19 +466,16 @@ def ensure_custom_device_exists(device_id: str) -> Optional[dict]:
 def image_matches_device(image: dict, device_id: str) -> bool:
     """Check if an image matches a device via device_id or compatible_devices.
 
-    Handles EOS/cEOS alias normalization.
+    Device IDs are normalized to canonical IDs before comparison.
     """
-    def _normalize(dev: str) -> str:
-        dev = dev.lower()
-        if dev in ("ceos", "arista_ceos", "arista_eos"):
-            dev = "eos"
-        return dev
+    target = canonicalize_device_id(device_id)
+    if not target:
+        return False
 
-    target = _normalize(device_id)
-    if _normalize(image.get("device_id") or "") == target:
+    if canonicalize_device_id(image.get("device_id") or "") == target:
         return True
     for cd in image.get("compatible_devices") or []:
-        if _normalize(cd) == target:
+        if canonicalize_device_id(cd) == target:
             return True
     return False
 
@@ -504,19 +556,24 @@ def create_image_entry(
     Returns:
         Dictionary with all image metadata fields
     """
-    vendor = get_vendor_for_device(device_id) if device_id else None
+    canonical_device_id = canonicalize_device_id(device_id)
+    normalized_compatible_devices = canonicalize_device_ids(compatible_devices)
+    if canonical_device_id and canonical_device_id not in normalized_compatible_devices:
+        normalized_compatible_devices.append(canonical_device_id)
+
+    vendor = get_vendor_for_device(canonical_device_id) if canonical_device_id else None
 
     # Ensure custom device entry exists for this device_id
     # This creates entries like "eos" with proper portNaming from the canonical "ceos" config
-    if device_id:
-        ensure_custom_device_exists(device_id)
+    if canonical_device_id:
+        ensure_custom_device_exists(canonical_device_id)
 
     return {
         "id": image_id,
         "kind": kind,
         "reference": reference,
         "filename": filename,
-        "device_id": device_id,
+        "device_id": canonical_device_id,
         "version": version,
         # New fields
         "vendor": vendor,
@@ -524,7 +581,7 @@ def create_image_entry(
         "size_bytes": size_bytes,
         "is_default": False,
         "notes": notes,
-        "compatible_devices": compatible_devices or ([device_id] if device_id else []),
+        "compatible_devices": normalized_compatible_devices,
         "source": source,
     }
 
@@ -548,7 +605,20 @@ def update_image_entry(
         if item.get("id") == image_id:
             # Update vendor if device_id is being changed
             if "device_id" in updates:
+                updates["device_id"] = canonicalize_device_id(updates["device_id"])
                 updates["vendor"] = get_vendor_for_device(updates["device_id"])
+
+            if "compatible_devices" in updates:
+                updates["compatible_devices"] = canonicalize_device_ids(updates["compatible_devices"])
+
+            # Ensure device_id is included in compatible_devices when assigned.
+            if updates.get("device_id"):
+                compatible = updates.get("compatible_devices")
+                if compatible is None:
+                    compatible = canonicalize_device_ids(item.get("compatible_devices") or [])
+                if updates["device_id"] not in compatible:
+                    compatible.append(updates["device_id"])
+                updates["compatible_devices"] = compatible
 
             # Handle is_default - if setting as default, unset other defaults for same device
             if updates.get("is_default") and updates.get("device_id"):

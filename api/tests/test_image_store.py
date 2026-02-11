@@ -18,6 +18,7 @@ from app.image_store import (
     detect_device_from_filename,
     detect_qcow2_device_type,
     find_image_by_id,
+    image_matches_device,
     load_manifest,
     save_manifest,
     update_image_entry,
@@ -183,6 +184,31 @@ class TestManifestOperations:
             loaded = json.loads(content)
             assert loaded == manifest
 
+    def test_load_manifest_normalizes_legacy_iosv_device_ids(self, tmp_path):
+        """Legacy iosv IDs are normalized to canonical cisco_iosv."""
+        manifest_path = tmp_path / "manifest.json"
+        with patch("app.image_store.manifest_path", return_value=manifest_path):
+            manifest_path.write_text(
+                json.dumps({
+                    "images": [
+                        {
+                            "id": "qcow2:vios-15.9",
+                            "kind": "qcow2",
+                            "reference": "/images/vios-15.9.qcow2",
+                            "filename": "vios-15.9.qcow2",
+                            "device_id": "iosv",
+                            "compatible_devices": ["iosv"],
+                        }
+                    ]
+                }),
+                encoding="utf-8",
+            )
+
+            loaded = load_manifest()
+            image = loaded["images"][0]
+            assert image["device_id"] == "cisco_iosv"
+            assert image["compatible_devices"] == ["cisco_iosv"]
+
 
 class TestImageEntryOperations:
     """Tests for image entry CRUD operations."""
@@ -219,6 +245,19 @@ class TestImageEntryOperations:
         assert entry["id"] == "docker:test:latest"
         assert entry["device_id"] is None
         assert entry["version"] is None
+
+    def test_create_image_entry_normalizes_iosv(self):
+        """Legacy iosv assignment is normalized to cisco_iosv."""
+        entry = create_image_entry(
+            image_id="qcow2:vios-15.9",
+            kind="qcow2",
+            reference="/images/vios-15.9.qcow2",
+            filename="vios-15.9.qcow2",
+            device_id="iosv",
+        )
+
+        assert entry["device_id"] == "cisco_iosv"
+        assert "cisco_iosv" in entry["compatible_devices"]
 
     def test_find_image_by_id(self):
         """Finds image by ID."""
@@ -260,6 +299,29 @@ class TestImageEntryOperations:
         assert updated["notes"] == "Test image"
         # Original fields preserved
         assert updated["version"] == "1.0"
+
+    def test_update_image_entry_normalizes_iosv(self):
+        """Legacy iosv updates normalize to canonical cisco_iosv."""
+        manifest = {
+            "images": [
+                {
+                    "id": "qcow2:vios-15.9",
+                    "kind": "qcow2",
+                    "device_id": None,
+                    "compatible_devices": [],
+                }
+            ]
+        }
+
+        updated = update_image_entry(
+            manifest,
+            "qcow2:vios-15.9",
+            {"device_id": "iosv"},
+        )
+
+        assert updated is not None
+        assert updated["device_id"] == "cisco_iosv"
+        assert updated["compatible_devices"] == ["cisco_iosv"]
 
     def test_update_nonexistent_image(self):
         """Update nonexistent image returns None."""
@@ -317,6 +379,20 @@ class TestImageDefaultHandling:
             {"is_default": True}
         )
         assert updated["is_default"] is True
+
+
+class TestImageMatching:
+    """Tests for device/image matching across canonical and legacy IDs."""
+
+    def test_image_matches_device_iosv_alias(self):
+        image = {
+            "id": "qcow2:vios-15.9",
+            "kind": "qcow2",
+            "device_id": "iosv",
+            "compatible_devices": ["iosv"],
+        }
+
+        assert image_matches_device(image, "cisco_iosv") is True
 
 
 class TestCompatibleDevices:
