@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from agent.network.cleanup import NetworkCleanupManager, get_cleanup_manager

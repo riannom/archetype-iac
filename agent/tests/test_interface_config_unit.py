@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import types
 
 import pytest
@@ -61,5 +60,4 @@ async def test_set_mtu_persistent_networkmanager_no_connection(monkeypatch):
     ok, err = await iface.set_mtu_persistent_networkmanager("eth0", 1400)
     assert ok is False
     assert "No NetworkManager connection" in (err or "")
-
 

@@ -1,6 +1,5 @@
 """Tests for device hardware spec resolution in DeviceService."""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from dataclasses import dataclass
 
 from app.services.device_service import DeviceService

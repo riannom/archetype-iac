@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from sqlalchemy.orm import Session
@@ -177,4 +176,3 @@ def test_get_client_ip_fallback_to_client():
     }
     req = Request(scope)
     assert users_router._get_client_ip(req) == "10.0.0.2"
-

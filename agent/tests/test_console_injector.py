@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import types
-
 import pytest
 
 from agent import console_session_registry as session_registry
@@ -82,5 +80,4 @@ def test_injector_drain_collects(monkeypatch):
 
     assert data == b"chunk"
     assert forwarded == [b"chunk"]
-
 
