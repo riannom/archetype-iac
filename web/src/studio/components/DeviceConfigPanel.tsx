@@ -224,7 +224,7 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
           <p className="text-sm text-stone-600 dark:text-stone-400">{error}</p>
           <button
             onClick={loadConfig}
-            className="mt-3 px-4 py-2 text-xs font-bold bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 rounded-lg transition-colors"
+            className="mt-3 px-4 py-2 text-xs font-bold glass-control rounded-lg transition-colors"
           >
             Retry
           </button>

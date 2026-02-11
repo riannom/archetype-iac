@@ -7,6 +7,47 @@ body {
   background-color: var(--color-bg-base);
 }
 
+:root {
+  --ui-glass-surface-rgb: 255 255 255;
+  --ui-glass-elevated-rgb: 255 255 255;
+  --ui-glass-control-rgb: 245 245 244;
+  --ui-glass-control-hover-rgb: 231 229 228;
+  --ui-glass-border-rgb: 214 211 209;
+}
+
+.dark {
+  --ui-glass-surface-rgb: 28 25 23;
+  --ui-glass-elevated-rgb: 12 10 9;
+  --ui-glass-control-rgb: 41 37 36;
+  --ui-glass-control-hover-rgb: 68 64 60;
+  --ui-glass-border-rgb: 68 64 60;
+}
+
+.glass-surface {
+  background-color: rgb(var(--ui-glass-surface-rgb) / 0.42);
+  border: 1px solid rgb(var(--ui-glass-border-rgb) / 0.72);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+}
+
+.glass-surface-elevated {
+  background-color: rgb(var(--ui-glass-elevated-rgb) / 0.58);
+  border: 1px solid rgb(var(--ui-glass-border-rgb) / 0.78);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+}
+
+.glass-control {
+  background-color: rgb(var(--ui-glass-control-rgb) / 0.36);
+  border: 1px solid rgb(var(--ui-glass-border-rgb) / 0.75);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+
+.glass-control:hover {
+  background-color: rgb(var(--ui-glass-control-hover-rgb) / 0.52);
+}
+
 /* Global scrollbar styling - uses theme CSS variable */
 * {
   scrollbar-width: thin;

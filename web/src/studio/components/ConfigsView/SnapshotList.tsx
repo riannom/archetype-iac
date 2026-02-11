@@ -98,7 +98,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
   // Loading state (before node selection)
   if (loading && !selectedNodeName) {
     return (
-      <div className="w-72 shrink-0 flex flex-col bg-stone-900 border-l border-r border-stone-800">
+      <div className="w-72 shrink-0 flex flex-col glass-surface border-l border-r border-stone-200 dark:border-stone-800">
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-stone-500">
             <i className="fas fa-spinner fa-spin mr-2"></i>
@@ -112,7 +112,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
   // Empty state: no node selected
   if (!selectedNodeName) {
     return (
-      <div className="w-72 shrink-0 flex flex-col bg-stone-900 border-l border-r border-stone-800">
+      <div className="w-72 shrink-0 flex flex-col glass-surface border-l border-r border-stone-200 dark:border-stone-800">
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center text-stone-500">
             <i className="fas fa-arrow-left text-4xl mb-4 opacity-50"></i>
@@ -124,14 +124,14 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
   }
 
   return (
-    <div className="w-72 shrink-0 flex flex-col bg-stone-900 border-l border-r border-stone-800">
+    <div className="w-72 shrink-0 flex flex-col glass-surface border-l border-r border-stone-200 dark:border-stone-800">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-stone-800 bg-stone-900/50">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-stone-200 dark:border-stone-800 glass-control">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-medium text-stone-300">
+          <h3 className="text-sm font-medium text-stone-800 dark:text-stone-300">
             {getDisplayName(selectedNodeName)}
           </h3>
-          <span className="text-xs text-stone-500">
+          <span className="text-xs text-stone-500 dark:text-stone-500">
             ({nodeSnapshots.length} snapshot{nodeSnapshots.length !== 1 ? 's' : ''})
           </span>
         </div>
@@ -140,7 +140,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
           {/* Download Button */}
           <button
             onClick={() => onDownloadNode(selectedNodeName)}
-            className="px-2 py-1 text-xs text-stone-400 hover:text-stone-300 hover:bg-stone-800 rounded transition-colors"
+            className="px-2 py-1 text-xs text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 rounded transition-colors"
             title="Download all snapshots"
           >
             <i className="fas fa-download"></i>
@@ -148,13 +148,13 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
 
           {/* View/Compare Mode Toggle */}
           {nodeSnapshots.length >= 2 && (
-            <div className="flex gap-1 bg-stone-800 rounded p-0.5">
+            <div className="flex gap-1 glass-control rounded p-0.5 border">
               <button
                 onClick={() => onSetViewMode('view')}
                 className={`px-2 py-1 text-xs rounded transition-colors ${
                   viewMode === 'view'
                     ? 'bg-sage-600 text-white'
-                    : 'text-stone-400 hover:text-stone-300'
+                    : 'text-stone-600 dark:text-stone-400 hover:text-stone-800 dark:hover:text-stone-300'
                 }`}
               >
                 View
@@ -164,7 +164,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
                 className={`px-2 py-1 text-xs rounded transition-colors ${
                   viewMode === 'compare'
                     ? 'bg-sage-600 text-white'
-                    : 'text-stone-400 hover:text-stone-300'
+                    : 'text-stone-600 dark:text-stone-400 hover:text-stone-800 dark:hover:text-stone-300'
                 }`}
               >
                 Compare
@@ -218,7 +218,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
                     ${
                       isSelected
                         ? 'bg-sage-500/10 border-sage-500/30'
-                        : 'bg-stone-800/50 border-stone-700 hover:border-stone-600'
+                        : 'glass-control border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
                     }
                   `}
                 >
@@ -236,10 +236,10 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
                   <div className="space-y-2">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1">
-                        <div className="text-sm text-stone-300 font-medium">
+                        <div className="text-sm text-stone-700 dark:text-stone-300 font-medium">
                           {formatTimestamp(snapshot.created_at)}
                         </div>
-                        <div className="text-xs text-stone-500 font-mono mt-0.5">
+                        <div className="text-xs text-stone-500 dark:text-stone-500 font-mono mt-0.5">
                           {snapshot.content_hash?.slice(0, 8) || 'N/A'}
                         </div>
                       </div>
@@ -263,7 +263,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
                             handleSetActive(snapshot.id);
                           }}
                           disabled={isSettingActive}
-                          className="text-xs text-stone-400 hover:text-amber-400 transition-colors"
+                          className="text-xs text-stone-500 dark:text-stone-400 hover:text-amber-500 dark:hover:text-amber-400 transition-colors"
                           title="Set as startup config"
                         >
                           {isSettingActive ? (
@@ -280,7 +280,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
                             e.stopPropagation();
                             handleDelete(snapshot.id);
                           }}
-                          className="text-xs text-stone-400 hover:text-red-400 transition-colors ml-auto"
+                          className="text-xs text-stone-500 dark:text-stone-400 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-auto"
                           title="Delete snapshot"
                         >
                           <i className="fas fa-trash"></i>

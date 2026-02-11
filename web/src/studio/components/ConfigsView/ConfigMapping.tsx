@@ -149,7 +149,7 @@ export const ConfigMapping: React.FC<ConfigMappingProps> = ({
                     selectedOrphan?.nodeName === node.nodeName &&
                     selectedOrphan?.deviceKind === group.deviceKind
                       ? 'border-amber-500 bg-amber-50 dark:bg-amber-950 shadow-md'
-                      : 'border-amber-200 dark:border-amber-800 bg-white dark:bg-stone-800 hover:border-amber-300 dark:hover:border-amber-600 hover:shadow-sm'
+                      : 'border-amber-200 dark:border-amber-800 glass-surface hover:border-amber-300 dark:hover:border-amber-600 hover:shadow-sm'
                   }`}
                 >
                   <div className="flex items-start justify-between">
@@ -201,8 +201,8 @@ export const ConfigMapping: React.FC<ConfigMappingProps> = ({
                     disabled={!isCompatible}
                     className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
                       isCompatible
-                        ? 'border-sage-200 dark:border-sage-800 bg-white dark:bg-stone-800 hover:border-sage-400 dark:hover:border-sage-600 hover:shadow-sm cursor-pointer'
-                        : 'border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-900 opacity-50 cursor-not-allowed'
+                        ? 'border-sage-200 dark:border-sage-800 glass-surface hover:border-sage-400 dark:hover:border-sage-600 hover:shadow-sm cursor-pointer'
+                        : 'border-stone-200 dark:border-stone-700 glass-control opacity-50 cursor-not-allowed'
                     }`}
                   >
                     <div className="flex items-start justify-between">
@@ -235,7 +235,7 @@ export const ConfigMapping: React.FC<ConfigMappingProps> = ({
       {/* Confirmation Dialog */}
       {showConfirmDialog && selectedOrphan && selectedTargetNode && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-stone-900 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+          <div className="glass-surface-elevated rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
             <h3 className="text-lg font-semibold text-stone-900 dark:text-stone-100 mb-4">
               Confirm Config Mapping
             </h3>
@@ -251,11 +251,11 @@ export const ConfigMapping: React.FC<ConfigMappingProps> = ({
                 </span>
                 ?
               </p>
-              <div className="bg-stone-50 dark:bg-stone-800 p-3 rounded border border-stone-200 dark:border-stone-700">
+              <div className="glass-control p-3 rounded border">
                 <div className="text-xs text-stone-500 dark:text-stone-400 mb-1">Device Type</div>
                 <div className="font-medium">{selectedOrphan.deviceKind}</div>
               </div>
-              <div className="bg-stone-50 dark:bg-stone-800 p-3 rounded border border-stone-200 dark:border-stone-700">
+              <div className="glass-control p-3 rounded border">
                 <div className="text-xs text-stone-500 dark:text-stone-400 mb-1">Action</div>
                 <div>
                   This will map {selectedOrphan.snapshotCount} snapshot
@@ -268,7 +268,7 @@ export const ConfigMapping: React.FC<ConfigMappingProps> = ({
               <button
                 onClick={handleCancelMap}
                 disabled={isMapping}
-                className="px-4 py-2 text-sm font-medium text-stone-700 dark:text-stone-300 bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md hover:bg-stone-50 dark:hover:bg-stone-700 disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium text-stone-700 dark:text-stone-300 glass-control rounded-md disabled:opacity-50"
               >
                 Cancel
               </button>

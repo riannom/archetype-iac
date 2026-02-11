@@ -59,7 +59,7 @@ export const Modal: React.FC<ModalProps> = ({
       {/* Modal content */}
       <div
         className={`
-          relative bg-stone-50 dark:bg-stone-900 rounded-xl shadow-2xl
+          relative glass-surface-elevated rounded-xl shadow-2xl
           w-full ${sizeStyles[size]} mx-4 max-h-[85vh] overflow-hidden
           ${className}
         `.trim().replace(/\s+/g, ' ')}

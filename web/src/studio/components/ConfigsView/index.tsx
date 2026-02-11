@@ -64,9 +64,9 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden animate-in fade-in duration-300">
+    <div className="flex-1 bg-transparent flex flex-col overflow-hidden animate-in fade-in duration-300">
       {/* Header */}
-      <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 bg-white/50 dark:bg-stone-900/50 backdrop-blur-sm">
+      <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 glass-surface">
         <div className="flex flex-wrap justify-between items-end gap-4">
           <div>
             <h1 className="text-2xl font-black text-stone-900 dark:text-white tracking-tight">
@@ -78,12 +78,12 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
           </div>
           <div className="flex items-center gap-4">
             {/* Tab navigation */}
-            <div className="flex gap-1 bg-stone-200 dark:bg-stone-800 rounded-lg p-0.5">
+            <div className="flex gap-1 glass-control rounded-lg p-0.5 border">
               <button
                 onClick={() => setActiveTab('snapshots')}
                 className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${
                   activeTab === 'snapshots'
-                    ? 'bg-white dark:bg-stone-700 text-stone-900 dark:text-white shadow-sm'
+                    ? 'glass-surface text-stone-900 dark:text-white shadow-sm'
                     : 'text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300'
                 }`}
               >
@@ -94,7 +94,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                 onClick={() => setActiveTab('mapping')}
                 className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${
                   activeTab === 'mapping'
-                    ? 'bg-white dark:bg-stone-700 text-stone-900 dark:text-white shadow-sm'
+                    ? 'glass-surface text-stone-900 dark:text-white shadow-sm'
                     : 'text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300'
                 }`}
               >

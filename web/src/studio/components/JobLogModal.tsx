@@ -79,7 +79,7 @@ const JobLogModal: React.FC<JobLogModalProps> = ({
           <div className="flex items-center justify-end mb-3">
             <button
               onClick={handleCopy}
-              className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 rounded-lg transition-colors"
+              className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium glass-control text-stone-700 dark:text-stone-300 rounded-lg transition-colors"
             >
               <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`} />
               {copied ? 'Copied!' : 'Copy'}

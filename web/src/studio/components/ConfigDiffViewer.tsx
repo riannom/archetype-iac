@@ -100,7 +100,7 @@ const ConfigDiffViewer: React.FC<ConfigDiffViewerProps> = ({
   return (
     <div className="flex flex-col h-full">
       {/* Diff header */}
-      <div className="px-4 py-3 bg-stone-900 border-b border-stone-800 flex items-center justify-between">
+      <div className="px-4 py-3 glass-control border-b border-stone-800 flex items-center justify-between">
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded bg-red-500/30 border border-red-500" />

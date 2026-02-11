@@ -1108,7 +1108,7 @@ const InfrastructurePage: React.FC = () => {
           <div className="flex items-center gap-3">
             <button
               onClick={() => navigate('/')}
-              className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+              className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
             >
               <i className="fa-solid fa-arrow-left text-xs"></i>
               <span className="text-[10px] font-bold uppercase">Back</span>
@@ -1116,7 +1116,7 @@ const InfrastructurePage: React.FC = () => {
 
             <button
               onClick={() => setShowThemeSelector(true)}
-              className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
               title="Theme Settings"
             >
               <i className="fa-solid fa-palette text-sm"></i>
@@ -1124,7 +1124,7 @@ const InfrastructurePage: React.FC = () => {
 
             <button
               onClick={toggleMode}
-              className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
               title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
             >
               <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'} text-sm`}></i>
@@ -1134,7 +1134,7 @@ const InfrastructurePage: React.FC = () => {
         </header>
 
         {/* Tab Bar */}
-        <div className="border-b border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 px-10">
+        <div className="border-b border-stone-200 dark:border-stone-800 glass-surface px-10">
           <div className="flex gap-1">
             <button
               onClick={() => setActiveTab('hosts')}
@@ -1224,7 +1224,7 @@ const InfrastructurePage: React.FC = () => {
                     return (
                       <div
                         key={host.id}
-                        className={`bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 hover:border-sage-500/30 hover:shadow-xl transition-all ${host.status !== 'online' ? 'opacity-50 hover:opacity-100' : ''}`}
+                        className={`glass-surface rounded-2xl p-6 hover:border-sage-500/30 hover:shadow-xl transition-all ${host.status !== 'online' ? 'opacity-50 hover:opacity-100' : ''}`}
                       >
                         {/* Header */}
                         <div className="flex items-start justify-between mb-4">
@@ -1685,7 +1685,7 @@ const InfrastructurePage: React.FC = () => {
               ) : (
                 <div className="space-y-8">
                   {/* Settings Panel */}
-                  <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6">
+                  <div className="glass-surface rounded-2xl p-6">
                     <h2 className="text-lg font-bold text-stone-900 dark:text-white mb-4 flex items-center gap-2">
                       <i className="fa-solid fa-sliders text-sage-600 dark:text-sage-400"></i>
                       Global Settings
@@ -1765,7 +1765,7 @@ const InfrastructurePage: React.FC = () => {
                   </div>
 
                   {/* Host Network Configuration */}
-                  <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6">
+                  <div className="glass-surface rounded-2xl p-6">
                     <div className="flex items-center justify-between mb-4">
                       <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
                         <i className="fa-solid fa-ethernet text-sage-600 dark:text-sage-400"></i>
@@ -1774,7 +1774,7 @@ const InfrastructurePage: React.FC = () => {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => navigate('/admin/interfaces')}
-                          className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-sage-700 dark:text-sage-400 border border-stone-200 dark:border-stone-700 rounded-lg transition-colors"
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium glass-control text-sage-700 dark:text-sage-400 border border-stone-200 dark:border-stone-700 rounded-lg transition-colors"
                         >
                           <i className="fa-solid fa-network-wired"></i>
                           Manage Interfaces
@@ -1919,7 +1919,7 @@ const InfrastructurePage: React.FC = () => {
                                       disabled={host.status !== 'online' || isLoading}
                                       className={`px-2 py-1 rounded text-xs font-medium transition-all ${
                                         host.status === 'online' && !isLoading
-                                          ? 'bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400'
+                                          ? 'glass-control text-stone-600 dark:text-stone-400'
                                           : 'bg-stone-100 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
                                       }`}
                                     >
@@ -1964,7 +1964,7 @@ const InfrastructurePage: React.FC = () => {
                           </h3>
                           <button
                             onClick={() => setShowManagedInterfaces((prev) => !prev)}
-                            className="px-2 py-1 rounded text-xs font-medium transition-all bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400"
+                            className="px-2 py-1 rounded text-xs font-medium transition-all glass-control text-stone-600 dark:text-stone-400"
                           >
                             <i className={`fa-solid ${showManagedInterfaces ? 'fa-chevron-up' : 'fa-chevron-down'} mr-1`}></i>
                             {showManagedInterfaces ? 'Hide' : 'Show'}
@@ -2041,7 +2041,7 @@ const InfrastructurePage: React.FC = () => {
                                       <td className="py-2 px-3 text-right">
                                         <button
                                           onClick={() => navigate('/admin/interfaces')}
-                                          className="px-2 py-1 rounded text-xs font-medium transition-all bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400"
+                                          className="px-2 py-1 rounded text-xs font-medium transition-all glass-control text-stone-600 dark:text-stone-400"
                                         >
                                           <i className="fa-solid fa-pen-to-square mr-1"></i>
                                           Edit
@@ -2070,7 +2070,7 @@ const InfrastructurePage: React.FC = () => {
                           disabled={hosts.length === 0}
                           className={`px-2 py-1 rounded text-xs font-medium transition-all ${
                             hosts.length > 0
-                              ? 'bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400'
+                              ? 'glass-control text-stone-600 dark:text-stone-400'
                               : 'bg-stone-100 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
                           }`}
                         >
@@ -2142,7 +2142,7 @@ const InfrastructurePage: React.FC = () => {
                                         disabled={availableIfaces.length === 0}
                                         className={`px-2 py-1 rounded text-xs font-medium transition-all ${
                                           availableIfaces.length > 0
-                                            ? 'bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400'
+                                            ? 'glass-control text-stone-600 dark:text-stone-400'
                                             : 'bg-stone-100 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
                                         }`}
                                       >
@@ -2161,7 +2161,7 @@ const InfrastructurePage: React.FC = () => {
                   </div>
 
                   {/* Agent Mesh */}
-                  <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6">
+                  <div className="glass-surface rounded-2xl p-6">
                     <div className="flex items-center justify-between mb-6">
                       <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
                         <i className="fa-solid fa-diagram-project text-sage-600 dark:text-sage-400"></i>
@@ -2384,7 +2384,7 @@ const InfrastructurePage: React.FC = () => {
                                         disabled={isTesting || testingAll}
                                         className={`px-2 py-1 rounded text-xs font-medium transition-all ${
                                           !isTesting && !testingAll
-                                            ? 'bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400'
+                                            ? 'glass-control text-stone-600 dark:text-stone-400'
                                             : 'bg-stone-100 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
                                         }`}
                                       >
@@ -2416,7 +2416,7 @@ const InfrastructurePage: React.FC = () => {
           )}
         </main>
 
-        <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
+        <footer className="h-10 border-t border-stone-200 dark:border-stone-900 glass-surface flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
           <span>Archetype Infrastructure Management</span>
           <span>Auto-refresh: {activeTab === 'hosts' ? '10s' : '30s'}{activeTab === 'network' ? ' (network)' : ''}</span>
         </footer>
@@ -2509,7 +2509,7 @@ const InfrastructurePage: React.FC = () => {
             <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
               <button
                 onClick={handleCancelDeregister}
-                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+                className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
               >
                 Cancel
               </button>
@@ -2844,7 +2844,7 @@ const InfrastructurePage: React.FC = () => {
             <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
               <button
                 onClick={closeMtuConfigModal}
-                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+                className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
               >
                 Cancel
               </button>
@@ -2942,7 +2942,7 @@ const InfrastructurePage: React.FC = () => {
             <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
               <button
                 onClick={closeNicGroupModal}
-                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+                className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
               >
                 Cancel
               </button>
@@ -3036,7 +3036,7 @@ const InfrastructurePage: React.FC = () => {
             <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
               <button
                 onClick={closeNicGroupMemberModal}
-                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+                className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
               >
                 Cancel
               </button>
@@ -3102,7 +3102,7 @@ const InfrastructurePage: React.FC = () => {
             <div className="p-4 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
               <button
                 onClick={() => setCustomUpdateTarget(null)}
-                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+                className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
               >
                 Cancel
               </button>

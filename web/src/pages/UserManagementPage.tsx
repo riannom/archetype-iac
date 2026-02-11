@@ -305,7 +305,7 @@ const UserManagementPage: React.FC = () => {
           <div className="flex items-center gap-3">
             <button
               onClick={() => navigate('/')}
-              className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+              className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
             >
               <i className="fa-solid fa-arrow-left text-xs"></i>
               <span className="text-[10px] font-bold uppercase">Back</span>
@@ -313,7 +313,7 @@ const UserManagementPage: React.FC = () => {
 
             <button
               onClick={() => setShowThemeSelector(true)}
-              className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
               title="Theme Settings"
             >
               <i className="fa-solid fa-palette text-sm"></i>
@@ -321,7 +321,7 @@ const UserManagementPage: React.FC = () => {
 
             <button
               onClick={toggleMode}
-              className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
               title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
             >
               <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'} text-sm`}></i>
@@ -372,7 +372,7 @@ const UserManagementPage: React.FC = () => {
               </div>
             ) : (
               /* Users Table */
-              <div className="bg-white dark:bg-stone-900/50 border border-stone-200 dark:border-stone-800 rounded-xl overflow-hidden">
+              <div className="glass-surface rounded-xl overflow-hidden border">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -613,7 +613,7 @@ const UserManagementPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={resetModalState}
-                  className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+                  className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
                 >
                   Cancel
                 </button>
@@ -713,7 +713,7 @@ const UserManagementPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={resetModalState}
-                  className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+                  className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
                 >
                   Cancel
                 </button>
@@ -813,7 +813,7 @@ const UserManagementPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={resetModalState}
-                  className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
+                  className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
                 >
                   Cancel
                 </button>

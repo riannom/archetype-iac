@@ -52,7 +52,7 @@ export const TabList: React.FC<TabListProps> = ({ children, className = '' }) =>
 
   const baseStyles = variant === 'underline'
     ? 'flex border-b border-stone-200 dark:border-stone-700'
-    : 'flex gap-1 p-1 bg-stone-100 dark:bg-stone-800 rounded-lg';
+    : 'flex gap-1 p-1 rounded-lg glass-control';
 
   return (
     <div className={`${baseStyles} ${className}`}>
@@ -84,7 +84,7 @@ export const Tab: React.FC<TabProps> = ({
     : 'text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300 border-b-2 border-transparent';
 
   const pillStyles = isActive
-    ? 'bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100 shadow-sm'
+    ? 'glass-surface text-stone-900 dark:text-stone-100 shadow-sm'
     : 'text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200';
 
   const baseStyles = variant === 'underline'

@@ -346,7 +346,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
         {/* External Networks Section */}
         {onAddExternalNetwork && (
           <div className="mb-4">
-            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100 dark:bg-stone-800 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10">
+            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest bg-stone-200/85 dark:bg-stone-800 border-y border-stone-300 dark:border-stone-800 sticky top-0 z-10">
               <span>Connectivity</span>
             </div>
             <div className="p-2">
@@ -376,7 +376,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
 
         {/* Tools Section */}
         <div className="mb-4">
-          <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100 dark:bg-stone-800 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10">
+          <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest bg-stone-200/85 dark:bg-stone-800 border-y border-stone-300 dark:border-stone-800 sticky top-0 z-10">
             <span>Annotations</span>
           </div>
           <div className="p-2 grid grid-cols-2 gap-2">
@@ -397,7 +397,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
           <div key={category.name} className="mb-2">
             <button
               onClick={() => toggleCategory(category.name)}
-              className="w-full px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest bg-stone-100 dark:bg-stone-800 border-y border-stone-200 dark:border-stone-800 sticky top-0 z-10 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+              className="w-full px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest bg-stone-200/85 dark:bg-stone-800 border-y border-stone-300 dark:border-stone-800 sticky top-0 z-10 hover:bg-stone-300/85 dark:hover:bg-stone-700 transition-colors"
             >
               <span className="flex items-center gap-2">
                 {category.name}
@@ -472,8 +472,8 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
         )}
       </div>
 
-      <div className="p-4 border-t border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-950/50">
-        <div className="flex flex-col gap-2 p-3 bg-sage-500/5 border border-sage-500/10 rounded-lg">
+      <div className="p-4 border-t border-stone-200 dark:border-stone-800 glass-surface">
+        <div className="flex flex-col gap-2 p-3 glass-control rounded-lg">
           <div className="flex items-center gap-2 text-[10px] font-bold text-sage-600 dark:text-sage-400 uppercase tracking-tight">
             <i className="fa-solid fa-lightbulb"></i>
             <span>Network Canvas</span>

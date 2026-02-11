@@ -81,6 +81,7 @@ describe("Dashboard", () => {
   const mockOnCreate = vi.fn();
   const mockOnDelete = vi.fn();
   const mockOnRename = vi.fn();
+  const mockOnLogout = vi.fn();
 
   const defaultProps = {
     labs: mockLabs,
@@ -90,6 +91,7 @@ describe("Dashboard", () => {
     onCreate: mockOnCreate,
     onDelete: mockOnDelete,
     onRename: mockOnRename,
+    onLogout: mockOnLogout,
   };
 
   beforeEach(() => {
@@ -149,6 +151,28 @@ describe("Dashboard", () => {
       name: /create new lab/i,
     });
     expect(createButton).toBeInTheDocument();
+  });
+
+  it("renders logout button", () => {
+    render(
+      <TestWrapper>
+        <Dashboard {...defaultProps} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTitle("Logout")).toBeInTheDocument();
+  });
+
+  it("calls onLogout when logout button is clicked", async () => {
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <Dashboard {...defaultProps} />
+      </TestWrapper>
+    );
+
+    await user.click(screen.getByTitle("Logout"));
+    expect(mockOnLogout).toHaveBeenCalledTimes(1);
   });
 
   it("calls onCreate when Create New Lab is clicked", async () => {

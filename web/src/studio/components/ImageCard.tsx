@@ -98,7 +98,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
           group flex items-center gap-2 p-2 rounded-lg border transition-all cursor-grab active:cursor-grabbing select-none
           ${isDragging
             ? 'opacity-50 scale-95 border-sage-500 bg-sage-50 dark:bg-sage-900/20'
-            : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
+            : 'glass-surface border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
           }
         `}
       >
@@ -136,7 +136,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
         group relative rounded-lg border transition-all duration-200 cursor-grab active:cursor-grabbing select-none
         ${isDragging
           ? 'opacity-50 scale-95 border-sage-500 bg-sage-50 dark:bg-sage-900/20'
-          : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
+          : 'glass-surface border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
         }
       `}
     >

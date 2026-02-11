@@ -444,10 +444,10 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     : null;
 
   return (
-    <div className="h-full bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden">
+    <div className="h-full bg-transparent flex flex-col overflow-hidden">
       <div className="flex flex-col h-full min-h-0">
         {/* Header */}
-        <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 bg-white/50 dark:bg-stone-900/50 backdrop-blur-sm">
+        <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 glass-surface">
           <div className="flex flex-wrap justify-between items-end gap-4">
             <div>
               <h1 className="text-2xl font-black text-stone-900 dark:text-white tracking-tight">
@@ -466,7 +466,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
               </button>
               <button
                 onClick={openQcow2Picker}
-                className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
+                className="px-4 py-2 glass-control text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
               >
                 <i className="fa-solid fa-hard-drive mr-2"></i> Upload QCOW2
               </button>
@@ -524,7 +524,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           {/* Left panel - Devices (40%) */}
           <div className="w-2/5 border-r border-stone-200 dark:border-stone-800 flex flex-col overflow-hidden min-h-0">
             {/* Device filters */}
-            <div className="p-4 border-b border-stone-200 dark:border-stone-800 bg-stone-100/50 dark:bg-stone-900/30 space-y-3">
+            <div className="p-4 border-b border-stone-200 dark:border-stone-800 glass-surface space-y-3">
               {/* Search and sort row */}
               <div className="flex gap-2">
                 <div className="relative flex-1">
@@ -534,7 +534,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                     placeholder="Search devices..."
                     value={deviceSearch}
                     onChange={(e) => setDeviceSearch(e.target.value)}
-                    className="w-full pl-9 pr-8 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                    className="w-full pl-9 pr-8 py-2 glass-control rounded-lg text-xs text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
                   />
                   {deviceSearch && (
                     <button
@@ -548,7 +548,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                 <select
                   value={deviceSort}
                   onChange={(e) => setDeviceSort(e.target.value as 'name' | 'vendor' | 'type')}
-                  className="px-3 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                  className="px-3 py-2 glass-control rounded-lg text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
                 >
                   <option value="vendor">Sort: Vendor</option>
                   <option value="name">Sort: Name</option>

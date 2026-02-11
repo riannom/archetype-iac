@@ -224,7 +224,7 @@ describe("StudioConsolePage", () => {
 
       const pageContainer = container.querySelector(".min-h-screen");
       expect(pageContainer).toBeInTheDocument();
-      expect(pageContainer).toHaveClass("bg-[#0b0f16]");
+      expect(pageContainer).toHaveClass("bg-stone-50/72");
     });
 
     it("renders the terminal container", () => {

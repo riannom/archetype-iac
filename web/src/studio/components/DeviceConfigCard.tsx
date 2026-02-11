@@ -31,13 +31,13 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
     }
     if (isSelected) {
       // Subtle left accent bar, keep dark background readable
-      return 'bg-sage-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800 border-l-2 border-l-sage-500 dark:border-l-sage-400';
+      return 'glass-surface border-stone-200 dark:border-stone-800 border-l-2 border-l-sage-500 dark:border-l-sage-400';
     }
     if (isCustom) {
       // Subtle differentiation for persistent custom devices
-      return 'bg-stone-50 dark:bg-stone-900 border-stone-300 dark:border-stone-700 hover:border-stone-400 dark:hover:border-stone-600';
+      return 'glass-surface border-stone-300 dark:border-stone-700 hover:border-stone-400 dark:hover:border-stone-600';
     }
-    return 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700';
+    return 'glass-surface border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700';
   };
 
   // Determine icon background styling

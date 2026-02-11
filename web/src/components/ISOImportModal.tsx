@@ -1022,7 +1022,7 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
               <>
                 <button
                   onClick={() => setStep('input')}
-                  className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 rounded-lg text-xs font-bold transition-all"
+                  className="px-4 py-2 glass-control text-stone-700 dark:text-stone-300 rounded-lg text-xs font-bold transition-all"
                 >
                   <i className="fa-solid fa-arrow-left mr-2" />
                   Back

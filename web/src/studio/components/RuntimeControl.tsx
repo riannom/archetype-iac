@@ -144,7 +144,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
   }, [handleBulkAction]);
 
   return (
-    <div className="flex-1 bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden animate-in fade-in duration-300">
+    <div className="flex-1 bg-transparent flex flex-col overflow-hidden animate-in fade-in duration-300">
       <div className="p-8 max-w-7xl mx-auto w-full flex-1 flex flex-col overflow-hidden">
         <header className="mb-8 flex justify-between items-end">
           <div>
@@ -178,7 +178,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                 <button
                   onClick={handleStopAll}
                   disabled={isOperationPending()}
-                  className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 disabled:opacity-50 disabled:cursor-not-allowed text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
+                  className="px-4 py-2 glass-control disabled:opacity-50 disabled:cursor-not-allowed text-stone-700 dark:text-white rounded-lg border text-xs font-bold transition-all"
                   title="Stop all running nodes"
                 >
                   <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-stop'} mr-2`}></i>
@@ -198,10 +198,10 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
           </div>
         </header>
 
-        <div className="bg-white/50 dark:bg-stone-900/50 border border-stone-200 dark:border-stone-800 rounded-2xl flex-1 min-h-0 overflow-y-auto">
+        <div className="glass-surface border rounded-2xl flex-1 min-h-0 overflow-y-auto">
           <table className="w-full text-left border-collapse">
             <thead className="sticky top-0 z-10">
-              <tr className="bg-stone-100 dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800">
+              <tr className="glass-control border-b border-stone-200 dark:border-stone-800">
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Device Name</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Model</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Version</th>
@@ -261,7 +261,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                           value={node.host || ''}
                           onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
                           disabled={status === 'running' || status === 'booting' || status === 'stopping'}
-                          className="bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="glass-control border rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <option value="">Auto</option>
                           {agents.map((agent) => (

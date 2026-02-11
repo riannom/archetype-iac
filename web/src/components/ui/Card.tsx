@@ -10,8 +10,8 @@ export interface CardProps {
 }
 
 const variantStyles: Record<CardVariant, string> = {
-  default: 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800',
-  interactive: 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm cursor-pointer',
+  default: 'glass-surface',
+  interactive: 'glass-surface hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm cursor-pointer',
   selected: 'bg-sage-50 dark:bg-sage-900/20 border-sage-300 dark:border-sage-700 ring-1 ring-sage-200 dark:ring-sage-800',
 };
 

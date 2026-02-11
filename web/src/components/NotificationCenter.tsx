@@ -47,7 +47,7 @@ export function NotificationCenter() {
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="relative w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-black/65 text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all border border-stone-200 dark:border-black/70"
+        className="relative w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all border"
         title="Notifications"
       >
         <i className="fa-solid fa-bell" />
@@ -59,7 +59,7 @@ export function NotificationCenter() {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-80 bg-white dark:bg-stone-950 border border-stone-200 dark:border-black/80 rounded-xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute right-0 top-full mt-2 w-80 glass-surface-elevated border border-stone-200 dark:border-black/80 rounded-xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
           {/* Header */}
           <div className="px-4 py-3 border-b border-stone-200 dark:border-black/70 flex items-center justify-between">
             <span className="text-sm font-bold text-stone-900 dark:text-stone-100">

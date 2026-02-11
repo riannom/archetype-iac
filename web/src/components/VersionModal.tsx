@@ -193,7 +193,7 @@ export const VersionModal: React.FC<VersionModalProps> = ({
           )}
           <button
             onClick={onClose}
-            className="px-4 py-2 text-xs font-semibold text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 rounded-lg transition-all"
+            className="px-4 py-2 text-xs font-semibold text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white glass-control rounded-lg transition-all"
           >
             Close
           </button>

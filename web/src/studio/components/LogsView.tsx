@@ -295,9 +295,9 @@ const LogsView: React.FC<LogsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden animate-in fade-in duration-300">
+    <div className="flex-1 bg-transparent flex flex-col overflow-hidden animate-in fade-in duration-300">
       {/* Header */}
-      <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 bg-white/50 dark:bg-stone-900/50 backdrop-blur-sm">
+      <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 glass-surface">
         <div className="flex flex-wrap justify-between items-end gap-4">
           <div>
             <h1 className="text-2xl font-black text-stone-900 dark:text-white tracking-tight">
@@ -328,7 +328,7 @@ const LogsView: React.FC<LogsViewProps> = ({
               className={`px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
                 autoScroll
                   ? 'bg-sage-600 text-white hover:bg-sage-700'
-                  : 'bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white'
+                  : 'glass-control text-stone-700 dark:text-white border'
               }`}
               title={autoScroll ? 'Auto-scroll enabled (click to disable)' : 'Auto-scroll disabled (click to enable)'}
             >
@@ -338,7 +338,7 @@ const LogsView: React.FC<LogsViewProps> = ({
             <button
               onClick={handleCopyAll}
               disabled={allEntries.length === 0}
-              className="px-3 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 disabled:opacity-50 text-stone-700 dark:text-white rounded-lg text-xs font-bold transition-all flex items-center gap-2"
+              className="px-3 py-2 glass-control disabled:opacity-50 text-stone-700 dark:text-white rounded-lg text-xs font-bold transition-all flex items-center gap-2 border"
             >
               <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`} />
               {copied ? 'Copied!' : 'Copy All'}
@@ -348,14 +348,14 @@ const LogsView: React.FC<LogsViewProps> = ({
       </header>
 
       {/* Filter bar */}
-      <div className="px-6 py-3 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex flex-wrap items-center gap-3">
+      <div className="px-6 py-3 border-b border-stone-200 dark:border-stone-800 glass-surface flex flex-wrap items-center gap-3">
         {/* Job filter */}
         <div className="flex items-center gap-2">
           <label className="text-[10px] font-bold text-stone-500 uppercase">Job</label>
           <select
             value={selectedJobId}
             onChange={(e) => setSelectedJobId(e.target.value)}
-            className="px-2 py-1.5 text-xs bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
+            className="px-2 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
           >
             <option value="all">All Jobs</option>
             {logs?.jobs.map((job) => (
@@ -372,7 +372,7 @@ const LogsView: React.FC<LogsViewProps> = ({
           <select
             value={selectedHostId}
             onChange={(e) => setSelectedHostId(e.target.value)}
-            className="px-2 py-1.5 text-xs bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
+            className="px-2 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
           >
             <option value="all">All Hosts</option>
             {allHosts.map((host) => (
@@ -389,7 +389,7 @@ const LogsView: React.FC<LogsViewProps> = ({
           <select
             value={selectedLevel}
             onChange={(e) => setSelectedLevel(e.target.value)}
-            className="px-2 py-1.5 text-xs bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
+            className="px-2 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
           >
             <option value="all">All Levels</option>
             <option value="info">Info+</option>
@@ -404,7 +404,7 @@ const LogsView: React.FC<LogsViewProps> = ({
           <select
             value={selectedSince}
             onChange={(e) => setSelectedSince(e.target.value)}
-            className="px-2 py-1.5 text-xs bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
+            className="px-2 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
           >
             <option value="all">All Time</option>
             <option value="15m">Last 15 min</option>
@@ -415,13 +415,13 @@ const LogsView: React.FC<LogsViewProps> = ({
 
         {/* Search */}
         <div className="flex-1 min-w-[200px]">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search logs..."
-            className="w-full px-3 py-1.5 text-xs bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-stone-700 dark:text-stone-300 placeholder-stone-400 focus:outline-none focus:ring-1 focus:ring-sage-500"
-          />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search logs..."
+          className="w-full px-3 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 placeholder-stone-400 focus:outline-none focus:ring-1 focus:ring-sage-500"
+        />
         </div>
 
         {/* Clear filters button */}
@@ -440,7 +440,7 @@ const LogsView: React.FC<LogsViewProps> = ({
       <div className="flex-1 flex overflow-hidden">
         {/* Host sidebar */}
         <div
-          className={`border-r border-stone-200 dark:border-stone-800 flex flex-col overflow-hidden bg-white/30 dark:bg-stone-900/30 transition-all ${
+          className={`border-r border-stone-200 dark:border-stone-800 flex flex-col overflow-hidden glass-surface transition-all ${
             hostSidebarCollapsed ? 'w-10' : 'w-40'
           }`}
         >
@@ -699,7 +699,7 @@ const LogsView: React.FC<LogsViewProps> = ({
       </div>
 
       {/* Footer */}
-      <footer className="px-6 py-2 border-t border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between text-xs text-stone-500 dark:text-stone-400">
+      <footer className="px-6 py-2 border-t border-stone-200 dark:border-stone-800 glass-surface flex items-center justify-between text-xs text-stone-500 dark:text-stone-400">
         <div className="flex items-center gap-4">
           <span>
             {logs?.total_count || 0} entries
@@ -719,7 +719,7 @@ const LogsView: React.FC<LogsViewProps> = ({
         <button
           onClick={handleExport}
           disabled={allEntries.length === 0}
-          className="px-3 py-1 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 disabled:opacity-50 rounded text-xs font-medium transition-colors flex items-center gap-2"
+          className="px-3 py-1 glass-control disabled:opacity-50 rounded text-xs font-medium transition-colors flex items-center gap-2"
         >
           <i className="fa-solid fa-download" />
           Export as Text

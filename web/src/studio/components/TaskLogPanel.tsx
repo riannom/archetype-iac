@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import TerminalSession from './TerminalSession';
 import { NodeStateEntry } from '../../types/nodeState';
+import { useTheme } from '../../theme';
 
 export interface TaskLogEntry {
   id: string;
@@ -57,6 +58,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   labId,
   nodeStates = {},
 }) => {
+  const { effectiveMode } = useTheme();
   const errorCount = entries.filter((e) => e.level === 'error').length;
   const hasConsoleTabs = showConsoles && consoleTabs.length > 0;
 
@@ -248,6 +250,21 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   const isLogTabActive = activeTabId === 'log';
   const logTabActive = showConsoles ? isLogTabActive : true;
   const showLogContent = isLogTabActive || !showConsoles;
+  const headerBarStyle: React.CSSProperties = {
+    backgroundColor:
+      effectiveMode === 'light'
+        ? 'var(--color-accent-600)'
+        : 'color-mix(in srgb, var(--color-bg-surface) 92%, transparent)',
+  };
+  const headerTitleClass = effectiveMode === 'light' ? 'text-white/90' : 'text-stone-600 dark:text-stone-400';
+  const headerActionClass = effectiveMode === 'light'
+    ? 'text-white/80 hover:text-white'
+    : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300';
+  const headerChevronClass = effectiveMode === 'light'
+    ? 'text-white/75 hover:text-white'
+    : 'text-stone-400 dark:text-stone-500 hover:text-stone-600 dark:hover:text-stone-300';
+  const headerHoverClass = effectiveMode === 'light' ? 'hover:bg-white/10' : 'hover:bg-stone-100/50 dark:hover:bg-stone-900/50';
+  const gripClass = effectiveMode === 'light' ? 'bg-white/40 group-hover:bg-white/60' : 'bg-stone-300 dark:bg-stone-600 group-hover:bg-cyan-400';
 
   return (
     <div
@@ -258,7 +275,8 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
       <div
         className={`flex justify-between items-center px-4 py-2 select-none ${
           isVisible ? 'cursor-ns-resize' : 'cursor-pointer'
-        } hover:bg-stone-100/50 dark:hover:bg-stone-900/50 group relative`}
+        } ${headerHoverClass} group relative`}
+        style={headerBarStyle}
         onMouseDown={isVisible ? handleMouseDown : undefined}
         onClick={isVisible ? undefined : onToggle}
       >
@@ -266,12 +284,12 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
         {isVisible && (
           <div className="absolute top-0 left-0 right-0 h-1 flex items-center justify-center">
             <div className={`w-10 h-1 rounded-full transition-colors ${
-              isResizing ? 'bg-cyan-500' : 'bg-stone-300 dark:bg-stone-600 group-hover:bg-cyan-400'
+              isResizing ? 'bg-cyan-500' : gripClass
             }`} />
           </div>
         )}
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-black uppercase tracking-widest text-stone-600 dark:text-stone-400">
+          <span className={`text-[10px] font-black uppercase tracking-widest ${headerTitleClass}`}>
             {hasConsoleTabs ? 'Panel' : 'Task Log'}
           </span>
           {errorCount > 0 && logTabActive && (
@@ -287,7 +305,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
                 e.stopPropagation();
                 onClear();
               }}
-              className="text-[10px] font-bold text-stone-500 hover:text-stone-700 dark:hover:text-stone-300 uppercase tracking-widest"
+              className={`text-[10px] font-bold uppercase tracking-widest ${headerActionClass}`}
             >
               Clear
             </button>
@@ -297,7 +315,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
               e.stopPropagation();
               onToggle();
             }}
-            className="text-stone-400 dark:text-stone-500 text-xs hover:text-stone-600 dark:hover:text-stone-300 px-1"
+            className={`text-xs px-1 ${headerChevronClass}`}
           >
             {isVisible ? 'v' : '^'}
           </button>

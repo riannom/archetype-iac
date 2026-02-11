@@ -16,7 +16,7 @@ export function NotificationSettingsPanel({ isOpen, onClose }: NotificationSetti
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-2xl w-[500px] max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
+      <div className="glass-surface-elevated border border-stone-200 dark:border-stone-700 rounded-2xl w-[500px] max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
         {/* Header */}
         <div className="p-5 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
           <h3 className="text-stone-900 dark:text-stone-100 font-bold text-sm uppercase tracking-wider">

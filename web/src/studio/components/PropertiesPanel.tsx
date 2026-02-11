@@ -227,28 +227,28 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             <div className="grid grid-cols-4 gap-1">
               <button
                 onClick={handleBringToFront}
-                className="flex items-center justify-center gap-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+                className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
                 title="Bring to Front"
               >
                 <i className="fa-solid fa-angles-up"></i>
               </button>
               <button
                 onClick={handleBringForward}
-                className="flex items-center justify-center gap-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+                className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
                 title="Bring Forward"
               >
                 <i className="fa-solid fa-angle-up"></i>
               </button>
               <button
                 onClick={handleSendBackward}
-                className="flex items-center justify-center gap-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+                className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
                 title="Send Backward"
               >
                 <i className="fa-solid fa-angle-down"></i>
               </button>
               <button
                 onClick={handleSendToBack}
-                className="flex items-center justify-center gap-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+                className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
                 title="Send to Back"
               >
                 <i className="fa-solid fa-angles-down"></i>
@@ -399,7 +399,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                     <button onClick={() => onUpdateStatus(node.id, 'stopped')} className="flex items-center justify-center gap-2 py-2 bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold rounded-lg transition-all"><i className="fa-solid fa-power-off"></i> STOP</button>
                   )}
                   {status !== 'stopped' && status !== 'stopping' && (
-                    <button onClick={() => onUpdateStatus(node.id, 'booting')} className="flex items-center justify-center gap-2 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-[10px] font-bold rounded-lg transition-all border border-stone-300 dark:border-stone-700"><i className="fa-solid fa-rotate"></i> RELOAD</button>
+                    <button onClick={() => onUpdateStatus(node.id, 'booting')} className="flex items-center justify-center gap-2 py-2 glass-control text-stone-700 dark:text-stone-300 text-[10px] font-bold rounded-lg transition-all border border-stone-300 dark:border-stone-700"><i className="fa-solid fa-rotate"></i> RELOAD</button>
                   )}
                </div>
             </div>
@@ -454,7 +454,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsHardwareLocked((prev) => !prev)}
-                  className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-bold uppercase text-stone-600 dark:text-stone-300 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 rounded-lg transition-colors"
+                  className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-bold uppercase text-stone-600 dark:text-stone-300 glass-control rounded-lg transition-colors"
                   title={isHardwareLocked ? 'Unlock hardware settings' : 'Lock hardware settings'}
                 >
                   <i className={`fa-solid ${isHardwareLocked ? 'fa-lock' : 'fa-lock-open'}`} />
@@ -472,7 +472,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   className={`px-3 py-1 text-[9px] font-bold uppercase rounded-lg transition-colors ${
                     isHardwareLocked
                       ? 'text-stone-400 dark:text-stone-600 bg-stone-100 dark:bg-stone-800 cursor-not-allowed'
-                      : 'text-stone-600 dark:text-stone-300 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700'
+                      : 'text-stone-600 dark:text-stone-300 glass-control'
                   }`}
                   title="Reset CPU, RAM, and hardware defaults for this device type"
                 >

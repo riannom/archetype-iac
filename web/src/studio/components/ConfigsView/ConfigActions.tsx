@@ -51,7 +51,7 @@ export const ConfigActions: React.FC<ConfigActionsProps> = ({
         {/* Download All */}
         <button
           onClick={onDownloadAll}
-          className="px-3 py-2 text-xs font-bold text-stone-700 dark:text-stone-300 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 rounded-lg transition-colors flex items-center gap-2"
+          className="px-3 py-2 text-xs font-bold text-stone-700 dark:text-stone-300 glass-control rounded-lg transition-colors flex items-center gap-2 border"
         >
           <i className="fas fa-file-zipper" />
           Download All
@@ -76,7 +76,7 @@ export const ConfigActions: React.FC<ConfigActionsProps> = ({
       {/* Delete Confirmation Dialog */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-stone-900 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+          <div className="glass-surface-elevated rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
             <h3 className="text-lg font-bold text-stone-900 dark:text-stone-100 mb-4">
               Delete Orphaned Configs
             </h3>
@@ -86,7 +86,7 @@ export const ConfigActions: React.FC<ConfigActionsProps> = ({
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowDeleteConfirm(false)}
-                className="px-4 py-2 text-sm font-medium text-stone-700 dark:text-stone-300 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium text-stone-700 dark:text-stone-300 glass-control rounded-lg transition-colors"
               >
                 Cancel
               </button>

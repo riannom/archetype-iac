@@ -88,11 +88,6 @@ describe("TopBar", () => {
       expect(screen.getByText("EXPORT")).toBeInTheDocument();
     });
 
-    it("renders logout button", () => {
-      render(<TopBar {...defaultProps} />);
-      expect(screen.getByText("LOGOUT")).toBeInTheDocument();
-    });
-
     it("shows Lab: prefix before lab name", () => {
       render(<TopBar {...defaultProps} />);
       expect(screen.getByText("Lab:")).toBeInTheDocument();
@@ -108,13 +103,6 @@ describe("TopBar", () => {
       expect(defaultProps.onExit).toHaveBeenCalledTimes(1);
     });
 
-    it("calls onExit when logout button is clicked", async () => {
-      const user = userEvent.setup();
-      render(<TopBar {...defaultProps} />);
-
-      await user.click(screen.getByText("LOGOUT"));
-      expect(defaultProps.onExit).toHaveBeenCalledTimes(1);
-    });
   });
 
   describe("theme controls", () => {

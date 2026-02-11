@@ -58,15 +58,15 @@ export const NodeList: React.FC<NodeListProps> = ({
   };
 
   return (
-    <div className="w-64 border-r border-stone-700 bg-stone-800/50 flex flex-col">
+    <div className="w-64 border-r border-stone-200 dark:border-stone-800 glass-surface flex flex-col">
       {/* Active Nodes Section */}
       <div className="flex-1 overflow-y-auto">
-        <div className="p-3 border-b border-stone-700 bg-stone-800/70">
-          <h3 className="text-sm font-semibold text-stone-200">
+        <div className="p-3 border-b border-stone-200 dark:border-stone-800 glass-control">
+          <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-200">
             Active Nodes ({nodeNames.length})
           </h3>
         </div>
-        <div className="divide-y divide-stone-700/50">
+        <div className="divide-y divide-stone-200/60 dark:divide-stone-800/60">
           {nodeNames.map((containerName) => {
             const hasSnapshots = nodeNamesWithSnapshots.includes(containerName);
             const snapshotCount = getSnapshotCount(containerName);
@@ -91,11 +91,11 @@ export const NodeList: React.FC<NodeListProps> = ({
 
                   {/* Node Info */}
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-stone-200 truncate">
+                    <div className="text-sm font-medium text-stone-800 dark:text-stone-200 truncate">
                       {getDisplayName(containerName)}
                     </div>
                     {hasSnapshots && (
-                      <div className="text-xs text-stone-400 mt-0.5">
+                      <div className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
                         {snapshotCount} snapshot{snapshotCount !== 1 ? 's' : ''}
                       </div>
                     )}
@@ -112,8 +112,8 @@ export const NodeList: React.FC<NodeListProps> = ({
 
       {/* Orphaned Configs Section */}
       {orphanedNodeNames.length > 0 && (
-        <div className="border-t border-stone-700">
-          <div className="p-3 border-b border-stone-700 bg-stone-800/70 flex items-center justify-between">
+        <div className="border-t border-stone-200 dark:border-stone-800">
+          <div className="p-3 border-b border-stone-200 dark:border-stone-800 glass-control flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-amber-400">Orphaned Configs</h3>
               <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-500/20 text-amber-300">
@@ -128,7 +128,7 @@ export const NodeList: React.FC<NodeListProps> = ({
               Delete All
             </button>
           </div>
-          <div className="divide-y divide-stone-700/50 max-h-64 overflow-y-auto">
+          <div className="divide-y divide-stone-200/60 dark:divide-stone-800/60 max-h-64 overflow-y-auto">
             {orphanedNodeNames.map((containerName) => {
               const snapshotCount = getSnapshotCount(containerName);
               const isSelected = selectedNodeName === containerName;
@@ -148,12 +148,12 @@ export const NodeList: React.FC<NodeListProps> = ({
 
                     {/* Node Info */}
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-stone-300 truncate">
+                      <div className="text-sm font-medium text-stone-700 dark:text-stone-300 truncate">
                         {getDisplayName(containerName)}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         {deviceKind && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-stone-700/50 text-stone-400">
+                          <span className="text-xs px-1.5 py-0.5 rounded glass-control text-stone-500 dark:text-stone-400 border border-stone-200 dark:border-stone-700">
                             {deviceKind}
                           </span>
                         )}

@@ -269,9 +269,9 @@ export default function InterfaceManagerPage() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-100 dark:bg-stone-950 flex flex-col">
+    <div className="min-h-screen bg-stone-50/72 dark:bg-stone-900/72 backdrop-blur-[1px] flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="bg-white dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800 px-10 py-6">
+      <header className="h-20 bg-white/30 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800 px-10 flex items-center">
         <div className="max-w-7xl mx-auto">
           <div className="flex items-center gap-3 mb-2">
             <button
@@ -289,12 +289,12 @@ export default function InterfaceManagerPage() {
       </header>
 
       {/* Filters + Actions */}
-      <div className="px-10 py-4 border-b border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900">
+      <div className="px-10 py-4 border-b border-stone-200 dark:border-stone-800 glass-surface">
         <div className="max-w-7xl mx-auto flex items-center gap-4 flex-wrap">
           <select
             value={filterHost}
             onChange={e => setFilterHost(e.target.value)}
-            className="px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+            className="px-3 py-1.5 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300"
           >
             <option value="">All Hosts</option>
             {agents.map(a => (
@@ -304,7 +304,7 @@ export default function InterfaceManagerPage() {
           <select
             value={filterType}
             onChange={e => setFilterType(e.target.value)}
-            className="px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+            className="px-3 py-1.5 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300"
           >
             <option value="">All Types</option>
             <option value="transport">Transport</option>
@@ -318,7 +318,7 @@ export default function InterfaceManagerPage() {
               placeholder="Search interfaces..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+              className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300"
             />
           </div>
           <div className="flex items-center gap-2 ml-auto">
@@ -334,7 +334,7 @@ export default function InterfaceManagerPage() {
       </div>
 
       {/* Content */}
-      <main className="flex-1 overflow-y-auto p-10">
+      <main className="flex-1 overflow-y-auto p-10 custom-scrollbar">
         <div className="max-w-7xl mx-auto">
           {loading && interfaces.length === 0 ? (
             <div className="flex items-center justify-center py-20">
@@ -358,10 +358,10 @@ export default function InterfaceManagerPage() {
                     <h3 className="text-sm font-semibold text-stone-700 dark:text-stone-300">{hostName}</h3>
                     <span className="text-xs text-stone-400">({hostInterfaces.length} interface{hostInterfaces.length !== 1 ? 's' : ''})</span>
                   </div>
-                  <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl overflow-hidden">
+                  <div className="glass-surface border border-stone-200 dark:border-stone-800 rounded-xl overflow-hidden">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="border-b border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800/50">
+                        <tr className="border-b border-stone-200 dark:border-stone-700 glass-control">
                           <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Interface</th>
                           <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Type</th>
                           <th className="text-left py-2 px-3 font-medium text-stone-500 dark:text-stone-400">Parent</th>
@@ -406,7 +406,7 @@ export default function InterfaceManagerPage() {
                                     }}
                                     onBlur={() => setEditingMtu(null)}
                                     autoFocus
-                                    className="w-20 px-1 py-0.5 text-xs font-mono rounded border border-sage-400 dark:border-sage-600 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+                                    className="w-20 px-1 py-0.5 text-xs font-mono rounded border border-sage-400 dark:border-sage-600 glass-control text-stone-700 dark:text-stone-300"
                                     min={68} max={9216}
                                   />
                                 ) : (
@@ -448,7 +448,7 @@ export default function InterfaceManagerPage() {
                                     </button>
                                     <button
                                       onClick={() => setConfirmDelete(null)}
-                                      className="px-2 py-0.5 text-xs rounded bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-400"
+                                      className="px-2 py-0.5 text-xs rounded glass-control text-stone-600 dark:text-stone-400"
                                     >
                                       Cancel
                                     </button>
@@ -488,7 +488,7 @@ export default function InterfaceManagerPage() {
       {/* Edit Modal */}
       {showEditModal && editingInterface && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 w-full max-w-lg shadow-xl">
+          <div className="glass-surface-elevated rounded-2xl border border-stone-200 dark:border-stone-800 w-full max-w-lg shadow-xl">
             <div className="px-6 py-4 border-b border-stone-200 dark:border-stone-800">
               <h3 className="text-lg font-semibold text-stone-900 dark:text-white">Edit Interface</h3>
               <p className="text-sm text-stone-500 dark:text-stone-400 mt-0.5 font-mono">{editingInterface.name}</p>
@@ -502,7 +502,7 @@ export default function InterfaceManagerPage() {
                   value={editForm.ip_address}
                   onChange={e => setEditForm(f => ({ ...f, ip_address: e.target.value }))}
                   placeholder="e.g. 10.100.0.1/24"
-                  className={`w-full px-3 py-2 text-sm rounded-lg border bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300 ${
+                  className={`w-full px-3 py-2 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300 ${
                     editForm.ip_address && !isValidCidr(editForm.ip_address)
                       ? 'border-amber-400 dark:border-amber-600'
                       : 'border-stone-300 dark:border-stone-700'
@@ -523,7 +523,7 @@ export default function InterfaceManagerPage() {
                   value={editForm.desired_mtu}
                   onChange={e => setEditForm(f => ({ ...f, desired_mtu: parseInt(e.target.value) || 9000 }))}
                   min={68} max={9216}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+                  className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300"
                 />
               </div>
               {/* Current status info */}
@@ -542,7 +542,7 @@ export default function InterfaceManagerPage() {
             <div className="px-6 py-4 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
               <button
                 onClick={() => { setShowEditModal(false); setEditingInterface(null); }}
-                className="px-4 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800"
+                className="px-4 py-2 text-sm rounded-lg glass-control border text-stone-600 dark:text-stone-400"
               >
                 Cancel
               </button>
@@ -562,7 +562,7 @@ export default function InterfaceManagerPage() {
       {/* Create Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 w-full max-w-lg shadow-xl">
+          <div className="glass-surface-elevated rounded-2xl border border-stone-200 dark:border-stone-800 w-full max-w-lg shadow-xl">
             <div className="px-6 py-4 border-b border-stone-200 dark:border-stone-800">
               <h3 className="text-lg font-semibold text-stone-900 dark:text-white">Create Managed Interface</h3>
             </div>
@@ -573,7 +573,7 @@ export default function InterfaceManagerPage() {
                 <select
                   value={createForm.host_id}
                   onChange={e => handleCreateHostChange(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+                  className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300"
                 >
                   <option value="">Select host...</option>
                   {agents.filter(a => a.status === 'online').map(a => (
@@ -591,7 +591,7 @@ export default function InterfaceManagerPage() {
                     const type = e.target.value;
                     setCreateForm(f => ({ ...f, interface_type: type, ...(type === 'external' ? { ip_address: '' } : {}) }));
                   }}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+                  className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300"
                 >
                   <option value="transport">Transport (data plane)</option>
                   <option value="external">External (connectivity)</option>
@@ -607,7 +607,7 @@ export default function InterfaceManagerPage() {
                   value={createForm.parent_interface}
                   onChange={e => setCreateForm(f => ({ ...f, parent_interface: e.target.value }))}
                   disabled={!createForm.host_id || loadingAgentInterfaces}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300 disabled:opacity-50"
+                  className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 disabled:opacity-50"
                 >
                   <option value="">{loadingAgentInterfaces ? 'Loading...' : 'Select interface...'}</option>
                   {agentInterfaces.map(i => (
@@ -626,7 +626,7 @@ export default function InterfaceManagerPage() {
                     onChange={e => setCreateForm(f => ({ ...f, vlan_id: e.target.value }))}
                     placeholder="e.g. 100"
                     min={1} max={4094}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+                    className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300"
                   />
                 </div>
                 <div>
@@ -636,7 +636,7 @@ export default function InterfaceManagerPage() {
                     value={createForm.desired_mtu}
                     onChange={e => setCreateForm(f => ({ ...f, desired_mtu: parseInt(e.target.value) || 9000 }))}
                     min={68} max={9216}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+                    className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300"
                   />
                 </div>
               </div>
@@ -650,7 +650,7 @@ export default function InterfaceManagerPage() {
                     value={createForm.ip_address}
                     onChange={e => setCreateForm(f => ({ ...f, ip_address: e.target.value }))}
                     placeholder="e.g. 10.100.0.1/24"
-                    className={`w-full px-3 py-2 text-sm rounded-lg border bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300 ${
+                    className={`w-full px-3 py-2 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300 ${
                       createForm.ip_address && !isValidCidr(createForm.ip_address)
                         ? 'border-amber-400 dark:border-amber-600'
                         : 'border-stone-300 dark:border-stone-700'
@@ -670,7 +670,7 @@ export default function InterfaceManagerPage() {
             <div className="px-6 py-4 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
               <button
                 onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800"
+                className="px-4 py-2 text-sm rounded-lg glass-control border text-stone-600 dark:text-stone-400"
               >
                 Cancel
               </button>

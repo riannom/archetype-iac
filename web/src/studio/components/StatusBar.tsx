@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { formatUptime } from '../../utils/format';
 import { NodeStateEntry } from '../../types/nodeState';
 import { VersionBadge } from '../../components/VersionBadge';
+import { useTheme } from '../../theme/index';
 
 interface StatusBarProps {
   nodeStates: Record<string, NodeStateEntry>;
@@ -10,6 +11,7 @@ interface StatusBarProps {
 }
 
 const StatusBar: React.FC<StatusBarProps> = ({ nodeStates, wsConnected, reconnectAttempts = 0 }) => {
+  const { effectiveMode } = useTheme();
   const [uptime, setUptime] = useState<string>('--:--:--');
 
   useEffect(() => {
@@ -42,8 +44,22 @@ const StatusBar: React.FC<StatusBarProps> = ({ nodeStates, wsConnected, reconnec
     return () => clearInterval(interval);
   }, [nodeStates]);
 
+  const isLightMode = effectiveMode === 'light';
+  const statusBarStyle: React.CSSProperties = {
+    backgroundColor: isLightMode
+      ? 'color-mix(in srgb, color-mix(in srgb, var(--color-accent-900) 38%, var(--color-neutral-700) 62%) 86%, transparent)'
+      : 'color-mix(in srgb, var(--color-bg-surface) 92%, transparent)',
+  };
+  const uptimeClass = isLightMode
+    ? 'text-white/85 hover:text-white'
+    : 'text-stone-500 dark:text-stone-500 hover:text-sage-600 dark:hover:text-sage-400';
+  const dividerClass = isLightMode ? 'bg-white/30' : 'bg-stone-200 dark:bg-stone-800';
+
   return (
-    <div className="h-8 bg-white/90 dark:bg-stone-900/90 backdrop-blur-md border-t border-stone-200 dark:border-stone-700 flex items-center justify-between px-4 z-10 shrink-0 text-[10px] font-bold tracking-tight">
+    <div
+      className="h-8 backdrop-blur-md border-t border-stone-200 dark:border-stone-700 flex items-center justify-between px-4 z-10 shrink-0 text-[10px] font-bold tracking-tight"
+      style={statusBarStyle}
+    >
       <div className="flex items-center gap-6">
         {/* WebSocket connection indicator */}
         {wsConnected !== undefined && (
@@ -78,12 +94,12 @@ const StatusBar: React.FC<StatusBarProps> = ({ nodeStates, wsConnected, reconnec
       </div>
 
       <div className="flex items-center gap-6">
-        <div className="flex items-center gap-2 text-stone-500 dark:text-stone-500 hover:text-sage-600 dark:hover:text-sage-400 cursor-pointer transition-colors">
+        <div className={`flex items-center gap-2 cursor-pointer transition-colors ${uptimeClass}`}>
           <i className="fa-solid fa-clock-rotate-left"></i>
           <span className="uppercase">UPTIME: {uptime}</span>
         </div>
 
-        <div className="h-3 w-px bg-stone-200 dark:bg-stone-800"></div>
+        <div className={`h-3 w-px ${dividerClass}`}></div>
 
         <VersionBadge />
       </div>

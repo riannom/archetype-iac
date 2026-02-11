@@ -44,6 +44,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
 
   // Delete confirmation dialog
   const [deleteConfirmDevice, setDeleteConfirmDevice] = useState<CustomDevice | null>(null);
+  const [showAddDeviceModal, setShowAddDeviceModal] = useState(false);
 
   // Get unique vendors
   const vendors = useMemo(() => {
@@ -121,6 +122,8 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
         return next;
       });
     }, 3000);
+
+    setShowAddDeviceModal(false);
   };
 
   // Handle confirming delete
@@ -149,10 +152,10 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
     : null;
 
   return (
-    <div className="h-full bg-stone-50 dark:bg-stone-950 flex flex-col overflow-hidden">
+    <div className="h-full bg-transparent flex flex-col overflow-hidden">
       <div className="flex flex-col h-full min-h-0">
         {/* Header */}
-        <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 bg-white/50 dark:bg-stone-900/50 backdrop-blur-sm">
+        <header className="px-6 py-4 border-b border-stone-200 dark:border-stone-800 glass-surface">
           <div className="flex flex-wrap justify-between items-end gap-4">
             <div>
               <h1 className="text-2xl font-black text-stone-900 dark:text-white tracking-tight">
@@ -164,47 +167,19 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
             </div>
             <div className="flex gap-3">
               <button
+                onClick={() => setShowAddDeviceModal(true)}
+                className="px-4 py-2 bg-sage-600 hover:bg-sage-500 text-white rounded-lg text-xs font-bold transition-all"
+              >
+                <i className="fa-solid fa-plus mr-1"></i>
+                Add Custom Device
+              </button>
+              <button
                 onClick={onRefresh}
-                className="px-3 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-white rounded-lg text-xs font-bold transition-all"
+                className="px-3 py-2 glass-control text-stone-700 dark:text-white rounded-lg text-xs font-bold transition-all"
               >
                 <i className="fa-solid fa-rotate"></i>
               </button>
             </div>
-          </div>
-
-          {/* Custom device form */}
-          <div className="mt-4 p-3 bg-stone-100 dark:bg-stone-900/50 border border-stone-300 dark:border-stone-700 rounded-lg">
-            <div className="text-[10px] font-bold text-stone-600 dark:text-stone-400 uppercase tracking-widest mb-2">
-              <i className="fa-solid fa-plus-circle mr-1"></i>
-              Add Custom Device
-            </div>
-            <div className="flex gap-2">
-              <input
-                className="flex-1 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
-                placeholder="Device ID (e.g., my-router)"
-                value={customDeviceId}
-                onChange={(e) => setCustomDeviceId(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddCustomDevice()}
-              />
-              <input
-                className="flex-1 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
-                placeholder="Display Name (optional)"
-                value={customDeviceLabel}
-                onChange={(e) => setCustomDeviceLabel(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddCustomDevice()}
-              />
-              <button
-                onClick={handleAddCustomDevice}
-                disabled={!customDeviceId.trim()}
-                className="px-4 py-2 bg-sage-600 hover:bg-sage-500 disabled:bg-stone-300 dark:disabled:bg-stone-700 text-white text-xs font-bold rounded transition-all disabled:cursor-not-allowed"
-              >
-                <i className="fa-solid fa-plus mr-1"></i>
-                Add
-              </button>
-            </div>
-            <p className="text-[10px] text-stone-500 dark:text-stone-400 mt-2">
-              Custom devices appear at the top of the list and can be used to assign images in Image Management.
-            </p>
           </div>
         </header>
 
@@ -213,7 +188,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
           {/* Left panel - Device list (40%) */}
           <div className="w-2/5 border-r border-stone-200 dark:border-stone-800 flex flex-col overflow-hidden min-h-0">
             {/* Device filters */}
-            <div className="p-4 border-b border-stone-200 dark:border-stone-800 bg-stone-100/50 dark:bg-stone-900/30 space-y-3">
+            <div className="p-4 border-b border-stone-200 dark:border-stone-800 glass-surface space-y-3">
               {/* Search */}
               <div className="relative">
                 <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xs" />
@@ -222,7 +197,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
                   placeholder="Search devices..."
                   value={deviceSearch}
                   onChange={(e) => setDeviceSearch(e.target.value)}
-                  className="w-full pl-9 pr-8 py-2 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                  className="w-full pl-9 pr-8 py-2 glass-control rounded-lg text-xs text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
                 />
                 {deviceSearch && (
                   <button
@@ -300,7 +275,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
                                 setDeleteConfirmDevice(customDevice);
                               }
                             }}
-                            className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-400 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                            className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                             title="Delete custom device"
                           >
                             <i className="fa-solid fa-trash text-xs"></i>
@@ -348,7 +323,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
             </div>
 
             {/* Device count */}
-            <div className="p-3 border-t border-stone-200 dark:border-stone-800 bg-stone-100/50 dark:bg-stone-900/30">
+            <div className="p-3 border-t border-stone-200 dark:border-stone-800 glass-surface">
               <p className="text-[10px] text-stone-500 uppercase tracking-wider font-bold">
                 {filteredDevices.length} of {deviceModels.length} devices
               </p>
@@ -382,10 +357,81 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
         </div>
       </div>
 
+      {/* Add custom device modal */}
+      {showAddDeviceModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="glass-surface-elevated rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-sage-100 dark:bg-sage-900/50 flex items-center justify-center">
+                <i className="fa-solid fa-plus text-sage-600 dark:text-sage-400"></i>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-stone-900 dark:text-white">
+                  Add Custom Device
+                </h3>
+                <p className="text-xs text-stone-500 dark:text-stone-400">
+                  Create a custom device model for image assignment
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-1">
+                  Device ID
+                </label>
+                <input
+                  className="w-full glass-control rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                  placeholder="my-router"
+                  value={customDeviceId}
+                  onChange={(e) => setCustomDeviceId(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddCustomDevice()}
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-1">
+                  Display Name (Optional)
+                </label>
+                <input
+                  className="w-full glass-control rounded px-3 py-2 text-xs text-stone-900 dark:text-stone-200 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+                  placeholder="My Router"
+                  value={customDeviceLabel}
+                  onChange={(e) => setCustomDeviceLabel(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddCustomDevice()}
+                />
+              </div>
+
+              <p className="text-[10px] text-stone-500 dark:text-stone-400">
+                Custom devices appear at the top of the list and can be used in Image Management.
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end mt-6">
+              <button
+                onClick={() => setShowAddDeviceModal(false)}
+                className="px-4 py-2 glass-control text-stone-700 dark:text-stone-300 rounded-lg text-sm font-medium transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddCustomDevice}
+                disabled={!customDeviceId.trim()}
+                className="px-4 py-2 bg-sage-600 hover:bg-sage-500 disabled:bg-stone-300 dark:disabled:bg-stone-700 text-white rounded-lg text-sm font-bold transition-all disabled:cursor-not-allowed"
+              >
+                <i className="fa-solid fa-plus mr-2"></i>
+                Add Device
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete confirmation dialog */}
       {deleteConfirmDevice && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-stone-900 rounded-xl shadow-2xl border border-stone-200 dark:border-stone-700 p-6 max-w-md w-full mx-4 animate-in zoom-in-95 duration-200">
+          <div className="glass-surface-elevated rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 animate-in zoom-in-95 duration-200">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-rose-100 dark:bg-rose-900/50 flex items-center justify-center">
                 <i className="fa-solid fa-trash text-rose-600 dark:text-rose-400"></i>
@@ -413,7 +459,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setDeleteConfirmDevice(null)}
-                className="px-4 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 rounded-lg text-sm font-medium transition-all"
+                className="px-4 py-2 glass-control text-stone-700 dark:text-stone-300 rounded-lg text-sm font-medium transition-all"
               >
                 Cancel
               </button>

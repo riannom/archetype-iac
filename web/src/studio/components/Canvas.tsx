@@ -746,7 +746,15 @@ const Canvas: React.FC<CanvasProps> = ({
                 ${errorBorderClass}
                 hover:border-sage-400 z-10 select-none group`}
             >
-              <i className={`fa-solid ${getNodeIcon(deviceNode.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : status === 'error' ? 'text-red-500 dark:text-red-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
+              <div
+                className={`flex items-center justify-center ${isRouter ? 'w-8 h-8 rounded-full' : 'w-8 h-8 rounded-md'} border ${
+                  effectiveMode === 'dark'
+                    ? 'bg-stone-700/40 border-stone-600/80'
+                    : 'bg-stone-100/90 border-stone-400/90 shadow-[0_1px_2px_rgba(28,25,23,0.18)]'
+                }`}
+              >
+                <i className={`fa-solid ${getNodeIcon(deviceNode.model)} ${status === 'running' ? 'text-green-500 dark:text-green-400' : status === 'error' ? 'text-red-500 dark:text-red-400' : 'text-stone-700 dark:text-stone-100'} ${isRouter || isSwitch ? 'text-xl' : 'text-lg'}`}></i>
+              </div>
               {getStatusDot()}
               {getAgentIndicator()}
               {getErrorIndicator()}

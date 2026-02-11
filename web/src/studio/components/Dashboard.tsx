@@ -61,6 +61,7 @@ interface DashboardProps {
   onCreate: () => void;
   onDelete: (labId: string) => void;
   onRename?: (labId: string, newName: string) => void;
+  onLogout: () => void;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({
@@ -71,6 +72,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   onCreate,
   onDelete,
   onRename,
+  onLogout,
 }) => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user } = useUser();
@@ -162,7 +164,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             <>
               <button
                 onClick={() => navigate('/infrastructure')}
-                className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+                className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
                 title="Infrastructure Settings"
               >
                 <i className="fa-solid fa-network-wired text-xs"></i>
@@ -170,7 +172,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               </button>
               <button
                 onClick={() => navigate('/nodes')}
-                className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+                className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
                 title="Manage Nodes"
               >
                 <i className="fa-solid fa-microchip text-xs"></i>
@@ -178,7 +180,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               </button>
               <button
                 onClick={() => setShowSystemLogs(true)}
-                className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+                className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
                 title="View System Logs"
               >
                 <i className="fa-solid fa-file-lines text-xs"></i>
@@ -189,7 +191,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           {showUsers && (
             <button
               onClick={() => navigate('/admin/users')}
-              className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-stone-700 rounded-lg transition-all"
+              className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
               title="User Management"
             >
               <i className="fa-solid fa-users text-xs"></i>
@@ -199,7 +201,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
           <button
             onClick={() => setShowThemeSelector(true)}
-            className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
+            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
             title="Theme Settings"
           >
             <i className="fa-solid fa-palette text-sm"></i>
@@ -207,10 +209,19 @@ const Dashboard: React.FC<DashboardProps> = ({
 
           <button
             onClick={toggleMode}
-            className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all border border-stone-300 dark:border-stone-700"
+            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
             title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
           >
             <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'} text-sm`}></i>
+          </button>
+
+          <button
+            onClick={onLogout}
+            className="flex items-center gap-2 px-3 py-2 text-stone-500 hover:text-red-500 dark:text-stone-400 dark:hover:text-red-400 text-xs font-bold transition-all"
+            title="Logout"
+          >
+            <i className="fa-solid fa-right-from-bracket text-xs"></i>
+            <span className="text-[10px] font-bold uppercase">Logout</span>
           </button>
 
         </div>
@@ -244,7 +255,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               return (
               <div
                 key={lab.id}
-                className="group relative bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 hover:border-sage-500/50 hover:shadow-2xl hover:shadow-sage-900/10 transition-all cursor-default overflow-hidden"
+                className="group relative glass-surface border rounded-2xl p-6 hover:border-sage-500/50 hover:shadow-2xl hover:shadow-sage-900/10 transition-all cursor-default overflow-hidden"
               >
                 <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
                   {pendingDeleteId === lab.id ? (
@@ -258,7 +269,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDeleteCancel(); }}
-                        className="w-8 h-8 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-500 hover:bg-stone-200 dark:hover:bg-stone-700 transition-all border border-stone-300 dark:border-stone-700"
+                        className="w-8 h-8 rounded-lg glass-control text-stone-500 transition-all"
                         title="Cancel"
                       >
                         <i className="fa-solid fa-xmark text-xs"></i>
@@ -318,11 +329,11 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <div className="flex gap-2">
                   <button
                     onClick={() => onSelect(lab)}
-                    className="flex-1 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border border-stone-200 dark:border-stone-700 transition-all"
+                    className="flex-1 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all"
                   >
                     Open Designer
                   </button>
-                  <button className="w-10 py-2 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border border-stone-200 dark:border-stone-700 transition-all flex items-center justify-center">
+                  <button className="w-10 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all flex items-center justify-center">
                     <i className="fa-solid fa-download"></i>
                   </button>
                 </div>
@@ -339,7 +350,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </main>
 
-      <footer className="h-10 border-t border-stone-200 dark:border-stone-900 bg-stone-100 dark:bg-stone-950 flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
+      <footer className="h-10 border-t border-stone-200 dark:border-stone-900 glass-surface flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
         <span>© 2026 Archetype Network Studio</span>
         <VersionBadge />
       </footer>

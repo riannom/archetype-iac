@@ -164,7 +164,7 @@ export const ImageSyncProgress: React.FC<ImageSyncProgressProps> = ({
       {jobs.map((job) => (
         <div
           key={job.id}
-          className="bg-white dark:bg-stone-900 rounded-lg border border-stone-200 dark:border-stone-800 p-3"
+          className="glass-surface rounded-lg p-3"
         >
           {/* Header */}
           <div className="flex items-center justify-between mb-2">

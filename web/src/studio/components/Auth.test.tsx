@@ -41,14 +41,14 @@ describe("Auth", () => {
       expect(screen.getByTestId("archetype-icon")).toBeInTheDocument();
     });
 
-    it("renders Identity label", () => {
+    it("renders Username label", () => {
       render(<Auth {...defaultProps} />);
-      expect(screen.getByText("Identity")).toBeInTheDocument();
+      expect(screen.getByText("Username")).toBeInTheDocument();
     });
 
-    it("renders Credential label", () => {
+    it("renders Password label", () => {
       render(<Auth {...defaultProps} />);
-      expect(screen.getByText("Credential")).toBeInTheDocument();
+      expect(screen.getByText("Password")).toBeInTheDocument();
     });
 
     it("renders Sign In button", () => {
@@ -58,7 +58,7 @@ describe("Auth", () => {
 
     it("renders version info", () => {
       render(<Auth {...defaultProps} />);
-      expect(screen.getByText(/v2.4.0-STABLE/)).toBeInTheDocument();
+      expect(screen.getByText(/v0.4.0/)).toBeInTheDocument();
     });
   });
 
@@ -97,7 +97,7 @@ describe("Auth", () => {
   });
 
   describe("form submission", () => {
-    it("calls onLogin with username when form is submitted", async () => {
+    it("calls onLogin with username and password when form is submitted", async () => {
       const user = userEvent.setup();
       const onLogin = vi.fn();
       render(<Auth onLogin={onLogin} />);
@@ -110,7 +110,7 @@ describe("Auth", () => {
       await user.type(passwordInput, "password123");
       await user.click(submitButton);
 
-      expect(onLogin).toHaveBeenCalledWith("testuser");
+      expect(onLogin).toHaveBeenCalledWith("testuser", "password123");
     });
 
     it("does not call onLogin when username is empty", async () => {
@@ -138,20 +138,18 @@ describe("Auth", () => {
       expect(onLogin).not.toHaveBeenCalled();
     });
 
-    it("trims username before calling onLogin", async () => {
+    it("passes username and empty password when only username is typed", async () => {
       const user = userEvent.setup();
       const onLogin = vi.fn();
       render(<Auth onLogin={onLogin} />);
 
       const usernameInput = screen.getByPlaceholderText("Username");
-      // Note: The component does username.trim() check but passes username as-is
-      // So it validates trim but passes the actual value
       await user.type(usernameInput, "testuser");
 
       const submitButton = screen.getByRole("button", { name: /sign in to archetype/i });
       await user.click(submitButton);
 
-      expect(onLogin).toHaveBeenCalledWith("testuser");
+      expect(onLogin).toHaveBeenCalledWith("testuser", "");
     });
 
     it("can submit form with Enter key", async () => {
@@ -163,7 +161,7 @@ describe("Auth", () => {
       await user.type(usernameInput, "testuser");
       await user.keyboard("{Enter}");
 
-      expect(onLogin).toHaveBeenCalledWith("testuser");
+      expect(onLogin).toHaveBeenCalledWith("testuser", "");
     });
 
     it("prevents default form submission behavior", async () => {
@@ -181,6 +179,28 @@ describe("Auth", () => {
       form?.dispatchEvent(submitEvent);
 
       expect(submitEvent.preventDefault).toHaveBeenCalled();
+    });
+  });
+
+  describe("error and loading states", () => {
+    it("displays error message when error prop is provided", () => {
+      render(<Auth onLogin={vi.fn()} error="Invalid credentials" />);
+      expect(screen.getByText("Invalid credentials")).toBeInTheDocument();
+    });
+
+    it("does not display error when error is null", () => {
+      render(<Auth onLogin={vi.fn()} error={null} />);
+      expect(screen.queryByText(/invalid/i)).not.toBeInTheDocument();
+    });
+
+    it("shows loading text on button when loading", () => {
+      render(<Auth onLogin={vi.fn()} loading={true} />);
+      expect(screen.getByRole("button", { name: /signing in/i })).toBeInTheDocument();
+    });
+
+    it("disables button when loading", () => {
+      render(<Auth onLogin={vi.fn()} loading={true} />);
+      expect(screen.getByRole("button", { name: /signing in/i })).toBeDisabled();
     });
   });
 
@@ -240,6 +260,12 @@ describe("Auth", () => {
       const lockIcon = document.querySelector(".fa-lock");
       expect(lockIcon).toBeInTheDocument();
     });
+
+    it("renders network topology SVG decoration", () => {
+      render(<Auth {...defaultProps} />);
+      const svg = document.querySelector("svg[viewBox='0 0 1200 800']");
+      expect(svg).toBeInTheDocument();
+    });
   });
 
   describe("state management", () => {
@@ -285,7 +311,7 @@ describe("Auth", () => {
       const submitButton = screen.getByRole("button", { name: /sign in to archetype/i });
       await user.click(submitButton);
 
-      expect(onLogin).toHaveBeenCalledWith("user@domain.com");
+      expect(onLogin).toHaveBeenCalledWith("user@domain.com", "");
     });
 
     it("handles special characters in password", async () => {
@@ -310,7 +336,7 @@ describe("Auth", () => {
       const submitButton = screen.getByRole("button", { name: /sign in to archetype/i });
       await user.click(submitButton);
 
-      expect(onLogin).toHaveBeenCalledWith(longUsername);
+      expect(onLogin).toHaveBeenCalledWith(longUsername, "");
     });
   });
 });

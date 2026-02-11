@@ -71,7 +71,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
   };
 
   return (
-    <div className="bg-stone-50 dark:bg-stone-900/50 border-b border-stone-200 dark:border-stone-800 p-4 space-y-4">
+    <div className="glass-surface border-b border-stone-200 dark:border-stone-800 p-4 space-y-4">
       {/* Search bar and sort */}
       <div className="flex gap-2">
         <div className="relative flex-1">
@@ -81,7 +81,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
             placeholder="Search images by name, version, or vendor..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full pl-10 pr-10 py-2.5 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
+            className="w-full pl-10 pr-10 py-2.5 glass-control rounded-lg text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 dark:placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
           />
           {searchQuery && (
             <button
@@ -95,7 +95,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
         <select
           value={sortOption}
           onChange={(e) => onSortChange(e.target.value as ImageSortOption)}
-          className="px-3 py-2.5 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
+          className="px-3 py-2.5 glass-control rounded-lg text-sm text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
         >
           <option value="vendor">Sort: Vendor</option>
           <option value="name">Sort: Name</option>

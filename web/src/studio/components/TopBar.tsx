@@ -85,7 +85,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
 
           <div className="h-8 w-px bg-stone-200 dark:bg-black/80 mx-2"></div>
 
-          <div className="flex items-center gap-2 px-3 py-1 bg-stone-100 dark:bg-black/60 rounded-full border border-stone-200/50 dark:border-black/70">
+          <div className="flex items-center gap-2 px-3 py-1 glass-control rounded-full border">
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
             <span className="text-[11px] text-stone-500 dark:text-stone-400 font-medium uppercase tracking-tight">Lab:</span>
             {isEditing ? (
@@ -114,7 +114,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
         <div className="flex items-center gap-4">
           <button
             onClick={onExit}
-            className="flex items-center gap-2 px-3 py-2 bg-stone-100 dark:bg-black/65 hover:bg-stone-200 dark:hover:bg-black/80 text-stone-600 dark:text-stone-300 border border-stone-300 dark:border-black/70 rounded-lg transition-all"
+            className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
             title="Back to Dashboard"
           >
             <i className="fa-solid fa-arrow-left text-xs"></i>
@@ -125,7 +125,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
 
           <button
             onClick={() => setShowNotificationSettings(true)}
-            className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-black/65 text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all border border-stone-200 dark:border-black/70"
+            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all"
             title="Notification Settings"
           >
             <i className="fa-solid fa-gear"></i>
@@ -133,7 +133,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
 
           <button
             onClick={() => setShowThemeSelector(true)}
-            className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-black/65 text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all border border-stone-200 dark:border-black/70"
+            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all"
             title="Theme Settings"
           >
             <i className="fa-solid fa-palette"></i>
@@ -141,7 +141,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
 
           <button
             onClick={toggleMode}
-            className="w-9 h-9 flex items-center justify-center bg-stone-100 dark:bg-black/65 text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all border border-stone-200 dark:border-black/70"
+            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all"
             title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
           >
             <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'}`}></i>
@@ -150,14 +150,14 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
           <div className="relative" ref={exportDropdownRef}>
             <button
               onClick={() => setShowExportDropdown(!showExportDropdown)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-black/65 hover:bg-stone-50 dark:hover:bg-black/80 text-stone-700 dark:text-stone-100 text-xs font-semibold border border-stone-200 dark:border-black/70 rounded-lg transition-all active:scale-95 shadow-sm"
+              className="flex items-center gap-2 px-3 py-1.5 glass-control text-stone-700 dark:text-stone-100 text-xs font-semibold rounded-lg transition-all active:scale-95 shadow-sm"
             >
               <i className="fa-solid fa-file-code text-sage-600 dark:text-sage-400"></i>
               EXPORT
               <i className={`fa-solid fa-chevron-down text-[8px] transition-transform ${showExportDropdown ? 'rotate-180' : ''}`}></i>
             </button>
             {showExportDropdown && (
-              <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-stone-950 border border-stone-200 dark:border-black/80 rounded-lg shadow-lg overflow-hidden z-50">
+              <div className="absolute right-0 mt-1 w-48 glass-surface-elevated border border-stone-200 dark:border-black/80 rounded-lg shadow-lg overflow-hidden z-50">
                 <button
                   onClick={() => {
                     onExport();
@@ -187,15 +187,6 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
           </div>
 
           <div className="h-8 w-px bg-stone-200 dark:bg-black/80 mx-1"></div>
-
-          <button
-            onClick={onExit}
-            className="flex items-center gap-2 px-3 py-1.5 text-stone-500 hover:text-red-500 dark:text-stone-400 dark:hover:text-red-400 text-xs font-bold transition-all"
-            title="Logout"
-          >
-            <i className="fa-solid fa-right-from-bracket"></i>
-            LOGOUT
-          </button>
         </div>
       </div>
 

@@ -7,6 +7,7 @@ import ConsoleManager from './components/ConsoleManager';
 import RuntimeControl from './components/RuntimeControl';
 import StatusBar from './components/StatusBar';
 import TaskLogPanel, { TaskLogEntry, DockedConsole } from './components/TaskLogPanel';
+import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
 import AgentAlertBanner from './components/AgentAlertBanner';
@@ -27,7 +28,6 @@ import { canViewInfrastructure } from '../utils/permissions';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
 import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
-import { ArchetypeIcon } from '../components/icons';
 import './studio.css';
 import 'xterm/css/xterm.css';
 
@@ -188,7 +188,7 @@ const resolveNodeStatus = (action: string, status: string): RuntimeStatus | unde
 
 const StudioPage: React.FC = () => {
   const { effectiveMode } = useTheme();
-  const { user, refreshUser } = useUser();
+  const { user, refreshUser, clearUser } = useUser();
   const { addNotification, preferences } = useNotifications();
   const { imageLibrary } = useImageLibrary();
   const { deviceModels, deviceCategories, imageCatalog, refresh: refreshDeviceCatalog } = useDeviceCatalog();
@@ -223,8 +223,6 @@ const StudioPage: React.FC = () => {
     return localStorage.getItem('archetype_show_agent_indicators') !== 'false';
   });
   const [authRequired, setAuthRequired] = useState(false);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [taskLog, setTaskLog] = useState<TaskLogEntry[]>([]);
@@ -953,6 +951,17 @@ const StudioPage: React.FC = () => {
     setActiveLab(null);
   }, [activeLab]);
 
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem('token');
+    clearUser();
+    setAuthRequired(true);
+    setAuthError(null);
+    setActiveLab(null);
+    setConsoleWindows([]);
+    setDockedConsoles([]);
+    setActiveBottomTabId('log');
+  }, [clearUser]);
+
   const handleDeleteLab = async (labId: string) => {
     await studioRequest(`/labs/${labId}`, { method: 'DELETE' });
     if (activeLab?.id === labId) {
@@ -1658,14 +1667,13 @@ const StudioPage: React.FC = () => {
     }
   };
 
-  const handleLogin = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const handleLogin = async (username: string, password?: string) => {
     setAuthError(null);
     setAuthLoading(true);
     try {
       const body = new URLSearchParams();
-      body.set('username', authEmail);
-      body.set('password', authPassword);
+      body.set('username', username);
+      body.set('password', password || '');
       const response = await fetch(`${API_BASE_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1681,7 +1689,6 @@ const StudioPage: React.FC = () => {
       }
       localStorage.setItem('token', data.access_token);
       setAuthRequired(false);
-      setAuthPassword('');
       await refreshUser();
       await loadLabs();
       await refreshDeviceCatalog();
@@ -1833,51 +1840,11 @@ const StudioPage: React.FC = () => {
 
   const backgroundGradient =
     effectiveMode === 'dark'
-      ? 'bg-gradient-to-br from-stone-950/90 via-stone-900/82 to-stone-950/90 bg-gradient-animate backdrop-blur-[1px]'
-      : 'bg-gradient-to-br from-stone-50/70 via-white/64 to-stone-100/70 bg-gradient-animate backdrop-blur-[1px]';
+      ? 'bg-gradient-to-br from-stone-950/58 via-stone-900/48 to-stone-950/58 bg-gradient-animate backdrop-blur-[1px]'
+      : 'bg-gradient-to-br from-stone-50/56 via-white/50 to-stone-100/56 bg-gradient-animate backdrop-blur-[1px]';
 
   if (authRequired) {
-    return (
-      <div className={`min-h-screen flex items-center justify-center ${backgroundGradient}`}>
-        <div className="w-[420px] bg-white/90 dark:bg-stone-950/90 border border-stone-200 dark:border-stone-800 rounded-2xl shadow-2xl p-8">
-          <div className="flex items-center gap-4 mb-6">
-            <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
-            <div>
-              <h1 className="text-lg font-black text-stone-900 dark:text-white tracking-tight">Archetype Studio</h1>
-              <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Sign in</p>
-            </div>
-          </div>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Username</label>
-              <input
-                value={authEmail}
-                onChange={(event) => setAuthEmail(event.target.value)}
-                type="text"
-                className="w-full bg-stone-100 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Password</label>
-              <input
-                value={authPassword}
-                onChange={(event) => setAuthPassword(event.target.value)}
-                type="password"
-                className="w-full bg-stone-100 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500"
-              />
-            </div>
-            {authError && <div className="text-xs text-red-500 dark:text-red-400">{authError}</div>}
-            <button
-              type="submit"
-              disabled={authLoading}
-              className="w-full bg-sage-600 hover:bg-sage-500 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all"
-            >
-              {authLoading ? 'Signing in...' : 'Sign in'}
-            </button>
-          </form>
-        </div>
-      </div>
-    );
+    return <Auth onLogin={handleLogin} error={authError} loading={authLoading} />;
   }
 
   if (!activeLab) {
@@ -1890,6 +1857,7 @@ const StudioPage: React.FC = () => {
         onCreate={handleCreateLab}
         onDelete={handleDeleteLab}
         onRename={handleRenameLab}
+        onLogout={handleLogout}
       />
     );
   }

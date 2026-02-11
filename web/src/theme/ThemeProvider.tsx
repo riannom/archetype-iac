@@ -16,7 +16,7 @@ const CUSTOM_THEMES_KEY = 'archetype_custom_themes';
 // Default preferences
 const defaultPreferences: ThemePreferences = {
   themeId: DEFAULT_THEME_ID,
-  mode: 'dark',
+  mode: 'system',
   backgroundId: getSuggestedBackgroundForTheme(DEFAULT_THEME_ID),
   backgroundOpacity: 50,
   taskLogOpacity: 92,
@@ -36,7 +36,7 @@ function loadPreferences(): ThemePreferences {
       const parsed = JSON.parse(stored);
       return {
         themeId: parsed.themeId || DEFAULT_THEME_ID,
-        mode: parsed.mode || 'dark',
+        mode: parsed.mode || 'system',
         backgroundId: parsed.backgroundId || getSuggestedBackgroundForTheme(parsed.themeId || DEFAULT_THEME_ID),
         backgroundOpacity: typeof parsed.backgroundOpacity === 'number' ? parsed.backgroundOpacity : 50,
         taskLogOpacity: typeof parsed.taskLogOpacity === 'number' ? parsed.taskLogOpacity : 92,
@@ -141,8 +141,9 @@ function applyThemeToDOM(theme: Theme, effectiveMode: 'light' | 'dark', taskLogO
   root.style.setProperty('--color-node-glow', modeColors.nodeGlow);
   root.style.setProperty('--color-scrollbar-thumb', modeColors.scrollbarThumb);
 
-  const surfaceChannels = hexToRgbChannels(modeColors.bgSurface) || '255 255 255';
-  const clampedOpacity = Math.max(0, Math.min(100, taskLogOpacity)) / 100;
+  const taskLogBase = effectiveMode === 'dark' ? '#0c0a09' : '#f8fafc';
+  const surfaceChannels = hexToRgbChannels(taskLogBase) || '255 255 255';
+  const clampedOpacity = (Math.max(0, Math.min(100, taskLogOpacity)) / 100) * 0.95;
   root.style.setProperty('--tasklog-panel-bg', surfaceChannels);
   root.style.setProperty('--tasklog-opacity', clampedOpacity.toFixed(2));
 }
