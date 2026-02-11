@@ -8,29 +8,42 @@ import { NotificationProvider } from "./contexts/NotificationContext";
 import { ImageLibraryProvider } from "./contexts/ImageLibraryContext";
 import { DeviceCatalogProvider } from "./contexts/DeviceCatalogContext";
 import { ToastContainer } from "./components/ui/ToastContainer";
-import StudioConsolePage from "./pages/StudioConsolePage";
-import InfrastructurePage from "./pages/InfrastructurePage";
-import InterfaceManagerPage from "./pages/InterfaceManagerPage";
-import NodesPage from "./pages/NodesPage";
-import AdminSettingsPage from "./pages/AdminSettingsPage";
-import StudioPage from "./studio/StudioPage";
-import UserManagementPage from "./pages/UserManagementPage";
+
+const StudioConsolePage = React.lazy(() => import("./pages/StudioConsolePage"));
+const InfrastructurePage = React.lazy(() => import("./pages/InfrastructurePage"));
+const InterfaceManagerPage = React.lazy(() => import("./pages/InterfaceManagerPage"));
+const NodesPage = React.lazy(() => import("./pages/NodesPage"));
+const AdminSettingsPage = React.lazy(() => import("./pages/AdminSettingsPage"));
+const StudioPage = React.lazy(() => import("./studio/StudioPage"));
+const UserManagementPage = React.lazy(() => import("./pages/UserManagementPage"));
+
+function RouteFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center text-stone-500 dark:text-stone-400">
+      Loading...
+    </div>
+  );
+}
+
+function withSuspense(element: React.ReactElement) {
+  return <React.Suspense fallback={<RouteFallback />}>{element}</React.Suspense>;
+}
 
 const router = createBrowserRouter([
-  { path: "/", element: <StudioPage /> },
+  { path: "/", element: withSuspense(<StudioPage />) },
   { path: "/hosts", element: <Navigate to="/infrastructure" replace /> },
-  { path: "/infrastructure", element: <InfrastructurePage /> },
-  { path: "/admin/interfaces", element: <InterfaceManagerPage /> },
-  { path: "/admin/settings", element: <AdminSettingsPage /> },
-  { path: "/admin/users", element: <UserManagementPage /> },
-  { path: "/nodes", element: <NodesPage /> },
-  { path: "/nodes/devices", element: <NodesPage /> },
-  { path: "/nodes/images", element: <NodesPage /> },
-  { path: "/nodes/sync", element: <NodesPage /> },
+  { path: "/infrastructure", element: withSuspense(<InfrastructurePage />) },
+  { path: "/admin/interfaces", element: withSuspense(<InterfaceManagerPage />) },
+  { path: "/admin/settings", element: withSuspense(<AdminSettingsPage />) },
+  { path: "/admin/users", element: withSuspense(<UserManagementPage />) },
+  { path: "/nodes", element: withSuspense(<NodesPage />) },
+  { path: "/nodes/devices", element: withSuspense(<NodesPage />) },
+  { path: "/nodes/images", element: withSuspense(<NodesPage />) },
+  { path: "/nodes/sync", element: withSuspense(<NodesPage />) },
   { path: "/labs", element: <Navigate to="/" replace /> },
   { path: "/labs/:labId", element: <Navigate to="/" replace /> },
   { path: "/studio", element: <Navigate to="/" replace /> },
-  { path: "/studio/console/:labId/:nodeId", element: <StudioConsolePage /> },
+  { path: "/studio/console/:labId/:nodeId", element: withSuspense(<StudioConsolePage />) },
   { path: "*", element: <Navigate to="/" replace /> },
 ]);
 
