@@ -19,6 +19,7 @@ const defaultPreferences: ThemePreferences = {
   mode: 'dark',
   backgroundId: getSuggestedBackgroundForTheme(DEFAULT_THEME_ID),
   backgroundOpacity: 50,
+  taskLogOpacity: 92,
   favoriteBackgrounds: [],
 };
 
@@ -38,6 +39,7 @@ function loadPreferences(): ThemePreferences {
         mode: parsed.mode || 'dark',
         backgroundId: parsed.backgroundId || getSuggestedBackgroundForTheme(parsed.themeId || DEFAULT_THEME_ID),
         backgroundOpacity: typeof parsed.backgroundOpacity === 'number' ? parsed.backgroundOpacity : 50,
+        taskLogOpacity: typeof parsed.taskLogOpacity === 'number' ? parsed.taskLogOpacity : 92,
         favoriteBackgrounds: Array.isArray(parsed.favoriteBackgrounds) ? parsed.favoriteBackgrounds : [],
       };
     }
@@ -87,7 +89,24 @@ function saveCustomThemes(themes: Theme[]): void {
 /**
  * Apply theme colors to DOM via CSS custom properties
  */
-function applyThemeToDOM(theme: Theme, effectiveMode: 'light' | 'dark'): void {
+function hexToRgbChannels(hex: string): string | null {
+  const sanitized = hex.replace('#', '').trim();
+  if (sanitized.length === 3) {
+    const r = parseInt(sanitized[0] + sanitized[0], 16);
+    const g = parseInt(sanitized[1] + sanitized[1], 16);
+    const b = parseInt(sanitized[2] + sanitized[2], 16);
+    return `${r} ${g} ${b}`;
+  }
+  if (sanitized.length === 6) {
+    const r = parseInt(sanitized.slice(0, 2), 16);
+    const g = parseInt(sanitized.slice(2, 4), 16);
+    const b = parseInt(sanitized.slice(4, 6), 16);
+    return `${r} ${g} ${b}`;
+  }
+  return null;
+}
+
+function applyThemeToDOM(theme: Theme, effectiveMode: 'light' | 'dark', taskLogOpacity: number): void {
   const root = document.documentElement;
 
   // Apply dark class for Tailwind
@@ -121,6 +140,11 @@ function applyThemeToDOM(theme: Theme, effectiveMode: 'light' | 'dark'): void {
   root.style.setProperty('--color-canvas-grid', modeColors.canvasGrid);
   root.style.setProperty('--color-node-glow', modeColors.nodeGlow);
   root.style.setProperty('--color-scrollbar-thumb', modeColors.scrollbarThumb);
+
+  const surfaceChannels = hexToRgbChannels(modeColors.bgSurface) || '255 255 255';
+  const clampedOpacity = Math.max(0, Math.min(100, taskLogOpacity)) / 100;
+  root.style.setProperty('--tasklog-panel-bg', surfaceChannels);
+  root.style.setProperty('--tasklog-opacity', clampedOpacity.toFixed(2));
 }
 
 function applyBackgroundToDOM(backgroundId: string, opacity: number): void {
@@ -209,8 +233,8 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
   // Apply theme to DOM whenever theme or mode changes
   useEffect(() => {
-    applyThemeToDOM(theme, effectiveMode);
-  }, [theme, effectiveMode]);
+    applyThemeToDOM(theme, effectiveMode, preferences.taskLogOpacity);
+  }, [theme, effectiveMode, preferences.taskLogOpacity]);
 
   useEffect(() => {
     applyBackgroundToDOM(selectedBackground.id, preferences.backgroundOpacity);
@@ -249,6 +273,11 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   const setBackgroundOpacity = useCallback((opacity: number) => {
     const clampedOpacity = Math.max(0, Math.min(100, opacity));
     setPreferences(prev => ({ ...prev, backgroundOpacity: clampedOpacity }));
+  }, []);
+
+  const setTaskLogOpacity = useCallback((opacity: number) => {
+    const clampedOpacity = Math.max(0, Math.min(100, opacity));
+    setPreferences(prev => ({ ...prev, taskLogOpacity: clampedOpacity }));
   }, []);
 
   const toggleFavoriteBackground = useCallback((backgroundId: string) => {
@@ -346,6 +375,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     theme,
     backgroundId: selectedBackground.id,
     backgroundOpacity: preferences.backgroundOpacity,
+    taskLogOpacity: preferences.taskLogOpacity,
     mode: preferences.mode === 'system' ? effectiveMode : preferences.mode,
     effectiveMode,
     preferences,
@@ -354,6 +384,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setTheme,
     setBackground,
     setBackgroundOpacity,
+    setTaskLogOpacity,
     toggleFavoriteBackground,
     setMode,
     toggleMode,
@@ -364,11 +395,13 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     theme,
     selectedBackground.id,
     preferences.backgroundOpacity,
+    preferences.taskLogOpacity,
     effectiveMode,
     preferences,
     availableThemes,
     setBackground,
     setBackgroundOpacity,
+    setTaskLogOpacity,
     toggleFavoriteBackground,
     setTheme,
     setMode,

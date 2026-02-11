@@ -620,6 +620,39 @@ describe("PropertiesPanel", () => {
         expect(screen.getByText("MB")).toBeInTheDocument();
       });
 
+      it("resets CPU and memory to device defaults", async () => {
+        const user = userEvent.setup();
+
+        render(<PropertiesPanel {...defaultProps} />);
+
+        await user.click(screen.getByText("hardware"));
+
+        await user.click(screen.getByText("Reset"));
+
+        expect(mockOnUpdateNode).toHaveBeenCalledWith("node-1", {
+          cpu: 2,
+          memory: 2048,
+          disk_driver: undefined,
+          nic_driver: undefined,
+          machine_type: undefined,
+        });
+      });
+
+      it("locks hardware inputs when toggled", async () => {
+        const user = userEvent.setup();
+        const { container } = render(<PropertiesPanel {...defaultProps} />);
+
+        await user.click(screen.getByText("hardware"));
+
+        await user.click(screen.getByText("Unlocked"));
+
+        const cpuSlider = container.querySelector('input[type="range"]') as HTMLInputElement;
+        const ramInput = container.querySelector('input[type="number"]') as HTMLInputElement;
+
+        expect(cpuSlider).toBeDisabled();
+        expect(ramInput).toBeDisabled();
+      });
+
       it("updates CPU when slider is changed", async () => {
         const user = userEvent.setup();
         const { container } = render(<PropertiesPanel {...defaultProps} />);

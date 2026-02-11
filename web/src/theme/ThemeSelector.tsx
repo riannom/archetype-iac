@@ -97,6 +97,7 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
     theme,
     backgroundId,
     backgroundOpacity,
+    taskLogOpacity,
     effectiveMode,
     preferences,
     availableThemes,
@@ -104,6 +105,7 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
     setTheme,
     setBackground,
     setBackgroundOpacity,
+    setTaskLogOpacity,
     toggleFavoriteBackground,
     setMode,
     importTheme,
@@ -452,6 +454,19 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
                 max={100}
                 value={backgroundOpacity}
                 onChange={(event) => setBackgroundOpacity(parseInt(event.target.value, 10))}
+                className="w-full"
+              />
+            </div>
+            <div className="mt-4">
+              <label className="block text-sm text-stone-700 dark:text-stone-300 mb-2">
+                Task Log Opacity: {taskLogOpacity}%
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={taskLogOpacity}
+                onChange={(event) => setTaskLogOpacity(parseInt(event.target.value, 10))}
                 className="w-full"
               />
             </div>

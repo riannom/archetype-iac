@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import DetailPopup from './DetailPopup';
 
 interface SavedConfig {
@@ -30,7 +30,8 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
   const [activeTab, setActiveTab] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const copyTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isOpen || !labId) return;
@@ -68,12 +69,62 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
     fetchConfigs();
   }, [isOpen, labId, nodeName, studioRequest]);
 
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const setCopyStatusWithTimeout = (status: 'success' | 'error') => {
+    setCopyStatus(status);
+    if (copyTimeoutRef.current) {
+      window.clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = window.setTimeout(() => {
+      setCopyStatus('idle');
+    }, 2000);
+  };
+
+  const fallbackCopy = (text: string) => {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-1000px';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+      const success = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return success;
+    } catch {
+      return false;
+    }
+  };
+
   const handleCopy = async () => {
     const activeConfig = configs.find(c => c.node_name === activeTab);
     if (activeConfig) {
-      await navigator.clipboard.writeText(activeConfig.config);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(activeConfig.config);
+          setCopyStatusWithTimeout('success');
+          return;
+        }
+      } catch {
+        // Fall back below
+      }
+
+      const success = fallbackCopy(activeConfig.config);
+      if (success) {
+        setCopyStatusWithTimeout('success');
+      } else {
+        setCopyStatusWithTimeout('error');
+      }
     }
   };
 
@@ -144,8 +195,12 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
                 onClick={handleCopy}
                 className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 rounded-lg transition-colors"
               >
-                <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`} />
-                {copied ? 'Copied!' : 'Copy'}
+                <i
+                  className={`fa-solid ${
+                    copyStatus === 'success' ? 'fa-check' : copyStatus === 'error' ? 'fa-triangle-exclamation' : 'fa-copy'
+                  }`}
+                />
+                {copyStatus === 'success' ? 'Copied!' : copyStatus === 'error' ? 'Copy failed' : 'Copy'}
               </button>
             </div>
           )}

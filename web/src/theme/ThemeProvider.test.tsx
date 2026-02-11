@@ -96,7 +96,7 @@ describe("ThemeProvider", () => {
     it("loads stored preferences", () => {
       localStorage.setItem(
         "archetype_theme_prefs",
-        JSON.stringify({ themeId: "ocean", mode: "light", backgroundId: "stars", backgroundOpacity: 75 })
+        JSON.stringify({ themeId: "ocean", mode: "light", backgroundId: "stars", backgroundOpacity: 75, taskLogOpacity: 80 })
       );
 
       render(

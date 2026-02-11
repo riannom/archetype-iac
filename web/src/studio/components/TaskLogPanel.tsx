@@ -250,7 +250,10 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   const showLogContent = isLogTabActive || !showConsoles;
 
   return (
-    <div className="shrink-0 bg-white/95 dark:bg-stone-950/95 backdrop-blur-md border-t border-stone-200 dark:border-stone-800">
+    <div
+      className="shrink-0 backdrop-blur-md border-t border-stone-200 dark:border-stone-800"
+      style={{ backgroundColor: 'rgb(var(--tasklog-panel-bg) / var(--tasklog-opacity, 0.92))' }}
+    >
       {/* Header with integrated resize handle at top */}
       <div
         className={`flex justify-between items-center px-4 py-2 select-none ${
@@ -305,7 +308,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
         <>
           {/* Tab bar - only show when there are console tabs */}
           {hasConsoleTabs && (
-            <div className="flex items-center border-b border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-900/50 px-2">
+            <div className="flex items-center border-b border-stone-200 dark:border-stone-800 bg-transparent px-2">
               {/* Log tab */}
               <button
                 onClick={() => onSelectTab?.('log')}
@@ -436,7 +439,11 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
                   const isReady = !isRunning || nodeState?.is_ready !== false;
 
                   return (
-                    <div key={tab.nodeId} className="h-full bg-[#0b0f16]">
+                    <div
+                      key={tab.nodeId}
+                      className="h-full"
+                      style={{ backgroundColor: 'rgb(11 15 22 / var(--tasklog-opacity, 0.92))' }}
+                    >
                       <TerminalSession
                         labId={labId}
                         nodeId={tab.nodeId}
