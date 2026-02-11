@@ -80,4 +80,19 @@ describe('SnapshotList', () => {
 
     expect(baseProps.onSetActiveConfig).toHaveBeenCalledWith('r1', 's1');
   });
+
+  it('toggles compare mode and downloads node snapshots', () => {
+    render(
+      <SnapshotList
+        {...baseProps}
+        nodeSnapshots={[snapshot, { ...snapshot, id: 's2', created_at: '2024-01-02T00:00:00Z' }]}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Compare'));
+    expect(baseProps.onSetViewMode).toHaveBeenCalledWith('compare');
+
+    fireEvent.click(screen.getByTitle('Download all snapshots'));
+    expect(baseProps.onDownloadNode).toHaveBeenCalledWith('r1');
+  });
 });
