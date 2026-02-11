@@ -92,30 +92,30 @@ const DeviceConfigCard: React.FC<DeviceConfigCardProps> = ({
           </div>
 
           <div className="flex items-center gap-2 mt-1">
-            <span className="text-[10px] text-stone-500 dark:text-stone-400 font-medium">
+            <span className="text-[10px] text-stone-800 dark:text-stone-400 font-medium">
               {device.vendor}
             </span>
             <span className="w-1 h-1 rounded-full bg-stone-300 dark:bg-stone-600"></span>
-            <span className="text-[10px] text-stone-400 dark:text-stone-500 font-mono">
+            <span className="text-[10px] text-stone-700 dark:text-stone-500 font-mono">
               {device.id}
             </span>
             <span className="w-1 h-1 rounded-full bg-stone-300 dark:bg-stone-600"></span>
-            <span className="text-[10px] text-stone-400 dark:text-stone-500 capitalize">
+            <span className="text-[10px] text-stone-700 dark:text-stone-500 capitalize">
               {device.type}
             </span>
           </div>
 
           {/* Resource summary */}
           <div className="flex items-center gap-3 mt-2">
-            <div className="flex items-center gap-1 text-[10px] text-stone-400 dark:text-stone-500">
+            <div className="flex items-center gap-1 text-[10px] text-stone-800 dark:text-stone-500">
               <i className="fa-solid fa-memory text-[8px]"></i>
               <span>{formatMemory(device.memory)}</span>
             </div>
-            <div className="flex items-center gap-1 text-[10px] text-stone-400 dark:text-stone-500">
+            <div className="flex items-center gap-1 text-[10px] text-stone-800 dark:text-stone-500">
               <i className="fa-solid fa-microchip text-[8px]"></i>
               <span>{device.cpu || 1} CPU</span>
             </div>
-            <div className="flex items-center gap-1 text-[10px] text-stone-400 dark:text-stone-500">
+            <div className="flex items-center gap-1 text-[10px] text-stone-800 dark:text-stone-500">
               <i className="fa-solid fa-ethernet text-[8px]"></i>
               <span>{device.maxPorts || 8} ports</span>
             </div>

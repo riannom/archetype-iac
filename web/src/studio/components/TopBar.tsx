@@ -87,7 +87,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
 
           <div className="flex items-center gap-2 px-3 py-1 glass-control rounded-full border">
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-            <span className="text-[11px] text-stone-500 dark:text-stone-400 font-medium uppercase tracking-tight">Lab:</span>
+            <span className="text-[11px] text-stone-700 dark:text-stone-400 font-medium uppercase tracking-tight">Lab:</span>
             {isEditing ? (
               <input
                 ref={inputRef}
@@ -114,7 +114,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
         <div className="flex items-center gap-4">
           <button
             onClick={onExit}
-            className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
+            className="flex items-center gap-2 px-3 py-2 glass-control text-stone-800 dark:text-stone-300 rounded-lg transition-all"
             title="Back to Dashboard"
           >
             <i className="fa-solid fa-arrow-left text-xs"></i>
@@ -125,7 +125,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
 
           <button
             onClick={() => setShowNotificationSettings(true)}
-            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all"
+            className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
             title="Notification Settings"
           >
             <i className="fa-solid fa-gear"></i>
@@ -133,7 +133,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
 
           <button
             onClick={() => setShowThemeSelector(true)}
-            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all"
+            className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
             title="Theme Settings"
           >
             <i className="fa-solid fa-palette"></i>
@@ -141,7 +141,7 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
 
           <button
             onClick={toggleMode}
-            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-300 hover:text-sage-600 dark:hover:text-sage-400 rounded-xl transition-all"
+            className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
             title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
           >
             <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'}`}></i>

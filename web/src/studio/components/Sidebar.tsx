@@ -321,7 +321,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
   return (
     <div className="w-64 bg-white/40 dark:bg-stone-900/40 backdrop-blur-md border-r border-stone-200 dark:border-stone-800 flex flex-col h-full overflow-hidden">
       <div className="p-4 border-b border-stone-200 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-800/30">
-        <h2 className="text-sm font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400 flex items-center gap-2">
+        <h2 className="text-sm font-bold uppercase tracking-wider text-stone-700 dark:text-stone-400 flex items-center gap-2">
           <i className="fa-solid fa-boxes-stacked text-sage-600 dark:text-sage-500"></i>
           Library
         </h2>
@@ -346,7 +346,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
         {/* External Networks Section */}
         {onAddExternalNetwork && (
           <div className="mb-4">
-            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest bg-stone-200/85 dark:bg-stone-800 border-y border-stone-300 dark:border-stone-800 sticky top-0 z-10">
+            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-700 dark:text-stone-400 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10">
               <span>Connectivity</span>
             </div>
             <div className="p-2">
@@ -364,7 +364,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
                 </div>
                 <div className="flex-1 text-left">
                   <div className="text-[11px] font-bold text-stone-700 dark:text-stone-200">{externalNetworkTool.label}</div>
-                  <div className="text-[9px] text-stone-500 dark:text-stone-400">Connect to VLAN or bridge</div>
+                  <div className="text-[9px] text-stone-700 dark:text-stone-400">Connect to VLAN or bridge</div>
                 </div>
                 <div className="opacity-0 group-hover:opacity-100 transition-opacity">
                   <i className="fa-solid fa-plus-circle text-blue-500 dark:text-blue-400"></i>
@@ -376,7 +376,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
 
         {/* Tools Section */}
         <div className="mb-4">
-          <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest bg-stone-200/85 dark:bg-stone-800 border-y border-stone-300 dark:border-stone-800 sticky top-0 z-10">
+          <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-700 dark:text-stone-400 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10">
             <span>Annotations</span>
           </div>
           <div className="p-2 grid grid-cols-2 gap-2">
@@ -386,8 +386,8 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
                 onClick={() => onAddAnnotation(tool.type)}
                 className="flex flex-col items-center justify-center p-2 rounded-lg bg-white dark:bg-stone-800/50 hover:bg-stone-50 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-700 hover:border-sage-300 dark:hover:border-sage-500/50 transition-all gap-1 group shadow-sm"
               >
-                <i className={`fa-solid ${tool.icon} text-stone-400 group-hover:text-sage-600 dark:group-hover:text-sage-500 text-xs`}></i>
-                <span className="text-[9px] text-stone-500 dark:text-stone-500 group-hover:text-stone-700 dark:group-hover:text-stone-200 font-bold">{tool.label}</span>
+                <i className={`fa-solid ${tool.icon} text-stone-600 dark:text-stone-500 group-hover:text-sage-700 dark:group-hover:text-sage-500 text-xs`}></i>
+                <span className="text-[9px] text-stone-700 dark:text-stone-500 group-hover:text-stone-900 dark:group-hover:text-stone-200 font-bold">{tool.label}</span>
               </button>
             ))}
           </div>
@@ -397,7 +397,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
           <div key={category.name} className="mb-2">
             <button
               onClick={() => toggleCategory(category.name)}
-              className="w-full px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest bg-stone-200/85 dark:bg-stone-800 border-y border-stone-300 dark:border-stone-800 sticky top-0 z-10 hover:bg-stone-300/85 dark:hover:bg-stone-700 transition-colors"
+              className="w-full px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-700 dark:text-stone-400 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10 hover:bg-stone-500/50 dark:hover:bg-stone-700 transition-colors"
             >
               <span className="flex items-center gap-2">
                 {category.name}
@@ -421,12 +421,12 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
                     <div key={sub.name} className="mt-2">
                       <button
                         onClick={() => toggleSubCategory(category.name, sub.name)}
-                        className="w-full px-3 py-1 text-[9px] font-bold text-stone-400 dark:text-stone-600 uppercase flex items-center gap-2 hover:text-stone-600 dark:hover:text-stone-400 transition-colors"
+                        className="w-full px-3 py-1 text-[9px] font-bold text-stone-600 dark:text-stone-600 uppercase flex items-center gap-2 hover:text-stone-800 dark:hover:text-stone-400 transition-colors"
                       >
                         <div className="h-px flex-1 bg-stone-200 dark:bg-stone-800"></div>
                         <span className="flex items-center gap-1">
                           {sub.name}
-                          <span className="font-normal text-stone-400 dark:text-stone-600">
+                          <span className="font-normal text-stone-600 dark:text-stone-600">
                             ({sub.models.length})
                           </span>
                           <i className={`fa-solid fa-chevron-down text-[7px] transition-transform duration-200 ${
@@ -459,7 +459,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
         {filteredCategories.length === 0 && (
           <div className="p-4 text-center">
             <i className="fa-solid fa-search text-2xl text-stone-300 dark:text-stone-700 mb-2" />
-            <p className="text-xs text-stone-500 dark:text-stone-400">
+            <p className="text-xs text-stone-700 dark:text-stone-400">
               No devices match your filters
             </p>
             <button
@@ -472,13 +472,13 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
         )}
       </div>
 
-      <div className="p-4 border-t border-stone-200 dark:border-stone-800 glass-surface">
-        <div className="flex flex-col gap-2 p-3 glass-control rounded-lg">
+      <div className="p-4 border-t border-stone-300/40 dark:border-stone-700/45 bg-stone-200/15 dark:bg-stone-900/20 backdrop-blur-sm">
+        <div className="flex flex-col gap-2 p-3 rounded-lg border border-stone-600/40 dark:border-stone-600/50 bg-stone-500/28 dark:bg-stone-800/46 backdrop-blur-md">
           <div className="flex items-center gap-2 text-[10px] font-bold text-sage-600 dark:text-sage-400 uppercase tracking-tight">
             <i className="fa-solid fa-lightbulb"></i>
             <span>Network Canvas</span>
           </div>
-          <p className="text-[9px] text-stone-500 dark:text-stone-400 leading-relaxed">
+          <p className="text-[9px] text-stone-700 dark:text-stone-400 leading-relaxed">
             Click or drag devices onto the grid to build your topology.
           </p>
         </div>

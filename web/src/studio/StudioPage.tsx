@@ -1869,7 +1869,9 @@ const StudioPage: React.FC = () => {
         <button
           onClick={() => setView('designer')}
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'designer' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+            view === 'designer'
+              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
+              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
           }`}
         >
           Designer
@@ -1877,7 +1879,9 @@ const StudioPage: React.FC = () => {
         <button
           onClick={() => setView('runtime')}
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'runtime' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+            view === 'runtime'
+              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
+              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
           }`}
         >
           Runtime
@@ -1885,7 +1889,9 @@ const StudioPage: React.FC = () => {
         <button
           onClick={() => setView('configs')}
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'configs' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+            view === 'configs'
+              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
+              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
           }`}
         >
           Configs
@@ -1893,7 +1899,9 @@ const StudioPage: React.FC = () => {
         <button
           onClick={() => setView('logs')}
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'logs' ? 'text-sage-600 dark:text-sage-500 border-sage-600 dark:border-sage-500' : 'text-stone-400 dark:text-stone-500 border-transparent'
+            view === 'logs'
+              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
+              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
           }`}
         >
           Logs

@@ -113,7 +113,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
       {/* Search bar */}
       <div className="p-3">
         <div className="relative">
-          <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xs" />
+          <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 dark:text-stone-400 text-xs" />
           <input
             type="text"
             placeholder="Search devices, vendors, tags..."
@@ -124,7 +124,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           {searchQuery && (
             <button
               onClick={() => onSearchChange('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-500 hover:text-stone-700 dark:hover:text-stone-300"
             >
               <i className="fa-solid fa-xmark text-xs" />
             </button>
@@ -133,10 +133,16 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
       </div>
 
       {/* Filter toggle */}
-      <div className="px-3 pb-2">
+      <div
+        className="mx-3 mb-2 px-2 py-1.5 rounded-lg border"
+        style={{
+          backgroundColor: 'color-mix(in srgb, var(--color-accent-400) 24%, transparent)',
+          borderColor: 'color-mix(in srgb, var(--color-accent-500) 28%, transparent)',
+        }}
+      >
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="flex items-center gap-2 text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wide hover:text-stone-700 dark:hover:text-stone-200 transition-colors"
+          className="flex items-center gap-2 text-[10px] font-bold text-stone-700 dark:text-stone-400 uppercase tracking-wide hover:text-stone-900 dark:hover:text-stone-200 transition-colors"
         >
           <i className={`fa-solid fa-filter ${hasActiveFilters ? 'text-sage-500' : ''}`} />
           <span>Filters</span>
@@ -154,7 +160,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
         <div className="px-3 pb-3 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
           {/* Image Status */}
           <div>
-            <div className="text-[9px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest mb-1.5">
+            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-500 uppercase tracking-widest mb-1.5">
               Image Status
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -187,7 +193,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
 
           {/* Vendors */}
           <div>
-            <div className="text-[9px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest mb-1.5">
+            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-500 uppercase tracking-widest mb-1.5">
               Vendor
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -201,7 +207,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                 />
               ))}
               {vendors.length > 8 && (
-                <span className="text-[10px] text-stone-400 dark:text-stone-500 self-center">
+                <span className="text-[10px] text-stone-600 dark:text-stone-500 self-center">
                   +{vendors.length - 8} more
                 </span>
               )}
@@ -210,7 +216,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
 
           {/* Types */}
           <div>
-            <div className="text-[9px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest mb-1.5">
+            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-500 uppercase tracking-widest mb-1.5">
               Type
             </div>
             <div className="flex flex-wrap gap-1.5">
