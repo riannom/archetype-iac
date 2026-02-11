@@ -40,8 +40,8 @@ async def test_healthz_reports_monitor_counts(monkeypatch):
     monkeypatch.setattr(scheduler.db, "engine", DummyEngine(pool=pool))
 
     task_active = asyncio.create_task(asyncio.sleep(0.1))
-    task_done = asyncio.create_task(asyncio.sleep(0))
-    await asyncio.sleep(0)
+    task_done = asyncio.get_running_loop().create_future()
+    task_done.set_result(None)
 
     scheduler._monitor_tasks = [task_active, task_done]
 
@@ -81,6 +81,7 @@ async def test_startup_starts_monitors(monkeypatch):
     monkeypatch.setattr(scheduler.settings, "cleanup_event_driven_enabled", True)
 
     await scheduler.startup()
+    await asyncio.sleep(0)
 
     assert len(scheduler._monitor_tasks) == 8
     assert "cleanup_event_monitor" in started
@@ -110,3 +111,20 @@ async def test_shutdown_cancels_tasks(monkeypatch):
     assert closed["called"] is True
 
 
+@pytest.mark.asyncio
+async def test_metrics_endpoint_returns_prometheus_payload(monkeypatch):
+    monkeypatch.setattr(
+        "app.metrics.get_metrics",
+        lambda: (b"test_metric 1\n", "text/plain"),
+    )
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/metrics",
+        "headers": [],
+        "client": ("127.0.0.1", 1234),
+    }
+    request = Request(scope)
+    response = await scheduler.metrics(request)
+    assert response.status_code == 200
+    assert response.body == b"test_metric 1\n"

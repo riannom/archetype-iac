@@ -17,6 +17,8 @@ KNOWN_METRICS = {
     "archetype_nodes_ready",
     "archetype_jobs_total",
     "archetype_job_duration_seconds",
+    "archetype_job_queue_wait_seconds",
+    "archetype_job_failures_total",
     "archetype_jobs_active",
     "archetype_agents_online",
     "archetype_agents_total",
