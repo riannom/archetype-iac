@@ -4,6 +4,27 @@
 # Configure Alertmanager to route these alerts to your notification channels.
 
 groups:
+  - name: archetype-recording
+    rules:
+      - record: archetype:job_duration:p95_5m
+        expr: histogram_quantile(0.95, sum by (le, action) (rate(archetype_job_duration_seconds_bucket{job="archetype-api"}[5m])))
+      - record: archetype:job_queue_wait:p95_5m
+        expr: histogram_quantile(0.95, sum by (le, action) (rate(archetype_job_queue_wait_seconds_bucket{job="archetype-api"}[5m])))
+      - record: archetype:job_failure_rate:5m
+        expr: sum(rate(archetype_jobs_total{job="archetype-api",status="failed"}[5m])) / clamp_min(sum(rate(archetype_jobs_total{job="archetype-api"}[5m])), 1e-9)
+      - record: archetype:nlm_container_deploy:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job="archetype-api",phase="container_deploy",status="success"}[5m])) by (le))
+      - record: archetype:nlm_container_start:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job="archetype-api",phase="container_start",status="success"}[5m])) by (le))
+      - record: archetype:coverage:jobs_started:2h
+        expr: sum(increase(archetype_jobs_total{job="archetype-api",status="started"}[2h]))
+      - record: archetype:coverage:job_duration_samples:2h
+        expr: sum(increase(archetype_job_duration_seconds_count{job="archetype-api"}[2h]))
+      - record: archetype:coverage:job_queue_samples:2h
+        expr: sum(increase(archetype_job_queue_wait_seconds_count{job="archetype-api"}[2h]))
+      - record: archetype:coverage:nlm_samples:2h
+        expr: sum(increase(archetype_nlm_phase_duration_seconds_count{job="archetype-api"}[2h]))
+
   - name: archetype-jobs
     rules:
       # Alert when a job has been running for more than 20 minutes
@@ -12,7 +33,7 @@ groups:
           sum(archetype_jobs_active{job="archetype-api"}) > 0
           and
           (
-            (sum(increase(archetype_jobs_total{job=~"archetype-(api|worker)",status=~"completed|failed"}[20m])) or on() vector(0)) == 0
+            (sum(increase(archetype_jobs_total{job="archetype-api",status=~"completed|failed"}[20m])) or on() vector(0)) == 0
           )
         for: 20m
         labels:
@@ -24,10 +45,7 @@ groups:
       # Alert when job failure rate is high
       - alert: HighJobFailureRate
         expr: |
-          (
-            sum(rate(archetype_jobs_total{job=~"archetype-(api|worker)",status="failed"}[5m])) /
-            sum(rate(archetype_jobs_total{job=~"archetype-(api|worker)"}[5m]))
-          ) > 0.3
+          archetype:job_failure_rate:5m > 0.3
         for: 5m
         labels:
           severity: warning
@@ -38,14 +56,12 @@ groups:
       # Alert when worker is executing jobs but key latency metrics are missing
       - alert: JobMetricsCoverageGap
         expr: |
-          (
-            sum(increase(archetype_jobs_total{job=~"archetype-(api|worker)",status="started"}[2h])) > 0
-          )
+          (archetype:coverage:jobs_started:2h > 0)
           and
           (
-            (sum(increase(archetype_job_duration_seconds_count{job=~"archetype-(api|worker)"}[2h])) == 0)
+            (archetype:coverage:job_duration_samples:2h == 0)
             or
-            (sum(increase(archetype_job_queue_wait_seconds_count{job=~"archetype-(api|worker)"}[2h])) == 0)
+            (archetype:coverage:job_queue_samples:2h == 0)
           )
         for: 30m
         labels:
@@ -58,11 +74,11 @@ groups:
       - alert: NlmMetricsCoverageGap
         expr: |
           (
-            sum(increase(archetype_jobs_total{job=~"archetype-(api|worker)",action="sync",status="started"}[2h])) > 0
+            sum(increase(archetype_jobs_total{job="archetype-api",action="sync",status="started"}[2h])) > 0
           )
           and
           (
-            sum(increase(archetype_nlm_phase_duration_seconds_count{job=~"archetype-(api|worker)"}[2h])) == 0
+            archetype:coverage:nlm_samples:2h == 0
           )
         for: 30m
         labels:
@@ -173,7 +189,7 @@ groups:
     rules:
       # Alert when node deploy phase P95 is slow
       - alert: SlowNodeDeploy
-        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=~"archetype-(api|worker)",phase="container_deploy",status="success"}[10m])) by (le)) > 120
+        expr: archetype:nlm_container_deploy:p95_5m > 120
         for: 10m
         labels:
           severity: warning
@@ -183,7 +199,7 @@ groups:
 
       # Alert when container start P95 is very slow
       - alert: SlowBootWait
-        expr: histogram_quantile(0.95, sum(rate(archetype_nlm_phase_duration_seconds_bucket{job=~"archetype-(api|worker)",phase="container_start",status="success"}[15m])) by (le)) > 300
+        expr: archetype:nlm_container_start:p95_5m > 300
         for: 15m
         labels:
           severity: warning

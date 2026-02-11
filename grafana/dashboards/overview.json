@@ -13,7 +13,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_job_duration_seconds_bucket{job=~\"archetype-(api|worker)\"}[5m])) by (le, action))",
+          "expr": "archetype:job_duration:p95_5m",
           "legendFormat": "P95 {{action}}",
           "refId": "A"
         }
@@ -137,7 +137,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(archetype_job_queue_wait_seconds_bucket{job=~\"archetype-(api|worker)\"}[5m])) by (le, action))",
+          "expr": "archetype:job_queue_wait:p95_5m",
           "legendFormat": "P95 {{action}}",
           "refId": "A"
         }
@@ -155,7 +155,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "targets": [
         {
-          "expr": "sum by (action, reason) (increase(archetype_job_failures_total{job=~\"archetype-(api|worker)\"}[1h]))",
+          "expr": "sum by (action, reason) (increase(archetype_job_failures_total{job=\"archetype-api\"}[1h]))",
           "legendFormat": "{{action}} / {{reason}}",
           "refId": "A"
         }
@@ -173,22 +173,22 @@
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
       "targets": [
         {
-          "expr": "sum(increase(archetype_jobs_total{job=~\"archetype-(api|worker)\",status=\"started\"}[2h]))",
+          "expr": "archetype:coverage:jobs_started:2h",
           "legendFormat": "jobs_started",
           "refId": "A"
         },
         {
-          "expr": "sum(increase(archetype_job_duration_seconds_count{job=~\"archetype-(api|worker)\"}[2h]))",
+          "expr": "archetype:coverage:job_duration_samples:2h",
           "legendFormat": "job_duration_samples",
           "refId": "B"
         },
         {
-          "expr": "sum(increase(archetype_job_queue_wait_seconds_count{job=~\"archetype-(api|worker)\"}[2h]))",
+          "expr": "archetype:coverage:job_queue_samples:2h",
           "legendFormat": "job_queue_wait_samples",
           "refId": "C"
         },
         {
-          "expr": "sum(increase(archetype_nlm_phase_duration_seconds_count{job=~\"archetype-(api|worker)\"}[2h]))",
+          "expr": "archetype:coverage:nlm_samples:2h",
           "legendFormat": "nlm_phase_samples",
           "refId": "D"
         }
