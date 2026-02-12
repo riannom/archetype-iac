@@ -102,3 +102,19 @@ class TestLibvirtProviderOverride:
         request_memory = None
         resolved = request_memory or vendor_config.memory_mb
         assert resolved == 2048  # fallback default
+
+    def test_unknown_device_fallback_logs_warning(self, caplog):
+        """Unknown non-intensive devices should log when generic fallback is used."""
+        from agent.vendors import get_libvirt_config
+
+        caplog.set_level("WARNING")
+        cfg = get_libvirt_config("unknown_device_xyz")
+        assert cfg.memory_mb == 2048
+        assert "using fallback defaults" in caplog.text
+
+    def test_memory_intensive_unknown_device_refuses_fallback(self):
+        """Memory-intensive unknown device IDs must fail fast instead of fallback."""
+        from agent.vendors import get_libvirt_config
+
+        with pytest.raises(ValueError, match="Refusing fallback defaults"):
+            get_libvirt_config("cat9000v-uadp-custom")

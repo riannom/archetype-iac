@@ -2274,7 +2274,15 @@ class DockerOVSPlugin:
                 container = client.containers.get(container_name)
                 return container.attrs["NetworkSettings"]["Networks"]
 
-            networks = await asyncio.to_thread(_get_container_networks)
+            try:
+                networks = await asyncio.to_thread(_get_container_networks)
+            except docker.errors.NotFound:
+                pruned = await self._prune_stale_container_endpoints(lab_id, container_name)
+                logger.warning(
+                    f"Container not found during endpoint discovery: {container_name}:{interface_name}. "
+                    f"Pruned {pruned} stale tracked endpoint(s)."
+                )
+                return None
 
             # Try each attached network to match EndpointID or NetworkID
             for net_name, net_info in networks.items():
@@ -2381,6 +2389,25 @@ class DockerOVSPlugin:
         except Exception as e:
             logger.error(f"Error discovering endpoint {container_name}:{interface_name}: {e}")
             return None
+
+    async def _prune_stale_container_endpoints(self, lab_id: str, container_name: str) -> int:
+        """Remove tracked endpoints bound to a container that no longer exists."""
+        stale_ids: list[str] = []
+        for endpoint_id, endpoint in self.endpoints.items():
+            if endpoint.container_name != container_name:
+                continue
+            network = self.networks.get(endpoint.network_id)
+            if network and network.lab_id != lab_id:
+                continue
+            stale_ids.append(endpoint_id)
+
+        for endpoint_id in stale_ids:
+            self.endpoints.pop(endpoint_id, None)
+
+        if stale_ids:
+            await self._mark_dirty_and_save()
+
+        return len(stale_ids)
 
     async def hot_connect(
         self,

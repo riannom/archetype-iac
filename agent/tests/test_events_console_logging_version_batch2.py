@@ -286,6 +286,42 @@ def test_console_extractor_clean_config(monkeypatch) -> None:
     assert "interface eth0" in cleaned
 
 
+def test_console_extractor_validate_config_rejects_truncated_echo() -> None:
+    import agent.console_extractor as console_extractor
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    valid, reason = extractor._validate_extracted_config(
+        config="erminal length 0",
+        command="show running-config",
+        paging_disable="terminal length 0",
+    )
+    assert valid is False
+    assert reason
+
+
+def test_console_extractor_validate_config_accepts_multiline_payload() -> None:
+    import agent.console_extractor as console_extractor
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    payload = (
+        "Current configuration : 1200 bytes\n"
+        "!\n"
+        "version 15.2\n"
+        "hostname Router\n"
+    )
+    valid, reason = extractor._validate_extracted_config(
+        config=payload,
+        command="show running-config",
+        paging_disable="terminal length 0",
+    )
+    assert valid is True
+    assert reason == ""
+
+
 def test_console_extractor_disable_paging_waits_for_prompt() -> None:
     import agent.console_extractor as console_extractor
 

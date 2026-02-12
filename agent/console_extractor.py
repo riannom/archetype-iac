@@ -196,6 +196,16 @@ class SerialConsoleExtractor:
 
             # Clean up the config output
             config = self._clean_config(config, command)
+            valid, reason = self._validate_extracted_config(
+                config=config,
+                command=command,
+                paging_disable=paging_disable,
+            )
+            if not valid:
+                return ExtractionResult(
+                    success=False,
+                    error=f"Captured output not recognized as configuration: {reason}",
+                )
 
             return ExtractionResult(success=True, config=config)
 
@@ -329,6 +339,35 @@ class SerialConsoleExtractor:
             lines = lines[:-1]
 
         return '\n'.join(lines)
+
+    def _validate_extracted_config(
+        self,
+        config: str,
+        command: str,
+        paging_disable: str = "",
+    ) -> tuple[bool, str]:
+        """Validate that extracted output looks like a real config payload."""
+        text = (config or "").strip()
+        if not text:
+            return False, "empty output"
+
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            return False, f"too few lines ({len(lines)})"
+
+        command_l = command.strip().lower()
+        paging_l = paging_disable.strip().lower()
+        echo_only = {command_l}
+        if paging_l:
+            echo_only.add(paging_l)
+        if all(ln.lower() in echo_only for ln in lines):
+            return False, "output contains only command echoes"
+
+        # Very short output is usually a prompt/echo artifact.
+        if len(text) < 64 and not any("config" in ln.lower() for ln in lines):
+            return False, f"output too short ({len(text)} bytes)"
+
+        return True, ""
 
     def _cleanup(self) -> None:
         """Clean up pexpect session.

@@ -184,6 +184,48 @@ async def test_discover_endpoint_returns_none_when_missing(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_discover_endpoint_prunes_stale_on_missing_container(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+
+    endpoint_id = "ep-stale"
+    network_id = "net-stale"
+    plugin.networks[network_id] = NetworkState(
+        network_id=network_id,
+        lab_id="lab",
+        interface_name="eth1",
+        bridge_name="arch-ovs",
+    )
+    plugin.endpoints[endpoint_id] = EndpointState(
+        endpoint_id=endpoint_id,
+        network_id=network_id,
+        interface_name="eth1",
+        host_veth="vhstale",
+        cont_veth="vcstale",
+        vlan_tag=100,
+        container_name="container-stale",
+    )
+
+    import docker as real_docker
+
+    class _MissingDocker:
+        class _Containers:
+            def get(self, _name):
+                raise real_docker.errors.NotFound("container missing")
+
+        @property
+        def containers(self):
+            return self._Containers()
+
+    monkeypatch.setattr(real_docker, "from_env", lambda **kwargs: _MissingDocker())
+    monkeypatch.setattr(plugin, "_mark_dirty_and_save", AsyncMock(return_value=None))
+
+    ep = await plugin._discover_endpoint("lab", "container-stale", "eth1")
+    assert ep is None
+    assert endpoint_id not in plugin.endpoints
+
+
+@pytest.mark.asyncio
 async def test_reconcile_queues_missing_veth(monkeypatch, tmp_path):
     monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
     plugin = DockerOVSPlugin()

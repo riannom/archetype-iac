@@ -850,6 +850,12 @@ class LibvirtProvider(Provider):
 
             # Look up libvirt config from vendor registry
             libvirt_config = get_libvirt_config(node.kind)
+            if getattr(libvirt_config, "source", "vendor") == "fallback":
+                logger.warning(
+                    f"VM config fallback in use for {log_name}: "
+                    f"unknown device kind '{node.kind}' resolved to generic defaults "
+                    "(override with explicit memory/cpu/machine_type/disk_driver/nic_driver)"
+                )
 
             # Build node config dict for helper methods
             # interface_count comes from topology (based on links) or defaults to 1
@@ -2059,6 +2065,13 @@ class LibvirtProvider(Provider):
             # Extract via SSH
             config = await self._extract_config_via_ssh(domain_name, kind, node_name)
             if config:
+                # Guard against saving clearly truncated captures.
+                if len(config.strip()) < 64:
+                    logger.warning(
+                        f"Discarding suspiciously short extracted config for {node_name} via SSH "
+                        f"({len(config.strip())} bytes)"
+                    )
+                    return None
                 logger.info(f"Extracted config from {node_name} via SSH ({len(config)} bytes)")
                 return (node_name, config)
             return None
@@ -2080,6 +2093,13 @@ class LibvirtProvider(Provider):
             )
 
             if result.success:
+                # Extra safety net even if extractor reported success.
+                if len(result.config.strip()) < 64:
+                    logger.warning(
+                        f"Discarding suspiciously short extracted config for {node_name} "
+                        f"({len(result.config.strip())} bytes)"
+                    )
+                    return None
                 logger.info(f"Extracted config from {node_name} ({len(result.config)} bytes)")
                 return (node_name, result.config)
             else:

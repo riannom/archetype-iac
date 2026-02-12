@@ -15,7 +15,10 @@ When adding a new vendor:
 
 from dataclasses import dataclass, field
 from enum import Enum
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class DeviceType(str, Enum):
@@ -1490,6 +1493,7 @@ class LibvirtRuntimeConfig:
     readiness_pattern: str | None
     readiness_timeout: int
     force_stop: bool = True  # Skip ACPI shutdown (most network VMs don't support it)
+    source: str = "vendor"  # "vendor" for matched profile, "fallback" for generic defaults
 
 
 def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
@@ -1510,6 +1514,30 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         kind = get_kind_for_device(device)
         config = _get_config_by_kind(kind)
     if not config:
+        # Memory-intensive VM families should never silently run with generic
+        # low defaults because failures are expensive and hard to diagnose.
+        memory_intensive_markers = (
+            "cat9000",
+            "cat9kv",
+            "uadp",
+            "q200",
+            "cat9800",
+            "fmcv",
+            "ftdv",
+        )
+        normalized = str(device).lower()
+        if any(marker in normalized for marker in memory_intensive_markers):
+            raise ValueError(
+                f"No vendor/libvirt profile found for memory-intensive device '{device}'. "
+                "Refusing fallback defaults. Define explicit device config (memory/cpu/"
+                "machine_type/disk_driver/nic_driver)."
+            )
+
+        logger.warning(
+            "No libvirt profile found for device '%s'; using fallback defaults "
+            "(memory=2048MB, cpu=1, machine_type=pc-q35-6.2, disk=virtio, nic=virtio)",
+            device,
+        )
         # Fallback to defaults
         return LibvirtRuntimeConfig(
             memory_mb=2048,
@@ -1522,6 +1550,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             readiness_pattern=None,
             readiness_timeout=120,
             force_stop=True,
+            source="fallback",
         )
 
     return LibvirtRuntimeConfig(
@@ -1535,6 +1564,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         readiness_pattern=config.readiness_pattern,
         readiness_timeout=config.readiness_timeout,
         force_stop=config.force_stop,
+        source="vendor",
     )
 
 
