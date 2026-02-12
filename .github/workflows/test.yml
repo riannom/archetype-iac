@@ -73,7 +73,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           cd web
-          NODE_OPTIONS="--max-old-space-size=4096" npm run test:coverage -- --run --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=1 --coverage.thresholds.lines=45 --coverage.thresholds.functions=40 --coverage.thresholds.statements=45 --coverage.thresholds.branches=40
+          NODE_OPTIONS="--max-old-space-size=6144" npm run test:coverage -- --run --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=1 --coverage.thresholds.lines=45 --coverage.thresholds.functions=40 --coverage.thresholds.statements=45 --coverage.thresholds.branches=40
 
   lint:
     name: Lint
