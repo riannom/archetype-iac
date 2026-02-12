@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConfigMapping } from './ConfigMapping';
 
 const snapshot = {
@@ -66,7 +66,9 @@ describe('ConfigMapping', () => {
 
     fireEvent.click(screen.getByText('Confirm'));
 
-    expect(onMapConfig).toHaveBeenCalledWith('s1', 'n1');
-    expect(onSetActiveConfig).toHaveBeenCalledWith('r1', 's1');
+    await waitFor(() => {
+      expect(onMapConfig).toHaveBeenCalledWith('s1', 'n1');
+      expect(onSetActiveConfig).toHaveBeenCalledWith('r1', 's1');
+    });
   });
 });

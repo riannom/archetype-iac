@@ -631,8 +631,8 @@ describe("PropertiesPanel", () => {
         await user.click(screen.getByText("Reset"));
 
         expect(mockOnUpdateNode).toHaveBeenCalledWith("node-1", {
-          cpu: 2,
-          memory: 2048,
+          cpu: 1,
+          memory: 1024,
           disk_driver: undefined,
           nic_driver: undefined,
           machine_type: undefined,

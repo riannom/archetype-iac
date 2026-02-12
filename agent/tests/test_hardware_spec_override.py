@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from schemas import CreateNodeRequest
+from agent.schemas import CreateNodeRequest
 
 
 class TestCreateNodeRequestHardwareFields:
@@ -83,7 +83,7 @@ class TestLibvirtProviderOverride:
 
     def test_request_params_override_vendor_config(self):
         """Request params should take priority over get_libvirt_config() defaults."""
-        from vendors import get_libvirt_config
+        from agent.vendors import get_libvirt_config
 
         # Get vendor defaults for a known device
         vendor_config = get_libvirt_config("unknown_device_xyz")
@@ -96,7 +96,7 @@ class TestLibvirtProviderOverride:
 
     def test_missing_request_params_fallback_to_vendor(self):
         """When request params are None, vendor defaults should be used."""
-        from vendors import get_libvirt_config
+        from agent.vendors import get_libvirt_config
 
         vendor_config = get_libvirt_config("unknown_device_xyz")
         request_memory = None

@@ -106,6 +106,8 @@ describe('useConfigManager', () => {
 
     act(() => {
       result.current.setViewMode('compare');
+    });
+    act(() => {
       result.current.handleSnapshotClick('s2');
       result.current.handleSnapshotClick('s1');
     });
