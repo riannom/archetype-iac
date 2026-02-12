@@ -265,7 +265,7 @@ describe("DeviceConfigCard", () => {
       render(<DeviceConfigCard {...defaultProps} isSelected={true} />);
 
       const card = screen.getByText("Arista cEOS").closest("div[class*='rounded-lg']");
-      expect(card).toHaveClass("bg-sage-50");
+      expect(card).toHaveClass("glass-surface");
       expect(card).toHaveClass("border-l-sage-500");
     });
 
@@ -280,7 +280,7 @@ describe("DeviceConfigCard", () => {
 
       // Custom devices when selected use the same sage styling as non-custom
       const card = screen.getByText("Arista cEOS").closest("div[class*='rounded-lg']");
-      expect(card).toHaveClass("bg-sage-50");
+      expect(card).toHaveClass("glass-surface");
       expect(card).toHaveClass("border-l-sage-500");
     });
 
@@ -288,7 +288,7 @@ describe("DeviceConfigCard", () => {
       render(<DeviceConfigCard {...defaultProps} isSelected={false} />);
 
       const card = screen.getByText("Arista cEOS").closest("div[class*='rounded-lg']");
-      expect(card).toHaveClass("bg-white");
+      expect(card).toHaveClass("glass-surface");
       expect(card).toHaveClass("border-stone-200");
     });
 
@@ -303,7 +303,7 @@ describe("DeviceConfigCard", () => {
 
       // Custom devices when not selected use subtle stone styling
       const card = screen.getByText("Arista cEOS").closest("div[class*='rounded-lg']");
-      expect(card).toHaveClass("bg-stone-50");
+      expect(card).toHaveClass("glass-surface");
       expect(card).toHaveClass("border-stone-300");
     });
   });

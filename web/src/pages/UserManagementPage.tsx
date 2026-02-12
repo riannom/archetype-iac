@@ -127,8 +127,9 @@ const UserManagementPage: React.FC = () => {
   const loadUsers = useCallback(async () => {
     try {
       const data = await apiRequest<UsersResponse>('/users');
-      setUsers(data.users);
-      setTotal(data.total);
+      const safeUsers = Array.isArray((data as any)?.users) ? (data as any).users : [];
+      setUsers(safeUsers);
+      setTotal(typeof (data as any)?.total === 'number' ? (data as any).total : safeUsers.length);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load users');

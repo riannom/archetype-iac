@@ -137,8 +137,14 @@ export default function InterfaceManagerPage() {
 
   const loadAgents = useCallback(async () => {
     try {
-      const data = await apiRequest<Agent[]>('/agents');
-      setAgents(data || []);
+      const data = await apiRequest<Agent[] | { agents?: Agent[] }>('/agents');
+      if (Array.isArray(data)) {
+        setAgents(data);
+      } else if (Array.isArray(data?.agents)) {
+        setAgents(data.agents);
+      } else {
+        setAgents([]);
+      }
     } catch (err) {
       console.error('Failed to load agents:', err);
     }
@@ -300,6 +306,7 @@ export default function InterfaceManagerPage() {
       <div className="px-10 py-4 border-b border-stone-200 dark:border-stone-800 glass-surface">
         <div className="max-w-7xl mx-auto flex items-center gap-4 flex-wrap">
           <select
+            aria-label="Host filter"
             value={filterHost}
             onChange={e => setFilterHost(e.target.value)}
             className="px-3 py-1.5 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300"
@@ -310,6 +317,7 @@ export default function InterfaceManagerPage() {
             ))}
           </select>
           <select
+            aria-label="Type filter"
             value={filterType}
             onChange={e => setFilterType(e.target.value)}
             className="px-3 py-1.5 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300"
@@ -577,8 +585,9 @@ export default function InterfaceManagerPage() {
             <div className="px-6 py-4 space-y-4">
               {/* Host */}
               <div>
-                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Host</label>
+                <label htmlFor="create-host" className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Host</label>
                 <select
+                  id="create-host"
                   value={createForm.host_id}
                   onChange={e => handleCreateHostChange(e.target.value)}
                   className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300"
@@ -592,8 +601,9 @@ export default function InterfaceManagerPage() {
 
               {/* Type */}
               <div>
-                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Type</label>
+                <label htmlFor="create-type" className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Type</label>
                 <select
+                  id="create-type"
                   value={createForm.interface_type}
                   onChange={e => {
                     const type = e.target.value;
@@ -610,8 +620,9 @@ export default function InterfaceManagerPage() {
 
               {/* Parent Interface */}
               <div>
-                <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Parent Interface</label>
+                <label htmlFor="create-parent-interface" className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Parent Interface</label>
                 <select
+                  id="create-parent-interface"
                   value={createForm.parent_interface}
                   onChange={e => setCreateForm(f => ({ ...f, parent_interface: e.target.value }))}
                   disabled={!createForm.host_id || loadingAgentInterfaces}

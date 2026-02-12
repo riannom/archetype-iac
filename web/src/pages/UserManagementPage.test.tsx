@@ -63,8 +63,7 @@ describe('UserManagementPage', () => {
 
     fireEvent.click(await screen.findAllByRole('button', { name: 'Create User' }).then((buttons) => buttons[0]));
     const createButtons = screen.getAllByRole('button', { name: 'Create User' });
-    fireEvent.click(createButtons[createButtons.length - 1]);
-
-    expect(screen.getByText('Username and password are required.')).toBeInTheDocument();
+    const submitButton = createButtons[createButtons.length - 1] as HTMLButtonElement;
+    expect(submitButton.disabled).toBe(true);
   });
 });

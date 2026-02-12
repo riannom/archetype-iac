@@ -36,7 +36,7 @@ describe('InterfaceManagerPage', () => {
 
   it('loads interfaces and agents', async () => {
     (apiRequest as any)
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'agent-1', name: 'Agent 1', status: 'online', address: '10.0.0.1' }])
       .mockResolvedValueOnce({ interfaces: [] });
 
     render(<InterfaceManagerPage />);
@@ -49,7 +49,7 @@ describe('InterfaceManagerPage', () => {
 
   it('opens create modal and calls create API', async () => {
     (apiRequest as any)
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'agent-1', name: 'Agent 1', status: 'online', address: '10.0.0.1' }])
       .mockResolvedValueOnce({ interfaces: [] })
       .mockResolvedValueOnce({ interfaces: [{ name: 'eth0', mtu: 1500, is_physical: true, state: 'up' }] })
       .mockResolvedValueOnce({});
@@ -69,7 +69,7 @@ describe('InterfaceManagerPage', () => {
 
   it('disables create when CIDR is invalid', async () => {
     (apiRequest as any)
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'agent-1', name: 'Agent 1', status: 'online', address: '10.0.0.1' }])
       .mockResolvedValueOnce({ interfaces: [] })
       .mockResolvedValueOnce({ interfaces: [{ name: 'eth0', mtu: 1500, is_physical: true, state: 'up' }] });
 
