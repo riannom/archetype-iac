@@ -609,10 +609,10 @@ const Canvas: React.FC<CanvasProps> = ({
 
           // Status indicator: green=running, gray=stopped, yellow=booting, orange=stopping, red=error, no dot=undeployed
           const getStatusDot = () => {
-            if (!status) return null; // No status = undeployed, no indicator
             const ns = nodeStates?.[node.id];
             const imageSyncActive =
               ns?.image_sync_status === 'syncing' || ns?.image_sync_status === 'checking';
+            if (!status && !imageSyncActive) return null; // No runtime state and no sync = undeployed
             let dotColor = '#a8a29e'; // stone-400 (stopped)
             let animate = false;
             if (status === 'running') dotColor = '#22c55e'; // green-500
@@ -626,7 +626,7 @@ const Canvas: React.FC<CanvasProps> = ({
             }
 
             // Build tooltip with retry info and elapsed time
-            let tooltip: string = status;
+            let tooltip: string = status || 'unknown';
             if (imageSyncActive) {
               const phase = ns?.image_sync_status === 'checking' ? 'checking' : 'syncing';
               tooltip = `image ${phase}`;

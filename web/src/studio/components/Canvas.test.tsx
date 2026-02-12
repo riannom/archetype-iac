@@ -332,6 +332,33 @@ describe("Canvas", () => {
       expect(statusDot?.getAttribute("style") || "").toContain("background-color: rgb(59, 130, 246)");
     });
 
+    it("shows blue sync indicator even before runtime status is set", () => {
+      const node = createDeviceNode({ id: "node-1", name: "SyncNoRuntimeNode" });
+      const nodeStates = {
+        "node-1": {
+          id: "state-1",
+          node_id: "node-1",
+          node_name: "SyncNoRuntimeNode",
+          image_sync_status: "syncing",
+          image_sync_message: "Syncing image to agent-01...",
+        },
+      };
+
+      renderWithTheme(
+        <Canvas
+          {...defaultProps}
+          nodes={[node]}
+          runtimeStates={{}}
+          nodeStates={nodeStates as any}
+        />
+      );
+
+      const statusDot = document.querySelector('[title^="image syncing"]') as HTMLElement | null;
+      expect(statusDot).toBeInTheDocument();
+      expect(statusDot).toHaveClass("animate-pulse");
+      expect(statusDot?.getAttribute("style") || "").toContain("background-color: rgb(59, 130, 246)");
+    });
+
     it("shows status dot for error nodes", () => {
       const node = createDeviceNode({ id: "node-1", name: "ErrorNode" });
       const runtimeStates: Record<string, RuntimeStatus> = {
