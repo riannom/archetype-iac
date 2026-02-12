@@ -611,6 +611,8 @@ class LibvirtProvider(Provider):
         interface_count: int = 1,
         vlan_tags: list[int] | None = None,
         kind: str | None = None,
+        include_management_interface: bool = False,
+        management_network: str = "default",
     ) -> str:
         """Generate libvirt domain XML for a VM.
 
@@ -665,9 +667,22 @@ class LibvirtProvider(Provider):
 
         # Ensure we have at least 1 interface
         interface_count = max(1, interface_count)
+        data_interface_mac_offset = 0
+
+        # For SSH-console libvirt VMs (e.g., NX-OSv/Cat9k), add a dedicated
+        # management NIC on libvirt's default network before data interfaces.
+        if include_management_interface:
+            mgmt_mac = self._generate_mac_address(name, 0)
+            interfaces_xml += f'''
+    <interface type='network'>
+      <mac address='{mgmt_mac}'/>
+      <source network='{management_network}'/>
+      <model type='{nic_driver}'/>
+    </interface>'''
+            data_interface_mac_offset = 1
 
         for i in range(interface_count):
-            mac_address = self._generate_mac_address(name, i)
+            mac_address = self._generate_mac_address(name, i + data_interface_mac_offset)
             interface_id = str(uuid.uuid4())
 
             # Add VLAN tag if provided (for OVS isolation)
@@ -995,6 +1010,15 @@ class LibvirtProvider(Provider):
         workspace = disks_dir.parent
         vlan_tags = self._allocate_vlans(lab_id, node_name, interface_count, workspace)
 
+        include_management_interface = False
+        if kind and self._node_uses_dedicated_mgmt_interface(kind):
+            include_management_interface = self._ensure_libvirt_network("default")
+            if not include_management_interface:
+                logger.warning(
+                    f"Unable to enable libvirt 'default' network for {node_name}; "
+                    "management NIC omitted, SSH console may be unavailable"
+                )
+
         # Generate domain XML with multiple interfaces
         xml = self._generate_domain_xml(
             domain_name,
@@ -1004,6 +1028,8 @@ class LibvirtProvider(Provider):
             interface_count=interface_count,
             vlan_tags=vlan_tags,
             kind=kind,
+            include_management_interface=include_management_interface,
+            management_network="default",
         )
 
         # Define and start the domain
@@ -1360,6 +1386,15 @@ class LibvirtProvider(Provider):
             iface_count = node_config.get("interface_count", 1)
             vlan_tags = self._allocate_vlans(lab_id, node_name, iface_count, workspace)
 
+            include_management_interface = False
+            if self._node_uses_dedicated_mgmt_interface(kind):
+                include_management_interface = self._ensure_libvirt_network("default")
+                if not include_management_interface:
+                    logger.warning(
+                        f"Unable to enable libvirt 'default' network for {node_name}; "
+                        "management NIC omitted, SSH console may be unavailable"
+                    )
+
             # Generate domain XML
             xml = self._generate_domain_xml(
                 domain_name,
@@ -1369,6 +1404,8 @@ class LibvirtProvider(Provider):
                 interface_count=iface_count,
                 vlan_tags=vlan_tags,
                 kind=kind,
+                include_management_interface=include_management_interface,
+                management_network="default",
             )
 
             # Define but do NOT start
@@ -1598,6 +1635,45 @@ class LibvirtProvider(Provider):
             logger.debug(f"Error getting VM IP for {domain_name}: {e}")
             return None
 
+    def _node_uses_dedicated_mgmt_interface(self, kind: str | None) -> bool:
+        """Return True when VM should have a dedicated management interface."""
+        if not kind:
+            return False
+        try:
+            return get_console_method(kind) == "ssh"
+        except Exception:
+            return False
+
+    def _ensure_libvirt_network(self, network_name: str) -> bool:
+        """Ensure a libvirt network exists, is active, and autostarted."""
+        try:
+            network = self.conn.networkLookupByName(network_name)
+            if network is None:
+                return False
+            if network.isActive() != 1:
+                network.create()
+            try:
+                network.setAutostart(True)
+            except Exception:
+                # Autostart failure is non-fatal if the network is active now.
+                pass
+            return True
+        except Exception:
+            return False
+
+    def _domain_has_dedicated_mgmt_interface(self, domain) -> bool:
+        """Detect whether a domain includes a default-network management NIC."""
+        try:
+            xml = domain.XMLDesc(0)
+            root = ET.fromstring(xml)
+            for iface in root.findall(".//devices/interface[@type='network']"):
+                src = iface.find("source")
+                if src is not None and src.get("network") == "default":
+                    return True
+        except Exception:
+            return False
+        return False
+
     async def get_vm_interface_port(
         self,
         lab_id: str,
@@ -1618,7 +1694,16 @@ class LibvirtProvider(Provider):
             OVS port name, or None if not found
         """
         domain_name = self._domain_name(lab_id, node_name)
-        guest_mac = self._generate_mac_address(domain_name, interface_index)
+        mac_index = interface_index
+        try:
+            domain = self.conn.lookupByName(domain_name)
+            kind = self._get_domain_kind(domain)
+            if self._node_uses_dedicated_mgmt_interface(kind) and self._domain_has_dedicated_mgmt_interface(domain):
+                mac_index = interface_index + 1
+        except Exception:
+            pass
+
+        guest_mac = self._generate_mac_address(domain_name, mac_index)
 
         # Libvirt modifies the first byte of the MAC on host-side tap devices:
         # guest sees 52:54:00:XX:XX:XX but the tap device (and OVS mac_in_use)

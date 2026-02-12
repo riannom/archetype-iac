@@ -283,6 +283,37 @@ def test_libvirt_generate_domain_xml(monkeypatch, tmp_path: Path) -> None:
     assert "<archetype:readiness_timeout>2400</archetype:readiness_timeout>" in xml
 
 
+def test_libvirt_generate_domain_xml_with_dedicated_mgmt_interface(monkeypatch, tmp_path: Path) -> None:
+    provider = _make_libvirt_provider()
+    monkeypatch.setattr(libvirt_provider.settings, "ovs_bridge_name", "arch-ovs-test", raising=False)
+
+    overlay = tmp_path / "overlay.qcow2"
+    overlay.touch()
+
+    xml = provider._generate_domain_xml(
+        "arch-lab-node1",
+        {
+            "memory": 1024,
+            "cpu": 2,
+            "disk_driver": "virtio",
+            "nic_driver": "e1000",
+        },
+        overlay,
+        interface_count=2,
+        vlan_tags=[100, 101],
+        kind="cisco_n9kv",
+        include_management_interface=True,
+        management_network="default",
+    )
+
+    assert "<interface type='network'>" in xml
+    assert "<source network='default'/>" in xml
+    assert "<source bridge='arch-ovs-test'/>" in xml
+    # Data-plane interface MACs are offset by one when mgmt NIC is present.
+    assert provider._generate_mac_address("arch-lab-node1", 1) in xml
+    assert provider._generate_mac_address("arch-lab-node1", 2) in xml
+
+
 def test_libvirt_parse_readiness_overrides_from_domain_metadata() -> None:
     provider = _make_libvirt_provider()
 
