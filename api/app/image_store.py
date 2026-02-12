@@ -109,6 +109,7 @@ DEVICE_VENDOR_MAP = {
 # vendor IDs returned by /vendors and used by the UI catalog.
 DEVICE_ID_ALIASES = {
     "iosv": "cisco_iosv",
+    "ceos": "eos",
 }
 
 

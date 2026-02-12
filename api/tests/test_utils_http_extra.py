@@ -12,5 +12,7 @@ def test_require_lab_owner_raises_without_db(test_user, sample_lab):
 
 
 def test_require_lab_owner_raises_for_missing_role(test_user, sample_lab, test_db):
+    sample_lab.owner_id = "someone-else"
+    test_db.commit()
     with pytest.raises(HTTPException):
         require_lab_owner(test_user, sample_lab, db=test_db)

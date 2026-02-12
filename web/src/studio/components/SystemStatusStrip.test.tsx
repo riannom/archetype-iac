@@ -16,6 +16,10 @@ vi.mock("../../contexts/NotificationContext", () => ({
   }),
 }));
 
+vi.mock("../../theme", () => ({
+  useTheme: () => ({ effectiveMode: "light" }),
+}));
+
 // Mock the popup components
 vi.mock("./AgentsPopup", () => ({
   default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>

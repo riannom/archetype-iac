@@ -7,6 +7,10 @@ vi.mock('./TerminalSession', () => ({
   default: () => <div data-testid="terminal" />,
 }));
 
+vi.mock('../../theme', () => ({
+  useTheme: () => ({ effectiveMode: 'light' }),
+}));
+
 describe('TaskLogPanel', () => {
   it('renders entries and triggers actions', () => {
     const onToggle = vi.fn();

@@ -20,7 +20,11 @@ class TestAgentOperationHistogram:
             result = await start_node_on_agent(mock_agent, "lab1", "node1")
 
         assert result["success"] is True
-        mock_hist.labels.assert_called_with(operation="start_node", host_id="agent-1")
+        mock_hist.labels.assert_called_with(
+            operation="start_node",
+            host_id="agent-1",
+            status="success",
+        )
         mock_hist.labels.return_value.observe.assert_called_once()
 
     @pytest.mark.asyncio
@@ -36,7 +40,11 @@ class TestAgentOperationHistogram:
             result = await stop_node_on_agent(mock_agent, "lab1", "node1")
 
         assert result["success"] is False
-        mock_hist.labels.assert_called_with(operation="stop_node", host_id="agent-1")
+        mock_hist.labels.assert_called_with(
+            operation="stop_node",
+            host_id="agent-1",
+            status="error",
+        )
         mock_hist.labels.return_value.observe.assert_called_once()
 
     @pytest.mark.asyncio
@@ -71,7 +79,11 @@ class TestAgentOperationHistogram:
             from app.agent_client import destroy_node_on_agent
             await destroy_node_on_agent(mock_agent, "lab1", "node1")
 
-        mock_hist.labels.assert_called_with(operation="destroy_node", host_id="abc123")
+        mock_hist.labels.assert_called_with(
+            operation="destroy_node",
+            host_id="abc123",
+            status="success",
+        )
 
     @pytest.mark.asyncio
     async def test_all_operations_instrumented(self):

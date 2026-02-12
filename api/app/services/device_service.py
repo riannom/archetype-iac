@@ -17,6 +17,34 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _get_config_by_kind(device_id: str):
+    """Module-level helper kept patchable for tests."""
+    from agent.vendors import _get_config_by_kind as vendor_get_config_by_kind
+
+    return vendor_get_config_by_kind(device_id)
+
+
+def get_kind_for_device(device_id: str) -> str:
+    """Module-level helper kept patchable for tests."""
+    from agent.vendors import get_kind_for_device as vendor_get_kind_for_device
+
+    return vendor_get_kind_for_device(device_id)
+
+
+def find_custom_device(device_id: str):
+    """Module-level helper kept patchable for tests."""
+    from app.image_store import find_custom_device as image_store_find_custom_device
+
+    return image_store_find_custom_device(device_id)
+
+
+def get_device_override(device_id: str):
+    """Module-level helper kept patchable for tests."""
+    from app.image_store import get_device_override as image_store_get_device_override
+
+    return image_store_get_device_override(device_id)
+
+
 class DeviceNotFoundError(Exception):
     """Raised when a device is not found."""
     pass
@@ -419,9 +447,6 @@ class DeviceService:
             Dict with resolved memory, cpu, disk_driver, nic_driver, machine_type
             (keys present only when values are non-default / explicitly set)
         """
-        from app.image_store import find_custom_device, get_device_override
-        from agent.vendors import _get_config_by_kind, get_kind_for_device
-
         specs: dict = {}
 
         # Layer 1: Built-in vendor config

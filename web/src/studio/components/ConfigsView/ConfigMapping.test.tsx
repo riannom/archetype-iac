@@ -55,7 +55,7 @@ describe('ConfigMapping', () => {
         labId="lab1"
         orphanedByDeviceKind={orphaned}
         deviceNodes={[node]}
-        getDisplayName={(n) => n}
+        getDisplayName={(n) => (n === 'r1' ? 'R1' : n)}
         onMapConfig={onMapConfig}
         onSetActiveConfig={onSetActiveConfig}
       />

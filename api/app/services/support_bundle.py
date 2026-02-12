@@ -322,7 +322,7 @@ def _lab_export(
         ],
         "link_states": [
             _model_to_dict(
-                l,
+                link_state,
                 [
                     "id",
                     "lab_id",
@@ -345,7 +345,7 @@ def _lab_export(
                     "updated_at",
                 ],
             )
-            for l in link_states
+            for link_state in link_states
         ],
         "placements": [
             _model_to_dict(
