@@ -118,3 +118,16 @@ class TestLibvirtProviderOverride:
 
         with pytest.raises(ValueError, match="Refusing fallback defaults"):
             get_libvirt_config("cat9000v-uadp-custom")
+
+    @pytest.mark.parametrize("kind", ["cat9000v-uadp", "cat9000v-q200"])
+    def test_cat9k_aliases_resolve_to_vendor_profile(self, kind: str):
+        """Known Cat9k aliases should resolve to the Cat9kv vendor libvirt profile."""
+        from agent.vendors import get_libvirt_config
+
+        cfg = get_libvirt_config(kind)
+        assert cfg.source == "vendor"
+        assert cfg.memory_mb >= 18432
+        assert cfg.cpu_count >= 4
+        assert cfg.machine_type == "pc-i440fx-6.2"
+        assert cfg.disk_driver == "ide"
+        assert cfg.nic_driver == "e1000"
