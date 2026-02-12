@@ -7,6 +7,13 @@ import pytest
 from agent.network.local import LocalNetworkManager, get_local_manager, LocalLink
 
 
+@pytest.fixture(autouse=True)
+def reset_singleton_manager():
+    LocalNetworkManager._instance = None
+    yield
+    LocalNetworkManager._instance = None
+
+
 @pytest.mark.asyncio
 async def test_generate_veth_name_unique():
     mgr = LocalNetworkManager()
@@ -159,4 +166,3 @@ def test_get_local_manager_singleton():
     mgr1 = get_local_manager()
     mgr2 = get_local_manager()
     assert mgr1 is mgr2
-
