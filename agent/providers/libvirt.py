@@ -2065,11 +2065,17 @@ class LibvirtProvider(Provider):
             # Extract via SSH
             config = await self._extract_config_via_ssh(domain_name, kind, node_name)
             if config:
-                # Guard against saving clearly truncated captures.
-                if len(config.strip()) < 64:
+                # Guard against obvious non-config noise while allowing
+                # legitimately small configs on freshly booted devices.
+                compact = config.strip()
+                if len(compact) < 64 and not re.search(
+                    r"(version|hostname|interface|current configuration|^!$)",
+                    compact,
+                    re.IGNORECASE | re.MULTILINE,
+                ):
                     logger.warning(
                         f"Discarding suspiciously short extracted config for {node_name} via SSH "
-                        f"({len(config.strip())} bytes)"
+                        f"({len(compact)} bytes)"
                     )
                     return None
                 logger.info(f"Extracted config from {node_name} via SSH ({len(config)} bytes)")
@@ -2094,10 +2100,15 @@ class LibvirtProvider(Provider):
 
             if result.success:
                 # Extra safety net even if extractor reported success.
-                if len(result.config.strip()) < 64:
+                compact = result.config.strip()
+                if len(compact) < 64 and not re.search(
+                    r"(version|hostname|interface|current configuration|^!$)",
+                    compact,
+                    re.IGNORECASE | re.MULTILINE,
+                ):
                     logger.warning(
                         f"Discarding suspiciously short extracted config for {node_name} "
-                        f"({len(result.config.strip())} bytes)"
+                        f"({len(compact)} bytes)"
                     )
                     return None
                 logger.info(f"Extracted config from {node_name} ({len(result.config)} bytes)")

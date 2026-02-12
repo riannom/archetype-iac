@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 # Per-domain locks: domain_name -> threading.Lock
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
+_active_extractions: set[str] = set()
+_extractions_guard = threading.Lock()
 
 
 def _get_lock(domain_name: str) -> threading.Lock:
@@ -34,6 +36,24 @@ def _get_lock(domain_name: str) -> threading.Lock:
         if domain_name not in _locks:
             _locks[domain_name] = threading.Lock()
         return _locks[domain_name]
+
+
+def is_extraction_active(domain_name: str) -> bool:
+    """Return whether a config extraction is active for this domain."""
+    with _extractions_guard:
+        return domain_name in _active_extractions
+
+
+@contextmanager
+def extraction_session(domain_name: str) -> Generator[None, None, None]:
+    """Mark a domain as actively extracting config for probe backoff."""
+    with _extractions_guard:
+        _active_extractions.add(domain_name)
+    try:
+        yield
+    finally:
+        with _extractions_guard:
+            _active_extractions.discard(domain_name)
 
 
 def kill_orphaned_virsh(domain_name: str) -> int:
@@ -119,6 +139,11 @@ def try_console_lock(domain_name: str) -> Generator[bool, None, None]:
                 return ""  # skip this cycle
             # ... do work ...
     """
+    # Avoid contention while config extraction owns this domain.
+    if is_extraction_active(domain_name):
+        yield False
+        return
+
     lock = _get_lock(domain_name)
     acquired = lock.acquire(blocking=False)
     try:

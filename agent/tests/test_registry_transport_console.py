@@ -106,6 +106,12 @@ def test_try_console_lock_when_busy():
         lock.release()
 
 
+def test_try_console_lock_when_extraction_active():
+    with console_lock_mod.extraction_session("lab-extract"):
+        with console_lock_mod.try_console_lock("lab-extract") as acquired:
+            assert acquired is False
+
+
 def test_kill_orphaned_virsh(monkeypatch):
     class Result:
         def __init__(self, stdout: str, returncode: int = 0):
@@ -184,8 +190,10 @@ def test_piggyback_extract_success(monkeypatch):
         def __init__(self, fd, ws_forward=None, default_timeout=None):
             self.ws_forward = ws_forward
             self.calls = []
+            self.last_match = "router# "
             self._expects = [
                 "router# ",
+                "terminal length 0\r\n",
                 "show running-config\r\nline1\r\nline2\r\n",
             ]
 
@@ -200,6 +208,9 @@ def test_piggyback_extract_success(monkeypatch):
             return b""
 
         def expect(self, pattern, timeout=None):
+            if "assword" in str(pattern):
+                raise TimeoutError("no password prompt")
+            self.last_match = "router# "
             return self._expects.pop(0)
 
     loop = asyncio.new_event_loop()
@@ -230,6 +241,71 @@ def test_piggyback_extract_success(monkeypatch):
         assert session.pty_read_paused.is_set()
     finally:
         session_registry.unregister_session("lab4")
+        loop.close()
+
+
+def test_piggyback_extract_user_exec_mode_rejected(monkeypatch):
+    import asyncio
+
+    class FakeWebSocket:
+        async def send_bytes(self, data: bytes):
+            return None
+
+    class FakeInjector:
+        def __init__(self, fd, ws_forward=None, default_timeout=None):
+            self.ws_forward = ws_forward
+            self.calls = []
+            self.last_match = ""
+            self._expects = [
+                "router> ",
+                "router> ",
+                "terminal length 0\r\n",
+                "show running-config\r\n% Invalid input detected at '^' marker.\r\n",
+            ]
+
+        def send(self, text):
+            self.calls.append(("send", text))
+
+        def sendline(self, text):
+            self.calls.append(("sendline", text))
+
+        def drain(self, duration=0.5):
+            self.calls.append(("drain", duration))
+            return b""
+
+        def expect(self, pattern, timeout=None):
+            if "assword" in str(pattern):
+                raise TimeoutError("no password prompt")
+            text = self._expects.pop(0)
+            self.last_match = "router> "
+            return text
+
+    loop = asyncio.new_event_loop()
+
+    def run_coroutine_threadsafe(coro, loop):
+        loop.run_until_complete(coro)
+        return types.SimpleNamespace(result=lambda timeout=None: None)
+
+    monkeypatch.setattr(session_registry, "PtyInjector", FakeInjector)
+    monkeypatch.setattr(session_registry.asyncio, "run_coroutine_threadsafe", run_coroutine_threadsafe)
+    import time
+
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    session = session_registry.ActiveConsoleSession(
+        domain_name="lab5",
+        master_fd=1,
+        loop=loop,
+        websocket=FakeWebSocket(),
+    )
+    session_registry.register_session("lab5", session)
+    try:
+        result = session_registry.piggyback_extract("lab5", command="show running-config")
+        assert result is not None
+        assert result.success is False
+        assert "user EXEC mode" in result.error
+    finally:
+        session_registry.unregister_session("lab5")
         loop.close()
 
 

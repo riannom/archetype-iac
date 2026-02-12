@@ -301,6 +301,21 @@ def test_console_extractor_validate_config_rejects_truncated_echo() -> None:
     assert reason
 
 
+def test_console_extractor_validate_config_rejects_cli_error_output() -> None:
+    import agent.console_extractor as console_extractor
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    valid, reason = extractor._validate_extracted_config(
+        config="show running-config\n% Invalid input detected at '^' marker.\nRouter>",
+        command="show running-config",
+        paging_disable="terminal length 0",
+    )
+    assert valid is False
+    assert "cli error marker" in reason
+
+
 def test_console_extractor_validate_config_accepts_multiline_payload() -> None:
     import agent.console_extractor as console_extractor
 
@@ -347,7 +362,61 @@ def test_console_extractor_disable_paging_waits_for_prompt() -> None:
     extractor._disable_paging("terminal length 0", prompt)
 
     assert extractor.child.sent == ["terminal length 0"]
-    assert extractor.child.expected == [(prompt, 5)]
+    patterns, timeout = extractor.child.expected[0]
+    assert timeout == 5
+    assert prompt in patterns
+
+
+def test_console_extractor_wait_for_prompt_handles_press_return_banner() -> None:
+    import agent.console_extractor as console_extractor
+
+    class _FakeChild:
+        def __init__(self) -> None:
+            self.sent = []
+            self.calls = 0
+
+        def sendline(self, value: str) -> None:
+            self.sent.append(value)
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+        def expect(self, patterns, timeout: int | None = None) -> int:
+            self.calls += 1
+            # First cycle hits "Press RETURN...", second gets prompt.
+            return len(patterns) - 2 if self.calls == 1 else 0
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    extractor.timeout = 30
+    extractor.child = _FakeChild()
+
+    assert extractor._wait_for_prompt(r"[\w\-]+[>#]\s*$") is True
+    assert extractor.child.sent == ["\r"]
+
+
+def test_console_extractor_wait_for_prompt_accepts_config_mode_prompt() -> None:
+    import agent.console_extractor as console_extractor
+
+    class _FakeChild:
+        def sendline(self, value: str) -> None:
+            return None
+
+        def send(self, value: str) -> None:
+            return None
+
+        def expect(self, patterns, timeout: int | None = None) -> int:
+            # Simulate matching fallback "(config)#" pattern.
+            return 1
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    extractor.timeout = 30
+    extractor.child = _FakeChild()
+
+    assert extractor._wait_for_prompt(r"[\w\-]+[>#]\s*$") is True
 
 
 def test_extract_vm_config_no_pexpect(monkeypatch) -> None:

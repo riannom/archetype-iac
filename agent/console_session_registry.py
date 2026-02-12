@@ -94,6 +94,7 @@ class PtyInjector:
         self.ws_forward = ws_forward
         self.default_timeout = default_timeout
         self._buffer = b""
+        self.last_match = ""
 
     def send(self, text: str) -> None:
         os.write(self.fd, text.encode())
@@ -142,6 +143,7 @@ class PtyInjector:
             m = regex.search(self._buffer)
             if m:
                 before = self._buffer[:m.start()]
+                self.last_match = m.group(0).decode("utf-8", errors="replace")
                 self._buffer = self._buffer[m.end():]
                 return before.decode("utf-8", errors="replace")
 
@@ -181,14 +183,25 @@ def _clean_config(raw_output: str, command: str) -> str:
     output = ansi_escape.sub('', raw_output)
     output = output.replace('\r', '')
     lines = output.split('\n')
-    if lines and command in lines[0]:
-        lines = lines[1:]
+    cmd_pat = re.compile(rf"^\s*(?:[^\s]+[>#]\s*)?{re.escape(command)}\s*$", re.IGNORECASE)
+    lines = [line for line in lines if not cmd_pat.match(line)]
     lines = [line for line in lines if not line.strip().startswith("Building configuration")]
     while lines and not lines[0].strip():
         lines = lines[1:]
     while lines and not lines[-1].strip():
         lines = lines[:-1]
     return '\n'.join(lines)
+
+
+def _contains_cli_error(output: str) -> bool:
+    lowered = (output or "").lower()
+    markers = (
+        "% invalid input",
+        "% incomplete command",
+        "% ambiguous command",
+        "% unknown command",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 # ---------------------------------------------------------------------------
@@ -263,11 +276,13 @@ def piggyback_extract(
         try:
             # Wait for a prompt (user may be at login, enable, or exec)
             prompt_text = injector.expect(prompt_pattern, timeout=10)
+            prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
             # Check if we're in config mode — exit it
-            if "(config" in prompt_text:
+            if "(config" in prompt_match or "(config" in prompt_text:
                 injector.sendline("end")
                 injector.expect(prompt_pattern, timeout=5)
+                prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
             # Handle login if needed (Username: prompt in buffer)
             # This is unlikely during an active web console but handle it
@@ -278,24 +293,45 @@ def piggyback_extract(
                 injector.expect(prompt_pattern, timeout=10)
 
             # Enter enable mode if needed (prompt ends with >)
-            if enable_password and prompt_text.rstrip().endswith(">"):
+            if prompt_match.endswith(">"):
                 injector.sendline("enable")
                 try:
                     injector.expect(r"[Pp]assword:", timeout=5)
-                    injector.sendline(enable_password)
+                    injector.sendline(enable_password or "")
                     injector.expect(prompt_pattern, timeout=10)
+                    prompt_match = (getattr(injector, "last_match", "") or "").strip()
                 except TimeoutError:
-                    # Maybe already in enable mode
-                    pass
+                    # Some devices switch directly to # without a password prompt.
+                    try:
+                        injector.expect(prompt_pattern, timeout=3)
+                        prompt_match = (getattr(injector, "last_match", "") or "").strip()
+                    except TimeoutError:
+                        pass
 
             # Disable paging
             if paging_disable:
                 injector.sendline(paging_disable)
-                injector.drain(1.0)
+                try:
+                    injector.expect(prompt_pattern, timeout=5)
+                    prompt_match = (getattr(injector, "last_match", "") or "").strip()
+                except TimeoutError:
+                    injector.drain(1.0)
+
+            # `show running-config` generally requires privileged EXEC.
+            if "running-config" in command.lower() and prompt_match.endswith(">"):
+                return ExtractionResult(
+                    success=False,
+                    error="Device remained in user EXEC mode (>) after enable attempt",
+                )
 
             # Execute extraction command
             injector.sendline(command)
             raw_output = injector.expect(prompt_pattern, timeout=timeout)
+            if _contains_cli_error(raw_output):
+                return ExtractionResult(
+                    success=False,
+                    error="CLI rejected extraction command",
+                )
 
             config = _clean_config(raw_output, command)
 

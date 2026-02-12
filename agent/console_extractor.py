@@ -96,35 +96,55 @@ class SerialConsoleExtractor:
             timeout=self.timeout,
         )
         if piggyback_result is not None:
-            return piggyback_result
+            if not piggyback_result.success:
+                # Fall back to dedicated virsh extraction path on piggyback failure.
+                logger.info(
+                    "Piggyback extraction failed for %s, falling back to direct console: %s",
+                    self.domain_name,
+                    piggyback_result.error,
+                )
+            else:
+                valid, reason = self._validate_extracted_config(
+                    config=piggyback_result.config,
+                    command=command,
+                    paging_disable=paging_disable,
+                )
+                if valid:
+                    return piggyback_result
+                logger.info(
+                    "Piggyback output invalid for %s (%s); falling back to direct console",
+                    self.domain_name,
+                    reason,
+                )
 
         # No active web console — use normal virsh console with lock + retries
-        from agent.virsh_console_lock import console_lock
+        from agent.virsh_console_lock import console_lock, extraction_session
 
         last_result = ExtractionResult(success=False, error="No attempts made")
-        for attempt in range(1 + retries):
-            if attempt > 0:
-                delay = 2 ** attempt  # 2s, 4s
-                logger.info(
-                    f"Retrying config extraction for {self.domain_name} "
-                    f"(attempt {attempt + 1}/{1 + retries}) after {delay}s"
-                )
-                time.sleep(delay)
-
-            try:
-                with console_lock(self.domain_name, timeout=60):
-                    last_result = self._extract_config_inner(
-                        command, username, password,
-                        enable_password, prompt_pattern, paging_disable,
+        with extraction_session(self.domain_name):
+            for attempt in range(1 + retries):
+                if attempt > 0:
+                    delay = 2 ** attempt  # 2s, 4s
+                    logger.info(
+                        f"Retrying config extraction for {self.domain_name} "
+                        f"(attempt {attempt + 1}/{1 + retries}) after {delay}s"
                     )
-            except TimeoutError:
-                last_result = ExtractionResult(
-                    success=False,
-                    error="Console is locked by another session"
-                )
+                    time.sleep(delay)
 
-            if last_result.success:
-                return last_result
+                try:
+                    with console_lock(self.domain_name, timeout=60):
+                        last_result = self._extract_config_inner(
+                            command, username, password,
+                            enable_password, prompt_pattern, paging_disable,
+                        )
+                except TimeoutError:
+                    last_result = ExtractionResult(
+                        success=False,
+                        error="Console is locked by another session"
+                    )
+
+                if last_result.success:
+                    return last_result
 
         return last_result
 
@@ -155,9 +175,11 @@ class SerialConsoleExtractor:
                     error="Timeout waiting for console connection"
                 )
 
-            # Send Enter to get a prompt
-            time.sleep(0.5)
-            self.child.sendline("")
+            if not self._prime_console_for_prompt(prompt_pattern):
+                return ExtractionResult(
+                    success=False,
+                    error="Failed to wake console prompt",
+                )
 
             # Handle login if credentials provided
             if username:
@@ -181,6 +203,10 @@ class SerialConsoleExtractor:
                         success=False,
                         error="Failed to enter enable mode"
                     )
+            else:
+                # IOSv often lands in user EXEC mode (">"). Try best-effort
+                # privilege escalation even without an explicit enable password.
+                self._attempt_enable_mode(enable_password, prompt_pattern)
 
             # Disable terminal paging (critical for full config output)
             if paging_disable:
@@ -250,12 +276,81 @@ class SerialConsoleExtractor:
 
     def _wait_for_prompt(self, prompt_pattern: str) -> bool:
         """Wait for CLI prompt."""
+        prompt_patterns = self._prompt_patterns(prompt_pattern)
+        wait_timeout = max(5, min(self.timeout, 15))
+
+        # Some platforms print an intermediate banner and require another Enter
+        # before showing the interactive CLI prompt.
+        for _ in range(4):
+            try:
+                index = self.child.expect(
+                    [
+                        *prompt_patterns,
+                        r"Press RETURN to get started!",
+                        r"Would you like to enter the initial configuration dialog\?\s*\[yes/no\]:",
+                    ],
+                    timeout=wait_timeout,
+                )
+                if index < len(prompt_patterns):
+                    return True
+                if index == len(prompt_patterns):
+                    self.child.send("\r")
+                    continue
+                # Decline the setup wizard and continue to prompt detection.
+                self.child.sendline("no")
+                self.child.send("\r")
+            except pexpect.TIMEOUT:
+                self.child.send("\r")
+
+        tail = ""
         try:
-            self.child.expect(prompt_pattern, timeout=self.timeout)
-            return True
-        except pexpect.TIMEOUT:
-            logger.warning("Timeout waiting for prompt")
-            return False
+            tail = (self.child.before or "")[-200:]
+        except Exception:
+            tail = ""
+        logger.warning("Timeout waiting for prompt (buffer tail=%r)", tail)
+        return False
+
+    def _prime_console_for_prompt(self, prompt_pattern: str) -> bool:
+        """Wake serial console by sending Enter several times.
+
+        IOSv often requires multiple Enter key presses before it emits a prompt.
+        """
+        prompt_patterns = self._prompt_patterns(prompt_pattern)
+        patterns = [
+            *prompt_patterns,
+            r"Press RETURN to get started!",
+            r"[Uu]sername:",
+            r"[Ll]ogin:",
+            r"Would you like to enter the initial configuration dialog\?\s*\[yes/no\]:",
+        ]
+        for _ in range(8):
+            self.child.send("\r")
+            try:
+                idx = self.child.expect(patterns, timeout=2)
+                if idx < len(prompt_patterns):
+                    return True
+                if patterns[idx].startswith(r"Would you like to enter"):
+                    self.child.sendline("no")
+                    self.child.send("\r")
+            except pexpect.TIMEOUT:
+                pass
+            time.sleep(0.35)
+        return False
+
+    def _prompt_patterns(self, prompt_pattern: str) -> list[str]:
+        """Build prompt patterns with a Cisco-mode fallback.
+
+        Many Cisco CLIs switch prompts by mode (for example, Router(config)#).
+        If vendor prompt patterns are too strict, fall back to this generic form.
+        """
+        patterns = [prompt_pattern]
+        cisco_mode_prompt = r"[\w.\-]+(?:\([^)\r\n]+\))?[>#]\s*$"
+        generic_line_prompt = r"(?m)^[^\r\n]*[>#]\s*$"
+        if prompt_pattern != cisco_mode_prompt:
+            patterns.append(cisco_mode_prompt)
+        if prompt_pattern != generic_line_prompt:
+            patterns.append(generic_line_prompt)
+        return patterns
 
     def _handle_login(
         self,
@@ -300,13 +395,31 @@ class SerialConsoleExtractor:
             logger.warning("Timeout during enable")
             return False
 
+    def _attempt_enable_mode(self, enable_password: str, prompt_pattern: str) -> None:
+        """Best-effort privilege escalation.
+
+        If no enable password is configured, submit an empty password to
+        accommodate labs where enable has no password.
+        """
+        try:
+            self.child.sendline("enable")
+            index = self.child.expect(
+                [r"[Pp]assword:", prompt_pattern, r"% ?[Ii]nvalid input.*"],
+                timeout=min(self.timeout, 6),
+            )
+            if index == 0:
+                self.child.sendline(enable_password or "")
+                self._wait_for_prompt(prompt_pattern)
+        except Exception:
+            logger.debug("Enable escalation attempt skipped", exc_info=True)
+
     def _disable_paging(self, paging_command: str, prompt_pattern: str) -> None:
         """Disable terminal paging to get full output."""
         try:
             self.child.sendline(paging_command)
             # Wait for prompt so output from this command does not pollute
             # the next command capture.
-            self.child.expect(prompt_pattern, timeout=min(self.timeout, 5))
+            self.child.expect(self._prompt_patterns(prompt_pattern), timeout=min(self.timeout, 5))
         except Exception as e:
             logger.debug(f"Error disabling paging (non-fatal): {e}")
 
@@ -314,7 +427,7 @@ class SerialConsoleExtractor:
         """Execute command and capture output."""
         try:
             self.child.sendline(command)
-            self.child.expect(prompt_pattern, timeout=self.timeout)
+            self.child.expect(self._prompt_patterns(prompt_pattern), timeout=self.timeout)
 
             # Get the output (everything between command and prompt)
             output = self.child.before
@@ -375,16 +488,37 @@ class SerialConsoleExtractor:
         if len(lines) < 2:
             return False, f"too few lines ({len(lines)})"
 
+        lowered = text.lower()
+        for marker in (
+            "% invalid input",
+            "% incomplete command",
+            "% ambiguous command",
+            "% unknown command",
+        ):
+            if marker in lowered:
+                return False, f"cli error marker detected: {marker}"
+
         command_l = command.strip().lower()
         paging_l = paging_disable.strip().lower()
         echo_only = {command_l}
         if paging_l:
             echo_only.add(paging_l)
-        if all(ln.lower() in echo_only for ln in lines):
+        stripped_lines = [
+            re.sub(r"^[^\s]+[>#]\s*", "", ln).strip().lower()
+            for ln in lines
+        ]
+        if all(ln in echo_only for ln in stripped_lines):
             return False, "output contains only command echoes"
 
         # Very short output is usually a prompt/echo artifact.
-        if len(text) < 64 and not any("config" in ln.lower() for ln in lines):
+        config_markers = (
+            "current configuration",
+            "version ",
+            "hostname ",
+            "interface ",
+            "!",
+        )
+        if len(text) < 64 and not any(marker in lowered for marker in config_markers):
             return False, f"output too short ({len(text)} bytes)"
 
         return True, ""
@@ -497,9 +631,11 @@ class SerialConsoleExtractor:
                     error="Timeout waiting for console connection"
                 )
 
-            # Send Enter to get a prompt
-            time.sleep(0.5)
-            self.child.sendline("")
+            if not self._prime_console_for_prompt(prompt_pattern):
+                return CommandResult(
+                    success=False,
+                    error="Failed to wake console prompt",
+                )
 
             # Handle login if credentials provided
             if username:
@@ -523,6 +659,8 @@ class SerialConsoleExtractor:
                         success=False,
                         error="Failed to enter enable mode"
                     )
+            else:
+                self._attempt_enable_mode(enable_password, prompt_pattern)
 
             # Execute each command
             commands_run = 0
