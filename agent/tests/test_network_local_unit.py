@@ -47,7 +47,7 @@ async def test_create_management_network_existing(monkeypatch):
                 return [FakeNetwork()]
 
     monkeypatch.setattr(mgr, "_networks", {})
-    monkeypatch.setattr(mgr, "docker", FakeDocker())
+    monkeypatch.setattr(mgr, "_docker", FakeDocker())
     monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
 
     network = await mgr.create_management_network("lab1")
@@ -71,7 +71,7 @@ async def test_delete_management_network_not_tracked(monkeypatch):
             def list(names=None):
                 return [FakeNetwork()]
 
-    monkeypatch.setattr(mgr, "docker", FakeDocker())
+    monkeypatch.setattr(mgr, "_docker", FakeDocker())
 
     assert await mgr.delete_management_network("lab1") is True
 
@@ -159,5 +159,4 @@ def test_get_local_manager_singleton():
     mgr1 = get_local_manager()
     mgr2 = get_local_manager()
     assert mgr1 is mgr2
-
 

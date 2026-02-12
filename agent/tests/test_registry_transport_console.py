@@ -31,8 +31,10 @@ def test_lazy_singleton_get_and_reset():
 
 
 def test_transport_data_plane_ip_overrides(monkeypatch):
+    from agent.config import settings
+
     transport_mod.set_data_plane_ip("10.0.0.5")
-    monkeypatch.setattr(transport_mod.settings, "local_ip", "192.0.2.1", raising=False)
+    monkeypatch.setattr(settings, "local_ip", "192.0.2.1", raising=False)
     assert transport_mod.get_vxlan_local_ip() == "10.0.0.5"
 
     transport_mod.set_data_plane_ip(None)
@@ -42,8 +44,10 @@ def test_transport_data_plane_ip_overrides(monkeypatch):
 
 
 def test_transport_auto_detect_fallback(monkeypatch):
+    from agent.config import settings
+
     transport_mod.set_data_plane_ip(None)
-    monkeypatch.setattr(transport_mod.settings, "local_ip", "", raising=False)
+    monkeypatch.setattr(settings, "local_ip", "", raising=False)
     monkeypatch.setattr(transport_mod, "_detect_local_ip", lambda: "198.51.100.2")
     assert transport_mod.get_vxlan_local_ip() == "198.51.100.2"
 
@@ -206,7 +210,9 @@ def test_piggyback_extract_success(monkeypatch):
 
     monkeypatch.setattr(session_registry, "PtyInjector", FakeInjector)
     monkeypatch.setattr(session_registry.asyncio, "run_coroutine_threadsafe", run_coroutine_threadsafe)
-    monkeypatch.setattr(session_registry.time, "sleep", lambda *_args, **_kwargs: None)
+    import time
+
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
 
     session = session_registry.ActiveConsoleSession(
         domain_name="lab4",
@@ -236,4 +242,3 @@ def test_console_lock_timeout(monkeypatch):
                 pass
     finally:
         lock.release()
-

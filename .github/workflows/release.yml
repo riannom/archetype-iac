@@ -72,7 +72,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           cd web
-          npm run test:coverage -- --run --coverage.thresholds.lines=45 --coverage.thresholds.functions=40 --coverage.thresholds.statements=45 --coverage.thresholds.branches=40
+          npm run test:coverage -- --run --pool=forks --coverage.thresholds.lines=45 --coverage.thresholds.functions=40 --coverage.thresholds.statements=45 --coverage.thresholds.branches=40
 
   lint:
     name: Lint

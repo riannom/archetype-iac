@@ -1,30 +1,22 @@
 from __future__ import annotations
 
-import pytest
-
 from agent.network import vlan as vlan_mod
 
 
-def test_vlan_pool_allocation_and_release():
-    pool = vlan_mod.VlanPool(start=100, end=105)
-
-    v1 = pool.allocate()
-    v2 = pool.allocate()
-
-    assert v1 == 100
-    assert v2 == 101
-
-    pool.release(v1)
-    v3 = pool.allocate()
-    assert v3 == 100
+def test_create_vlan_interface_rejects_invalid_id():
+    mgr = vlan_mod.VlanManager()
+    assert mgr.create_vlan_interface("eth0", 0, "lab1") is None
+    assert mgr.create_vlan_interface("eth0", 4095, "lab1") is None
 
 
-def test_vlan_pool_exhaustion():
-    pool = vlan_mod.VlanPool(start=1, end=2)
-    assert pool.allocate() == 1
-    assert pool.allocate() == 2
+def test_cleanup_lab_removes_tracked_interfaces(monkeypatch):
+    mgr = vlan_mod.VlanManager()
+    mgr._interfaces_by_lab["lab1"] = {"eth0.100", "eth0.200"}
 
-    with pytest.raises(RuntimeError):
-        pool.allocate()
+    deleted = []
+    monkeypatch.setattr(mgr, "delete_vlan_interface", lambda name: deleted.append(name) or True)
 
+    removed = mgr.cleanup_lab("lab1")
+    assert sorted(removed) == sorted(["eth0.100", "eth0.200"])
+    assert sorted(deleted) == sorted(["eth0.100", "eth0.200"])
 

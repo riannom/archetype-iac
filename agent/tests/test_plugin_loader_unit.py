@@ -45,7 +45,7 @@ def test_discover_entrypoint_plugins(monkeypatch):
             assert group == "agent.plugins"
             return [FakeEP(DummyPlugin)]
 
-    monkeypatch.setattr(loader_mod, "entry_points", lambda: FakeEPS())
+    monkeypatch.setattr("importlib.metadata.entry_points", lambda: FakeEPS())
 
     plugins = list(loader_mod._discover_entrypoint_plugins())
     assert plugins == [DummyPlugin]
@@ -64,7 +64,7 @@ def test_load_entrypoint_plugins_skips_duplicates(monkeypatch):
         def select(self, group=None):
             return [FakeEP(DummyPlugin)]
 
-    monkeypatch.setattr(loader_mod, "entry_points", lambda: FakeEPS())
+    monkeypatch.setattr("importlib.metadata.entry_points", lambda: FakeEPS())
 
     # Register first time
     loaded = loader_mod.load_entrypoint_plugins()
@@ -110,4 +110,3 @@ def test_get_plugin_for_kind():
 def test_builtin_package_imports():
     import agent.plugins.builtin as builtin_pkg
     assert hasattr(builtin_pkg, "__file__")
-
