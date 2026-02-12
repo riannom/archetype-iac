@@ -263,6 +263,74 @@ describe("Sidebar", () => {
   });
 
   describe("Device filtering", () => {
+    it("matches image status by device kind when image is keyed by canonical kind", () => {
+      const cat9kModel: DeviceModel = {
+        id: "cat9000v-uadp",
+        kind: "cisco_cat9kv",
+        name: "BETA CAT9000v UADP",
+        type: DeviceType.ROUTER,
+        icon: "fa-microchip",
+        versions: ["17.15.03"],
+        isActive: true,
+        vendor: "Cisco",
+      };
+      const categories = [{ name: "Network Devices", models: [cat9kModel] }];
+      const images = [
+        {
+          id: "img-cat9k",
+          device_id: "cisco_cat9kv",
+          kind: "qcow2",
+          reference: "cat9kv_prd.17.15.03.qcow2",
+          is_default: false,
+        },
+      ];
+
+      render(
+        <Sidebar
+          categories={categories}
+          imageLibrary={images}
+          onAddDevice={mockOnAddDevice}
+          onAddAnnotation={mockOnAddAnnotation}
+        />
+      );
+
+      // Default image filter is "has_image", so this would be hidden without kind matching.
+      expect(screen.getByText("BETA CAT9000v UADP")).toBeInTheDocument();
+    });
+
+    it("matches Cat9000v image status via alias when kind is missing", () => {
+      const cat9kModel: DeviceModel = {
+        id: "cat9000v-q200",
+        name: "BETA CAT9000v Q200",
+        type: DeviceType.ROUTER,
+        icon: "fa-microchip",
+        versions: ["17.15.03"],
+        isActive: true,
+        vendor: "Cisco",
+      };
+      const categories = [{ name: "Network Devices", models: [cat9kModel] }];
+      const images = [
+        {
+          id: "img-cat9k",
+          device_id: "cisco_cat9kv",
+          kind: "qcow2",
+          reference: "cat9kv_prd.17.15.03.qcow2",
+          is_default: false,
+        },
+      ];
+
+      render(
+        <Sidebar
+          categories={categories}
+          imageLibrary={images}
+          onAddDevice={mockOnAddDevice}
+          onAddAnnotation={mockOnAddAnnotation}
+        />
+      );
+
+      expect(screen.getByText("BETA CAT9000v Q200")).toBeInTheDocument();
+    });
+
     it("displays count of devices per category", () => {
       render(
         <Sidebar

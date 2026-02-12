@@ -34,9 +34,20 @@ class TestVIRL2ToVendorMap:
     def test_router_mappings(self):
         """Test router device mappings."""
         assert VIRL2_TO_VENDOR_MAP["iosv"] == "cisco_iosv"
+        assert VIRL2_TO_VENDOR_MAP["iosvl2"] == "iosvl2"
+        assert VIRL2_TO_VENDOR_MAP["cat8000v"] == "c8000v"
         assert VIRL2_TO_VENDOR_MAP["csr1000v"] == "cisco_csr1000v"
         assert VIRL2_TO_VENDOR_MAP["iosxrv9000"] == "cisco_iosxr"
         assert VIRL2_TO_VENDOR_MAP["nxos"] == "cisco_n9kv"
+        assert VIRL2_TO_VENDOR_MAP["nxosv9000"] == "cisco_n9kv"
+
+    def test_iol_mappings(self):
+        """Test IOL device mappings."""
+        assert VIRL2_TO_VENDOR_MAP["iol-xe"] == "iol-xe"
+        assert VIRL2_TO_VENDOR_MAP["iol-xe-serial-4eth"] == "iol-xe"
+        assert VIRL2_TO_VENDOR_MAP["iol"] == "iol-xe"
+        assert VIRL2_TO_VENDOR_MAP["iol-l2"] == "iol-l2"
+        assert VIRL2_TO_VENDOR_MAP["ioll2-xe"] == "iol-l2"
 
     def test_linux_mappings(self):
         """Test Linux/container device mappings."""

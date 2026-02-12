@@ -45,6 +45,19 @@ const testDeviceModels: DeviceModel[] = [
     portStartIndex: 1,
     maxPorts: 34,
   },
+  {
+    id: "c8000v",
+    type: DeviceType.ROUTER,
+    name: "Catalyst 8000v",
+    icon: "fa-arrows-to-dot",
+    versions: ["17.16"],
+    isActive: true,
+    vendor: "Cisco",
+    kind: "cisco_c8000v",
+    portNaming: "GigabitEthernet",
+    portStartIndex: 1,
+    maxPorts: 12,
+  },
 ];
 
 beforeAll(() => {
@@ -327,6 +340,30 @@ describe("usePortManager", () => {
 
       const srlInterfaces = result.current.getAvailableInterfaces("srl-node", 2);
       expect(srlInterfaces[0]).toBe("e1-1");
+    });
+
+    it("uses Cat9000v fallback interface pattern for alias models", () => {
+      const nodes: Node[] = [
+        createDeviceNode({ id: "cat9k-uadp", model: "cat9000v-uadp" }),
+      ];
+
+      const { result } = renderHook(() => usePortManager(nodes, []));
+
+      const cat9kInterfaces = result.current.getAvailableInterfaces("cat9k-uadp", 2);
+      expect(cat9kInterfaces[0]).toBe("GigabitEthernet1/0/1");
+      expect(cat9kInterfaces[1]).toBe("GigabitEthernet1/0/2");
+    });
+
+    it("resolves legacy Cisco alias models to canonical patterns", () => {
+      const nodes: Node[] = [
+        createDeviceNode({ id: "legacy-c8000v", model: "cat8000v" }),
+      ];
+
+      const { result } = renderHook(() => usePortManager(nodes, []));
+      const interfaces = result.current.getAvailableInterfaces("legacy-c8000v", 2);
+
+      expect(interfaces[0]).toBe("GigabitEthernet1");
+      expect(interfaces[1]).toBe("GigabitEthernet2");
     });
 
     it("returns default count of 10 interfaces", () => {

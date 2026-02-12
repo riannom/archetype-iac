@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import logging
 import re
 from typing import Optional
 
 from app.config import settings
 from app.services.device_constraints import validate_minimum_hardware
 
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # QCOW2 DEVICE DETECTION FOR VRNETLAB BUILDS
@@ -227,7 +229,27 @@ def load_custom_devices() -> list[dict]:
     if not path.exists():
         return []
     data = json.loads(path.read_text(encoding="utf-8"))
-    return data.get("devices", [])
+    devices = data.get("devices", [])
+
+    # Prevent shadowing first-class vendor models with stale custom entries.
+    try:
+        from agent.vendors import VENDOR_CONFIGS, get_kind_for_device, _get_config_by_kind
+
+        vendor_ids = {key.lower() for key in VENDOR_CONFIGS.keys()}
+        def _shadows_vendor(device_id: str) -> bool:
+            did = (device_id or "").lower()
+            if did in vendor_ids:
+                return True
+            kind = get_kind_for_device(did)
+            return _get_config_by_kind(kind) is not None
+
+        filtered = [d for d in devices if not _shadows_vendor(d.get("id") or "")]
+        shadowed = len(devices) - len(filtered)
+        if shadowed:
+            logger.warning("Ignoring %s custom device(s) shadowed by vendor registry", shadowed)
+        return filtered
+    except Exception:
+        return devices
 
 
 def load_hidden_devices() -> list[str]:
@@ -324,6 +346,20 @@ def add_custom_device(device: dict) -> dict:
         The added device entry
     """
     devices = load_custom_devices()
+
+    # Don't allow custom devices to shadow built-in vendor IDs.
+    try:
+        from agent.vendors import VENDOR_CONFIGS, get_kind_for_device, _get_config_by_kind
+
+        did = (device.get("id") or "").lower()
+        if did in {k.lower() for k in VENDOR_CONFIGS.keys()}:
+            raise ValueError(f"Device '{device.get('id')}' already exists as a built-in vendor device")
+
+        kind = get_kind_for_device(did)
+        if _get_config_by_kind(kind) is not None:
+            raise ValueError(f"Device '{device.get('id')}' already exists as a built-in vendor device")
+    except ImportError:
+        pass
 
     # Check for duplicate
     for existing in devices:

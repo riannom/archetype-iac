@@ -122,6 +122,22 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     return statusMap;
   }, [imageLibrary]);
 
+  const getDeviceImageStatus = useCallback((device: DeviceModel) => {
+    const byId = deviceImageStatus.get(device.id);
+    if (byId) return byId;
+    if (device.kind) {
+      const byKind = deviceImageStatus.get(device.kind);
+      if (byKind) return byKind;
+    }
+
+    const aliases = IMAGE_COMPAT_ALIASES[(device.id || '').toLowerCase()] || [];
+    for (const alias of aliases) {
+      const byAlias = deviceImageStatus.get(alias);
+      if (byAlias) return byAlias;
+    }
+    return undefined;
+  }, [deviceImageStatus]);
+
   // Filter devices based on search and filters
   const filterDevice = (device: DeviceModel): boolean => {
     // Search filter
@@ -148,7 +164,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
 
     // Image status filter
     if (imageStatus !== 'all') {
-      const status = deviceImageStatus.get(device.id);
+      const status = getDeviceImageStatus(device);
       if (imageStatus === 'has_default' && !status?.hasDefault) return false;
       if (imageStatus === 'has_image' && !status?.hasImage) return false;
       if (imageStatus === 'no_image' && status?.hasImage) return false;
@@ -184,7 +200,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
       if (cat.models) return cat.models.length > 0;
       return true;
     });
-  }, [categories, searchQuery, selectedVendors, selectedTypes, imageStatus, deviceImageStatus]);
+  }, [categories, searchQuery, selectedVendors, selectedTypes, imageStatus, getDeviceImageStatus]);
 
   // Count filtered devices per category
   const getCategoryCount = (cat: typeof categories[0]) => {
@@ -251,7 +267,8 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
   };
 
   const getImageStatusIndicator = (deviceId: string) => {
-    const status = deviceImageStatus.get(deviceId);
+    const device = allDevices.find(d => d.id === deviceId);
+    const status = device ? getDeviceImageStatus(device) : deviceImageStatus.get(deviceId);
     if (status?.hasDefault) {
       return (
         <span
@@ -488,3 +505,9 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
 };
 
 export default Sidebar;
+  const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
+    'cat9000v-uadp': ['cisco_cat9kv'],
+    'cat9000v-q200': ['cisco_cat9kv'],
+    'cat9000v_uadp': ['cisco_cat9kv'],
+    'cat9000v_q200': ['cisco_cat9kv'],
+  };

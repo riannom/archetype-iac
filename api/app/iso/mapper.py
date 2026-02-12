@@ -28,16 +28,25 @@ VIRL2_TO_VENDOR_MAP = {
     "asav": "cisco_asav",
     # Wireless
     "cat9800": "cat9800",
+    # Catalyst 9000v variants
+    "cat9000v-q200": "cat9000v-q200",
+    "cat9000v_q200": "cat9000v-q200",
+    "cat9000v-uadp": "cat9000v-uadp",
+    "cat9000v_uadp": "cat9000v-uadp",
     # Routers
     "iosv": "cisco_iosv",
     "iosvl2": "iosvl2",
+    "cat8000v": "c8000v",
     "csr1000v": "cisco_csr1000v",
     "iosxrv9000": "cisco_iosxr",
     "nxos": "cisco_n9kv",
+    "nxosv9000": "cisco_n9kv",
     # IOL (IOS on Linux) - binary images
     "iol-xe": "iol-xe",
-    "iol": "iol",
+    "iol-xe-serial-4eth": "iol-xe",
+    "iol": "iol-xe",
     "iol-l2": "iol-l2",
+    "ioll2-xe": "iol-l2",
     # Linux/Containers
     "alpine": "linux",
     "ubuntu": "linux",

@@ -13,11 +13,13 @@ from unittest.mock import patch
 import pytest
 
 from app.image_store import (
+    add_custom_device,
     create_image_entry,
     delete_image_entry,
     detect_device_from_filename,
     detect_qcow2_device_type,
     find_image_by_id,
+    load_custom_devices,
     image_matches_device,
     load_manifest,
     save_manifest,
@@ -208,6 +210,68 @@ class TestManifestOperations:
             image = loaded["images"][0]
             assert image["device_id"] == "cisco_iosv"
             assert image["compatible_devices"] == ["cisco_iosv"]
+
+
+class TestCustomDeviceShadowing:
+    """Tests for custom device behavior when IDs overlap vendor registry."""
+
+    def test_load_custom_devices_filters_vendor_shadow_entries(self, tmp_path):
+        custom_path = tmp_path / "custom_devices.json"
+        custom_path.write_text(
+            json.dumps({
+                "devices": [
+                    {"id": "cat9000v-uadp", "name": "Legacy Custom"},
+                    {"id": "my-custom-device", "name": "Custom Device"},
+                ]
+            }),
+            encoding="utf-8",
+        )
+
+        with patch("app.image_store.custom_devices_path", return_value=custom_path):
+            with patch("agent.vendors.VENDOR_CONFIGS", {"cat9000v-uadp": object(), "linux": object()}):
+                devices = load_custom_devices()
+
+        assert [d["id"] for d in devices] == ["my-custom-device"]
+
+    def test_add_custom_device_rejects_vendor_id_shadow(self, tmp_path):
+        custom_path = tmp_path / "custom_devices.json"
+        custom_path.write_text(json.dumps({"devices": []}), encoding="utf-8")
+
+        with patch("app.image_store.custom_devices_path", return_value=custom_path):
+            with patch("agent.vendors.VENDOR_CONFIGS", {"cat9000v-uadp": object()}):
+                with pytest.raises(ValueError, match="built-in vendor device"):
+                    add_custom_device({"id": "cat9000v-uadp", "name": "Duplicate"})
+
+    def test_load_custom_devices_filters_vendor_alias_shadow_entries(self, tmp_path):
+        custom_path = tmp_path / "custom_devices.json"
+        custom_path.write_text(
+            json.dumps({
+                "devices": [
+                    {"id": "cat8000v", "name": "Legacy Alias"},
+                    {"id": "my-custom-device", "name": "Custom Device"},
+                ]
+            }),
+            encoding="utf-8",
+        )
+
+        with patch("app.image_store.custom_devices_path", return_value=custom_path):
+            with patch("agent.vendors.VENDOR_CONFIGS", {"c8000v": object(), "linux": object()}):
+                with patch("agent.vendors.get_kind_for_device", lambda d: "cisco_c8000v" if d == "cat8000v" else d):
+                    with patch("agent.vendors._get_config_by_kind", lambda k: object() if k == "cisco_c8000v" else None):
+                        devices = load_custom_devices()
+
+        assert [d["id"] for d in devices] == ["my-custom-device"]
+
+    def test_add_custom_device_rejects_vendor_alias_shadow(self, tmp_path):
+        custom_path = tmp_path / "custom_devices.json"
+        custom_path.write_text(json.dumps({"devices": []}), encoding="utf-8")
+
+        with patch("app.image_store.custom_devices_path", return_value=custom_path):
+            with patch("agent.vendors.VENDOR_CONFIGS", {"c8000v": object()}):
+                with patch("agent.vendors.get_kind_for_device", lambda d: "cisco_c8000v" if d == "cat8000v" else d):
+                    with patch("agent.vendors._get_config_by_kind", lambda k: object() if k == "cisco_c8000v" else None):
+                        with pytest.raises(ValueError, match="built-in vendor device"):
+                            add_custom_device({"id": "cat8000v", "name": "Alias Duplicate"})
 
 
 class TestImageEntryOperations:

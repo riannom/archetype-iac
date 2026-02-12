@@ -41,6 +41,31 @@ const FALLBACK_PATTERNS: Record<string, InterfacePattern> = {
     managementInterface: '',
     maxInterfaces: 1,
   },
+  // Cisco Catalyst 9000v variants (Q200/UADP from RefPlat metadata)
+  'cat9000v-q200': {
+    pattern: 'GigabitEthernet1/0/{index}',
+    startIndex: 1,
+    managementInterface: 'GigabitEthernet0/0',
+    maxInterfaces: 24,
+  },
+  'cat9000v-uadp': {
+    pattern: 'GigabitEthernet1/0/{index}',
+    startIndex: 1,
+    managementInterface: 'GigabitEthernet0/0',
+    maxInterfaces: 24,
+  },
+  cat9000v_q200: {
+    pattern: 'GigabitEthernet1/0/{index}',
+    startIndex: 1,
+    managementInterface: 'GigabitEthernet0/0',
+    maxInterfaces: 24,
+  },
+  cat9000v_uadp: {
+    pattern: 'GigabitEthernet1/0/{index}',
+    startIndex: 1,
+    managementInterface: 'GigabitEthernet0/0',
+    maxInterfaces: 24,
+  },
 };
 
 /**
@@ -56,6 +81,14 @@ const DEVICE_ALIASES: Record<string, string> = {
   // Nokia SR Linux aliases
   srl: 'nokia_srlinux',
   srlinux: 'nokia_srlinux',
+  // Cisco legacy/custom IDs from older RefPlat imports
+  cat8000v: 'c8000v',
+  nxosv9000: 'cisco_n9kv',
+  iosxrv9000: 'cisco_iosxr',
+  ioll2_xe: 'iol-l2',
+  'ioll2-xe': 'iol-l2',
+  iol_xe: 'iol-xe',
+  'iol-xe-serial-4eth': 'iol-xe',
 };
 
 /**
@@ -68,6 +101,23 @@ let _runtimePatterns: Record<string, InterfacePattern> = {};
  * Build an interface pattern from a DeviceModel's port configuration.
  */
 function buildPatternFromModel(model: DeviceModel): InterfacePattern {
+  // Cat9000v variants from RefPlat use explicit data-port naming:
+  // GigabitEthernet0/0 (mgmt) + GigabitEthernet1/0/1..24 (data).
+  const modelId = (model.id || '').toLowerCase();
+  if (
+    modelId === 'cat9000v-q200' ||
+    modelId === 'cat9000v-uadp' ||
+    modelId === 'cat9000v_q200' ||
+    modelId === 'cat9000v_uadp'
+  ) {
+    return {
+      pattern: 'GigabitEthernet1/0/{index}',
+      startIndex: 1,
+      managementInterface: 'GigabitEthernet0/0',
+      maxInterfaces: 24,
+    };
+  }
+
   const portNaming = model.portNaming || 'eth';
   const startIndex = model.portStartIndex ?? 1;
   const maxPorts = model.maxPorts ?? 32;

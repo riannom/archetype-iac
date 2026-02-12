@@ -40,6 +40,9 @@ NORMALIZE_CASES = [
     ("c8000v", "GigabitEthernet1", "eth1"),
     # Cisco Cat9800: GigabitEthernet, start=1
     ("cat9800", "GigabitEthernet1", "eth1"),
+    # Cisco Cat9000v aliases: GigabitEthernet1/0/{index}, start=1
+    ("cat9000v-uadp", "GigabitEthernet1/0/1", "eth1"),
+    ("cat9000v-q200", "GigabitEthernet1/0/8", "eth8"),
     # Juniper vSRX3: ge-0/0/, start=0
     ("juniper_vsrx3", "ge-0/0/0", "eth0"),
     ("juniper_vsrx3", "ge-0/0/3", "eth3"),

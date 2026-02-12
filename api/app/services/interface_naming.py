@@ -71,6 +71,18 @@ def _resolve_port_naming(device_type: str) -> tuple[str, int]:
         port_naming = override.get("portNaming", port_naming)
         port_start_index = override.get("portStartIndex", port_start_index)
 
+    # Device-specific overrides for known alias variants that differ from
+    # their canonical kind defaults.
+    device_lower = (device_type or "").lower()
+    if device_lower in {
+        "cat9000v-q200",
+        "cat9000v_q200",
+        "cat9000v-uadp",
+        "cat9000v_uadp",
+    }:
+        port_naming = "GigabitEthernet1/0/{index}"
+        port_start_index = 1
+
     return port_naming, port_start_index
 
 
@@ -79,6 +91,8 @@ def _resolve_port_naming(device_type: str) -> tuple[str, int]:
 _FALLBACK_PATTERNS: list[tuple[re.Pattern, bool]] = [
     # GigabitEthernet0/0/0/{N} — Cisco IOS-XR
     (re.compile(r"^GigabitEthernet\d+/\d+/\d+/(\d+)$", re.IGNORECASE), False),
+    # GigabitEthernet1/0/{N} — Cisco Cat9000v
+    (re.compile(r"^GigabitEthernet\d+/\d+/(\d+)$", re.IGNORECASE), False),
     # GigabitEthernet0/{N} — Cisco IOS
     (re.compile(r"^GigabitEthernet\d+/(\d+)$", re.IGNORECASE), False),
     # GigabitEthernet{N} — Cisco generic
