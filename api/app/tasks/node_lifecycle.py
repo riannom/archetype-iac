@@ -1665,14 +1665,15 @@ class NodeLifecycleManager:
 
         # Resolve hardware specs: per-node config > device overrides > vendor defaults
         from app.services.device_service import get_device_service
-        node_config = json.loads(db_node.config_json) if db_node.config_json else None
-        hw_specs = get_device_service().resolve_hardware_specs(
-            kind,
-            node_config,
-            image,
-        )
 
         try:
+            node_config = json.loads(db_node.config_json) if db_node.config_json else None
+            hw_specs = get_device_service().resolve_hardware_specs(
+                kind,
+                node_config,
+                image,
+            )
+
             # Create container/VM
             create_result = await agent_client.create_node_on_agent(
                 self.agent,
@@ -2363,9 +2364,52 @@ class NodeLifecycleManager:
             self.session, self.lab.id, self.log_parts,
         )
 
+    async def _reconcile_node_placement_statuses(self) -> None:
+        """Align node_placements.status with final per-node outcomes.
+
+        Prevent stale "starting" placement rows when deploy/start paths fail
+        before a runtime object is actually created.
+        """
+        from app.tasks.jobs import _update_node_placements
+
+        deployed_names: list[str] = []
+        failed_names: list[str] = []
+
+        for ns in self.node_states:
+            if ns.actual_state == NodeActualState.RUNNING.value:
+                deployed_names.append(ns.node_name)
+                continue
+
+            if ns.desired_state == NodeDesiredState.RUNNING.value and ns.actual_state in (
+                NodeActualState.ERROR.value,
+                NodeActualState.UNDEPLOYED.value,
+                NodeActualState.STOPPED.value,
+                NodeActualState.EXITED.value,
+            ):
+                failed_names.append(ns.node_name)
+
+        if deployed_names:
+            await _update_node_placements(
+                self.session,
+                self.lab.id,
+                self.agent.id,
+                deployed_names,
+                status="deployed",
+            )
+
+        if failed_names:
+            await _update_node_placements(
+                self.session,
+                self.lab.id,
+                self.agent.id,
+                failed_names,
+                status="failed",
+            )
+
     async def _finalize(self) -> LifecycleResult:
         """Finalize job status and broadcast result."""
         self._converge_stopped_desired_error_states()
+        await self._reconcile_node_placement_statuses()
         error_count = sum(
             1
             for ns in self.node_states
