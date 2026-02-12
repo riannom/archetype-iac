@@ -660,6 +660,47 @@ class TestNodeStates:
         test_db.refresh(node)
         assert node.desired_state == "running"
 
+    def test_set_node_desired_state_stopped_clears_error(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
+        auth_headers: dict,
+        monkeypatch,
+    ):
+        """Stopping an error node should converge to stopped without sync job."""
+        from app.routers import labs as labs_router
+
+        sync_calls = []
+        monkeypatch.setattr(labs_router, "has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr(
+            labs_router,
+            "_create_node_sync_job",
+            lambda *a, **kw: sync_calls.append("called"),
+        )
+
+        lab, nodes = sample_lab_with_nodes
+        node = nodes[0]
+        node.desired_state = "stopped"
+        node.actual_state = "error"
+        node.error_message = "previous failure"
+        node.enforcement_attempts = 3
+        test_db.commit()
+
+        response = test_client.put(
+            f"/labs/{lab.id}/nodes/{node.node_id}/desired-state",
+            json={"state": "stopped"},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+        test_db.refresh(node)
+        assert node.desired_state == "stopped"
+        assert node.actual_state == "stopped"
+        assert node.error_message is None
+        assert node.enforcement_attempts == 0
+        assert sync_calls == []
+
     def test_set_all_nodes_desired_state(
         self,
         test_client: TestClient,

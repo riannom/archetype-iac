@@ -500,27 +500,30 @@ class NodeLifecycleManager:
         # Priority 1: Explicit placement (Node.host_id)
         explicit_placement_failures = []
         for ns in self.node_states:
-            db_node = self.db_nodes_map.get(ns.node_name)
+            # Prefer exact container-name lookup, but fall back to gui_id-based
+            # lookup so explicit host assignment is still enforced when
+            # NodeState.node_name is stale.
+            db_node = self.db_nodes_map.get(ns.node_name) or self.db_nodes_by_gui_id.get(ns.node_id)
             if db_node and db_node.host_id:
                 host_agent = self.session.get(models.Host, db_node.host_id)
                 if not host_agent:
                     explicit_placement_failures.append(
-                        f"{db_node.container_name}: assigned host "
+                        f"{ns.node_name}: assigned host "
                         f"{db_node.host_id} not found"
                     )
                 elif not agent_client.is_agent_online(host_agent):
                     explicit_placement_failures.append(
-                        f"{db_node.container_name}: assigned host "
+                        f"{ns.node_name}: assigned host "
                         f"{host_agent.name} is offline"
                     )
                 else:
-                    all_node_agents[db_node.container_name] = db_node.host_id
+                    all_node_agents[ns.node_name] = db_node.host_id
                     logger.info(
                         "Placement decision",
                         extra={
                             "event": "placement_decision",
                             "lab_id": self.lab.id,
-                            "node_name": db_node.container_name,
+                            "node_name": ns.node_name,
                             "agent_id": db_node.host_id,
                             "agent_name": host_agent.name,
                             "decision_source": "explicit_host_id",
@@ -2312,6 +2315,33 @@ class NodeLifecycleManager:
                 },
             )
 
+    def _converge_stopped_desired_error_states(self) -> int:
+        """Normalize desired=stopped nodes stuck in error to stopped.
+
+        This is a safety guard: once the user intent is "stopped", stale error
+        state should not block stop controls or keep retry/error UI flags.
+        """
+        normalized = 0
+        for ns in self.node_states:
+            if (
+                ns.desired_state == NodeDesiredState.STOPPED.value
+                and ns.actual_state == NodeActualState.ERROR.value
+            ):
+                ns.actual_state = NodeActualState.STOPPED.value
+                ns.error_message = None
+                ns.image_sync_status = None
+                ns.image_sync_message = None
+                ns.stopping_started_at = None
+                ns.starting_started_at = None
+                ns.boot_started_at = None
+                ns.is_ready = False
+                ns.enforcement_attempts = 0
+                ns.enforcement_failed_at = None
+                ns.last_enforcement_at = None
+                normalized += 1
+                self._broadcast_state(ns, name_suffix="stopped")
+        return normalized
+
     async def _post_operation_cleanup(self):
         """Post-operation cleanup: create cross-host VXLAN links."""
         from app.tasks.jobs import _create_cross_host_links_if_ready
@@ -2322,6 +2352,7 @@ class NodeLifecycleManager:
 
     async def _finalize(self) -> LifecycleResult:
         """Finalize job status and broadcast result."""
+        self._converge_stopped_desired_error_states()
         error_count = sum(
             1
             for ns in self.node_states

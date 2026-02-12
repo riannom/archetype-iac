@@ -419,3 +419,78 @@ class TestUpdateNodeImageSyncStatus:
             test_db.refresh(node)
             assert node.image_sync_status is None
             assert node.image_sync_message is None
+
+
+class TestImageSyncCallbackAndKinds:
+    """Regression tests for image-sync callback and non-Docker refs."""
+
+    @pytest.mark.asyncio
+    async def test_check_and_start_image_sync_fails_qcow2_without_docker_sync(
+        self,
+        test_db: Session,
+        sample_lab_with_nodes,
+        sample_host: models.Host,
+    ):
+        """qcow2 refs should not start Docker sync jobs."""
+        from app.tasks.image_sync import check_and_start_image_sync
+
+        lab, nodes = sample_lab_with_nodes
+        ref = "/var/lib/archetype/images/nexus9300v64.10.5.3.F.qcow2"
+        image_to_nodes = {ref: [nodes[0].node_name]}
+
+        manifest = {
+            "images": [
+                {
+                    "id": "qcow2:nexus9300v64.10.5.3.F.qcow2",
+                    "kind": "qcow2",
+                    "reference": ref,
+                }
+            ]
+        }
+
+        with patch("app.tasks.image_sync.check_agent_has_image", new=AsyncMock(return_value=False)), \
+             patch("app.tasks.image_sync.load_manifest", return_value=manifest):
+            syncing, failed, logs = await check_and_start_image_sync(
+                host_id=sample_host.id,
+                image_references=[ref],
+                database=test_db,
+                lab_id=lab.id,
+                job_id="job-1",
+                node_ids=[nodes[0].node_id],
+                image_to_nodes=image_to_nodes,
+                provider="libvirt",
+            )
+
+        assert syncing == set()
+        assert nodes[0].node_name in failed
+        assert any("not docker" in line.lower() for line in logs)
+
+    def test_trigger_re_reconcile_skips_nodes_stopped_by_user(
+        self,
+        test_db: Session,
+        sample_lab_with_nodes,
+    ):
+        """Image callback should not requeue nodes whose desired_state=stopped."""
+        from app.tasks.image_sync import _trigger_re_reconcile
+
+        lab, nodes = sample_lab_with_nodes
+        nodes[0].desired_state = "stopped"
+        test_db.commit()
+        before = test_db.query(models.Job).count()
+
+        def _consume(coro, name=None):
+            coro.close()
+            return None
+
+        with patch("app.tasks.jobs.run_node_reconcile", new=AsyncMock()), \
+             patch("app.utils.async_tasks.safe_create_task", side_effect=_consume) as mock_safe:
+            _trigger_re_reconcile(
+                session=test_db,
+                lab_id=lab.id,
+                node_ids=[nodes[0].node_id],
+                provider="docker",
+            )
+
+        after = test_db.query(models.Job).count()
+        assert after == before
+        mock_safe.assert_not_called()

@@ -105,9 +105,10 @@ export function mapActualToRuntime(
   willRetry?: boolean,
   displayState?: string,
 ): NodeRuntimeStatus | null {
+  const canAutoRetry = willRetry && desiredState === 'running';
   // Prefer server-computed display_state
   if (displayState) {
-    if (displayState === 'error' && willRetry) return 'booting';
+    if (displayState === 'error' && canAutoRetry) return 'booting';
     return DISPLAY_STATE_MAP[displayState] ?? null;
   }
 
@@ -122,7 +123,7 @@ export function mapActualToRuntime(
     case 'pending':
       return desiredState === 'running' ? 'booting' : 'stopped';
     case 'error':
-      return willRetry ? 'booting' : 'error';
+      return canAutoRetry ? 'booting' : 'error';
     case 'stopped':
     case 'exited':
       return 'stopped';

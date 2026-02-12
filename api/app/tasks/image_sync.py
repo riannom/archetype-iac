@@ -655,7 +655,10 @@ async def check_and_start_image_sync(
             )
             return syncing_nodes, failed_nodes, log_entries
 
-        # Find image IDs in library for missing references
+        # Find image entries in library for missing references.
+        # Docker images can be pushed via image sync. File-based images
+        # (qcow2/img/iol paths) are not pushed by this path and must be
+        # available via compatible provider/storage on the target host.
         manifest = load_manifest()
         lib_images_by_ref: dict[str, dict] = {}
         for lib_image in manifest.get("images", []):
@@ -670,6 +673,29 @@ async def check_and_start_image_sync(
 
             if not lib_image:
                 log_entries.append(f"  {reference}: not found in library - cannot sync")
+                for node_name in affected_nodes:
+                    failed_nodes.add(node_name)
+                continue
+
+            if lib_image.get("kind") != "docker":
+                host_providers: list[str] = []
+                try:
+                    import json
+                    caps = json.loads(host.capabilities) if isinstance(host.capabilities, str) else (host.capabilities or {})
+                    host_providers = caps.get("providers", [])
+                except Exception:
+                    host_providers = []
+
+                required_provider = "libvirt" if reference.endswith((".qcow2", ".img")) else "docker"
+                reason = (
+                    f"target host does not support {required_provider}"
+                    if required_provider not in host_providers
+                    else "file-based image sync is not supported (host must already have image path)"
+                )
+                log_entries.append(
+                    f"  {reference}: kind={lib_image.get('kind')} is not Docker; "
+                    f"{reason}"
+                )
                 for node_name in affected_nodes:
                     failed_nodes.add(node_name)
                 continue
@@ -897,7 +923,11 @@ def _trigger_re_reconcile(
     node_ids: list[str],
     provider: str,
 ) -> None:
-    """Re-trigger node reconciliation after image sync completes."""
+    """Re-trigger node reconciliation after image sync completes.
+
+    Only nodes still requesting running state are re-queued. This prevents
+    image-sync callbacks from overriding a user-issued stop request.
+    """
     import logging
 
     logger = logging.getLogger(__name__)
@@ -908,6 +938,23 @@ def _trigger_re_reconcile(
     lab = session.get(models.Lab, lab_id)
     if not lab:
         logger.warning(f"Cannot re-reconcile: lab {lab_id} not found")
+        return
+
+    runnable_node_ids = [
+        ns.node_id
+        for ns in session.query(models.NodeState)
+        .filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_id.in_(node_ids),
+            models.NodeState.desired_state == "running",
+        )
+        .all()
+    ]
+    if not runnable_node_ids:
+        logger.info(
+            f"Skipping image-callback re-reconcile for lab {lab_id}: "
+            "all target nodes are stopped"
+        )
         return
 
     job = models.Job(
@@ -922,7 +969,7 @@ def _trigger_re_reconcile(
 
     logger.info(f"Created image-callback job {job.id} for lab {lab_id}")
     safe_create_task(
-        run_node_reconcile(job.id, lab_id, node_ids, provider=provider),
+        run_node_reconcile(job.id, lab_id, runnable_node_ids, provider=provider),
         name=f"imgsync:callback:{job.id}"
     )
 

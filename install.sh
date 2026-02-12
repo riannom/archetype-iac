@@ -15,6 +15,7 @@ set -e
 #   --controller-url URL   Controller URL for remote agents
 #   --ip IP                Local IP for VXLAN networking (auto-detected)
 #   --port PORT            Agent port (default: 8001)
+#   --no-libvirt           Disable libvirt/KVM installation for standalone agents
 #   --uninstall            Remove installation
 #   --fresh                Clean reinstall (removes database/volumes)
 
@@ -42,6 +43,8 @@ AGENT_NAME=""
 CONTROLLER_URL=""
 LOCAL_IP=""
 AGENT_PORT="8001"
+INSTALL_LIBVIRT=true
+INSTALL_LIBVIRT_PYTHON=false
 UNINSTALL=false
 FRESH_INSTALL=false
 
@@ -71,6 +74,14 @@ while [[ $# -gt 0 ]]; do
         --port)
             AGENT_PORT="$2"
             shift 2
+            ;;
+        --libvirt)
+            INSTALL_LIBVIRT=true
+            shift
+            ;;
+        --no-libvirt)
+            INSTALL_LIBVIRT=false
+            shift
             ;;
         --uninstall)
             UNINSTALL=true
@@ -110,6 +121,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --controller-url URL Controller URL for remote agents"
             echo "  --ip IP              Local IP for VXLAN (auto-detected)"
             echo "  --port PORT          Agent port (default: 8001)"
+            echo "  --no-libvirt         Disable libvirt/KVM for standalone agents"
             echo "  --uninstall          Remove installation completely"
             echo "  --fresh              Clean reinstall (removes database/volumes)"
             echo "  --branch BRANCH      Install specific branch/tag (default: latest release)"
@@ -288,6 +300,11 @@ if [ "$INSTALL_CONTROLLER" = true ]; then
 fi
 if [ "$INSTALL_AGENT" = true ]; then
     echo "Agent:           YES (name: $AGENT_NAME)"
+    if [ "$INSTALL_LIBVIRT" = true ]; then
+        echo "VM support:      ENABLED (libvirt/KVM)"
+    else
+        echo "VM support:      DISABLED (--no-libvirt)"
+    fi
     if [ "$INSTALL_CONTROLLER" = true ]; then
         echo "Agent connects:  http://localhost:8000 (local controller)"
     else
@@ -384,6 +401,21 @@ install_agent_deps() {
             dnf install -y python3 python3-pip
             ;;
     esac
+
+    if [ "$INSTALL_LIBVIRT" = true ]; then
+        log_info "Installing libvirt/KVM dependencies..."
+        case $OS in
+            ubuntu|debian)
+                apt-get install -y -qq qemu-kvm libvirt-daemon-system libvirt-clients \
+                    libvirt-dev pkg-config gcc libc-dev qemu-utils
+                ;;
+            centos|rhel|rocky|almalinux|fedora)
+                dnf install -y qemu-kvm libvirt libvirt-client libvirt-devel pkgconfig gcc qemu-img
+                ;;
+        esac
+        systemctl enable --now libvirtd 2>/dev/null || true
+        INSTALL_LIBVIRT_PYTHON=true
+    fi
 
     # vrnetlab for building VM images from qcow2
     VRNETLAB_DIR="/opt/vrnetlab"
@@ -528,6 +560,10 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
     pip install --upgrade pip 2>&1 | tail -1
     log_info "Installing Python dependencies..."
     pip install --progress-bar off -r $AGENT_INSTALL_DIR/repo/agent/requirements.txt 2>&1 | grep -E "^(Collecting|Installing|Successfully)" || true
+    if [ "${INSTALL_LIBVIRT_PYTHON:-false}" = true ]; then
+        log_info "Installing libvirt-python..."
+        pip install --progress-bar off libvirt-python >/dev/null
+    fi
     log_info "Python dependencies installed"
 
     # Config
@@ -538,6 +574,8 @@ ARCHETYPE_AGENT_CONTROLLER_URL=$CONTROLLER_URL
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT
 ARCHETYPE_AGENT_ENABLE_CONTAINERLAB=true
+ARCHETYPE_AGENT_ENABLE_DOCKER=true
+ARCHETYPE_AGENT_ENABLE_LIBVIRT=$INSTALL_LIBVIRT
 ARCHETYPE_AGENT_ENABLE_VXLAN=true
 ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
 ARCHETYPE_GIT_SHA=$AGENT_COMMIT
@@ -552,7 +590,7 @@ EOF
     cat > /etc/systemd/system/archetype-agent.service << EOF
 [Unit]
 Description=Archetype Network Lab Agent
-After=network.target docker.service
+After=network.target docker.service libvirtd.service
 Requires=docker.service
 
 [Service]
@@ -618,6 +656,11 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
     echo "  Name:       $AGENT_NAME"
     echo "  Controller: $CONTROLLER_URL"
     echo "  Local IP:   $LOCAL_IP"
+    if [ "$INSTALL_LIBVIRT" = true ]; then
+        echo "  Libvirt:    enabled"
+    else
+        echo "  Libvirt:    disabled"
+    fi
     echo ""
     echo "  Status:     systemctl status archetype-agent"
     echo "  Logs:       journalctl -u archetype-agent -f"

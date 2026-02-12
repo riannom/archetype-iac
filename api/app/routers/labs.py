@@ -72,6 +72,7 @@ def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
     from app.config import settings
     node_data.will_retry = (
         state.actual_state == "error"
+        and state.desired_state == "running"
         and state.enforcement_attempts < settings.state_enforcement_max_retries
         and state.enforcement_failed_at is None
     )
@@ -176,6 +177,24 @@ def _create_node_sync_job(
         run_node_reconcile(job.id, lab.id, [node_id], provider=provider),
         name=f"sync:node:{job.id}"
     )
+
+
+def _converge_stopped_error_state(state: models.NodeState) -> bool:
+    """Force convergence when desired_state=stopped but actual_state=error."""
+    if state.desired_state == "stopped" and state.actual_state == "error":
+        state.actual_state = "stopped"
+        state.error_message = None
+        state.image_sync_status = None
+        state.image_sync_message = None
+        state.starting_started_at = None
+        state.stopping_started_at = None
+        state.boot_started_at = None
+        state.is_ready = False
+        state.enforcement_attempts = 0
+        state.enforcement_failed_at = None
+        state.last_enforcement_at = None
+        return True
+    return False
 
 
 def _upsert_node_states(
@@ -1059,12 +1078,19 @@ async def set_node_desired_state(
     # Update desired state (may differ from initial if record already existed)
     if desired_changed:
         state.desired_state = payload.state
+        normalized = False
+        if payload.state == "stopped":
+            normalized = _converge_stopped_error_state(state)
         database.commit()
         database.refresh(state)
 
         # Auto-sync: immediately trigger reconciliation for this node
         has_conflict, _ = has_conflicting_job(lab_id, "sync", session=database)
-        if not has_conflict and NodeStateMachine.needs_sync(state.actual_state, command):
+        if (
+            not normalized
+            and not has_conflict
+            and NodeStateMachine.needs_sync(state.actual_state, command)
+        ):
             _create_node_sync_job(database, lab, node_id, current_user)
 
     elif (
@@ -1084,6 +1110,10 @@ async def set_node_desired_state(
         has_conflict, _ = has_conflicting_job(lab_id, "sync", session=database)
         if not has_conflict:
             _create_node_sync_job(database, lab, node_id, current_user)
+    elif payload.state == "stopped":
+        if _converge_stopped_error_state(state):
+            database.commit()
+            database.refresh(state)
 
     return _enrich_node_state(state)
 
@@ -1149,6 +1179,10 @@ async def set_all_nodes_desired_state(
 
         # This node can be processed (proceed or reset_and_proceed)
         state.desired_state = payload.state
+
+        if command == "stop" and _converge_stopped_error_state(state):
+            affected_count += 1
+            continue
 
         # Reset enforcement state for error nodes being retried
         if classification == "reset_and_proceed":
@@ -1645,11 +1679,17 @@ async def check_nodes_ready(
             management_ip=state.management_ip,
         ))
 
+    nodes_should_run = [s for s in states if s.desired_state == "running"]
+    should_run_count = len(nodes_should_run)
+    all_ready = should_run_count == 0 or all(
+        s.is_ready and s.actual_state == "running" for s in nodes_should_run
+    )
+
     return schemas.LabReadinessResponse(
         lab_id=lab_id,
-        all_ready=ready_count == len(states) and len(states) > 0,
+        all_ready=all_ready,
         ready_count=ready_count,
-        total_count=len(states),
+        total_count=should_run_count,
         running_count=running_count,
         nodes=nodes_out,
     )
@@ -2044,9 +2084,23 @@ def _link_state_endpoint_key(link_state: models.LinkState) -> tuple[str, str, st
 
 def _choose_preferred_link_state(states: list[models.LinkState]) -> models.LinkState:
     """Choose one row to keep when duplicate endpoint records exist."""
+    def _is_canonical_row(state: models.LinkState) -> bool:
+        src_n, src_i, tgt_n, tgt_i = _link_state_endpoint_key(state)
+        canonical_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
+        stored_src_i = normalize_interface(state.source_interface)
+        stored_tgt_i = normalize_interface(state.target_interface)
+        return (
+            state.link_name == canonical_name
+            and state.source_node == src_n
+            and stored_src_i == src_i
+            and state.target_node == tgt_n
+            and stored_tgt_i == tgt_i
+        )
+
     return sorted(
         states,
         key=lambda s: (
+            _is_canonical_row(s),
             s.desired_state != "deleted",
             s.updated_at or datetime.min.replace(tzinfo=timezone.utc),
         ),

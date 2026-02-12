@@ -491,7 +491,7 @@ const StudioPage: React.FC = () => {
 
   // Save topology to backend (auto-save on changes)
   const saveTopology = useCallback(
-    async (labId: string, currentNodes: Node[], currentLinks: Link[]) => {
+    async (labId: string, currentNodes: Node[], currentLinks: Link[], rethrowOnError = false) => {
       if (currentNodes.length === 0) return;
       const graph: TopologyGraph = {
         nodes: currentNodes.map((node) => {
@@ -544,6 +544,9 @@ const StudioPage: React.FC = () => {
         addTaskLogEntry('info', 'Topology auto-saved');
       } catch (error) {
         console.error('Failed to save topology:', error);
+        if (rethrowOnError) {
+          throw error;
+        }
       }
     },
     [studioRequest, addTaskLogEntry]
@@ -577,7 +580,7 @@ const StudioPage: React.FC = () => {
     }
     // If dirty, save immediately
     if (topologyDirtyRef.current) {
-      await saveTopology(activeLab.id, nodesRef.current, linksRef.current);
+      await saveTopology(activeLab.id, nodesRef.current, linksRef.current, true);
     }
   }, [activeLab, saveTopology]);
 
@@ -1090,6 +1093,10 @@ const StudioPage: React.FC = () => {
     addTaskLogEntry('info', `Setting "${nodeName}" to ${desiredState}...`);
 
     try {
+      if (desiredState === 'running') {
+        await flushTopologySave();
+      }
+
       // Optimistically update nodeStates — runtimeStates derived automatically
       const transitionalState = status === 'stopped' ? 'stopping' : 'starting';
       optimisticGuardRef.current.set(nodeId, Date.now() + 5000);
@@ -1145,7 +1152,7 @@ const StudioPage: React.FC = () => {
         return next;
       });
     }
-  }, [activeLab, nodes, pendingNodeOps, studioRequest, addTaskLogEntry, loadNodeStates, loadJobs]);
+  }, [activeLab, nodes, pendingNodeOps, studioRequest, addTaskLogEntry, loadNodeStates, loadJobs, flushTopologySave]);
 
   const handleOpenConsole = (nodeId: string) => {
     const node = nodes.find((n) => n.id === nodeId);
@@ -1450,7 +1457,12 @@ const StudioPage: React.FC = () => {
   };
 
   const handleUpdateNode = (id: string, updates: Partial<Node>) => {
-    setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, ...updates } as Node : node)));
+    setNodes((prev) => {
+      const next = prev.map((node) => (node.id === id ? { ...node, ...updates } as Node : node));
+      // Keep ref in sync immediately so flushTopologySave() sees latest host assignment.
+      nodesRef.current = next;
+      return next;
+    });
     // Auto-save topology if name, model, version, or host changed (device nodes only)
     const deviceUpdates = updates as Partial<DeviceNode>;
     if (updates.name || deviceUpdates.model || deviceUpdates.version || deviceUpdates.host

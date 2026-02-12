@@ -173,6 +173,7 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
                     host_id = placement_by_node.get(ns.node_name) or lab.agent_id
                     will_retry = (
                         ns.actual_state == "error"
+                        and ns.desired_state == "running"
                         and ns.enforcement_attempts < settings.state_enforcement_max_retries
                         and ns.enforcement_failed_at is None
                     )

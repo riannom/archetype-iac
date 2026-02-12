@@ -38,6 +38,10 @@ describe('mapActualToRuntime', () => {
     expect(mapActualToRuntime('error', 'running', true)).toBe('booting');
   });
 
+  it('maps "error" with willRetry=true but desired=stopped to "error"', () => {
+    expect(mapActualToRuntime('error', 'stopped', true)).toBe('error');
+  });
+
   it('maps "stopped" to "stopped"', () => {
     expect(mapActualToRuntime('stopped')).toBe('stopped');
   });
@@ -77,6 +81,10 @@ describe('mapActualToRuntime', () => {
 
   it('server display_state "error" with willRetry shows booting', () => {
     expect(mapActualToRuntime('error', 'running', true, 'error')).toBe('booting');
+  });
+
+  it('server display_state "error" with willRetry and desired=stopped stays error', () => {
+    expect(mapActualToRuntime('error', 'stopped', true, 'error')).toBe('error');
   });
 
   it('falls back to client-side when displayState is undefined', () => {

@@ -510,6 +510,34 @@ class TestResolveAgents:
         ).all()
         assert len(sub_jobs) == 1
 
+    @pytest.mark.asyncio
+    async def test_explicit_host_honored_when_node_state_name_stale(self, test_db, test_user):
+        """Explicit host_id must be honored even if NodeState.node_name is stale."""
+        host = _make_host(test_db, "host-a", "Host A")
+        fallback_host = _make_host(test_db, "host-b", "Host B")
+        lab = _make_lab(test_db, test_user, agent_id=fallback_host.id)
+        job = _make_job(test_db, lab, test_user)
+
+        # NodeState has stale node_name, but node_id still points to the correct node.
+        ns = _make_node_state(test_db, lab, "gui-n9kv", "stale-name", desired="running", actual="undeployed")
+        _make_node_def(test_db, lab, "gui-n9kv", "N9KV", "n9kv", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {}
+        manager.db_nodes_by_gui_id = {
+            "gui-n9kv": test_db.query(models.Node).filter_by(gui_id="gui-n9kv").first()
+        }
+        manager.placements_map = {}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+            mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+            result = await manager._resolve_agents()
+
+        assert result is True
+        assert manager.agent.id == host.id
+
 
 # ---------------------------------------------------------------------------
 # _check_resources
@@ -1119,6 +1147,29 @@ class TestFinalize:
         await manager._finalize()
 
         assert job.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_stopped_desired_error_converges_to_stopped(self, test_db, test_user):
+        """Guard: desired=stopped must not remain stuck in error at finalize."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="error")
+        ns.error_message = "sync failed"
+        ns.enforcement_attempts = 3
+        test_db.commit()
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+
+        result = await manager._finalize()
+
+        assert result.success is True
+        assert result.error_count == 0
+        assert job.status == JobStatus.COMPLETED.value
+        assert ns.actual_state == NodeActualState.STOPPED.value
+        assert ns.error_message is None
+        assert ns.enforcement_attempts == 0
 
 
 # ---------------------------------------------------------------------------

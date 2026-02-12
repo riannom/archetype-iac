@@ -12,7 +12,8 @@ set -e
 #   --port PORT           Agent port (default: 8001)
 #   --mtu MTU             Target MTU for jumbo frames (default: 9000, 0 to skip)
 #   --no-docker           Skip Docker installation
-#   --libvirt             Install libvirt/KVM for VM-based devices (IOSv, CSR1000v, etc.)
+#   --libvirt             Enable libvirt/KVM for VM-based devices (default: enabled)
+#   --no-libvirt          Disable libvirt/KVM installation
 #   --update              Quick update: pull latest code and restart (no full reinstall)
 #   --branch BRANCH       Install specific branch/tag (default: latest release)
 #   --version             Show installed and latest version
@@ -45,7 +46,7 @@ REDIS_URL=""
 LOCAL_IP=""
 AGENT_PORT="8001"
 INSTALL_DOCKER=true
-INSTALL_LIBVIRT=false
+INSTALL_LIBVIRT=true
 INSTALL_LIBVIRT_PYTHON=false
 UNINSTALL=false
 UPDATE_ONLY=false
@@ -84,6 +85,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --libvirt)
             INSTALL_LIBVIRT=true
+            shift
+            ;;
+        --no-libvirt)
+            INSTALL_LIBVIRT=false
             shift
             ;;
         --uninstall)
