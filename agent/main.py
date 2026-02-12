@@ -5486,12 +5486,19 @@ def check_image(reference: str) -> ImageExistsResponse:
     """Check if a specific image exists on this agent.
 
     Args:
-        reference: Docker image reference (e.g., "ceos:4.28.0F")
+        reference: Docker image reference or file path
 
     Returns:
         Whether the image exists and its details if found.
     """
     try:
+        # File-based images (qcow2/img/iol): check path existence on agent.
+        if reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol")):
+            # qcow2/img requires libvirt provider support.
+            if reference.endswith((".qcow2", ".img")) and not settings.enable_libvirt:
+                return ImageExistsResponse(exists=False)
+            return ImageExistsResponse(exists=os.path.exists(reference))
+
         import docker
         client = docker.from_env()
 
@@ -5543,6 +5550,7 @@ async def receive_image(
     import tempfile
 
     logger.info(f"Receiving image: {reference} ({total_bytes} bytes)")
+    is_file_based = reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
 
     # Update progress if job_id provided
     if job_id:
@@ -5555,6 +5563,62 @@ async def receive_image(
         )
 
     try:
+        if is_file_based:
+            if reference.endswith((".qcow2", ".img")) and not settings.enable_libvirt:
+                return ImageReceiveResponse(success=False, error="libvirt is not enabled on target agent")
+            if reference.endswith(".iol") and not settings.enable_docker:
+                return ImageReceiveResponse(success=False, error="docker is not enabled on target agent")
+            if not reference.startswith("/"):
+                return ImageReceiveResponse(
+                    success=False,
+                    error="file-based image sync requires an absolute destination path",
+                )
+
+            destination = Path(reference)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temp_destination = destination.with_name(
+                f"{destination.name}.part-{uuid.uuid4().hex[:8]}"
+            )
+
+            bytes_written = 0
+            chunk_size = 1024 * 1024  # 1MB chunks
+            try:
+                with temp_destination.open("wb") as tmp_out:
+                    while True:
+                        chunk = await file.read(chunk_size)
+                        if not chunk:
+                            break
+                        tmp_out.write(chunk)
+                        bytes_written += len(chunk)
+
+                        if job_id and total_bytes > 0:
+                            percent = min(95, int((bytes_written / total_bytes) * 95))
+                            _image_pull_jobs[job_id] = ImagePullProgress(
+                                job_id=job_id,
+                                status="transferring",
+                                progress_percent=percent,
+                                bytes_transferred=bytes_written,
+                                total_bytes=total_bytes,
+                            )
+
+                os.replace(temp_destination, destination)
+            except Exception:
+                if temp_destination.exists():
+                    temp_destination.unlink(missing_ok=True)
+                raise
+
+            if job_id:
+                _image_pull_jobs[job_id] = ImagePullProgress(
+                    job_id=job_id,
+                    status="completed",
+                    progress_percent=100,
+                    bytes_transferred=bytes_written,
+                    total_bytes=total_bytes,
+                )
+
+            logger.info(f"Stored file image to {destination} ({bytes_written} bytes)")
+            return ImageReceiveResponse(success=True, loaded_images=[str(destination)])
+
         # Save uploaded file to temp
         with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_file:
             bytes_written = 0

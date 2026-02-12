@@ -1,6 +1,7 @@
 """Tests for app/tasks/image_sync.py - Image synchronization tasks."""
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,8 +29,8 @@ class TestSyncImageToAgent:
                 assert "not found" in error.lower()
 
     @pytest.mark.asyncio
-    async def test_returns_error_for_non_docker_image(self, test_db: Session, sample_host: models.Host):
-        """Should return error for non-Docker images."""
+    async def test_returns_error_for_unsupported_non_docker_image(self, test_db: Session, sample_host: models.Host):
+        """Should return error for non-file non-Docker images."""
         from app.tasks.image_sync import sync_image_to_agent
 
         with patch("app.tasks.image_sync.load_manifest") as mock_manifest:
@@ -40,7 +41,7 @@ class TestSyncImageToAgent:
                 success, error = await sync_image_to_agent("qcow2:test", sample_host.id, test_db)
 
                 assert success is False
-                assert "docker" in error.lower()
+                assert "not syncable" in error.lower()
 
     @pytest.mark.asyncio
     async def test_returns_error_when_host_not_found(self, test_db: Session):
@@ -142,6 +143,46 @@ class TestCheckAgentHasImage:
             result = await check_agent_has_image(sample_host, "test:1.0")
 
             assert result is False
+
+    @pytest.mark.asyncio
+    async def test_file_image_queries_target_agent(self, sample_host: models.Host):
+        """File-based image checks must be validated on target agent, not controller FS."""
+        from app.tasks.image_sync import check_agent_has_image
+
+        sample_host.capabilities = json.dumps({"providers": ["docker", "libvirt"]})
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"exists": True}
+
+        with patch("app.tasks.image_sync.httpx.AsyncClient") as mock_client:
+            mock_instance = MagicMock()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_instance
+
+            result = await check_agent_has_image(
+                sample_host, "/var/lib/archetype/images/nexus9300v64.10.5.3.F.qcow2"
+            )
+
+            assert result is True
+            mock_instance.get.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_file_image_requires_matching_provider(self, sample_host: models.Host):
+        """qcow2 checks should fail fast when host lacks libvirt capability."""
+        from app.tasks.image_sync import check_agent_has_image
+
+        sample_host.capabilities = json.dumps({"providers": ["docker"]})
+
+        with patch("app.tasks.image_sync.httpx.AsyncClient") as mock_client:
+            result = await check_agent_has_image(
+                sample_host, "/var/lib/archetype/images/nexus9300v64.10.5.3.F.qcow2"
+            )
+
+            assert result is False
+            mock_client.assert_not_called()
 
 
 class TestGetAgentImageInventory:
@@ -425,18 +466,20 @@ class TestImageSyncCallbackAndKinds:
     """Regression tests for image-sync callback and non-Docker refs."""
 
     @pytest.mark.asyncio
-    async def test_check_and_start_image_sync_fails_qcow2_without_docker_sync(
+    async def test_check_and_start_image_sync_starts_qcow2_transfer(
         self,
         test_db: Session,
         sample_lab_with_nodes,
         sample_host: models.Host,
     ):
-        """qcow2 refs should not start Docker sync jobs."""
+        """qcow2 refs should queue image sync jobs when host supports libvirt."""
         from app.tasks.image_sync import check_and_start_image_sync
 
         lab, nodes = sample_lab_with_nodes
         ref = "/var/lib/archetype/images/nexus9300v64.10.5.3.F.qcow2"
         image_to_nodes = {ref: [nodes[0].node_name]}
+        sample_host.capabilities = json.dumps({"providers": ["docker", "libvirt"]})
+        test_db.commit()
 
         manifest = {
             "images": [
@@ -461,9 +504,9 @@ class TestImageSyncCallbackAndKinds:
                 provider="libvirt",
             )
 
-        assert syncing == set()
-        assert nodes[0].node_name in failed
-        assert any("not docker" in line.lower() for line in logs)
+        assert nodes[0].node_name in syncing
+        assert failed == set()
+        assert any("started sync" in line.lower() for line in logs)
 
     def test_trigger_re_reconcile_skips_nodes_stopped_by_user(
         self,

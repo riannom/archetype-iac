@@ -21,6 +21,20 @@ from app.db import get_session
 from app.image_store import find_image_by_id, load_manifest
 
 
+def _is_file_reference(reference: str) -> bool:
+    """Return True when reference points to a host filesystem image."""
+    return reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
+
+
+def _required_provider_for_reference(reference: str) -> str | None:
+    """Return required provider for a file-based image reference."""
+    if reference.endswith((".qcow2", ".img")):
+        return "libvirt"
+    if reference.endswith(".iol"):
+        return "docker"
+    return None
+
+
 async def sync_image_to_agent(
     image_id: str,
     host_id: str,
@@ -56,8 +70,9 @@ async def _sync_image_to_agent_impl(
         if not image:
             return False, "Image not found in library"
 
-        if image.get("kind") != "docker":
-            return False, "Only Docker images can be synced"
+        reference = image.get("reference", "")
+        if image.get("kind") != "docker" and not _is_file_reference(reference):
+            return False, f"Image kind '{image.get('kind')}' is not syncable"
 
         # Get target host
         host = database.get(models.Host, host_id)
@@ -133,16 +148,10 @@ async def check_agent_has_image(host: models.Host, reference: str) -> bool:
         True if the image is available for the agent
     """
     import json
-    import os
+    from urllib.parse import quote
 
     # Check if this is a file-based image (qcow2, iol)
-    if reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol")):
-        # For file-based images, check:
-        # 1. File exists on controller
-        # 2. Agent has appropriate provider capability
-        if not os.path.exists(reference):
-            return False
-
+    if _is_file_reference(reference):
         # Parse host capabilities
         host_providers = []
         if host.capabilities:
@@ -153,17 +162,29 @@ async def check_agent_has_image(host: models.Host, reference: str) -> bool:
                 pass
 
         # qcow2/img files need libvirt, iol files need docker
-        if reference.endswith((".qcow2", ".img")):
-            return "libvirt" in host_providers
-        elif reference.endswith(".iol"):
-            return "docker" in host_providers
-        return False
+        required_provider = _required_provider_for_reference(reference)
+        if required_provider and required_provider not in host_providers:
+            return False
+
+        # Query the target agent directly for file existence.
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                encoded_ref = quote(reference, safe="")
+                response = await client.get(
+                    f"http://{host.address}/images/{encoded_ref}"
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    return result.get("exists", False)
+                return False
+        except Exception as e:
+            print(f"Error checking image on {host.name}: {e}")
+            return False
 
     # Docker image - query agent
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             # URL-encode the reference for the path
-            from urllib.parse import quote
             encoded_ref = quote(reference, safe='')
             response = await client.get(
                 f"http://{host.address}/images/{encoded_ref}"
@@ -656,15 +677,20 @@ async def check_and_start_image_sync(
             return syncing_nodes, failed_nodes, log_entries
 
         # Find image entries in library for missing references.
-        # Docker images can be pushed via image sync. File-based images
-        # (qcow2/img/iol paths) are not pushed by this path and must be
-        # available via compatible provider/storage on the target host.
         manifest = load_manifest()
         lib_images_by_ref: dict[str, dict] = {}
         for lib_image in manifest.get("images", []):
             ref = lib_image.get("reference", "")
             if ref in missing:
                 lib_images_by_ref[ref] = lib_image
+
+        host_providers: list[str] = []
+        try:
+            import json
+            caps = json.loads(host.capabilities) if isinstance(host.capabilities, str) else (host.capabilities or {})
+            host_providers = caps.get("providers", [])
+        except Exception:
+            host_providers = []
 
         # Fire off non-blocking sync for each missing image
         for reference in missing:
@@ -675,38 +701,47 @@ async def check_and_start_image_sync(
                 log_entries.append(f"  {reference}: not found in library - cannot sync")
                 for node_name in affected_nodes:
                     failed_nodes.add(node_name)
-                continue
-
-            if lib_image.get("kind") != "docker":
-                host_providers: list[str] = []
-                try:
-                    import json
-                    caps = json.loads(host.capabilities) if isinstance(host.capabilities, str) else (host.capabilities or {})
-                    host_providers = caps.get("providers", [])
-                except Exception:
-                    host_providers = []
-
-                required_provider = "libvirt" if reference.endswith((".qcow2", ".img")) else "docker"
-                reason = (
-                    f"target host does not support {required_provider}"
-                    if required_provider not in host_providers
-                    else "file-based image sync is not supported (host must already have image path)"
-                )
-                log_entries.append(
-                    f"  {reference}: kind={lib_image.get('kind')} is not Docker; "
-                    f"{reason}"
-                )
-                for node_name in affected_nodes:
-                    failed_nodes.add(node_name)
+                if affected_nodes:
+                    update_node_image_sync_status(
+                        database, lab_id, affected_nodes, "failed", "Image not found in library"
+                    )
                 continue
 
             image_id = lib_image.get("id")
+            if not image_id:
+                log_entries.append(
+                    f"  {reference}: missing image id in library entry - cannot sync"
+                )
+                for node_name in affected_nodes:
+                    failed_nodes.add(node_name)
+                if affected_nodes:
+                    update_node_image_sync_status(
+                        database, lab_id, affected_nodes, "failed", "Invalid image entry (missing id)"
+                    )
+                continue
+
+            required_provider = _required_provider_for_reference(reference)
+            if required_provider and required_provider not in host_providers:
+                log_entries.append(
+                    f"  {reference}: target host does not support required provider '{required_provider}'"
+                )
+                for node_name in affected_nodes:
+                    failed_nodes.add(node_name)
+                if affected_nodes:
+                    update_node_image_sync_status(
+                        database,
+                        lab_id,
+                        affected_nodes,
+                        "failed",
+                        f"Target host missing {required_provider} capability",
+                    )
+                continue
 
             # Dedup: check for existing active sync job
             existing_job = database.query(models.ImageSyncJob).filter(
                 models.ImageSyncJob.image_id == image_id,
                 models.ImageSyncJob.host_id == host_id,
-                models.ImageSyncJob.status.in_(["pending", "transferring"]),
+                models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]),
             ).first()
 
             if existing_job:
@@ -750,7 +785,7 @@ async def check_and_start_image_sync(
             # Update node states to syncing
             if affected_nodes:
                 update_node_image_sync_status(
-                    database, lab_id, affected_nodes, "syncing", f"Pushing image to {host.name}..."
+                    database, lab_id, affected_nodes, "syncing", f"Syncing image to {host.name}..."
                 )
 
             # Broadcast syncing state for each node
@@ -769,7 +804,7 @@ async def check_and_start_image_sync(
                             actual_state=ns.actual_state,
                             is_ready=ns.is_ready,
                             image_sync_status="syncing",
-                            image_sync_message=f"Pushing image to {host.name}...",
+                            image_sync_message=f"Syncing image to {host.name}...",
                         ),
                         name=f"broadcast:imgsync:{lab_id}:{ns.node_id}"
                     )
@@ -804,12 +839,6 @@ async def check_and_start_image_sync(
                     ),
                     name=f"imgsync:wait:{sync_job_id[:8]}"
                 )
-
-        # Mark nodes with no library image as failed
-        if failed_nodes:
-            update_node_image_sync_status(
-                database, lab_id, list(failed_nodes), "failed", "Image not in library"
-            )
 
         return syncing_nodes, failed_nodes, log_entries
 

@@ -1640,6 +1640,50 @@ class TestStartNodesPerNode:
 
         mock_links.assert_called_once_with({"R1"})
 
+    @pytest.mark.asyncio
+    async def test_start_per_node_falls_back_to_redeploy_on_domain_missing(
+        self, test_db, test_user
+    ):
+        """If start target is missing, per-node start should redeploy."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="running", actual="stopped"
+        )
+        node_def = _make_node_def(
+            test_db, lab, "n1", "R1", "R1", host_id=host.id
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        async def _fake_deploy(single_ns):
+            single_ns.actual_state = NodeActualState.RUNNING.value
+            single_ns.error_message = None
+            single_ns.starting_started_at = None
+            single_ns.boot_started_at = datetime.now(timezone.utc)
+            return single_ns.node_name
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
+             patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
+             patch.object(manager, "_deploy_single_node", new_callable=AsyncMock) as mock_deploy:
+            mock_ac.start_node_on_agent = AsyncMock(return_value={
+                "success": False,
+                "error": "Libvirt error: Domain not found: no domain with matching name 'R1'",
+            })
+            mock_deploy.side_effect = _fake_deploy
+
+            await manager._start_nodes_per_node([ns])
+
+        mock_deploy.assert_called_once_with(ns)
+        assert ns.actual_state == NodeActualState.RUNNING.value
+        assert ns.error_message is None
+
 
 class TestDeployDispatch:
     """Test _deploy_nodes dispatches based on per_node_lifecycle_enabled."""

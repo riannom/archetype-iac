@@ -21,6 +21,8 @@ interface TaskLogPanelProps {
   isVisible: boolean;
   onToggle: () => void;
   onClear: () => void;
+  autoUpdateEnabled?: boolean;
+  onToggleAutoUpdate?: (enabled: boolean) => void;
   onEntryClick?: (entry: TaskLogEntry) => void;
   showConsoles?: boolean;
   // Console tabs support
@@ -47,6 +49,8 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   isVisible,
   onToggle,
   onClear,
+  autoUpdateEnabled = true,
+  onToggleAutoUpdate,
   onEntryClick,
   showConsoles = true,
   consoleTabs = [],
@@ -69,6 +73,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const startY = useRef(0);
   const startHeight = useRef(0);
+  const logContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Tab drag state for undocking and reordering
   const [tabDragState, setTabDragState] = useState<{
@@ -266,6 +271,14 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   const headerHoverClass = effectiveMode === 'light' ? 'hover:bg-white/10' : 'hover:bg-stone-100/50 dark:hover:bg-stone-900/50';
   const gripClass = effectiveMode === 'light' ? 'bg-white/40 group-hover:bg-white/60' : 'bg-stone-300 dark:bg-stone-600 group-hover:bg-cyan-400';
 
+  // Keep task log pinned to the latest entry when auto-refresh is enabled.
+  useEffect(() => {
+    if (!isVisible || !showLogContent || !autoUpdateEnabled) return;
+    const el = logContainerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [entries, autoUpdateEnabled, isVisible, showLogContent]);
+
   return (
     <div
       className="shrink-0 backdrop-blur-md border-t border-stone-200 dark:border-stone-800"
@@ -299,8 +312,24 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
           )}
         </div>
         <div className="flex items-center gap-3">
+          {isVisible && logTabActive && onToggleAutoUpdate && (
+            <label
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              className={`flex items-center gap-1.5 cursor-pointer text-[10px] font-bold uppercase tracking-widest ${headerActionClass}`}
+            >
+              <input
+                type="checkbox"
+                checked={autoUpdateEnabled}
+                onChange={(e) => onToggleAutoUpdate(e.target.checked)}
+                className="w-3 h-3 rounded border-stone-300 dark:border-stone-600 text-sage-600 focus:ring-sage-500"
+              />
+              <span>Auto-refresh</span>
+            </label>
+          )}
           {isVisible && logTabActive && (
             <button
+              onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 onClear();
@@ -311,6 +340,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
             </button>
           )}
           <button
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onToggle();
@@ -414,7 +444,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
           >
             {/* Log content */}
             {showLogContent && (
-              <div className="h-full overflow-y-auto font-mono text-[11px]">
+              <div ref={logContainerRef} className="h-full overflow-y-auto font-mono text-[11px]">
                 {entries.length === 0 ? (
                   <div className="px-4 py-6 text-center text-stone-400 dark:text-stone-600">No task activity yet</div>
                 ) : (

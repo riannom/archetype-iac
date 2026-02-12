@@ -610,16 +610,30 @@ const Canvas: React.FC<CanvasProps> = ({
           // Status indicator: green=running, gray=stopped, yellow=booting, orange=stopping, red=error, no dot=undeployed
           const getStatusDot = () => {
             if (!status) return null; // No status = undeployed, no indicator
+            const ns = nodeStates?.[node.id];
+            const imageSyncActive =
+              ns?.image_sync_status === 'syncing' || ns?.image_sync_status === 'checking';
             let dotColor = '#a8a29e'; // stone-400 (stopped)
             let animate = false;
             if (status === 'running') dotColor = '#22c55e'; // green-500
             else if (status === 'booting') { dotColor = '#eab308'; animate = true; } // yellow-500
             else if (status === 'stopping') { dotColor = '#f97316'; animate = true; } // orange-500
             else if (status === 'error') dotColor = '#ef4444'; // red-500
+            // Make image sync visually distinct from normal booting.
+            if (imageSyncActive) {
+              dotColor = '#3b82f6'; // blue-500
+              animate = true;
+            }
 
             // Build tooltip with retry info and elapsed time
             let tooltip: string = status;
-            const ns = nodeStates?.[node.id];
+            if (imageSyncActive) {
+              const phase = ns?.image_sync_status === 'checking' ? 'checking' : 'syncing';
+              tooltip = `image ${phase}`;
+              if (ns?.image_sync_message) {
+                tooltip += `: ${ns.image_sync_message}`;
+              }
+            }
             if (ns?.will_retry && (ns.enforcement_attempts ?? 0) > 0) {
               const max = ns.max_enforcement_attempts ?? 0;
               tooltip = max > 0

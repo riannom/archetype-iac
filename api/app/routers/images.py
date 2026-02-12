@@ -1351,7 +1351,7 @@ async def push_image_to_hosts(
 async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: models.Host):
     """Execute a sync job in the background.
 
-    Streams the Docker image to the agent and updates job progress.
+    Streams Docker or file-based images to the agent and updates job progress.
     Uses structured error handling for better error messages.
     """
     import logging
@@ -1376,85 +1376,104 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
             # Get image reference
             reference = image.get("reference", "")
             if not reference:
-                raise ValueError("Image has no Docker reference")
+                raise ValueError("Image has no reference")
 
-            # Get image size from Docker (async subprocess to avoid blocking event loop)
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "docker", "inspect", "--format", "{{.Size}}", reference,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-                if proc.returncode == 0:
-                    job.total_bytes = int(stdout.decode().strip())
-                    session.commit()
-            except Exception as e:
-                logger.warning(f"Could not get image size for {reference}: {e}")
+            image_kind = image.get("kind", "docker")
+            is_file_based = reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
 
-            # Stream image to agent
-            # Use docker save and pipe to agent
+            # Build agent URL once
+            agent_url = f"http://{host.address}/images/receive"
             async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout)) as client:
-                # Build agent URL
-                agent_url = f"http://{host.address}/images/receive"
+                if image_kind == "docker":
+                    # Get image size from Docker
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "docker", "inspect", "--format", "{{.Size}}", reference,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                        if proc.returncode == 0:
+                            job.total_bytes = int(stdout.decode().strip())
+                            session.commit()
+                    except Exception as e:
+                        logger.warning(f"Could not get image size for {reference}: {e}")
 
-                # Use subprocess to stream docker save output
-                proc = await asyncio.create_subprocess_exec(
-                    "docker", "save", reference,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
+                    # Build archive via docker save
+                    proc = await asyncio.create_subprocess_exec(
+                        "docker", "save", reference,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await proc.communicate()
+                    if proc.returncode != 0:
+                        error_msg = stderr.decode() if stderr else "docker save failed"
+                        raise ValueError(error_msg)
 
-                # Read all output (for now, TODO: true streaming)
-                stdout, stderr = await proc.communicate()
+                    # Update progress while upload begins
+                    job.bytes_transferred = len(stdout)
+                    job.progress_percent = 50
+                    session.commit()
 
-                if proc.returncode != 0:
-                    error_msg = stderr.decode() if stderr else "docker save failed"
-                    raise ValueError(error_msg)
+                    files = {"file": ("image.tar", stdout, "application/x-tar")}
+                    params = {
+                        "image_id": image_id,
+                        "reference": reference,
+                        "total_bytes": str(len(stdout)),
+                        "job_id": job_id,
+                    }
+                elif is_file_based:
+                    source_path = Path(reference)
+                    if not source_path.exists() or not source_path.is_file():
+                        raise ValueError(f"Source image file not found: {reference}")
 
-                # Update progress
-                job.bytes_transferred = len(stdout)
-                job.progress_percent = 50
-                session.commit()
+                    size_bytes = source_path.stat().st_size
+                    job.total_bytes = size_bytes
+                    session.commit()
 
-                # Send to agent
-                files = {"file": ("image.tar", stdout, "application/x-tar")}
-                params = {
-                    "image_id": image_id,
-                    "reference": reference,
-                    "total_bytes": str(len(stdout)),
-                    "job_id": job_id,
-                }
+                    files = {
+                        "file": (
+                            source_path.name,
+                            source_path.open("rb"),
+                            "application/octet-stream",
+                        )
+                    }
+                    params = {
+                        "image_id": image_id,
+                        "reference": reference,
+                        "total_bytes": str(size_bytes),
+                        "job_id": job_id,
+                    }
+                else:
+                    raise ValueError(f"Unsupported image kind for sync: {image_kind}")
 
                 try:
-                    response = await client.post(
-                        agent_url,
-                        files=files,
-                        params=params,
-                    )
+                    response = await client.post(agent_url, files=files, params=params)
                     response.raise_for_status()
-
                     result = response.json()
                     if not result.get("success"):
-                        raise ValueError(result.get("error", "Agent failed to load image"))
-
+                        raise ValueError(result.get("error", "Agent failed to receive image"))
                 except httpx.TimeoutException as e:
                     structured_error = categorize_httpx_error(
                         e, host_name=host.name, agent_id=host.id, job_id=job_id
                     )
                     raise ValueError(structured_error.to_error_message()) from e
-
                 except httpx.ConnectError as e:
                     structured_error = categorize_httpx_error(
                         e, host_name=host.name, agent_id=host.id, job_id=job_id
                     )
                     raise ValueError(structured_error.to_error_message()) from e
-
                 except httpx.HTTPStatusError as e:
                     structured_error = categorize_httpx_error(
                         e, host_name=host.name, agent_id=host.id, job_id=job_id
                     )
                     raise ValueError(structured_error.to_error_message()) from e
+                finally:
+                    # Close source file descriptor opened for file-based sync.
+                    if image_kind != "docker" and is_file_based:
+                        file_tuple = files.get("file")
+                        if file_tuple and hasattr(file_tuple[1], "close"):
+                            file_tuple[1].close()
 
             # Success
             job.status = "completed"

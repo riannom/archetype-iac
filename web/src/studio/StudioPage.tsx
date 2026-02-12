@@ -227,6 +227,7 @@ const StudioPage: React.FC = () => {
   const [authLoading, setAuthLoading] = useState(false);
   const [taskLog, setTaskLog] = useState<TaskLogEntry[]>([]);
   const [isTaskLogVisible, setIsTaskLogVisible] = usePersistedState('archetype-tasklog-visible', true);
+  const [taskLogAutoRefresh, setTaskLogAutoRefresh] = usePersistedState('archetype-tasklog-auto-refresh', true);
   const [taskLogClearedAt, setTaskLogClearedAt] = useState<number>(() => {
     const stored = localStorage.getItem('archetype_tasklog_cleared_at');
     return stored ? parseInt(stored, 10) : 0;
@@ -331,8 +332,16 @@ const StudioPage: React.FC = () => {
           is_ready: wsState.is_ready,
           host_id: wsState.host_id,
           host_name: wsState.host_name,
-          image_sync_status: wsState.image_sync_status,
-          image_sync_message: wsState.image_sync_message,
+          // Preserve image-sync fields when WS payload omits them.
+          // Clear only when server explicitly sends null.
+          image_sync_status:
+            wsState.image_sync_status !== undefined
+              ? wsState.image_sync_status
+              : prev[nodeId]?.image_sync_status,
+          image_sync_message:
+            wsState.image_sync_message !== undefined
+              ? wsState.image_sync_message
+              : prev[nodeId]?.image_sync_message,
           will_retry: wsState.will_retry,
           enforcement_attempts: wsState.enforcement_attempts,
           max_enforcement_attempts: wsState.max_enforcement_attempts,
@@ -876,6 +885,15 @@ const StudioPage: React.FC = () => {
 
     // Determine notification category prefix based on job action
     const categoryPrefix = (action: string) => action.startsWith('sync:') ? 'sync-' : '';
+    const maybeLogJobEvent = (
+      level: TaskLogEntry['level'],
+      message: string,
+      jobId: string
+    ) => {
+      if (taskLogAutoRefresh) {
+        addTaskLogEntry(level, message, jobId);
+      }
+    };
 
     for (const job of jobs) {
       const jobKey = job.id;
@@ -889,18 +907,18 @@ const StudioPage: React.FC = () => {
           : job.action.toUpperCase();
 
         if (job.status === 'running') {
-          addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
+          maybeLogJobEvent('info', `Job running: ${actionLabel}`, job.id);
           addNotification('info', `${actionLabel} started`, undefined, {
             jobId: job.id, labId: job.lab_id, category: `${prefix}job-start`,
           });
         } else if (job.status === 'completed') {
-          addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
+          maybeLogJobEvent('success', `Job completed: ${actionLabel}`, job.id);
           addNotification('success', `${actionLabel} completed`, undefined, {
             jobId: job.id, labId: job.lab_id, category: `${prefix}job-complete`,
           });
         } else if (job.status === 'failed') {
           const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
-          addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
+          maybeLogJobEvent('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
           addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
             jobId: job.id, labId: job.lab_id, category: `${prefix}job-failed`,
           });
@@ -912,20 +930,20 @@ const StudioPage: React.FC = () => {
           : job.action.toUpperCase();
 
         if (job.status === 'queued') {
-          addTaskLogEntry('info', `Job queued: ${actionLabel}`, job.id);
+          maybeLogJobEvent('info', `Job queued: ${actionLabel}`, job.id);
         } else if (job.status === 'running') {
-          addTaskLogEntry('info', `Job running: ${actionLabel}`, job.id);
+          maybeLogJobEvent('info', `Job running: ${actionLabel}`, job.id);
           addNotification('info', `${actionLabel} started`, undefined, {
             jobId: job.id, labId: job.lab_id, category: `${prefix}job-start`,
           });
         } else if (job.status === 'completed') {
-          addTaskLogEntry('success', `Job completed: ${actionLabel}`, job.id);
+          maybeLogJobEvent('success', `Job completed: ${actionLabel}`, job.id);
           addNotification('success', `${actionLabel} completed`, undefined, {
             jobId: job.id, labId: job.lab_id, category: `${prefix}job-complete`,
           });
         } else if (job.status === 'failed') {
           const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
-          addTaskLogEntry('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
+          maybeLogJobEvent('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
           addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
             jobId: job.id, labId: job.lab_id, category: `${prefix}job-failed`,
           });
@@ -934,7 +952,7 @@ const StudioPage: React.FC = () => {
     }
 
     prevJobsRef.current = newStatuses;
-  }, [jobs, addTaskLogEntry, addNotification]);
+  }, [jobs, addTaskLogEntry, addNotification, taskLogAutoRefresh]);
 
   const handleCreateLab = async () => {
     const name = `Project_${labs.length + 1}`;
@@ -2024,6 +2042,8 @@ const StudioPage: React.FC = () => {
         isVisible={isTaskLogVisible}
         onToggle={() => setIsTaskLogVisible(!isTaskLogVisible)}
         onClear={clearTaskLog}
+        autoUpdateEnabled={taskLogAutoRefresh}
+        onToggleAutoUpdate={setTaskLogAutoRefresh}
         onEntryClick={handleTaskLogEntryClick}
         showConsoles={isDesignerView}
         consoleTabs={dockedConsoles}

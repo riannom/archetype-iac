@@ -1868,6 +1868,15 @@ class NodeLifecycleManager:
                 return ns.node_name
             else:
                 error_msg = result.get("error", "Start failed")
+                error_lc = error_msg.lower()
+                # Self-heal drift: start requested but runtime object is missing
+                # (e.g., libvirt domain deleted). Fall back to full deploy.
+                if "not found" in error_lc:
+                    self.log_parts.append(
+                        f"  {ns.node_name}: start target missing, attempting redeploy..."
+                    )
+                    return await self._deploy_single_node(ns)
+
                 old_state = ns.actual_state
                 ns.actual_state = NodeActualState.ERROR.value
                 ns.starting_started_at = None

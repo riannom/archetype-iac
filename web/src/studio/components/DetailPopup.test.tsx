@@ -121,7 +121,7 @@ describe("DetailPopup", () => {
       </DetailPopup>
     );
 
-    const overlay = document.querySelector(".z-50");
+    const overlay = document.querySelector(".z-\\[120\\]");
     expect(overlay).toBeInTheDocument();
   });
 
