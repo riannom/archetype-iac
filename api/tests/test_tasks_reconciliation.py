@@ -1548,3 +1548,86 @@ class TestReconciliationStateUpdates:
 
         test_db.refresh(ns)
         assert ns.actual_state == "undeployed"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_link_broadcast_includes_oper_fields(
+    test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+):
+    """Link transition broadcasts should include operational link fields."""
+    from app.tasks.reconciliation import _reconcile_single_lab
+
+    sample_lab.agent_id = sample_host.id
+    sample_lab.state = "running"
+    test_db.commit()
+
+    node1 = models.Node(
+        lab_id=sample_lab.id,
+        gui_id="n1",
+        display_name="R1",
+        container_name="R1",
+        node_type="device",
+        device="linux",
+    )
+    node2 = models.Node(
+        lab_id=sample_lab.id,
+        gui_id="n2",
+        display_name="R2",
+        container_name="R2",
+        node_type="device",
+        device="linux",
+    )
+    test_db.add_all([node1, node2])
+    test_db.flush()
+
+    test_db.add_all(
+        [
+            models.NodeState(
+                lab_id=sample_lab.id,
+                node_id="n1",
+                node_name="R1",
+                desired_state="running",
+                actual_state="running",
+            ),
+            models.NodeState(
+                lab_id=sample_lab.id,
+                node_id="n2",
+                node_name="R2",
+                desired_state="running",
+                actual_state="running",
+            ),
+        ]
+    )
+    link = models.LinkState(
+        lab_id=sample_lab.id,
+        link_name="R1:eth1-R2:eth1",
+        source_node="R1",
+        source_interface="eth1",
+        target_node="R2",
+        target_interface="eth1",
+        desired_state="up",
+        actual_state="down",
+        source_carrier_state="on",
+        target_carrier_state="on",
+        source_oper_state="down",
+        target_oper_state="down",
+        oper_epoch=3,
+    )
+    test_db.add(link)
+    test_db.commit()
+
+    with patch("app.tasks.reconciliation.broadcast_link_state_change", new_callable=AsyncMock) as mock_bcast:
+        with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+            with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                mock_status.return_value = {
+                    "nodes": [{"name": "R1", "status": "running"}, {"name": "R2", "status": "running"}],
+                }
+                await _reconcile_single_lab(test_db, sample_lab.id)
+
+        assert mock_bcast.called
+        kwargs = mock_bcast.call_args.kwargs
+        assert "source_oper_state" in kwargs
+        assert "target_oper_state" in kwargs
+        assert "source_oper_reason" in kwargs
+        assert "target_oper_reason" in kwargs
+        assert "oper_epoch" in kwargs

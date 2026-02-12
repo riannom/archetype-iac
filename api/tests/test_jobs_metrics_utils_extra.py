@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 
+from unittest.mock import MagicMock
+
 import pytest
 
 import app.jobs as jobs_module
@@ -64,3 +66,29 @@ def test_infer_job_failure_reason() -> None:
     assert metrics_module.infer_job_failure_reason("ERROR: Preflight connectivity check failed") == "preflight_connectivity_failed"
     assert metrics_module.infer_job_failure_reason("ERROR: Job execution failed on agent") == "agent_job_error"
     assert metrics_module.infer_job_failure_reason("random error") == "unknown"
+
+
+def test_record_link_oper_transition_normalizes_labels(monkeypatch) -> None:
+    metric = MagicMock()
+    labeled = MagicMock()
+    metric.labels.return_value = labeled
+
+    monkeypatch.setattr(metrics_module, "PROMETHEUS_AVAILABLE", True)
+    monkeypatch.setattr(metrics_module, "link_oper_transitions", metric)
+
+    metrics_module.record_link_oper_transition(
+        endpoint="source",
+        old_state="DOWN-ish",
+        new_state="UP!",
+        reason="Peer Host Offline",
+        is_cross_host=True,
+    )
+
+    metric.labels.assert_called_once_with(
+        endpoint="source",
+        old_state="down_ish",
+        new_state="up",
+        reason="peer_host_offline",
+        is_cross_host="true",
+    )
+    labeled.inc.assert_called_once()

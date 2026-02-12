@@ -192,6 +192,11 @@ class TestWebSocketInitialState:
                 links = data["data"]["links"]
                 assert len(links) == 1
                 assert links[0]["link_name"] == sample_link_state.link_name
+                assert "source_oper_state" in links[0]
+                assert "target_oper_state" in links[0]
+                assert "source_oper_reason" in links[0]
+                assert "target_oper_reason" in links[0]
+                assert "oper_epoch" in links[0]
 
 
 class TestConnectionManager:

@@ -10,7 +10,7 @@
   - `make audit` — dry-run cleanup audit (no deletions).
   - `make audit-ovs` — dry-run cleanup audit including OVS/VXLAN checks.
   - `make test-agent` — run agent test suite.
-  - `make test-api` — run API test suite (requires `python3.11`; Python 3.13+ is not supported for API `TestClient` runs yet).
+  - `make test-api` — run API test suite (uses local `python3.11` when available; otherwise falls back to `make test-api-container` if `archetype-iac-api-1` is running).
   - `make test-api-container` — run API tests inside the running API container (`API_TEST=<path-or-kexpr>` optional, default `tests`).
   - `make test-web-container` — run web/vitest in a persistent Docker Compose `web-test` service with cached `node_modules` (`WEB_TEST=<vitest-file-or-pattern>` optional).
   - `make test-web-container-down` — remove the `web-test` container when you are done.

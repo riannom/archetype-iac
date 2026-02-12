@@ -322,6 +322,15 @@ class LinkState(Base):
     source_carrier_state: Mapped[str] = mapped_column(String(10), default="on")
     target_carrier_state: Mapped[str] = mapped_column(String(10), default="on")
 
+    # Derived operational state per endpoint (admin + local + peer + transport)
+    source_oper_state: Mapped[str] = mapped_column(String(20), default="down")
+    target_oper_state: Mapped[str] = mapped_column(String(20), default="down")
+    source_oper_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    target_oper_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_last_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    target_last_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    oper_epoch: Mapped[int] = mapped_column(default=0)
+
     # Partial VXLAN attachment tracking for cross-host links
     # Used to track which side has been successfully attached to the overlay
     # Enables partial recovery when one agent restarts

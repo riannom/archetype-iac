@@ -17,9 +17,14 @@ import logging
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
+from app.services.link_operational_state import recompute_link_oper_state
 from app.utils.link import lookup_endpoint_hosts
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_oper_state(session: Session, link_state: models.LinkState) -> None:
+    recompute_link_oper_state(session, link_state)
 
 
 def allocate_vni(lab_id: str, link_name: str) -> int:
@@ -84,6 +89,7 @@ class LinkManager:
             logger.error(f"Cannot determine hosts for link {link_state.link_name}")
             link_state.actual_state = "error"
             link_state.error_message = "Cannot determine endpoint hosts"
+            _sync_oper_state(self.session, link_state)
             return False
 
         # Store host IDs in link_state
@@ -149,6 +155,7 @@ class LinkManager:
         else:
             link_state.actual_state = "error"
             link_state.error_message = "Failed to isolate one or more endpoints"
+        _sync_oper_state(self.session, link_state)
 
         return success
 
@@ -211,6 +218,7 @@ class LinkManager:
         else:
             link_state.actual_state = "error"
             link_state.error_message = result.get("error", "VTEP setup failed")
+            _sync_oper_state(self.session, link_state)
             return False
 
     async def teardown_cross_host_link(
@@ -287,6 +295,7 @@ class LinkManager:
             tunnel.status = "failed"
             link_state.actual_state = "error"
             link_state.error_message = "Failed to detach source endpoint"
+            _sync_oper_state(self.session, link_state)
             return False
 
         # Phase 2b: Detach target interface
@@ -337,6 +346,7 @@ class LinkManager:
             link_state.target_vxlan_attached = False
             link_state.actual_state = "error"
             link_state.error_message = "Failed to detach target endpoint"
+            _sync_oper_state(self.session, link_state)
             return False
 
         # Phase 3: Both sides detached successfully - delete tunnel record
@@ -347,6 +357,7 @@ class LinkManager:
         link_state.vlan_tag = None
         link_state.actual_state = "down"
         link_state.error_message = None
+        _sync_oper_state(self.session, link_state)
 
         logger.info(f"Successfully tore down cross-host link {link_name}")
         return True
@@ -393,6 +404,7 @@ class LinkManager:
                 link_state.source_carrier_state = state
             else:
                 link_state.target_carrier_state = state
+            _sync_oper_state(self.session, link_state)
 
         return result
 
@@ -434,6 +446,7 @@ class LinkManager:
         if not agent:
             link_state.actual_state = "error"
             link_state.error_message = f"Agent not found for host {link_state.source_host_id}"
+            _sync_oper_state(self.session, link_state)
             return False
 
         # Use agent's hot_connect endpoint
@@ -452,10 +465,12 @@ class LinkManager:
             link_state.source_carrier_state = "on"
             link_state.target_carrier_state = "on"
             link_state.error_message = None
+            _sync_oper_state(self.session, link_state)
             return True
         else:
             link_state.actual_state = "error"
             link_state.error_message = result.get("error", "hot_connect failed")
+            _sync_oper_state(self.session, link_state)
             return False
 
     async def _connect_cross_host_link(
@@ -473,6 +488,7 @@ class LinkManager:
         if not agent_a or not agent_b:
             link_state.actual_state = "error"
             link_state.error_message = "One or more agents not available"
+            _sync_oper_state(self.session, link_state)
             return False
 
         # Create VXLAN tunnel
@@ -483,6 +499,7 @@ class LinkManager:
             link_state.source_carrier_state = "on"
             link_state.target_carrier_state = "on"
             link_state.error_message = None
+            _sync_oper_state(self.session, link_state)
 
         return success
 

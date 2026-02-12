@@ -1265,6 +1265,11 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                         source_node=ls.source_node,
                         target_node=ls.target_node,
                         error_message=ls.error_message,
+                        source_oper_state=ls.source_oper_state,
+                        target_oper_state=ls.target_oper_state,
+                        source_oper_reason=ls.source_oper_reason,
+                        target_oper_reason=ls.target_oper_reason,
+                        oper_epoch=ls.oper_epoch,
                     )
                 )
 

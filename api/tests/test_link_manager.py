@@ -583,6 +583,40 @@ class TestLinkManagerTeardownCrossHostLink:
             assert tunnel is None
 
     @pytest.mark.asyncio
+    async def test_teardown_cross_host_link_target_detach_failure_rolls_back_source(
+        self, test_db: Session, link_manager: LinkManager,
+        active_vxlan_link: models.LinkState, multiple_hosts: list[models.Host]
+    ):
+        """Target detach failure should attempt source rollback and keep tunnel record."""
+        agent_a = multiple_hosts[0]
+        agent_b = multiple_hosts[1]
+
+        with patch("app.services.link_manager.agent_client") as mock_client:
+            mock_client.detach_overlay_interface_on_agent = AsyncMock(side_effect=[
+                {"success": True},   # source detach ok
+                {"success": False},  # target detach fails
+            ])
+            mock_client.attach_overlay_interface_on_agent = AsyncMock(return_value={"success": True})
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
+
+            result = await link_manager.teardown_cross_host_link(
+                active_vxlan_link, agent_a, agent_b
+            )
+
+            assert result is False
+            assert active_vxlan_link.actual_state == "error"
+            assert "detach target" in (active_vxlan_link.error_message or "").lower()
+            assert active_vxlan_link.source_vxlan_attached is True
+            assert active_vxlan_link.target_vxlan_attached is False
+
+            test_db.flush()
+            tunnel = test_db.query(models.VxlanTunnel).filter(
+                models.VxlanTunnel.link_state_id == active_vxlan_link.id
+            ).first()
+            assert tunnel is not None
+            assert tunnel.status == "failed"
+
+    @pytest.mark.asyncio
     async def test_teardown_no_vni(
         self, link_manager: LinkManager, sample_lab: models.Lab,
         multiple_hosts: list[models.Host], test_db: Session

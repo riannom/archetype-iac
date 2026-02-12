@@ -402,6 +402,13 @@ class LinkStateOut(BaseModel):
     desired_state: str  # "up" or "down"
     actual_state: str  # "up", "down", "unknown", "error"
     error_message: str | None = None
+    source_oper_state: str = "down"
+    target_oper_state: str = "down"
+    source_oper_reason: str | None = None
+    target_oper_reason: str | None = None
+    source_last_change_at: datetime | None = None
+    target_last_change_at: datetime | None = None
+    oper_epoch: int = 0
     created_at: datetime
     updated_at: datetime
 

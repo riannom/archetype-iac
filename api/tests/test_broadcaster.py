@@ -111,6 +111,35 @@ class TestStateBroadcasterPublish:
         assert message["data"]["link_name"] == "R1:eth1-R2:eth1"
 
     @pytest.mark.asyncio
+    async def test_publish_link_state_includes_oper_fields(self, mock_redis):
+        """Should include operational link fields in payload when provided."""
+        broadcaster = StateBroadcaster("redis://localhost")
+        broadcaster._redis = mock_redis
+
+        await broadcaster.publish_link_state(
+            lab_id="lab-123",
+            link_name="R1:eth1-R2:eth1",
+            desired_state="up",
+            actual_state="down",
+            source_node="R1",
+            target_node="R2",
+            source_oper_state="down",
+            target_oper_state="down",
+            source_oper_reason="peer_host_offline",
+            target_oper_reason="local_interface_down",
+            oper_epoch=7,
+        )
+
+        call_args = mock_redis.publish.call_args
+        message = json.loads(call_args[0][1])
+        data = message["data"]
+        assert data["source_oper_state"] == "down"
+        assert data["target_oper_state"] == "down"
+        assert data["source_oper_reason"] == "peer_host_offline"
+        assert data["target_oper_reason"] == "local_interface_down"
+        assert data["oper_epoch"] == 7
+
+    @pytest.mark.asyncio
     async def test_publish_lab_state(self, mock_redis):
         """Should publish lab state to correct channel."""
         broadcaster = StateBroadcaster("redis://localhost")
@@ -319,6 +348,35 @@ class TestConvenienceFunctions:
             )
 
             mock_broadcaster.publish_link_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_broadcast_link_state_change_passes_oper_fields(self):
+        """Convenience function should forward operational state fields."""
+        with patch("app.services.broadcaster.get_broadcaster") as mock_get:
+            mock_broadcaster = MagicMock()
+            mock_broadcaster.publish_link_state = AsyncMock(return_value=1)
+            mock_get.return_value = mock_broadcaster
+
+            await broadcast_link_state_change(
+                lab_id="lab-123",
+                link_name="R1:eth1-R2:eth1",
+                desired_state="up",
+                actual_state="down",
+                source_node="R1",
+                target_node="R2",
+                source_oper_state="down",
+                target_oper_state="down",
+                source_oper_reason="peer_host_offline",
+                target_oper_reason="local_interface_down",
+                oper_epoch=4,
+            )
+
+            _, kwargs = mock_broadcaster.publish_link_state.call_args
+            assert kwargs["source_oper_state"] == "down"
+            assert kwargs["target_oper_state"] == "down"
+            assert kwargs["source_oper_reason"] == "peer_host_offline"
+            assert kwargs["target_oper_reason"] == "local_interface_down"
+            assert kwargs["oper_epoch"] == 4
 
 
 class TestMultiLabIsolation:

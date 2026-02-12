@@ -179,6 +179,14 @@ if PROMETHEUS_AVAILABLE:
         "Number of labs in running state",
     )
 
+    # --- Link Operational State Metrics ---
+
+    link_oper_transitions = Counter(
+        "archetype_link_oper_transitions_total",
+        "Total link endpoint operational-state transitions",
+        ["endpoint", "old_state", "new_state", "reason", "is_cross_host"],
+    )
+
     # --- Database Metrics ---
 
     db_connections_idle_in_transaction = Gauge(
@@ -227,6 +235,7 @@ else:
     agent_operation_duration = DummyMetric()
     labs_total = DummyMetric()
     labs_active = DummyMetric()
+    link_oper_transitions = DummyMetric()
     db_connections_idle_in_transaction = DummyMetric()
     db_connections_total = DummyMetric()
 
@@ -653,3 +662,26 @@ def record_enforcement_exhausted() -> None:
     if not PROMETHEUS_AVAILABLE:
         return
     enforcement_failures.inc()
+
+
+def record_link_oper_transition(
+    endpoint: str,
+    old_state: str | None,
+    new_state: str | None,
+    reason: str | None = None,
+    is_cross_host: bool = False,
+) -> None:
+    """Record a link endpoint operational-state transition."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    endpoint_label = "source" if endpoint == "source" else "target"
+    old_label = _normalize_reason_label(old_state or "unknown")
+    new_label = _normalize_reason_label(new_state or "unknown")
+    reason_label = _normalize_reason_label(reason or "none")
+    link_oper_transitions.labels(
+        endpoint=endpoint_label,
+        old_state=old_label,
+        new_state=new_label,
+        reason=reason_label,
+        is_cross_host="true" if is_cross_host else "false",
+    ).inc()

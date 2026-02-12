@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app import agent_client, models
 from app.config import settings
 from app.db import get_session
+from app.services.link_operational_state import recompute_link_oper_state
 from app.services.link_validator import verify_link_connected
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
 from app.services.interface_naming import normalize_interface
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 # Configuration
 RECONCILIATION_INTERVAL_SECONDS = 60
 RECONCILIATION_ENABLED = True
+
+
+def _sync_oper_state(session: Session, link_state: models.LinkState) -> None:
+    recompute_link_oper_state(session, link_state)
 
 
 async def _cleanup_deleted_links(
@@ -184,6 +189,7 @@ async def reconcile_link_states(session: Session) -> dict:
                 else:
                     link.actual_state = "error"
                     link.error_message = f"Reconciliation failed: {error}"
+                    _sync_oper_state(session, link)
                     results["errors"] += 1
                     logger.error(f"Link {link.link_name} repair failed")
 
@@ -303,6 +309,7 @@ async def attempt_partial_recovery(
         link.error_message = None
         link.source_carrier_state = "on"
         link.target_carrier_state = "on"
+        _sync_oper_state(session, link)
         logger.info(f"Link {link.link_name} fully recovered")
         return True
     else:
@@ -310,6 +317,7 @@ async def attempt_partial_recovery(
             f"Partial recovery: source={'ok' if source_ok else 'failed'}, "
             f"target={'ok' if target_ok else 'failed'}"
         )
+        _sync_oper_state(session, link)
         return False
 
 
@@ -677,6 +685,7 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
                 else:
                     link.actual_state = "error"
                     link.error_message = f"Reconciliation failed: {error}"
+                    _sync_oper_state(session, link)
                     results["errors"] += 1
 
         except Exception as e:

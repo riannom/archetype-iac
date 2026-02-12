@@ -25,6 +25,7 @@ from app.tasks.link_orchestration import (
     create_same_host_link,
     create_cross_host_link,
 )
+from app.services.link_operational_state import recompute_link_oper_state
 from app.services.interface_naming import normalize_interface
 from app.utils.locks import (
     link_ops_lock,
@@ -32,6 +33,10 @@ from app.utils.locks import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_oper_state(session: Session, link_state: models.LinkState) -> None:
+    recompute_link_oper_state(session, link_state)
 
 
 def _update_job_log(session: Session, job: models.Job, log_parts: list[str]) -> None:
@@ -102,6 +107,7 @@ async def create_link_if_ready(
         # One or both nodes not running - mark link as pending for later auto-connect
         link_state.actual_state = "pending"
         link_state.error_message = None
+        _sync_oper_state(session, link_state)
         src_status = source_state.actual_state if source_state else "unknown"
         tgt_status = target_state.actual_state if target_state else "unknown"
         log_parts.append(
@@ -120,6 +126,7 @@ async def create_link_if_ready(
     if not source_host_id or not target_host_id:
         link_state.actual_state = "error"
         link_state.error_message = "Cannot determine endpoint host placement"
+        _sync_oper_state(session, link_state)
         log_parts.append(f"  {link_state.link_name}: FAILED - missing host placement")
         logger.warning(f"Link {link_state.link_name} missing host placement")
         return False
@@ -192,6 +199,14 @@ async def teardown_link(
 
     source_host_id = link_info.get("source_host_id")
     target_host_id = link_info.get("target_host_id")
+    link_state_record = (
+        session.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.link_name == link_name,
+        )
+        .first()
+    )
 
     if is_cross_host:
         # Two-phase teardown with rollback for cross-host links
@@ -216,12 +231,7 @@ async def teardown_link(
         # Find and mark tunnel as cleanup
         tunnel = None
         ls = (
-            session.query(models.LinkState)
-            .filter(
-                models.LinkState.lab_id == lab_id,
-                models.LinkState.link_name == link_name,
-            )
-            .first()
+            link_state_record
         )
         if ls:
             tunnel = (
@@ -252,6 +262,10 @@ async def teardown_link(
         if not source_ok:
             if tunnel:
                 tunnel.status = "failed"
+            if link_state_record:
+                link_state_record.actual_state = "error"
+                link_state_record.error_message = "Source detach failed"
+                _sync_oper_state(session, link_state_record)
             log_parts.append(f"  {link_name}: FAILED (source detach error)")
             return False
 
@@ -293,12 +307,24 @@ async def teardown_link(
 
             if tunnel:
                 tunnel.status = "failed"
+            if link_state_record:
+                link_state_record.actual_state = "error"
+                link_state_record.error_message = "Target detach failed after source detach"
+                _sync_oper_state(session, link_state_record)
             log_parts.append(f"  {link_name}: FAILED (target detach error, source rolled back)")
             return False
 
         # Phase 3: Both sides detached - delete tunnel record
         if tunnel:
             session.delete(tunnel)
+        if link_state_record:
+            link_state_record.actual_state = "down"
+            link_state_record.source_carrier_state = "off"
+            link_state_record.target_carrier_state = "off"
+            link_state_record.source_vxlan_attached = False
+            link_state_record.target_vxlan_attached = False
+            link_state_record.error_message = None
+            _sync_oper_state(session, link_state_record)
 
         log_parts.append(f"  {link_name}: removed (cross-host VXLAN)")
         logger.info(f"Cross-host link {link_name} torn down")
@@ -328,17 +354,31 @@ async def teardown_link(
         try:
             result = await agent_client.delete_link_on_agent(agent, lab_id, normalized_link_id)
             if result.get("success"):
+                if link_state_record:
+                    link_state_record.actual_state = "down"
+                    link_state_record.source_carrier_state = "off"
+                    link_state_record.target_carrier_state = "off"
+                    link_state_record.error_message = None
+                    _sync_oper_state(session, link_state_record)
                 log_parts.append(f"  {link_name}: removed")
                 logger.info(f"Same-host link {link_name} torn down")
                 return True
             else:
                 error = result.get("error", "unknown error")
+                if link_state_record:
+                    link_state_record.actual_state = "error"
+                    link_state_record.error_message = error
+                    _sync_oper_state(session, link_state_record)
                 log_parts.append(f"  {link_name}: FAILED - {error}")
                 logger.warning(
                     f"Same-host link {link_name} teardown failed: {error}"
                 )
                 return False
         except Exception as e:
+            if link_state_record:
+                link_state_record.actual_state = "error"
+                link_state_record.error_message = str(e)
+                _sync_oper_state(session, link_state_record)
             log_parts.append(f"  {link_name}: FAILED - {e}")
             logger.error(f"Failed to tear down link {link_name}: {e}")
             return False
@@ -472,6 +512,7 @@ async def process_link_changes(
                                 logger.error(f"Error creating link {link_name}: {e}")
                                 link_state.actual_state = "error"
                                 link_state.error_message = str(e)
+                                _sync_oper_state(session, link_state)
                     log_parts.append("")
 
                 # Summary

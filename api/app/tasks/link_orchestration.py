@@ -17,12 +17,17 @@ import logging
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
+from app.services.link_operational_state import recompute_link_oper_state
 from app.services.link_manager import LinkManager
 from app.services.link_validator import verify_link_connected, update_interface_mappings
 from app.services.topology import TopologyService
 from app.services.interface_naming import normalize_interface
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_oper_state(session: Session, link_state: models.LinkState) -> None:
+    recompute_link_oper_state(session, link_state)
 
 
 async def create_deployment_links(
@@ -237,6 +242,7 @@ async def create_deployment_links(
             logger.warning(f"Link {link.link_name} has missing host placement")
             link_state.actual_state = "error"
             link_state.error_message = "Missing host placement for one or more endpoints"
+            _sync_oper_state(session, link_state)
             fail_count += 1
             log_parts.append(f"  {link.link_name}: FAILED - missing host placement")
             continue
@@ -327,6 +333,7 @@ async def create_external_network_links(
         for _, link_state, _, _, _ in links:
             link_state.actual_state = "error"
             link_state.error_message = "External network has no managed interface configured"
+            _sync_oper_state(session, link_state)
             fail_count += 1
         log_parts.append(f"  External {ext_node.display_name}: FAILED - no managed interface")
         return success_count, fail_count
@@ -336,6 +343,7 @@ async def create_external_network_links(
         for _, link_state, _, _, _ in links:
             link_state.actual_state = "error"
             link_state.error_message = "Managed interface not found (may have been deleted)"
+            _sync_oper_state(session, link_state)
             fail_count += 1
         log_parts.append(f"  External {ext_node.display_name}: FAILED - managed interface not found")
         return success_count, fail_count
@@ -346,6 +354,7 @@ async def create_external_network_links(
         for _, link_state, _, _, _ in links:
             link_state.actual_state = "error"
             link_state.error_message = "Agent for external interface not available"
+            _sync_oper_state(session, link_state)
             fail_count += 1
         log_parts.append(f"  External {ext_node.display_name}: FAILED - agent offline")
         return success_count, fail_count
@@ -383,6 +392,7 @@ async def create_external_network_links(
         if not device_host_id:
             link_state.actual_state = "error"
             link_state.error_message = "Device has no host placement"
+            _sync_oper_state(session, link_state)
             fail_count += 1
             log_parts.append(f"    {device_node.container_name}: FAILED - no host placement")
             continue
@@ -421,6 +431,7 @@ async def create_external_network_links(
                 link_state.vlan_tag = returned_vlan
                 link_state.source_carrier_state = "on"
                 link_state.target_carrier_state = "on"
+                _sync_oper_state(session, link_state)
                 success_count += 1
                 log_parts.append(
                     f"    {device_node.container_name}:{device_interface} -> "
@@ -429,6 +440,7 @@ async def create_external_network_links(
             else:
                 link_state.actual_state = "error"
                 link_state.error_message = result.get("error", "Unknown error")
+                _sync_oper_state(session, link_state)
                 fail_count += 1
                 log_parts.append(
                     f"    {device_node.container_name}:{device_interface}: "
@@ -437,6 +449,7 @@ async def create_external_network_links(
         except Exception as e:
             link_state.actual_state = "error"
             link_state.error_message = str(e)
+            _sync_oper_state(session, link_state)
             fail_count += 1
             logger.error(f"External connect failed: {e}")
 
@@ -447,6 +460,7 @@ async def create_external_network_links(
             for _, link_state, device_node, _, _ in remote_links:
                 link_state.actual_state = "error"
                 link_state.error_message = "Remote agent not available"
+                _sync_oper_state(session, link_state)
                 fail_count += 1
             log_parts.append(f"    Remote host {remote_host_id}: FAILED - agent offline")
             continue
@@ -479,6 +493,7 @@ async def create_external_network_links(
                     link_state.target_carrier_state = "on"
                     link_state.source_vxlan_attached = True
                     link_state.target_vxlan_attached = True
+                    _sync_oper_state(session, link_state)
 
                     # Create VxlanTunnel record
                     ext_ip = await agent_client.resolve_agent_ip(ext_agent.address)
@@ -514,6 +529,7 @@ async def create_external_network_links(
                 else:
                     link_state.actual_state = "error"
                     link_state.error_message = result.get("error", "Unknown error")
+                    _sync_oper_state(session, link_state)
                     fail_count += 1
                     log_parts.append(
                         f"    {device_node.container_name}:{device_interface}: "
@@ -522,6 +538,7 @@ async def create_external_network_links(
             except Exception as e:
                 link_state.actual_state = "error"
                 link_state.error_message = str(e)
+                _sync_oper_state(session, link_state)
                 fail_count += 1
                 logger.error(f"Cross-host external link failed: {e}")
 
@@ -559,11 +576,13 @@ async def create_same_host_link(
     if not agent:
         link_state.actual_state = "error"
         link_state.error_message = f"Agent not found for host {link_state.source_host_id}"
+        _sync_oper_state(session, link_state)
         log_parts.append(f"  {link_state.link_name}: FAILED - agent not found")
         return False
 
     # Set state to "creating" before making any changes
     link_state.actual_state = "creating"
+    _sync_oper_state(session, link_state)
     session.flush()
 
     try:
@@ -582,6 +601,7 @@ async def create_same_host_link(
         if not result.get("success"):
             link_state.actual_state = "error"
             link_state.error_message = result.get("error", "hot_connect failed")
+            _sync_oper_state(session, link_state)
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
 
@@ -595,6 +615,7 @@ async def create_same_host_link(
             if not is_valid:
                 link_state.actual_state = "error"
                 link_state.error_message = f"Verification failed: {error}"
+                _sync_oper_state(session, link_state)
                 log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
                 return False
 
@@ -606,6 +627,7 @@ async def create_same_host_link(
         link_state.source_carrier_state = "on"
         link_state.target_carrier_state = "on"
         link_state.error_message = None
+        _sync_oper_state(session, link_state)
         log_parts.append(
             f"  {link_state.link_name}: OK (VLAN {link_state.vlan_tag})"
         )
@@ -615,6 +637,7 @@ async def create_same_host_link(
         logger.error(f"Failed to create same-host link {link_state.link_name}: {e}")
         link_state.actual_state = "error"
         link_state.error_message = str(e)
+        _sync_oper_state(session, link_state)
         log_parts.append(f"  {link_state.link_name}: FAILED - {e}")
         return False
 
@@ -652,11 +675,13 @@ async def create_cross_host_link(
     if not agent_a or not agent_b:
         link_state.actual_state = "error"
         link_state.error_message = "One or more agents not available"
+        _sync_oper_state(session, link_state)
         log_parts.append(f"  {link_state.link_name}: FAILED - agents not available")
         return False
 
     # Set state to "creating" before making any changes
     link_state.actual_state = "creating"
+    _sync_oper_state(session, link_state)
     session.flush()
 
     try:
@@ -679,6 +704,7 @@ async def create_cross_host_link(
         if not result.get("success"):
             link_state.actual_state = "error"
             link_state.error_message = result.get("error", "Link tunnel setup failed")
+            _sync_oper_state(session, link_state)
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
 
@@ -692,6 +718,7 @@ async def create_cross_host_link(
             if not is_valid:
                 link_state.actual_state = "error"
                 link_state.error_message = f"Verification failed: {error}"
+                _sync_oper_state(session, link_state)
                 log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
                 return False
 
@@ -732,6 +759,7 @@ async def create_cross_host_link(
         link_state.source_vxlan_attached = True
         link_state.target_vxlan_attached = True
         link_state.error_message = None
+        _sync_oper_state(session, link_state)
         log_parts.append(
             f"  {link_state.link_name}: OK (VNI {vni}, per-link VXLAN)"
         )
@@ -741,6 +769,7 @@ async def create_cross_host_link(
         logger.error(f"Failed to create cross-host link {link_state.link_name}: {e}")
         link_state.actual_state = "error"
         link_state.error_message = str(e)
+        _sync_oper_state(session, link_state)
         log_parts.append(f"  {link_state.link_name}: FAILED - {e}")
         return False
 

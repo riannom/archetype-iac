@@ -13,11 +13,16 @@ test-agent:
 	pytest -q agent/tests
 
 test-api:
-	@command -v python3.11 >/dev/null 2>&1 || { \
-		echo "python3.11 is required for API tests. Install Python 3.11 and retry."; \
+	@if command -v python3.11 >/dev/null 2>&1; then \
+		python3.11 -m pytest -q api/tests; \
+	elif docker ps --format '{{.Names}}' | grep -q '^archetype-iac-api-1$$'; then \
+		echo "python3.11 not found locally; running API tests in container archetype-iac-api-1"; \
+		$(MAKE) test-api-container; \
+	else \
+		echo "python3.11 is not available locally and API container archetype-iac-api-1 is not running."; \
+		echo "Start the stack (docker compose -f docker-compose.gui.yml up -d api) or run make test-api-container after the container is up."; \
 		exit 1; \
-	}
-	python3.11 -m pytest -q api/tests
+	fi
 
 test-api-container:
 	docker exec archetype-iac-api-1 /bin/sh -lc 'cd /app && pytest -q $(API_TEST)'

@@ -727,3 +727,195 @@ class TestResolveAgentIp:
         # Either resolved to an IP or returned hostname as-is
         assert ip is not None
         assert len(ip) > 0
+
+
+class TestLinkOrchestrationReliability:
+    """Additional reliability tests for cross-host idempotency and external links."""
+
+    @pytest.mark.asyncio
+    async def test_create_cross_host_link_idempotent_single_tunnel(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+    ):
+        from app.tasks.link_orchestration import create_cross_host_link
+
+        link_state = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R3:eth1",
+            source_node="archetype-test-r1",
+            source_interface="eth1",
+            target_node="archetype-test-r3",
+            target_interface="eth1",
+            source_host_id=multiple_hosts[0].id,
+            target_host_id=multiple_hosts[1].id,
+            actual_state="pending",
+            is_cross_host=True,
+        )
+        test_db.add(link_state)
+        test_db.commit()
+
+        host_to_agent = {h.id: h for h in multiple_hosts}
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
+            mock_client.setup_cross_host_link_v2 = AsyncMock(side_effect=[
+                {"success": True, "vni": 1111},
+                {"success": True, "vni": 2222},
+            ])
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
+
+            assert await create_cross_host_link(test_db, sample_lab.id, link_state, host_to_agent, [])
+            assert await create_cross_host_link(test_db, sample_lab.id, link_state, host_to_agent, [])
+
+        test_db.flush()
+        tunnels = (
+            test_db.query(models.VxlanTunnel)
+            .filter(models.VxlanTunnel.link_state_id == link_state.id)
+            .all()
+        )
+        assert len(tunnels) == 1
+        assert tunnels[0].vni == 2222
+
+    @pytest.mark.asyncio
+    async def test_create_external_network_links_missing_managed_interface(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+    ):
+        from app.tasks.link_orchestration import create_external_network_links
+
+        device_node = models.Node(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="R1",
+            container_name="r1",
+            node_type="device",
+            device="linux",
+            host_id=sample_host.id,
+        )
+        ext_node = models.Node(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            gui_id="ext1",
+            display_name="External",
+            container_name="ext1",
+            node_type="external",
+            managed_interface_id=None,
+            host_id=sample_host.id,
+        )
+        link_def = models.Link(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-ext1",
+            source_node_id=device_node.id,
+            source_interface="eth1",
+            target_node_id=ext_node.id,
+            target_interface="_external",
+        )
+        link_state = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-_ext:ext1:_external",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="_ext:ext1",
+            target_interface="_external",
+            actual_state="pending",
+        )
+        test_db.add_all([device_node, ext_node, link_def, link_state])
+        test_db.commit()
+
+        ok, failed = await create_external_network_links(
+            test_db,
+            sample_lab.id,
+            ext_node.id,
+            [(link_def, link_state, device_node, ext_node, "eth1")],
+            host_to_agent={sample_host.id: sample_host},
+            log_parts=[],
+        )
+        assert ok == 0
+        assert failed == 1
+        assert link_state.actual_state == "error"
+        assert "managed interface" in (link_state.error_message or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_create_external_network_links_same_host_success(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+    ):
+        from app.tasks.link_orchestration import create_external_network_links
+
+        managed_iface = models.AgentManagedInterface(
+            id=str(uuid4()),
+            host_id=sample_host.id,
+            name="eth99",
+            interface_type="external",
+            sync_status="synced",
+            is_up=True,
+        )
+        device_node = models.Node(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="R1",
+            container_name="r1",
+            node_type="device",
+            device="linux",
+            host_id=sample_host.id,
+        )
+        ext_node = models.Node(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            gui_id="ext1",
+            display_name="External",
+            container_name="ext1",
+            node_type="external",
+            managed_interface_id=managed_iface.id,
+            host_id=sample_host.id,
+        )
+        link_def = models.Link(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-ext1",
+            source_node_id=device_node.id,
+            source_interface="eth1",
+            target_node_id=ext_node.id,
+            target_interface="_external",
+        )
+        link_state = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-_ext:eth99:_external",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="_ext:eth99",
+            target_interface="_external",
+            desired_state="up",
+            actual_state="pending",
+        )
+        test_db.add_all([managed_iface, device_node, ext_node, link_def, link_state])
+        test_db.add(
+            models.NodeState(
+                lab_id=sample_lab.id,
+                node_id="n1",
+                node_name="r1",
+                desired_state="running",
+                actual_state="running",
+            )
+        )
+        test_db.commit()
+
+        with patch("app.tasks.link_orchestration.agent_client.connect_external_on_agent", new_callable=AsyncMock) as mock_connect:
+            mock_connect.return_value = {"success": True, "vlan_tag": 222}
+            ok, failed = await create_external_network_links(
+                test_db,
+                sample_lab.id,
+                ext_node.id,
+                [(link_def, link_state, device_node, ext_node, "eth1")],
+                host_to_agent={sample_host.id: sample_host},
+                log_parts=[],
+            )
+
+        assert ok == 1
+        assert failed == 0
+        assert link_state.actual_state == "up"
+        assert link_state.source_oper_state == "up"
+        assert link_state.target_oper_state == "up"

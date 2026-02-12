@@ -33,6 +33,7 @@ from app.utils.agents import get_online_agent_for_lab
 from app.utils.http import require_lab_owner, raise_not_found, raise_unavailable
 from app.utils.link import generate_link_name
 from app.services.interface_naming import normalize_interface
+from app.services.link_operational_state import recompute_link_oper_state
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map, teardown_link
 from app.tasks.link_reconciliation import reconcile_lab_links
 from app.services import interface_mapping as interface_mapping_service
@@ -2082,6 +2083,10 @@ def _parse_link_id_endpoints(link_id: str) -> tuple[str, str, str, str] | None:
     return _canonicalize_link_endpoints(src_n, src_i, tgt_n, tgt_i)
 
 
+def _sync_link_oper_state(database: Session, link_state: models.LinkState) -> None:
+    recompute_link_oper_state(database, link_state)
+
+
 def _upsert_link_states(
     database: Session,
     lab_id: str,
@@ -2139,6 +2144,7 @@ def _upsert_link_states(
     updated_count = 0
     added_link_names: list[str] = []
     removed_link_info: list[dict] = []
+    mutated_states: list[models.LinkState] = []
 
     for link in graph.links:
         if len(link.endpoints) != 2:
@@ -2167,9 +2173,17 @@ def _upsert_link_states(
         # Keep one record and mark duplicates for deletion.
         for duplicate in duplicates:
             duplicate.desired_state = "deleted"
+            mutated_states.append(duplicate)
 
         if existing:
             # Update existing link state to canonical storage
+            existing_changed = (
+                existing.link_name != link_name
+                or existing.source_node != src_n
+                or existing.source_interface != src_i
+                or existing.target_node != tgt_n
+                or existing.target_interface != tgt_i
+            )
             existing.link_name = link_name
             existing.source_node = src_n
             existing.source_interface = src_i
@@ -2178,6 +2192,9 @@ def _upsert_link_states(
             # If this was previously a stale duplicate row, re-activate.
             if existing.desired_state == "deleted":
                 existing.desired_state = "up"
+                existing_changed = True
+            if existing_changed:
+                mutated_states.append(existing)
             updated_count += 1
         else:
             # Create new link state
@@ -2205,6 +2222,7 @@ def _upsert_link_states(
             )
             database.add(new_state)
             existing_states.append(new_state)
+            mutated_states.append(new_state)
             added_link_names.append(link_name)
             created_count += 1
 
@@ -2228,6 +2246,10 @@ def _upsert_link_states(
             # The task will delete after successful teardown
             # For now, mark as pending deletion but keep the record
             existing_state.desired_state = "deleted"
+            mutated_states.append(existing_state)
+
+    for state in mutated_states:
+        _sync_link_oper_state(database, state)
 
     return created_count, updated_count, added_link_names, removed_link_info
 
@@ -2335,6 +2357,7 @@ def set_link_state(
         raise_not_found(f"Link '{link_name}' not found")
 
     state.desired_state = payload.state
+    _sync_link_oper_state(database, state)
     database.commit()
     database.refresh(state)
 
@@ -2362,6 +2385,7 @@ def set_all_links_desired_state(
     )
     for state in states:
         state.desired_state = payload.state
+        _sync_link_oper_state(database, state)
     database.commit()
 
     # Refresh and return all states
@@ -3285,6 +3309,7 @@ async def hot_connect_link(
         )
         database.add(link_state)
         database.flush()
+        _sync_link_oper_state(database, link_state)
     else:
         # Ensure canonical storage and reactivate stale records.
         link_state.link_name = link_name
@@ -3294,6 +3319,7 @@ async def hot_connect_link(
         link_state.target_interface = tgt_i
         if link_state.desired_state == "deleted":
             link_state.desired_state = "up"
+        _sync_link_oper_state(database, link_state)
 
     host_to_agent = await _build_host_to_agent_map(database, lab_id)
     if not host_to_agent:

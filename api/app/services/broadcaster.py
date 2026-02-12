@@ -157,6 +157,11 @@ class StateBroadcaster:
         source_node: str,
         target_node: str,
         error_message: str | None = None,
+        source_oper_state: str | None = None,
+        target_oper_state: str | None = None,
+        source_oper_reason: str | None = None,
+        target_oper_reason: str | None = None,
+        oper_epoch: int | None = None,
     ) -> int:
         """Publish a link state change event.
 
@@ -183,6 +188,11 @@ class StateBroadcaster:
                     "source_node": source_node,
                     "target_node": target_node,
                     "error_message": error_message,
+                    "source_oper_state": source_oper_state,
+                    "target_oper_state": target_oper_state,
+                    "source_oper_reason": source_oper_reason,
+                    "target_oper_reason": target_oper_reason,
+                    "oper_epoch": oper_epoch,
                 },
             }
             channel = self._channel_name(lab_id)
@@ -382,6 +392,11 @@ async def broadcast_link_state_change(
     source_node: str,
     target_node: str,
     error_message: str | None = None,
+    source_oper_state: str | None = None,
+    target_oper_state: str | None = None,
+    source_oper_reason: str | None = None,
+    target_oper_reason: str | None = None,
+    oper_epoch: int | None = None,
 ) -> None:
     """Convenience function to broadcast a link state change.
 
@@ -396,4 +411,9 @@ async def broadcast_link_state_change(
         source_node=source_node,
         target_node=target_node,
         error_message=error_message,
+        source_oper_state=source_oper_state,
+        target_oper_state=target_oper_state,
+        source_oper_reason=source_oper_reason,
+        target_oper_reason=target_oper_reason,
+        oper_epoch=oper_epoch,
     )

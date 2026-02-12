@@ -575,3 +575,44 @@ class TestRowLevelLocking:
         assert has_conflict is False
         # Verify the session was used (query was called)
         mock_session.query.assert_called()
+
+
+class TestLinkStateRapidUpdates:
+    """Rapid link desired-state writes should remain consistent."""
+
+    def test_rapid_set_link_state_keeps_oper_epoch_monotonic(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        sample_lab: models.Lab,
+        test_db,
+    ) -> None:
+        link = models.LinkState(
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-r2:eth1",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="r2",
+            target_interface="eth1",
+            desired_state="up",
+            actual_state="unknown",
+        )
+        test_db.add(link)
+        test_db.commit()
+
+        epochs: list[int] = []
+        for state in ["down", "up", "down", "up", "down"]:
+            resp = test_client.put(
+                f"/labs/{sample_lab.id}/links/{link.link_name}/state",
+                json={"state": state},
+                headers=auth_headers,
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["desired_state"] == state
+            epochs.append(data["oper_epoch"])
+
+        assert epochs == sorted(epochs)
+        final = test_db.query(models.LinkState).filter(models.LinkState.id == link.id).first()
+        assert final is not None
+        assert final.desired_state == "down"
