@@ -71,6 +71,13 @@ export default function AdminMenuButton() {
       icon: 'fa-users',
       title: 'User Management',
     });
+
+    items.push({
+      label: 'Support Bundles',
+      path: '/admin/support-bundles',
+      icon: 'fa-file-zipper',
+      title: 'Offline Support Bundles',
+    });
   }
 
   return (

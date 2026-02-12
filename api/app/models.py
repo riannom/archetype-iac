@@ -51,6 +51,26 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
+class SupportBundle(Base):
+    """Generated offline support bundle metadata."""
+    __tablename__ = "support_bundles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    include_configs: Mapped[bool] = mapped_column(default=False)
+    pii_safe: Mapped[bool] = mapped_column(default=True)
+    time_window_hours: Mapped[int] = mapped_column(default=24)
+    options_json: Mapped[str] = mapped_column(Text, default="{}")
+    incident_json: Mapped[str] = mapped_column(Text, default="{}")
+    file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class Lab(Base):
     __tablename__ = "labs"
 

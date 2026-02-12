@@ -37,7 +37,7 @@ from app.logging_config import (
 )
 from app.middleware import CurrentUserMiddleware, DeprecationMiddleware
 from app.routers.v1 import router as v1_router
-from app.routers import admin, agents, auth, callbacks, console, events, images, infrastructure, iso, jobs, labs, permissions, state_ws, system, users, vendors, webhooks
+from app.routers import admin, agents, auth, callbacks, console, events, images, infrastructure, iso, jobs, labs, permissions, state_ws, support, system, users, vendors, webhooks
 from app.events.publisher import close_publisher
 from app.utils.async_tasks import setup_asyncio_exception_handler
 from alembic.config import Config as AlembicConfig
@@ -257,6 +257,7 @@ app.include_router(jobs.router)
 app.include_router(permissions.router)
 app.include_router(users.router)
 app.include_router(images.router)
+app.include_router(support.router)
 app.include_router(console.router)
 app.include_router(admin.router)
 app.include_router(callbacks.router)

@@ -213,3 +213,50 @@ export async function getLabLogs(
 
   return apiRequest<LabLogsResponse>(path);
 }
+
+
+// --- Support Bundle Types and Functions ---
+
+export interface SupportBundleCreate {
+  summary: string;
+  repro_steps: string;
+  expected_behavior: string;
+  actual_behavior: string;
+  incident_started_at?: string | null;
+  incident_ended_at?: string | null;
+  time_window_hours: number;
+  impacted_lab_ids: string[];
+  impacted_agent_ids: string[];
+  include_configs: boolean;
+  pii_safe: boolean;
+}
+
+export interface SupportBundle {
+  id: string;
+  user_id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  include_configs: boolean;
+  pii_safe: boolean;
+  time_window_hours: number;
+  size_bytes?: number | null;
+  error_message?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+}
+
+export async function createSupportBundle(payload: SupportBundleCreate): Promise<SupportBundle> {
+  return apiRequest<SupportBundle>("/support-bundles", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getSupportBundle(bundleId: string): Promise<SupportBundle> {
+  return apiRequest<SupportBundle>(`/support-bundles/${bundleId}`);
+}
+
+export async function listSupportBundles(limit = 20): Promise<SupportBundle[]> {
+  const query = buildQueryString({ limit });
+  return apiRequest<SupportBundle[]>(`/support-bundles${query}`);
+}

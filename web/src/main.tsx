@@ -14,6 +14,7 @@ const InfrastructurePage = React.lazy(() => import("./pages/InfrastructurePage")
 const InterfaceManagerPage = React.lazy(() => import("./pages/InterfaceManagerPage"));
 const NodesPage = React.lazy(() => import("./pages/NodesPage"));
 const AdminSettingsPage = React.lazy(() => import("./pages/AdminSettingsPage"));
+const SupportBundlesPage = React.lazy(() => import("./pages/SupportBundlesPage"));
 const StudioPage = React.lazy(() => import("./studio/StudioPage"));
 const UserManagementPage = React.lazy(() => import("./pages/UserManagementPage"));
 
@@ -35,6 +36,7 @@ const router = createBrowserRouter([
   { path: "/infrastructure", element: withSuspense(<InfrastructurePage />) },
   { path: "/admin/interfaces", element: withSuspense(<InterfaceManagerPage />) },
   { path: "/admin/settings", element: withSuspense(<AdminSettingsPage />) },
+  { path: "/admin/support-bundles", element: withSuspense(<SupportBundlesPage />) },
   { path: "/admin/users", element: withSuspense(<UserManagementPage />) },
   { path: "/nodes", element: withSuspense(<NodesPage />) },
   { path: "/nodes/devices", element: withSuspense(<NodesPage />) },

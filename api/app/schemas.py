@@ -1238,3 +1238,49 @@ class AuditLogsResponse(BaseModel):
     entries: list[AuditLogOut]
     total: int
     has_more: bool = False
+
+
+# =============================================================================
+# Support Bundle Schemas
+# =============================================================================
+
+
+class SupportBundleCreate(BaseModel):
+    """Create request for an offline support bundle."""
+
+    summary: str = Field(min_length=5, max_length=4000)
+    repro_steps: str = Field(min_length=5, max_length=10000)
+    expected_behavior: str = Field(min_length=2, max_length=4000)
+    actual_behavior: str = Field(min_length=2, max_length=4000)
+    incident_started_at: datetime | None = None
+    incident_ended_at: datetime | None = None
+    time_window_hours: int = Field(default=24, ge=1, le=168)
+    impacted_lab_ids: list[str] = Field(default_factory=list)
+    impacted_agent_ids: list[str] = Field(default_factory=list)
+    include_configs: bool = False
+    pii_safe: bool = True
+
+    @model_validator(mode="after")
+    def validate_incident_window(self):
+        if self.incident_started_at and self.incident_ended_at:
+            if self.incident_ended_at < self.incident_started_at:
+                raise ValueError("incident_ended_at must be >= incident_started_at")
+        return self
+
+
+class SupportBundleOut(BaseModel):
+    """Metadata for a generated support bundle."""
+
+    id: str
+    user_id: str
+    status: str
+    include_configs: bool
+    pii_safe: bool
+    time_window_hours: int
+    size_bytes: int | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
