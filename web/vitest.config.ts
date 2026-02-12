@@ -17,6 +17,7 @@ export default defineConfig({
         "src/**/*.spec.{ts,tsx}",
         "src/setupTests.ts",
         "src/main.tsx",
+        "src/components/backgrounds/animations/**/*.ts",
       ],
     },
   },
