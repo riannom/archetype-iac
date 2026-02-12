@@ -118,7 +118,7 @@ const ConfigViewer: React.FC<ConfigViewerProps> = ({
         </button>
       </div>
       <div className="flex-1 overflow-auto">
-        <pre className="p-4 text-sm font-mono text-sage-400 whitespace-pre-wrap break-words">
+        <pre className="p-4 text-sm font-mono text-stone-900 dark:text-stone-200 whitespace-pre-wrap break-words">
           {selectedSnapshot.content}
         </pre>
       </div>

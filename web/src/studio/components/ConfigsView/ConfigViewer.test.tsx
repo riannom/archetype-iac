@@ -80,4 +80,22 @@ describe('ConfigViewer', () => {
     fireEvent.click(screen.getByText('Copy'));
     expect(writeText).toHaveBeenCalledWith('line1\nline2');
   });
+
+  it('uses high-contrast text color for snapshot content', () => {
+    render(
+      <ConfigViewer
+        selectedSnapshot={snapshot}
+        comparisonSnapshots={null}
+        viewMode="view"
+        error={null}
+        labId="lab1"
+        studioRequest={vi.fn()}
+      />
+    );
+
+    const pre = document.querySelector('pre');
+    expect(pre).toBeInTheDocument();
+    expect(pre).toHaveClass('text-stone-900');
+    expect(pre).toHaveClass('dark:text-stone-200');
+  });
 });
