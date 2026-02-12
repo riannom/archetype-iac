@@ -277,6 +277,53 @@ class TestCreateSameHostLink:
             assert kwargs["source_interface"] == "eth1"
             assert kwargs["target_interface"] == "eth2"
 
+    @pytest.mark.asyncio
+    async def test_same_host_mixed_docker_libvirt_interface_normalization_and_verify(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+    ):
+        """Same-host mixed device link should normalize interfaces and run verify/update path."""
+        from app.tasks.link_orchestration import create_same_host_link
+
+        link_state = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="ceos_1:Ethernet5-cisco_iosv_6:GigabitEthernet0/0",
+            source_node="ceos_1",
+            source_interface="Ethernet5",
+            target_node="cisco_iosv_6",
+            target_interface="GigabitEthernet0/0",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+            actual_state="pending",
+        )
+        test_db.add(link_state)
+        test_db.commit()
+
+        host_to_agent = {sample_host.id: sample_host}
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)) as verify_mock, \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock) as update_mock:
+            mock_client.create_link_on_agent = AsyncMock(return_value={
+                "success": True,
+                "vlan_tag": 2999,
+            })
+
+            ok = await create_same_host_link(
+                test_db, sample_lab.id, link_state, host_to_agent, []
+            )
+
+            assert ok is True
+            assert link_state.actual_state == "up"
+            assert link_state.vlan_tag == 2999
+            verify_mock.assert_awaited_once()
+            update_mock.assert_awaited_once()
+
+            mock_client.create_link_on_agent.assert_awaited_once()
+            _, kwargs = mock_client.create_link_on_agent.await_args
+            assert kwargs["source_interface"] == "eth5"
+            assert kwargs["target_interface"] == "eth0"
+
 
 class TestCreateCrossHostLinkNormalization:
     """Tests for cross-host link interface normalization."""

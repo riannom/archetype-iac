@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app import models
 from app.auth import get_current_user
+from app.services.device_constraints import validate_minimum_hardware
 
 
 router = APIRouter(prefix="/vendors", tags=["vendors"])
@@ -143,10 +144,21 @@ def add_custom_device(
         )
 
     try:
+        validate_minimum_hardware(
+            device_id,
+            payload.get("memory"),
+            payload.get("cpu"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
         device = store_add_device(payload)
         return {"device": device}
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        msg = str(e)
+        status = 409 if "already exists" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg)
 
 
 @router.delete("/{device_id}")
@@ -290,7 +302,15 @@ def update_custom_device_endpoint(
     if not find_custom_device(device_id):
         raise HTTPException(status_code=404, detail="Custom device not found")
 
-    updated = update_custom_device(device_id, payload)
+    try:
+        validate_minimum_hardware(
+            device_id,
+            payload.get("memory"),
+            payload.get("cpu"),
+        )
+        updated = update_custom_device(device_id, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not updated:
         raise HTTPException(status_code=404, detail="Device not found")
 
@@ -422,6 +442,14 @@ def update_device_config(
             raise HTTPException(status_code=404, detail="Device not found")
 
     # Set override
+    try:
+        validate_minimum_hardware(
+            device_id,
+            filtered_payload.get("memory"),
+            filtered_payload.get("cpu"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     set_device_override(device_id, filtered_payload)
 
     # Return updated config

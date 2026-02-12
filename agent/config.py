@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     lab_ttl_seconds: int = 86400  # 24 hours
     lab_ttl_check_interval: int = 3600  # Check every hour
 
+    # Endpoint binding audit (container iface -> host veth) drift detection.
+    endpoint_binding_audit_enabled: bool = True
+    endpoint_binding_audit_interval_seconds: int = 120
+
     model_config = ConfigDict(env_prefix="ARCHETYPE_AGENT_")
 
 

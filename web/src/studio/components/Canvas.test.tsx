@@ -141,6 +141,7 @@ describe("Canvas", () => {
   const mockOnConnect = vi.fn();
   const mockOnSelect = vi.fn();
   const mockOnOpenConsole = vi.fn();
+  const mockOnExtractConfig = vi.fn();
   const mockOnUpdateStatus = vi.fn();
   const mockOnDelete = vi.fn();
 
@@ -163,6 +164,7 @@ describe("Canvas", () => {
     selectedId: null as string | null,
     onSelect: mockOnSelect,
     onOpenConsole: mockOnOpenConsole,
+    onExtractConfig: mockOnExtractConfig,
     onUpdateStatus: mockOnUpdateStatus,
     onDelete: mockOnDelete,
   };
@@ -562,6 +564,25 @@ describe("Canvas", () => {
       });
     });
 
+    it("shows extract config option after open console", async () => {
+      const node = createDeviceNode({ id: "node-1", name: "ExtractNode" });
+
+      renderWithTheme(<Canvas {...defaultProps} nodes={[node]} />);
+
+      const nodeLabel = screen.getByText("ExtractNode");
+      const nodeElement = nodeLabel.closest(".absolute")!;
+      fireEvent.contextMenu(nodeElement);
+
+      await waitFor(() => {
+        expect(screen.getByText("Open Console")).toBeInTheDocument();
+        expect(screen.getByText("Extract Config")).toBeInTheDocument();
+      });
+
+      const openConsoleButton = screen.getByText("Open Console").closest("button")!;
+      const extractConfigButton = screen.getByText("Extract Config").closest("button")!;
+      expect(openConsoleButton.compareDocumentPosition(extractConfigButton) & 4).toBeTruthy();
+    });
+
     it("calls onOpenConsole when console option is clicked", async () => {
       const user = userEvent.setup();
       const node = createDeviceNode({ id: "node-1", name: "ConsoleNode" });
@@ -580,6 +601,26 @@ describe("Canvas", () => {
       await user.click(screen.getByText("Open Console"));
 
       expect(mockOnOpenConsole).toHaveBeenCalledWith("node-1");
+    });
+
+    it("calls onExtractConfig when extract config option is clicked", async () => {
+      const user = userEvent.setup();
+      const node = createDeviceNode({ id: "node-1", name: "ExtractNode" });
+
+      renderWithTheme(<Canvas {...defaultProps} nodes={[node]} />);
+
+      const nodeLabel = screen.getByText("ExtractNode");
+      const nodeElement = nodeLabel.closest(".absolute")!;
+
+      fireEvent.contextMenu(nodeElement);
+
+      await waitFor(() => {
+        expect(screen.getByText("Extract Config")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByText("Extract Config"));
+
+      expect(mockOnExtractConfig).toHaveBeenCalledWith("node-1");
     });
 
     it("calls onDelete when delete option is clicked", async () => {

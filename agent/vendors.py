@@ -311,7 +311,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         license_required=True,
         tags=["routing", "bgp", "ospf", "eigrp", "legacy", "vm"],
         readiness_probe="log_pattern",
-        readiness_pattern=r"Press RETURN to get started",
+        readiness_pattern=r"Press RETURN to get started|[\w.-]+[>#]",
         readiness_timeout=180,
         # Config extraction via serial console
         config_extract_method="serial",
@@ -323,6 +323,26 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         post_boot_commands=[
             "terminal length 0",  # Disable paging for CLI sessions
             "no ip domain-lookup",  # Disable DNS lookups that slow down CLI
+            # Ensure data interfaces are enabled even when imported startup-configs
+            # omit explicit "no shutdown" lines.
+            "configure terminal",
+            "interface GigabitEthernet0/0",
+            "no shutdown",
+            "interface GigabitEthernet0/1",
+            "no shutdown",
+            "interface GigabitEthernet0/2",
+            "no shutdown",
+            "interface GigabitEthernet0/3",
+            "no shutdown",
+            "interface GigabitEthernet0/4",
+            "no shutdown",
+            "interface GigabitEthernet0/5",
+            "no shutdown",
+            "interface GigabitEthernet0/6",
+            "no shutdown",
+            "interface GigabitEthernet0/7",
+            "no shutdown",
+            "end",
         ],
     ),
     "cisco_csr1000v": VendorConfig(
@@ -350,7 +370,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         license_required=True,
         tags=["routing", "bgp", "sd-wan", "ipsec", "cloud", "vm"],
         readiness_probe="log_pattern",
-        readiness_pattern=r"Press RETURN to get started",
+        readiness_pattern=r"Press RETURN to get started|[\w.-]+[>#]",
         readiness_timeout=300,
         console_method="ssh",
         console_user="admin",

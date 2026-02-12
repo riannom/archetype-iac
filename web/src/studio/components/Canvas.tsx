@@ -24,6 +24,7 @@ interface CanvasProps {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   onOpenConsole: (nodeId: string) => void;
+  onExtractConfig?: (nodeId: string) => void;
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
   onDelete: (id: string) => void;
   onDropDevice?: (model: DeviceModel, x: number, y: number) => void;
@@ -52,7 +53,7 @@ interface ContextMenu {
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
+  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -329,6 +330,7 @@ const Canvas: React.FC<CanvasProps> = ({
       switch (action) {
         case 'delete': onDelete(contextMenu.id); break;
         case 'console': onOpenConsole(contextMenu.id); break;
+        case 'extract-config': onExtractConfig?.(contextMenu.id); break;
         case 'start': onUpdateStatus(contextMenu.id, 'booting'); break;
         case 'stop': onUpdateStatus(contextMenu.id, 'stopped'); break;
         case 'reload': onUpdateStatus(contextMenu.id, 'booting'); break;
@@ -766,6 +768,9 @@ const Canvas: React.FC<CanvasProps> = ({
               <>
                 <button onClick={() => handleAction('console')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-sage-600 hover:text-white transition-colors">
                   <i className="fa-solid fa-terminal w-4"></i> Open Console
+                </button>
+                <button onClick={() => handleAction('extract-config')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-sage-600 hover:text-white transition-colors">
+                  <i className="fa-solid fa-download w-4"></i> Extract Config
                 </button>
                 {!isNodeRunning && (
                   <button onClick={() => handleAction('start')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-green-600 dark:text-green-400 hover:bg-green-600 hover:text-white transition-colors">

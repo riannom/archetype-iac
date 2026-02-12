@@ -2089,6 +2089,41 @@ async def extract_configs_on_agent(
         return {"success": False, "extracted_count": 0, "error": str(e)}
 
 
+async def extract_node_config_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+) -> dict:
+    """Extract running config from one node on an agent."""
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/extract-config"
+    logger.info(
+        f"Extracting config for node {node_name} in lab {lab_id} via agent {agent.id}"
+    )
+
+    try:
+        result = await _agent_request(
+            "POST",
+            url,
+            timeout=120.0,
+            max_retries=0,
+            metric_operation="extract_configs",
+            metric_host_id=agent.id,
+        )
+        if result.get("success"):
+            logger.info(f"Extracted config for {node_name} in lab {lab_id}")
+        else:
+            logger.warning(
+                f"Node config extraction failed for {node_name} in lab {lab_id}: "
+                f"{result.get('error')}"
+            )
+        return result
+    except Exception as e:
+        logger.error(
+            f"Failed to extract config for {node_name} in lab {lab_id} on agent {agent.id}: {e}"
+        )
+        return {"success": False, "node_name": node_name, "error": str(e)}
+
+
 async def update_config_on_agent(
     agent: models.Host,
     lab_id: str,

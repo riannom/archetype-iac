@@ -249,6 +249,7 @@ const StudioPage: React.FC = () => {
   const layoutDirtyRef = useRef(false);
   const saveLayoutTimeoutRef = useRef<number | null>(null);
   const topologyDirtyRef = useRef(false);
+  const initialNodeSyncLabRef = useRef<string | null>(null);
   const saveTopologyTimeoutRef = useRef<number | null>(null);
   // Refs to track current state for debounced saves (avoids stale closure issues)
   const nodesRef = useRef<Node[]>([]);
@@ -794,12 +795,32 @@ const StudioPage: React.FC = () => {
     loadGraph(activeLab.id);
   }, [activeLab, loadGraph]);
 
-  // Refresh node states from agent when entering a lab
-  // This ensures we have accurate container status, especially after restarts
+  // On lab entry, force a deterministic sync sequence:
+  // refresh from agent first, then load node states/jobs.
+  // This avoids UI showing stale DB state on initial render.
   useEffect(() => {
-    if (!activeLab) return;
-    refreshNodeStatesFromAgent(activeLab.id);
-  }, [activeLab, refreshNodeStatesFromAgent]);
+    if (!activeLab) {
+      initialNodeSyncLabRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    const labId = activeLab.id;
+    if (initialNodeSyncLabRef.current === labId) return;
+    initialNodeSyncLabRef.current = labId;
+
+    const syncOnOpen = async () => {
+      await refreshNodeStatesFromAgent(labId);
+      if (cancelled) return;
+      await loadNodeStates(labId, nodes);
+      if (cancelled) return;
+      await loadJobs(labId, nodes);
+    };
+
+    void syncOnOpen();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLab, refreshNodeStatesFromAgent, loadNodeStates, loadJobs, nodes]);
 
   useEffect(() => {
     if (!activeLab || nodes.length === 0) return;
@@ -1162,6 +1183,39 @@ const StudioPage: React.FC = () => {
       });
     }
   };
+
+  const handleExtractNodeConfig = useCallback(async (nodeId: string) => {
+    if (!activeLab) return;
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node || !isDeviceNode(node)) return;
+
+    addTaskLogEntry('info', `Extracting config for "${node.name}"...`);
+    try {
+      const result = await studioRequest<{ message: string }>(
+        `/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/extract-config?create_snapshot=true&snapshot_type=manual`,
+        { method: 'POST' }
+      );
+      addTaskLogEntry('success', `Config extracted successfully for "${node.name}"`);
+      addNotification(
+        'success',
+        `Config extracted: ${node.name}`,
+        result.message || `Config extracted successfully for "${node.name}"`,
+        { labId: activeLab.id, category: 'config-extract-node-success' }
+      );
+      if (result.message) {
+        addTaskLogEntry('info', result.message);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Extract failed';
+      addTaskLogEntry('error', `Config extraction failed for "${node.name}": ${message}`);
+      addNotification(
+        'error',
+        `Config extract failed: ${node.name}`,
+        message,
+        { labId: activeLab.id, category: 'config-extract-node-failed' }
+      );
+    }
+  }, [activeLab, nodes, studioRequest, addTaskLogEntry, addNotification]);
 
   // Merge all tabs from source window into target window
   const handleMergeWindows = useCallback((sourceWindowId: string, targetWindowId: string) => {
@@ -1821,6 +1875,7 @@ const StudioPage: React.FC = () => {
               selectedId={selectedId}
               onSelect={setSelectedId}
               onOpenConsole={handleOpenConsole}
+              onExtractConfig={handleExtractNodeConfig}
               onUpdateStatus={handleUpdateStatus}
               onDelete={handleDelete}
               onDropDevice={handleAddDevice}

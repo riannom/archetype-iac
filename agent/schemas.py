@@ -512,6 +512,14 @@ class ExtractConfigsResponse(BaseModel):
     error: str | None = None
 
 
+class ExtractNodeConfigResponse(BaseModel):
+    """Agent -> Controller: Single-node config extraction result."""
+    success: bool
+    node_name: str
+    content: str | None = None
+    error: str | None = None
+
+
 class UpdateConfigRequest(BaseModel):
     """Controller -> Agent: Push a startup config for a node."""
     content: str

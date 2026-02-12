@@ -1565,7 +1565,7 @@ async def check_nodes_ready(
     - actual_state is "running"
     - is_ready flag is True (boot sequence complete)
     """
-    from app.utils.lab import get_lab_provider
+    from app.utils.lab import get_lab_provider, get_node_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
@@ -1577,6 +1577,18 @@ async def check_nodes_ready(
         .order_by(models.NodeState.node_name)
         .all()
     )
+    # Build node metadata lookup for readiness checks (VMs require kind)
+    db_nodes = (
+        database.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name.in_([s.node_name for s in states]),
+        )
+        .all()
+    )
+    nodes_by_name = {n.container_name: n for n in db_nodes}
+    node_devices = {n.container_name: n.device for n in db_nodes}
+    node_images = {n.container_name: n.image for n in db_nodes}
 
     # Get agent for readiness checks
     lab_provider = get_lab_provider(lab)
@@ -1595,8 +1607,19 @@ async def check_nodes_ready(
             running_count += 1
             if agent:
                 try:
+                    device_kind = node_devices.get(state.node_name)
+                    node_image = node_images.get(state.node_name)
+                    provider_type = None
+                    if node_image:
+                        db_node = nodes_by_name.get(state.node_name)
+                        if db_node is not None:
+                            provider_type = get_node_provider(db_node)
                     readiness = await agent_client.check_node_readiness(
-                        agent, lab.id, state.node_name
+                        agent,
+                        lab.id,
+                        state.node_name,
+                        kind=device_kind,
+                        provider_type=provider_type,
                     )
                     # Update is_ready from agent response
                     if readiness.get("is_ready") and not state.is_ready:
@@ -1657,7 +1680,7 @@ async def poll_nodes_ready(
     """
     import asyncio
     from fastapi.responses import JSONResponse
-    from app.utils.lab import get_lab_provider
+    from app.utils.lab import get_lab_provider, get_node_provider
 
     # Validate parameters
     timeout = min(max(timeout, 10), 600)  # 10s to 10min
@@ -1665,6 +1688,15 @@ async def poll_nodes_ready(
 
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
+
+    db_nodes = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id)
+        .all()
+    )
+    nodes_by_name = {n.container_name: n for n in db_nodes}
+    node_devices = {n.container_name: n.device for n in db_nodes}
+    node_images = {n.container_name: n.image for n in db_nodes}
 
     lab_provider = get_lab_provider(lab)
     agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
@@ -1710,8 +1742,19 @@ async def poll_nodes_ready(
                 running_count += 1
                 if agent and not state.is_ready:
                     try:
+                        device_kind = node_devices.get(state.node_name)
+                        node_image = node_images.get(state.node_name)
+                        provider_type = None
+                        if node_image:
+                            db_node = nodes_by_name.get(state.node_name)
+                            if db_node is not None:
+                                provider_type = get_node_provider(db_node)
                         readiness = await agent_client.check_node_readiness(
-                            agent, lab.id, state.node_name
+                            agent,
+                            lab.id,
+                            state.node_name,
+                            kind=device_kind,
+                            provider_type=provider_type,
                         )
                         if readiness.get("is_ready"):
                             state.is_ready = True
@@ -1974,6 +2017,71 @@ async def export_inventory(
 # ============================================================================
 
 
+def _canonicalize_link_endpoints(
+    source_node: str,
+    source_interface: str,
+    target_node: str,
+    target_interface: str,
+) -> tuple[str, str, str, str]:
+    """Normalize and sort endpoints into canonical source/target order."""
+    src_i = normalize_interface(source_interface) if source_interface else "eth0"
+    tgt_i = normalize_interface(target_interface) if target_interface else "eth0"
+    if f"{source_node}:{src_i}" <= f"{target_node}:{tgt_i}":
+        return source_node, src_i, target_node, tgt_i
+    return target_node, tgt_i, source_node, src_i
+
+
+def _link_state_endpoint_key(link_state: models.LinkState) -> tuple[str, str, str, str]:
+    """Return canonical endpoint tuple for an existing LinkState row."""
+    return _canonicalize_link_endpoints(
+        link_state.source_node,
+        link_state.source_interface,
+        link_state.target_node,
+        link_state.target_interface,
+    )
+
+
+def _choose_preferred_link_state(states: list[models.LinkState]) -> models.LinkState:
+    """Choose one row to keep when duplicate endpoint records exist."""
+    return sorted(
+        states,
+        key=lambda s: (
+            s.desired_state != "deleted",
+            s.updated_at or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+    )[-1]
+
+
+def _find_matching_link_state(
+    states: list[models.LinkState],
+    src_n: str,
+    src_i: str,
+    tgt_n: str,
+    tgt_i: str,
+) -> tuple[models.LinkState | None, list[models.LinkState]]:
+    """Find matching LinkState rows by canonical endpoints."""
+    key = (src_n, src_i, tgt_n, tgt_i)
+    matches = [s for s in states if _link_state_endpoint_key(s) == key]
+    if not matches:
+        return None, []
+    preferred = _choose_preferred_link_state(matches)
+    return preferred, [s for s in matches if s.id != preferred.id]
+
+
+def _parse_link_id_endpoints(link_id: str) -> tuple[str, str, str, str] | None:
+    """Best-effort parse for link id format: nodeA:ifaceA-nodeB:ifaceB."""
+    if "-" not in link_id or ":" not in link_id:
+        return None
+    left, right = link_id.split("-", 1)
+    if ":" not in left or ":" not in right:
+        return None
+    src_n, src_i = left.rsplit(":", 1)
+    tgt_n, tgt_i = right.rsplit(":", 1)
+    if not src_n or not src_i or not tgt_n or not tgt_i:
+        return None
+    return _canonicalize_link_endpoints(src_n, src_i, tgt_n, tgt_i)
+
+
 def _upsert_link_states(
     database: Session,
     lab_id: str,
@@ -1996,7 +2104,6 @@ def _upsert_link_states(
         .filter(models.LinkState.lab_id == lab_id)
         .all()
     )
-    existing_by_name = {ls.link_name: ls for ls in existing_states}
 
     # Build node ID to name mapping for resolving link endpoints
     # Node endpoints in links reference node IDs, not names
@@ -2043,43 +2150,37 @@ def _upsert_link_states(
         if ep_a.type != "node" or ep_b.type != "node":
             continue
 
-        # Resolve node IDs to names
+        # Resolve node IDs to names and canonicalize endpoints
         source_node = node_id_to_name.get(ep_a.node, ep_a.node)
         target_node = node_id_to_name.get(ep_b.node, ep_b.node)
-        source_interface = normalize_interface(ep_a.ifname) if ep_a.ifname else "eth0"
-        target_interface = normalize_interface(ep_b.ifname) if ep_b.ifname else "eth0"
-
-        # Generate canonical link name
-        link_name = generate_link_name(
-            source_node, source_interface, target_node, target_interface
+        src_n, src_i, tgt_n, tgt_i = _canonicalize_link_endpoints(
+            source_node,
+            ep_a.ifname or "eth0",
+            target_node,
+            ep_b.ifname or "eth0",
         )
+        link_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
         current_link_names.add(link_name)
 
-        if link_name in existing_by_name:
-            # Update existing link state (source/target may have changed order)
-            ls = existing_by_name[link_name]
-            # Ensure canonical ordering is preserved
-            if f"{source_node}:{source_interface}" <= f"{target_node}:{target_interface}":
-                ls.source_node = source_node
-                ls.source_interface = source_interface
-                ls.target_node = target_node
-                ls.target_interface = target_interface
-            else:
-                ls.source_node = target_node
-                ls.source_interface = target_interface
-                ls.target_node = source_node
-                ls.target_interface = source_interface
+        existing, duplicates = _find_matching_link_state(existing_states, src_n, src_i, tgt_n, tgt_i)
+        # Old naming variants can collide to the same canonical endpoints.
+        # Keep one record and mark duplicates for deletion.
+        for duplicate in duplicates:
+            duplicate.desired_state = "deleted"
+
+        if existing:
+            # Update existing link state to canonical storage
+            existing.link_name = link_name
+            existing.source_node = src_n
+            existing.source_interface = src_i
+            existing.target_node = tgt_n
+            existing.target_interface = tgt_i
+            # If this was previously a stale duplicate row, re-activate.
+            if existing.desired_state == "deleted":
+                existing.desired_state = "up"
             updated_count += 1
         else:
             # Create new link state
-            # Ensure canonical ordering
-            if f"{source_node}:{source_interface}" <= f"{target_node}:{target_interface}":
-                src_n, src_i = source_node, source_interface
-                tgt_n, tgt_i = target_node, target_interface
-            else:
-                src_n, src_i = target_node, target_interface
-                tgt_n, tgt_i = source_node, source_interface
-
             # Look up host_ids for the endpoints
             src_host_id = node_name_to_host.get(src_n)
             tgt_host_id = node_name_to_host.get(tgt_n)
@@ -2103,12 +2204,13 @@ def _upsert_link_states(
                 actual_state="unknown",
             )
             database.add(new_state)
+            existing_states.append(new_state)
             added_link_names.append(link_name)
             created_count += 1
 
     # Collect info about links to remove (for teardown) before deleting
-    for existing_name, existing_state in existing_by_name.items():
-        if existing_name not in current_link_names:
+    for existing_state in existing_states:
+        if existing_state.link_name not in current_link_names:
             # Store info needed for teardown before deletion
             removed_link_info.append({
                 "link_name": existing_state.link_name,
@@ -2293,7 +2395,7 @@ def refresh_link_states(
         raise_not_found("Topology not found")
     graph = service.export_to_graph(lab.id)
 
-    created, updated = _upsert_link_states(database, lab.id, graph)
+    created, updated, _, _ = _upsert_link_states(database, lab.id, graph)
     database.commit()
 
     return schemas.LinkStateRefreshResponse(
@@ -2477,6 +2579,102 @@ async def extract_configs(
         "snapshots_created": snapshots_created,
         "sync_errors": sync_errors if sync_errors else None,
         "message": f"Extracted {extracted_count} cEOS configs, created {snapshots_created} snapshot(s)",
+    }
+
+
+@router.post("/labs/{lab_id}/nodes/{node_id}/extract-config")
+async def extract_node_config(
+    lab_id: str,
+    node_id: str,
+    create_snapshot: bool = True,
+    snapshot_type: str = "manual",
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Extract running config from a specific node in the lab."""
+    lab = _require_lab_editor(lab_id, database, current_user)
+
+    node = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab.id, models.Node.gui_id == node_id)
+        .first()
+    )
+    if not node:
+        raise_not_found(f"Node '{node_id}' not found")
+
+    # External nodes do not have device configs.
+    if node.node_type == "external":
+        raise HTTPException(status_code=400, detail="Cannot extract config from external network nodes")
+
+    node_name = node.container_name
+    placement = (
+        database.query(models.NodePlacement)
+        .filter(
+            models.NodePlacement.lab_id == lab.id,
+            models.NodePlacement.node_name == node_name,
+        )
+        .first()
+    )
+    host_id = (
+        placement.host_id
+        or node.host_id
+        or lab.agent_id
+    )
+    if not host_id:
+        raise_unavailable(f"No host assignment found for node '{node_name}'")
+
+    agent = database.get(models.Host, host_id)
+    if not agent or not agent_client.is_agent_online(agent):
+        raise_unavailable(f"No healthy agent available for node '{node_name}'")
+
+    result = await agent_client.extract_node_config_on_agent(agent, lab.id, node_name)
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Config extraction failed for {node_name}: "
+                f"{result.get('error', 'Unknown error')}"
+            ),
+        )
+
+    content = result.get("content")
+    if not content:
+        raise HTTPException(status_code=500, detail=f"Config extraction returned empty content for {node_name}")
+
+    snapshots_created = 0
+    from app.services.config_service import ConfigService
+    config_svc = ConfigService(database)
+    if create_snapshot:
+        snapshot = config_svc.save_extracted_config(
+            lab_id=lab_id,
+            node_name=node_name,
+            content=content,
+            snapshot_type=snapshot_type,
+            device_kind=node.device,
+        )
+        if snapshot:
+            snapshots_created = 1
+    else:
+        config_svc.save_extracted_config(
+            lab_id=lab_id,
+            node_name=node_name,
+            content=content,
+            snapshot_type=snapshot_type,
+            device_kind=node.device,
+            set_as_active=False,
+        )
+    database.commit()
+
+    sync_result = await agent_client.update_config_on_agent(agent, lab.id, node_name, content)
+    sync_error = None if sync_result.get("success") else sync_result.get("error", "unknown")
+
+    return {
+        "success": True,
+        "node_id": node_id,
+        "node_name": node_name,
+        "snapshots_created": snapshots_created,
+        "sync_error": sync_error,
+        "message": f"Extracted config for {node_name}",
     }
 
 
@@ -3010,25 +3208,29 @@ async def hot_connect_link(
             detail=f"Lab must be running for hot-connect (current state: {lab.state})"
         )
 
-    link_name = generate_link_name(
-        request.source_node, request.source_interface,
-        request.target_node, request.target_interface,
+    src_n, src_i, tgt_n, tgt_i = _canonicalize_link_endpoints(
+        request.source_node,
+        request.source_interface,
+        request.target_node,
+        request.target_interface,
     )
-    link_state = (
+    link_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
+    existing_states = (
         database.query(models.LinkState)
-        .filter(
-            models.LinkState.lab_id == lab_id,
-            models.LinkState.link_name == link_name,
-        )
-        .first()
+        .filter(models.LinkState.lab_id == lab_id)
+        .all()
     )
+    link_state, duplicate_states = _find_matching_link_state(
+        existing_states, src_n, src_i, tgt_n, tgt_i
+    )
+    for duplicate in duplicate_states:
+        duplicate.desired_state = "deleted"
+
     if not link_state:
-        if f"{request.source_node}:{request.source_interface}" <= f"{request.target_node}:{request.target_interface}":
-            src_n, src_i = request.source_node, request.source_interface
-            tgt_n, tgt_i = request.target_node, request.target_interface
-        else:
-            src_n, src_i = request.target_node, request.target_interface
-            tgt_n, tgt_i = request.source_node, request.source_interface
+        # Backward compatibility fallback: exact name match
+        link_state = next((s for s in existing_states if s.link_name == link_name), None)
+
+    if not link_state:
 
         # Look up host_ids for the endpoints
         src_node = (
@@ -3083,6 +3285,15 @@ async def hot_connect_link(
         )
         database.add(link_state)
         database.flush()
+    else:
+        # Ensure canonical storage and reactivate stale records.
+        link_state.link_name = link_name
+        link_state.source_node = src_n
+        link_state.source_interface = src_i
+        link_state.target_node = tgt_n
+        link_state.target_interface = tgt_i
+        if link_state.desired_state == "deleted":
+            link_state.desired_state = "up"
 
     host_to_agent = await _build_host_to_agent_map(database, lab_id)
     if not host_to_agent:
@@ -3134,12 +3345,19 @@ async def hot_disconnect_link(
         .filter(models.LinkState.lab_id == lab_id)
         .all()
     )
+    parsed = _parse_link_id_endpoints(link_id)
     link_state = None
-    for ls in link_states:
-        if link_id == f"{ls.source_node}:{ls.source_interface}-{ls.target_node}:{ls.target_interface}" or \
-           link_id == f"{ls.target_node}:{ls.target_interface}-{ls.source_node}:{ls.source_interface}":
-            link_state = ls
-            break
+    if parsed:
+        src_n, src_i, tgt_n, tgt_i = parsed
+        link_state, _ = _find_matching_link_state(link_states, src_n, src_i, tgt_n, tgt_i)
+
+    if link_state is None:
+        # Backward compatibility with exact legacy IDs.
+        for ls in link_states:
+            if link_id == f"{ls.source_node}:{ls.source_interface}-{ls.target_node}:{ls.target_interface}" or \
+               link_id == f"{ls.target_node}:{ls.target_interface}-{ls.source_node}:{ls.source_interface}":
+                link_state = ls
+                break
 
     if not link_state:
         return HotConnectResponse(success=False, error=f"Link '{link_id}' not found")
@@ -3606,7 +3824,7 @@ async def cleanup_lab_orphans(
 @router.get("/labs/{lab_id}/interface-mappings")
 async def get_lab_interface_mappings(
     lab_id: str,
-    database: Session = Depends(db.get_session),
+    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.InterfaceMappingsResponse:
     """Get all interface mappings for a lab.
@@ -3632,7 +3850,7 @@ async def get_lab_interface_mappings(
 async def get_node_interfaces(
     lab_id: str,
     node_id: str,
-    database: Session = Depends(db.get_session),
+    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.InterfaceMappingsResponse:
     """Get interface mappings for a specific node.
@@ -3677,7 +3895,7 @@ class InterfaceMappingSyncResponse(BaseModel):
 @router.post("/labs/{lab_id}/interface-mappings/sync")
 async def sync_interface_mappings(
     lab_id: str,
-    database: Session = Depends(db.get_session),
+    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> InterfaceMappingSyncResponse:
     """Sync interface mappings from all agents for a lab.
@@ -3709,7 +3927,7 @@ class LinkReconciliationResponse(BaseModel):
 @router.post("/labs/{lab_id}/links/reconcile")
 async def reconcile_links(
     lab_id: str,
-    database: Session = Depends(db.get_session),
+    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> LinkReconciliationResponse:
     """Reconcile link states for a lab.

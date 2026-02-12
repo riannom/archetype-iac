@@ -150,6 +150,7 @@ class DockerOVSPlugin:
         self._lock = asyncio.Lock()
         self._started_at = datetime.now(timezone.utc)
         self._cleanup_task: asyncio.Task | None = None
+        self._binding_audit_task: asyncio.Task | None = None
         self._next_mgmt_subnet_index = 1  # For allocating management subnets
         self._pending_endpoint_reconnects: list[tuple[str, str, str]] = []
         self._allocated_vlans: set[int] = set()
@@ -1294,6 +1295,27 @@ class DockerOVSPlugin:
                 pass
             self._cleanup_task = None
 
+    async def _start_endpoint_binding_audit(self) -> None:
+        """Start periodic endpoint binding audit task if enabled."""
+        if settings.endpoint_binding_audit_enabled:
+            self._binding_audit_task = asyncio.create_task(
+                self._endpoint_binding_audit_loop()
+            )
+            logger.info(
+                "Endpoint binding audit enabled: interval=%ss",
+                settings.endpoint_binding_audit_interval_seconds,
+            )
+
+    async def _stop_endpoint_binding_audit(self) -> None:
+        """Stop periodic endpoint binding audit task."""
+        if self._binding_audit_task:
+            self._binding_audit_task.cancel()
+            try:
+                await self._binding_audit_task
+            except asyncio.CancelledError:
+                pass
+            self._binding_audit_task = None
+
     async def _ttl_cleanup_loop(self) -> None:
         """Background task to clean up expired labs."""
         while True:
@@ -1304,6 +1326,58 @@ class DockerOVSPlugin:
                 break
             except Exception as e:
                 logger.error(f"TTL cleanup error: {e}")
+
+    async def _endpoint_binding_audit_loop(self) -> None:
+        """Background task to verify tracked endpoint bindings remain valid."""
+        while True:
+            try:
+                await asyncio.sleep(settings.endpoint_binding_audit_interval_seconds)
+                stats = await self._audit_endpoint_bindings()
+                if stats["drifted"] > 0 or stats["failed"] > 0:
+                    logger.warning(
+                        "Endpoint binding audit: checked=%s drifted=%s repaired=%s failed=%s",
+                        stats["checked"],
+                        stats["drifted"],
+                        stats["repaired"],
+                        stats["failed"],
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Endpoint binding audit error: {e}")
+
+    async def _audit_endpoint_bindings(self) -> dict[str, int]:
+        """Verify endpoint host_veth bindings and refresh stale mappings."""
+        stats = {"checked": 0, "drifted": 0, "repaired": 0, "failed": 0}
+        candidates: list[tuple[str, str, str, str]] = []
+        async with self._lock:
+            for ep in self.endpoints.values():
+                if not ep.container_name:
+                    continue
+                network = self.networks.get(ep.network_id)
+                if not network:
+                    continue
+                candidates.append(
+                    (network.lab_id, ep.container_name, ep.interface_name, ep.host_veth)
+                )
+
+        for lab_id, container_name, interface_name, expected_host_veth in candidates:
+            stats["checked"] += 1
+            discovered = await self._discover_endpoint(lab_id, container_name, interface_name)
+            if not discovered:
+                stats["failed"] += 1
+                continue
+            if discovered.host_veth != expected_host_veth:
+                stats["drifted"] += 1
+                stats["repaired"] += 1
+                logger.warning(
+                    "Endpoint binding drift repaired: %s:%s %s -> %s",
+                    container_name,
+                    interface_name,
+                    expected_host_veth,
+                    discovered.host_veth,
+                )
+        return stats
 
     async def _cleanup_expired_labs(self) -> None:
         """Remove resources for labs inactive beyond TTL."""
@@ -2268,6 +2342,22 @@ class DockerOVSPlugin:
         import docker
 
         try:
+            async def _binding_matches(host_veth: str) -> bool:
+                """Verify host_veth is actually the peer of container:interface_name."""
+                def _get_container_pid() -> int:
+                    client = docker.from_env()
+                    container = client.containers.get(container_name)
+                    return int(container.attrs.get("State", {}).get("Pid", 0))
+
+                try:
+                    pid = await asyncio.to_thread(_get_container_pid)
+                except Exception:
+                    return False
+                if pid <= 0:
+                    return False
+                mapped_if = await self._find_interface_in_container(pid, host_veth)
+                return mapped_if == interface_name
+
             # Get container's network memberships
             def _get_container_networks():
                 client = docker.from_env()
@@ -2302,6 +2392,12 @@ class DockerOVSPlugin:
                                 f"(OVS port {ep.host_veth} missing)"
                             )
                             continue  # Try other networks / strategies 3+4
+                        if not await _binding_matches(ep.host_veth):
+                            logger.warning(
+                                f"Endpoint binding mismatch for {container_name}:{interface_name}: "
+                                f"{ep.host_veth} is not the current interface peer"
+                            )
+                            continue
                         ep.container_name = container_name
                         logger.info(
                             f"Matched endpoint via EndpointID: {container_name}:{interface_name} -> {ep.host_veth}"
@@ -2321,6 +2417,12 @@ class DockerOVSPlugin:
                                     f"(OVS port {ep.host_veth} missing)"
                                 )
                                 continue  # Try other networks / strategies 3+4
+                            if not await _binding_matches(ep.host_veth):
+                                logger.warning(
+                                    f"Endpoint binding mismatch for {container_name}:{interface_name}: "
+                                    f"{ep.host_veth} is not the current interface peer"
+                                )
+                                continue
                             ep.container_name = container_name
                             logger.info(
                                 f"Matched endpoint via NetworkID: {container_name}:{interface_name} -> {ep.host_veth}"
@@ -2367,6 +2469,12 @@ class DockerOVSPlugin:
                     vlan_tag=vlan_tag,
                     container_name=container_name,
                 )
+                if not await _binding_matches(host_veth):
+                    logger.warning(
+                        f"Reconstructed endpoint mismatch for {container_name}:{interface_name}: "
+                        f"{host_veth} is not the current interface peer"
+                    )
+                    continue
                 self.endpoints[target_endpoint_id] = endpoint
                 await self._mark_dirty_and_save()
                 logger.info(
@@ -3230,6 +3338,8 @@ class DockerOVSPlugin:
 
         # Start TTL cleanup if enabled
         await self._start_ttl_cleanup()
+        # Start endpoint binding drift audit if enabled
+        await self._start_endpoint_binding_audit()
 
         # Reconcile after plugin is listening.
         asyncio.create_task(self._post_start_reconcile())
@@ -3252,6 +3362,8 @@ class DockerOVSPlugin:
 
         # Stop TTL cleanup task
         await self._stop_ttl_cleanup()
+        # Stop endpoint binding audit task
+        await self._stop_endpoint_binding_audit()
 
         # Save final state
         if self._state_dirty or True:  # Always save on shutdown

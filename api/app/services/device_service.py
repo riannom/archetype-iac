@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import logging
 
+from app.services.device_constraints import validate_minimum_hardware
+
 logger = logging.getLogger(__name__)
 
 
@@ -194,7 +196,10 @@ class DeviceService:
         try:
             return store_add_device(payload)
         except ValueError as e:
-            raise DeviceConflictError(str(e))
+            message = str(e)
+            if "already exists" in message.lower():
+                raise DeviceConflictError(message)
+            raise DeviceValidationError(message)
 
     def update_custom_device(self, device_id: str, payload: dict) -> dict:
         """Update a custom device type's properties.
@@ -221,9 +226,12 @@ class DeviceService:
         if not find_custom_device(device_id):
             raise DeviceNotFoundError(f"Custom device '{device_id}' not found")
 
-        updated = update_custom_device(device_id, payload)
-        if not updated:
-            raise DeviceNotFoundError(f"Device '{device_id}' not found")
+        try:
+            updated = update_custom_device(device_id, payload)
+            if not updated:
+                raise DeviceNotFoundError(f"Device '{device_id}' not found")
+        except ValueError as e:
+            raise DeviceValidationError(str(e))
 
         return updated
 
@@ -399,6 +407,14 @@ class DeviceService:
                 raise DeviceNotFoundError(f"Device '{device_id}' not found")
 
         # Set override
+        try:
+            validate_minimum_hardware(
+                device_id,
+                filtered_payload.get("memory"),
+                filtered_payload.get("cpu"),
+            )
+        except ValueError as e:
+            raise DeviceValidationError(str(e))
         set_device_override(device_id, filtered_payload)
 
         # Return updated config
@@ -491,6 +507,11 @@ class DeviceService:
                 val = node_config_json.get(key)
                 if val is not None:
                     specs[key] = val
+
+        try:
+            validate_minimum_hardware(device_id, specs.get("memory"), specs.get("cpu"))
+        except ValueError as e:
+            raise DeviceValidationError(str(e))
 
         return specs
 

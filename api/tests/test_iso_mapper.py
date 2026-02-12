@@ -203,6 +203,20 @@ class TestCreateDeviceConfigFromNodeDef:
         assert config["maxPorts"] == 2  # len(interfaces)
         assert config["portNaming"] == "GigabitEthernet"
 
+    def test_resource_properties_cat9k_enforces_minimums(self):
+        """Test Cat9k variants are normalized to safe hardware minimums."""
+        node_def = ParsedNodeDefinition(
+            id="cat9000v-uadp",
+            label="Cat9000v UADP",
+            ram_mb=12288,
+            cpus=2,
+        )
+
+        config = create_device_config_from_node_def(node_def)
+
+        assert config["memory"] == 18432
+        assert config["cpu"] == 4
+
     def test_resource_properties_no_interfaces(self):
         """Test resource properties when no interfaces defined."""
         node_def = ParsedNodeDefinition(

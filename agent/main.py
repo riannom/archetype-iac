@@ -51,6 +51,7 @@ from agent.schemas import (
     DiscoverLabsResponse,
     DockerImageInfo,
     ExtractConfigsResponse,
+    ExtractNodeConfigResponse,
     ExtractedConfig,
     FixInterfacesResponse,
     HeartbeatRequest,
@@ -1811,6 +1812,103 @@ async def extract_configs(lab_id: str) -> ExtractConfigsResponse:
         )
 
 
+@app.post("/labs/{lab_id}/nodes/{node_name}/extract-config")
+async def extract_node_config(
+    lab_id: str,
+    node_name: str,
+) -> ExtractNodeConfigResponse:
+    """Extract running config from a specific node in a lab."""
+    logger.info(f"Extract node config request: lab={lab_id} node={node_name}")
+
+    try:
+        workspace = get_workspace(lab_id)
+
+        # Try Docker node first.
+        if settings.enable_docker:
+            try:
+                docker_provider = get_provider_for_request("docker")
+                container_name = docker_provider.get_container_name(lab_id, node_name)
+                container = await asyncio.to_thread(
+                    docker_provider.docker.containers.get,
+                    container_name,
+                )
+                if container.status == "running":
+                    labels = container.labels or {}
+                    kind = labels.get("archetype.node_kind", "")
+                    from agent.vendors import get_config_extraction_settings
+                    extraction_settings = get_config_extraction_settings(kind)
+                    cmd = extraction_settings.command
+                    config_content = None
+                    if cmd:
+                        if extraction_settings.method == "ssh":
+                            config_content = await docker_provider._extract_config_via_ssh(
+                                container, kind, cmd, node_name
+                            )
+                        elif extraction_settings.method == "docker":
+                            config_content = await docker_provider._extract_config_via_docker(
+                                container, cmd, node_name
+                            )
+                    if config_content and config_content.strip():
+                        config_dir = workspace / "configs" / node_name
+                        config_dir.mkdir(parents=True, exist_ok=True)
+                        config_path = config_dir / "startup-config"
+                        config_path.write_text(config_content)
+                        logger.info(
+                            f"Extracted config from Docker node {node_name} "
+                            f"({len(config_content)} bytes)"
+                        )
+                        return ExtractNodeConfigResponse(
+                            success=True,
+                            node_name=node_name,
+                            content=config_content,
+                        )
+            except Exception as e:
+                logger.debug(f"Docker node extraction skipped/failed for {node_name}: {e}")
+
+        # Then try libvirt VM node.
+        if settings.enable_libvirt:
+            try:
+                from agent.providers.libvirt import LibvirtProvider, LIBVIRT_AVAILABLE
+                if LIBVIRT_AVAILABLE:
+                    libvirt_provider = LibvirtProvider()
+                    domain_name = libvirt_provider._domain_name(lab_id, node_name)
+                    domain = libvirt_provider.conn.lookupByName(domain_name)
+                    kind = libvirt_provider._get_domain_kind(domain)
+                    if kind:
+                        result = await libvirt_provider._extract_config(lab_id, node_name, kind)
+                        if result:
+                            _, config_content = result
+                            config_dir = workspace / "configs" / node_name
+                            config_dir.mkdir(parents=True, exist_ok=True)
+                            config_path = config_dir / "startup-config"
+                            config_path.write_text(config_content)
+                            logger.info(
+                                f"Extracted config from VM node {node_name} "
+                                f"({len(config_content)} bytes)"
+                            )
+                            return ExtractNodeConfigResponse(
+                                success=True,
+                                node_name=node_name,
+                                content=config_content,
+                            )
+            except Exception as e:
+                logger.debug(f"Libvirt node extraction skipped/failed for {node_name}: {e}")
+
+        return ExtractNodeConfigResponse(
+            success=False,
+            node_name=node_name,
+            error="Node not running, not found, or config extraction is not supported",
+        )
+
+    except Exception as e:
+        logger.error(f"Extract node config error for {node_name}: {e}", exc_info=True)
+        return ExtractNodeConfigResponse(
+            success=False,
+            node_name=node_name,
+            error=str(e),
+        )
+
+
 @app.put("/labs/{lab_id}/nodes/{node_name}/config")
 async def update_node_config(
     lab_id: str,
@@ -3500,20 +3598,32 @@ async def _resolve_ovs_port(
         OVSPortInfo with port name, current VLAN, and provider type.
         None if the port cannot be found via any provider.
     """
-    # --- Try Docker first (fast, in-memory lookup) ---
+    # Detect if this node is a libvirt VM up-front so we can avoid repeated
+    # Docker endpoint discovery attempts for VM nodes.
+    libvirt_provider = get_provider("libvirt")
+    libvirt_kind: str | None = None
+    if libvirt_provider is not None:
+        try:
+            libvirt_kind = libvirt_provider.get_node_kind(lab_id, node_name)
+        except Exception:
+            libvirt_kind = None
+    is_libvirt_node = libvirt_kind is not None
+
+    # --- Try Docker first (fast, in-memory lookup), except for libvirt VMs ---
     docker_provider = get_provider("docker")
-    if docker_provider is not None:
+    if docker_provider is not None and not is_libvirt_node:
         try:
             container_name = docker_provider.get_container_name(lab_id, node_name)
             plugin = _get_docker_ovs_plugin()
-            # Try in-memory lookup first, then on-demand discovery
-            ep = None
-            for endpoint in plugin.endpoints.values():
-                if endpoint.container_name == container_name and endpoint.interface_name == interface_name:
-                    ep = endpoint
-                    break
+            # Always try discovery first so stale in-memory endpoint mappings are
+            # refreshed after container/interface reattachments.
+            ep = await plugin._discover_endpoint(lab_id, container_name, interface_name)
             if not ep:
-                ep = await plugin._discover_endpoint(lab_id, container_name, interface_name)
+                # Fall back to in-memory lookup if discovery cannot find the endpoint.
+                for endpoint in plugin.endpoints.values():
+                    if endpoint.container_name == container_name and endpoint.interface_name == interface_name:
+                        ep = endpoint
+                        break
             if ep:
                 # Validate the port actually exists on OVS
                 if not await plugin._validate_endpoint_exists(ep):
@@ -3531,12 +3641,11 @@ async def _resolve_ovs_port(
             pass  # Not a Docker node, fall through to libvirt
 
     # --- Try libvirt (OVS/MAC introspection) ---
-    libvirt_provider = get_provider("libvirt")
     if libvirt_provider is not None:
         try:
             # Get port_start_index from the VM's device kind (stored in domain metadata)
             port_start_index = 0
-            kind = libvirt_provider.get_node_kind(lab_id, node_name)
+            kind = libvirt_kind or libvirt_provider.get_node_kind(lab_id, node_name)
             if kind:
                 from agent.vendors import get_vendor_config
                 config = get_vendor_config(kind)
@@ -4508,9 +4617,18 @@ async def get_interface_vlan(
     try:
         plugin = _get_docker_ovs_plugin()
 
-        # Try Docker provider first (fast path)
+        # Identify libvirt nodes first to avoid Docker discovery noise for VM nodes.
+        libvirt_provider = get_provider("libvirt")
+        is_libvirt_node = False
+        if libvirt_provider is not None:
+            try:
+                is_libvirt_node = libvirt_provider.get_node_kind(lab_id, node) is not None
+            except Exception:
+                is_libvirt_node = False
+
+        # Try Docker provider first (fast path), except for libvirt nodes.
         docker_provider = get_provider("docker")
-        if docker_provider is not None:
+        if docker_provider is not None and not is_libvirt_node:
             container_name = docker_provider.get_container_name(lab_id, node)
             vlan_tag = await plugin.get_endpoint_vlan(
                 lab_id, container_name, interface, read_from_ovs=read_from_ovs

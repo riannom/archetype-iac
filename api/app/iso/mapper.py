@@ -10,6 +10,7 @@ import logging
 import re
 
 from app.iso.models import ParsedNodeDefinition, ParsedImage
+from app.services.device_constraints import minimum_hardware_for_device
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,29 @@ def create_device_config_from_node_def(node_def: ParsedNodeDefinition) -> dict:
         # Default for VMs (qcow2)
         supported_kinds = ["qcow2"]
 
+    memory_mb = node_def.ram_mb
+    cpu_count = node_def.cpus
+    minimums = minimum_hardware_for_device(node_def.id)
+    if minimums:
+        # ISO defaults are often optimistic for Cat9k variants.
+        # Normalize imported defaults up to safe minimums.
+        if memory_mb < minimums["memory"]:
+            logger.warning(
+                "Raising imported memory for %s from %sMB to %sMB",
+                node_def.id,
+                memory_mb,
+                minimums["memory"],
+            )
+            memory_mb = minimums["memory"]
+        if cpu_count < minimums["cpu"]:
+            logger.warning(
+                "Raising imported CPU for %s from %s to %s",
+                node_def.id,
+                cpu_count,
+                minimums["cpu"],
+            )
+            cpu_count = minimums["cpu"]
+
     # Build the device config
     config = {
         "id": node_def.id,
@@ -138,8 +162,8 @@ def create_device_config_from_node_def(node_def: ParsedNodeDefinition) -> dict:
         "versions": [],  # Will be populated from images
         "isActive": True,
         # Resource properties
-        "memory": node_def.ram_mb,
-        "cpu": node_def.cpus,
+        "memory": memory_mb,
+        "cpu": cpu_count,
         "maxPorts": len(node_def.interfaces) or node_def.interface_count_default,
         "portNaming": port_naming,
         "portStartIndex": port_start_index,

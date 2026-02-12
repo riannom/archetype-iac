@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shlex
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
@@ -36,6 +38,14 @@ try:
 except ImportError:
     libvirt = None
     LIBVIRT_AVAILABLE = False
+
+# Try to import pexpect - optional but preferred for VM console interaction
+try:
+    import pexpect
+    PEXPECT_AVAILABLE = True
+except ImportError:
+    pexpect = None
+    PEXPECT_AVAILABLE = False
 
 
 logger = logging.getLogger(__name__)
@@ -352,20 +362,53 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                 return ""
 
             try:
+                if PEXPECT_AVAILABLE:
+                    cmd = (
+                        f"virsh -c {shlex.quote(self.uri)} "
+                        f"console --force {shlex.quote(self.domain_name)}"
+                    )
+                    child = pexpect.spawn(cmd, timeout=8, encoding="utf-8")
+                    chunks: list[str] = []
+                    try:
+                        child.expect(r"Connected to domain", timeout=4)
+                        chunks.append(child.before or "")
+                        chunks.append(child.after or "")
+                    except pexpect.TIMEOUT:
+                        pass
+
+                    child.sendline("")
+                    deadline = time.time() + 3.0
+                    while time.time() < deadline:
+                        try:
+                            data = child.read_nonblocking(size=4096, timeout=0.4)
+                            if data:
+                                chunks.append(data)
+                        except pexpect.TIMEOUT:
+                            continue
+                        except pexpect.EOF:
+                            break
+
+                    try:
+                        child.sendcontrol("]")
+                        child.sendline("quit")
+                    except Exception:
+                        pass
+                    child.close(force=True)
+                    return "".join(chunks)
+
+                virsh_cmd = (
+                    f"timeout 6 virsh -c {shlex.quote(self.uri)} "
+                    f"console --force {shlex.quote(self.domain_name)}"
+                )
+                cmd = f"script -q -c {shlex.quote(virsh_cmd)} /dev/null"
                 result = subprocess.run(
-                    [
-                        "timeout", "2",
-                        "virsh", "-c", self.uri, "console", self.domain_name, "--force"
-                    ],
+                    ["timeout", "10", "bash", "-lc", cmd],
                     capture_output=True,
                     text=True,
-                    timeout=5,
+                    timeout=12,
                     stdin=subprocess.DEVNULL,
                 )
-                # Combine stdout and stderr (some output may go to stderr)
                 return result.stdout + result.stderr
-            except subprocess.TimeoutExpired:
-                return ""
             except Exception as e:
                 logger.debug(f"Error getting console output: {e}")
                 return ""

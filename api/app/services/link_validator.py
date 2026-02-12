@@ -162,7 +162,10 @@ async def verify_cross_host_link(
     # Per-link VNI model: VLANs are local to each agent and need NOT match.
     # Verify the per-link VXLAN tunnel exists on both agents via overlay status.
     link_name = link_state.link_name
-    for side, agent in [("source", source_agent), ("target", target_agent)]:
+    for side, agent, expected_vlan in [
+        ("source", source_agent, source_vlan),
+        ("target", target_agent, target_vlan),
+    ]:
         try:
             status = await agent_client.get_overlay_status_from_agent(agent)
             if status.get("error"):
@@ -172,12 +175,30 @@ async def verify_cross_host_link(
                 return False, f"Per-link VXLAN tunnel not found on {agent.name} for link {link_name}"
             # Accept recovered tunnels that still have placeholder link_id but correct port name
             expected_port = agent_client.compute_vxlan_port_name(link_state.lab_id, link_name)
-            found = any(
-                t.get("link_id") == link_name or t.get("interface_name") == expected_port
-                for t in link_tunnels
+            matching_tunnel = next(
+                (
+                    t for t in link_tunnels
+                    if t.get("link_id") == link_name or t.get("interface_name") == expected_port
+                ),
+                None,
             )
-            if not found:
+            if not matching_tunnel:
                 return False, f"Per-link VXLAN tunnel not found on {agent.name} for link {link_name}"
+
+            # Ensure each side's local VLAN on the tunnel matches the endpoint's
+            # current access VLAN. Recovered tunnels can exist with stale local_vlan
+            # values and still pass existence checks, causing silent blackholes.
+            tunnel_vlan = matching_tunnel.get("local_vlan")
+            try:
+                tunnel_vlan_int = int(tunnel_vlan) if tunnel_vlan is not None else None
+            except (TypeError, ValueError):
+                tunnel_vlan_int = None
+            if tunnel_vlan_int is not None and tunnel_vlan_int != expected_vlan:
+                return (
+                    False,
+                    f"VXLAN local VLAN mismatch on {agent.name}: "
+                    f"tunnel={tunnel_vlan_int}, endpoint={expected_vlan}",
+                )
         except Exception as e:
             return False, f"Could not check overlay status on {agent.name}: {e}"
 

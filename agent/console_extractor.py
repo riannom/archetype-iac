@@ -187,20 +187,40 @@ class SerialConsoleExtractor:
                 self._disable_paging(paging_disable, prompt_pattern)
 
             # Execute the config extraction command
-            config = self._execute_command(command, prompt_pattern)
-            if config is None:
+            raw_config = self._execute_command(command, prompt_pattern)
+            if raw_config is None:
                 return ExtractionResult(
                     success=False,
                     error="Timeout waiting for command output"
                 )
 
-            # Clean up the config output
-            config = self._clean_config(config, command)
+            config = self._clean_config(raw_config, command)
             valid, reason = self._validate_extracted_config(
                 config=config,
                 command=command,
                 paging_disable=paging_disable,
             )
+
+            # Some IOS variants can return short/partial running-config output.
+            # Fall back to startup-config when running-config is not credible.
+            if not valid and "running-config" in command.lower():
+                fallback_command = command.lower().replace("running-config", "startup-config")
+                fallback_raw = self._execute_command(fallback_command, prompt_pattern)
+                if fallback_raw is not None:
+                    fallback_config = self._clean_config(fallback_raw, fallback_command)
+                    fallback_valid, _ = self._validate_extracted_config(
+                        config=fallback_config,
+                        command=fallback_command,
+                        paging_disable=paging_disable,
+                    )
+                    if fallback_valid:
+                        logger.info(
+                            "Using startup-config fallback for %s after invalid running-config capture",
+                            self.domain_name,
+                        )
+                        config = fallback_config
+                        valid = True
+
             if not valid:
                 return ExtractionResult(
                     success=False,

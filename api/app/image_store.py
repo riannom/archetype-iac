@@ -7,6 +7,7 @@ import re
 from typing import Optional
 
 from app.config import settings
+from app.services.device_constraints import validate_minimum_hardware
 
 
 # =============================================================================
@@ -352,6 +353,12 @@ def add_custom_device(device: dict) -> dict:
     device.setdefault("documentationUrl", None)
     device.setdefault("tags", [])
 
+    validate_minimum_hardware(
+        device.get("id"),
+        device.get("memory"),
+        device.get("cpu"),
+    )
+
     devices.append(device)
     save_custom_devices(devices)
     return device
@@ -370,6 +377,12 @@ def update_custom_device(device_id: str, updates: dict) -> Optional[dict]:
     devices = load_custom_devices()
     for device in devices:
         if device.get("id") == device_id:
+            merged = {**device, **updates}
+            validate_minimum_hardware(
+                device_id,
+                merged.get("memory"),
+                merged.get("cpu"),
+            )
             # Don't allow changing the ID or isCustom flag
             updates.pop("id", None)
             updates.pop("isCustom", None)

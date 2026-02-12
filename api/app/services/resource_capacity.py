@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
+from app.services.device_constraints import minimum_hardware_for_device
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +110,20 @@ def calculate_node_requirements(device_types: list[str]) -> ResourceRequirements
 
     for device_type in device_types:
         override = overrides.get(device_type, {})
+        min_hw = minimum_hardware_for_device(device_type) or {}
+        min_mem = min_hw.get("memory")
+        min_cpu = min_hw.get("cpu")
         if device_type and device_type in vendor_configs:
             config = vendor_configs[device_type]
-            reqs.memory_mb += override.get("memory", getattr(config, "memory", DEFAULT_MEMORY_MB))
-            reqs.cpu_cores += override.get("cpu", getattr(config, "cpu", DEFAULT_CPU_CORES))
+            memory = override.get("memory", getattr(config, "memory", DEFAULT_MEMORY_MB))
+            cpu = override.get("cpu", getattr(config, "cpu", DEFAULT_CPU_CORES))
+            reqs.memory_mb += max(memory, min_mem) if min_mem else memory
+            reqs.cpu_cores += max(cpu, min_cpu) if min_cpu else cpu
         else:
-            reqs.memory_mb += override.get("memory", DEFAULT_MEMORY_MB)
-            reqs.cpu_cores += override.get("cpu", DEFAULT_CPU_CORES)
+            memory = override.get("memory", DEFAULT_MEMORY_MB)
+            cpu = override.get("cpu", DEFAULT_CPU_CORES)
+            reqs.memory_mb += max(memory, min_mem) if min_mem else memory
+            reqs.cpu_cores += max(cpu, min_cpu) if min_cpu else cpu
 
     return reqs
 

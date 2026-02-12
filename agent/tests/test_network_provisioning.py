@@ -237,3 +237,110 @@ def test_get_interface_vlan_reads_from_ovs(test_client):
     plugin.get_endpoint_vlan.assert_awaited_once_with(
         "lab1", "archetype-lab1-r1", "eth1", read_from_ovs=True
     )
+
+
+@pytest.mark.asyncio
+async def test_resolve_ovs_port_prefers_discovery_over_stale_endpoint(monkeypatch):
+    """Resolver should prefer discovered endpoint over stale in-memory endpoint."""
+    from agent import main as main_mod
+
+    stale_ep = SimpleNamespace(
+        container_name="archetype-lab1-r1",
+        interface_name="eth5",
+        host_veth="vh-stale",
+        vlan_tag=1140,
+    )
+    discovered_ep = SimpleNamespace(
+        container_name="archetype-lab1-r1",
+        interface_name="eth5",
+        host_veth="vh-current",
+        vlan_tag=2999,
+    )
+
+    plugin = MagicMock()
+    plugin.endpoints = {"stale": stale_ep}
+    plugin._discover_endpoint = AsyncMock(return_value=discovered_ep)
+    plugin._validate_endpoint_exists = AsyncMock(return_value=True)
+
+    docker_provider = MagicMock()
+    docker_provider.get_container_name.return_value = "archetype-lab1-r1"
+
+    def _get_provider(name: str):
+        if name == "docker":
+            return docker_provider
+        return None
+
+    monkeypatch.setattr("agent.main.get_provider", _get_provider)
+    monkeypatch.setattr("agent.main._get_docker_ovs_plugin", lambda: plugin)
+
+    result = await main_mod._resolve_ovs_port("lab1", "r1", "eth5")
+    assert result is not None
+    assert result.provider == "docker"
+    assert result.port_name == "vh-current"
+    assert result.vlan_tag == 2999
+    plugin._discover_endpoint.assert_awaited_once_with("lab1", "archetype-lab1-r1", "eth5")
+
+
+@pytest.mark.asyncio
+async def test_hot_connect_uses_discovered_current_vlan_not_stale():
+    """Hot-connect should use current discovered source endpoint VLAN, not stale cached VLAN."""
+    stale_source = SimpleNamespace(
+        container_name="archetype-lab1-r1",
+        interface_name="eth5",
+        host_veth="vh-stale-source",
+        vlan_tag=1140,
+    )
+    source_current = SimpleNamespace(
+        container_name="archetype-lab1-r1",
+        interface_name="eth5",
+        host_veth="vh-current-source",
+        vlan_tag=2999,
+    )
+    target_current = SimpleNamespace(
+        container_name="archetype-lab1-r2",
+        interface_name="eth0",
+        host_veth="vh-current-target",
+        vlan_tag=1200,
+    )
+
+    plugin = MagicMock()
+    plugin.endpoints = {"stale": stale_source}
+
+    async def _discover(_lab_id: str, container_name: str, interface_name: str):
+        if container_name == "archetype-lab1-r1" and interface_name == "eth5":
+            return source_current
+        if container_name == "archetype-lab1-r2" and interface_name == "eth0":
+            return target_current
+        return None
+
+    plugin._discover_endpoint = AsyncMock(side_effect=_discover)
+    plugin._validate_endpoint_exists = AsyncMock(return_value=True)
+
+    docker_provider = MagicMock()
+    docker_provider.get_container_name.side_effect = lambda _lab, node: f"archetype-lab1-{node}"
+
+    def _get_provider(name: str):
+        if name == "docker":
+            return docker_provider
+        return None
+
+    from agent.main import create_link
+    from agent.schemas import LinkCreate
+
+    with patch("agent.main.get_provider", side_effect=_get_provider):
+        with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+            with patch("agent.main._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True) as set_vlan:
+                response = await create_link(
+                    "lab1",
+                    LinkCreate(
+                        source_node="r1",
+                        source_interface="eth5",
+                        target_node="r2",
+                        target_interface="eth0",
+                    ),
+                )
+
+    assert response.success is True
+    assert response.link is not None
+    assert response.link.vlan_tag == 2999
+    set_vlan.assert_awaited_once_with("vh-current-target", 2999)

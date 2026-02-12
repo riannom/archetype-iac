@@ -9,11 +9,14 @@ Tests verify:
 
 import pytest
 from unittest.mock import MagicMock, patch
+from contextlib import contextmanager
+import types
 
 from agent.readiness import (
     NoopProbe,
     LogPatternProbe,
     CliProbe,
+    LibvirtLogPatternProbe,
     get_probe_for_vendor,
     get_readiness_timeout,
     run_post_boot_commands,
@@ -256,6 +259,15 @@ class TestGetProbeForVendor:
         probe = get_probe_for_vendor("unknown_device")
         assert isinstance(probe, NoopProbe)
 
+    def test_cisco_vm_readiness_patterns_include_cli_prompt(self):
+        """Cisco VM probes must treat CLI prompt as ready, not only press-return banner."""
+        iosv = get_vendor_config("cisco_iosv")
+        csr = get_vendor_config("cisco_csr1000v")
+        assert iosv is not None and "Press RETURN to get started" in (iosv.readiness_pattern or "")
+        assert csr is not None and "Press RETURN to get started" in (csr.readiness_pattern or "")
+        assert iosv is not None and "[\\w.-]+[>#]" in (iosv.readiness_pattern or "")
+        assert csr is not None and "[\\w.-]+[>#]" in (csr.readiness_pattern or "")
+
     def test_nokia_srlinux_returns_log_pattern_probe(self):
         """Nokia SR Linux should use LogPatternProbe."""
         probe = get_probe_for_vendor("nokia_srlinux")
@@ -295,6 +307,63 @@ class TestGetReadinessTimeout:
         """Unknown kinds get default timeout."""
         timeout = get_readiness_timeout("unknown")
         assert timeout == 120
+
+
+class TestLibvirtLogPatternProbe:
+    """Tests for libvirt readiness probing via console."""
+
+    def test_console_output_uses_pexpect_when_available(self, monkeypatch):
+        """Regression: probe should use interactive pexpect console path."""
+        probe = LibvirtLogPatternProbe(
+            pattern=r"Press RETURN|Router>",
+            domain_name="dummy-domain",
+            uri="qemu:///system",
+        )
+
+        @contextmanager
+        def fake_lock(_domain_name):
+            yield True
+
+        monkeypatch.setattr("agent.virsh_console_lock.try_console_lock", fake_lock)
+
+        class FakeChild:
+            before = ""
+            after = "Connected to domain"
+
+            def __init__(self):
+                self.reads = 0
+
+            def expect(self, _pattern, timeout=None):
+                return 0
+
+            def sendline(self, _line):
+                return None
+
+            def read_nonblocking(self, size=4096, timeout=0.4):
+                self.reads += 1
+                if self.reads == 1:
+                    return "Router>\n"
+                raise EOFError
+
+            def sendcontrol(self, _ch):
+                return None
+
+            def close(self, force=True):
+                return None
+
+        fake_child = FakeChild()
+        fake_pexpect = types.SimpleNamespace(
+            spawn=lambda *_args, **_kwargs: fake_child,
+            TIMEOUT=TimeoutError,
+            EOF=EOFError,
+        )
+        monkeypatch.setattr("agent.readiness.pexpect", fake_pexpect)
+        monkeypatch.setattr("agent.readiness.PEXPECT_AVAILABLE", True)
+        times = iter([0.0, 0.2, 4.1])
+        monkeypatch.setattr("agent.readiness.time.time", lambda: next(times))
+
+        output = probe._get_console_output()
+        assert "Router>" in output
 
 
 # --- Post-boot Commands Tests ---

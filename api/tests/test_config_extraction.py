@@ -558,6 +558,73 @@ class TestExtractConfigsEndpoint:
         assert data["extracted_count"] == 1
 
 
+class TestExtractSingleNodeEndpoint:
+    """Tests for POST /labs/{lab_id}/nodes/{node_id}/extract-config endpoint."""
+
+    def test_extract_single_node_success(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        auth_headers: dict,
+        lab_single_host: tuple,
+        sample_host: models.Host,
+    ):
+        lab, nodes, _ = lab_single_host
+        node = nodes[0]
+
+        mock_result = {
+            "success": True,
+            "node_name": node.container_name,
+            "content": f"! config for {node.container_name}\nhostname {node.container_name}",
+        }
+
+        with patch("app.routers.labs.agent_client") as mock_agent_client, \
+             patch("app.routers.labs._save_config_to_workspace"):
+            mock_agent_client.is_agent_online.return_value = True
+            mock_agent_client.extract_node_config_on_agent = AsyncMock(return_value=mock_result)
+            mock_agent_client.update_config_on_agent = AsyncMock(return_value={"success": True})
+
+            response = test_client.post(
+                f"/labs/{lab.id}/nodes/{node.gui_id}/extract-config",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["node_name"] == node.container_name
+        assert data["snapshots_created"] == 1
+
+        snapshots = test_db.query(models.ConfigSnapshot).filter(
+            models.ConfigSnapshot.lab_id == lab.id,
+            models.ConfigSnapshot.node_name == node.container_name,
+        ).all()
+        assert len(snapshots) == 1
+
+    def test_extract_single_node_failure(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        lab_single_host: tuple,
+    ):
+        lab, nodes, _ = lab_single_host
+        node = nodes[0]
+
+        with patch("app.routers.labs.agent_client") as mock_agent_client:
+            mock_agent_client.is_agent_online.return_value = True
+            mock_agent_client.extract_node_config_on_agent = AsyncMock(
+                return_value={"success": False, "error": "node unreachable"}
+            )
+
+            response = test_client.post(
+                f"/labs/{lab.id}/nodes/{node.gui_id}/extract-config",
+                headers=auth_headers,
+            )
+
+        assert response.status_code == 500
+        assert "Config extraction failed" in response.json()["detail"]
+
+
 # --- Auto Extract Before Destroy Tests ---
 
 

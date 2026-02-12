@@ -102,3 +102,29 @@ def test_update_device_config_custom(monkeypatch) -> None:
 
     result = service.update_device_config("custom", {"cpu": 2, "invalid": 1})
     assert result["effective"]["cpu"] == 2
+
+
+def test_update_device_config_rejects_underprovisioned_cat9k(monkeypatch) -> None:
+    service = device_service.DeviceService()
+
+    monkeypatch.setattr("agent.vendors.VENDOR_CONFIGS", {"cat9000v-uadp": object()})
+    monkeypatch.setattr("agent.vendors.get_kind_for_device", lambda device_id: device_id)
+
+    with pytest.raises(device_service.DeviceValidationError, match="memory intensive"):
+        service.update_device_config("cat9000v-uadp", {"memory": 12288, "cpu": 2})
+
+
+def test_resolve_hardware_specs_rejects_underprovisioned_cat9k(monkeypatch) -> None:
+    service = device_service.DeviceService()
+
+    monkeypatch.setattr(device_service, "_get_config_by_kind", lambda device_id: None)
+    monkeypatch.setattr(device_service, "get_kind_for_device", lambda device_id: device_id)
+    monkeypatch.setattr(
+        device_service,
+        "find_custom_device",
+        lambda device_id: {"id": device_id, "memory": 12288, "cpu": 2},
+    )
+    monkeypatch.setattr(device_service, "get_device_override", lambda device_id: {})
+
+    with pytest.raises(device_service.DeviceValidationError, match="memory intensive"):
+        service.resolve_hardware_specs("cat9000v-uadp")
