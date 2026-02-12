@@ -468,6 +468,9 @@ async def test_libvirt_check_readiness_ssh_console_waits_for_management_ip(monke
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(libvirt_provider, "get_console_method", lambda _kind: "ssh")
+    class DummyCfg:
+        readiness_probe = "ssh"
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
 
     result = await provider.check_readiness("lab", "node1", "cisco_n9kv")
 
@@ -519,12 +522,75 @@ async def test_libvirt_check_readiness_ssh_console_marks_ready_when_ssh_open(mon
         staticmethod(lambda _host, _port, _timeout: True),
     )
     monkeypatch.setattr(libvirt_provider, "get_console_method", lambda _kind: "ssh")
+    class DummyCfg:
+        readiness_probe = "ssh"
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
 
     result = await provider.check_readiness("lab", "node1", "cisco_n9kv")
 
     assert result.is_ready is True
     assert result.progress_percent == 100
     assert "SSH ready" in result.message
+
+
+@pytest.mark.asyncio
+async def test_libvirt_check_readiness_ssh_console_uses_probe_when_not_ssh_readiness(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+
+    class DummyLibvirt:
+        VIR_DOMAIN_RUNNING = 1
+
+        class libvirtError(Exception):
+            pass
+
+    class DummyDomain:
+        def state(self):
+            return (DummyLibvirt.VIR_DOMAIN_RUNNING, 0)
+
+        def XMLDesc(self):
+            return "<domain/>"
+
+    class DummyConn:
+        def lookupByName(self, _name):
+            return DummyDomain()
+
+    monkeypatch.setattr(libvirt_provider, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "conn",
+        property(lambda self: DummyConn()),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_domain_name",
+        lambda self, _lab_id, _node_name: "arch-lab-node1",
+    )
+    monkeypatch.setattr(libvirt_provider, "get_console_method", lambda _kind: "ssh")
+
+    class DummyCfg:
+        readiness_probe = "log_pattern"
+
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_get_vm_management_ip",
+        AsyncMock(return_value=None),
+    )
+
+    class DummyProbe:
+        async def check(self, _node_name):
+            return libvirt_provider.ReadinessResult(
+                is_ready=True,
+                message="Boot complete",
+                progress_percent=100,
+            )
+
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_probe", lambda *args, **kwargs: DummyProbe())
+
+    result = await provider.check_readiness("lab", "node1", "cat9000v-q200")
+
+    assert result.is_ready is True
+    assert result.message == "Boot complete"
 
 
 def test_libvirt_domain_status_mapping(monkeypatch) -> None:

@@ -1800,10 +1800,13 @@ class LibvirtProvider(Provider):
                 progress_percent=0,
             )
 
-        # SSH-console VMs (for example N9Kv) often do not emit reliable serial
-        # output during boot. For these, gate readiness on management reachability
-        # instead of serial log pattern matching.
-        if get_console_method(kind) == "ssh":
+        # Apply per-node readiness metadata overrides when present.
+        overrides = self._get_domain_readiness_overrides(domain)
+        effective_probe = overrides.get("readiness_probe") or get_libvirt_config(kind).readiness_probe
+
+        # Only use management-IP/SSH gating when readiness probe explicitly asks
+        # for SSH readiness. Console method alone is not sufficient.
+        if get_console_method(kind) == "ssh" and effective_probe in {"ssh", "tcp_ssh", "management_ssh"}:
             ip = await self._get_vm_management_ip(domain_name)
             if not ip:
                 return ReadinessResult(
@@ -1826,8 +1829,6 @@ class LibvirtProvider(Provider):
                 progress_percent=100,
             )
 
-        # Apply per-node readiness metadata overrides when present.
-        overrides = self._get_domain_readiness_overrides(domain)
         probe = get_libvirt_probe(
             kind,
             domain_name,
