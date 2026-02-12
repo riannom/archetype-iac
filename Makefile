@@ -1,4 +1,7 @@
-.PHONY: audit audit-ovs test-agent test-api observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install
+.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install
+
+API_TEST ?= tests
+WEB_TEST ?=
 
 audit:
 	python3 scripts/cleanup_audit.py
@@ -15,6 +18,16 @@ test-api:
 		exit 1; \
 	}
 	python3.11 -m pytest -q api/tests
+
+test-api-container:
+	docker exec archetype-iac-api-1 /bin/sh -lc 'cd /app && pytest -q $(API_TEST)'
+
+test-web-container:
+	docker run --rm \
+		-v "$(PWD)/web:/app" \
+		-w /app \
+		node:20-alpine \
+		/bin/sh -lc 'npm ci && if [ -n "$(WEB_TEST)" ]; then NODE_OPTIONS=--max-old-space-size=3072 npx vitest run --no-isolate --pool=threads --poolOptions.threads.minThreads=1 --poolOptions.threads.maxThreads=1 "$(WEB_TEST)"; else NODE_OPTIONS=--max-old-space-size=3072 npx vitest run --no-isolate --pool=threads --poolOptions.threads.minThreads=1 --poolOptions.threads.maxThreads=1; fi'
 
 observability-canary:
 	python3 scripts/observability_canary.py

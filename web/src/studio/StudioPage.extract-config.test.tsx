@@ -30,6 +30,18 @@ vi.mock('../contexts/NotificationContext', () => ({
   }),
 }));
 
+vi.mock('../contexts/UserContext', () => ({
+  useUser: () => ({
+    user: { id: 'u1', username: 'test', global_role: 'super_admin' },
+    loading: false,
+    logout: vi.fn(),
+    refreshUser: vi.fn(),
+    hasRole: () => true,
+    isAdmin: () => true,
+  }),
+  UserProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 vi.mock('../contexts/ImageLibraryContext', () => ({
   useImageLibrary: () => ({
     imageLibrary: [],
@@ -56,10 +68,11 @@ vi.mock('../contexts/DeviceCatalogContext', () => ({
 }));
 
 vi.mock('./hooks/useLabStateWS', () => ({
-  default: () => ({
-    connected: false,
+  useLabStateWS: () => ({
+    isConnected: false,
     reconnectAttempts: 0,
-    sendMessage: vi.fn(),
+    refresh: vi.fn(),
+    connected: false,
   }),
 }));
 
