@@ -1625,9 +1625,26 @@ async def check_nodes_ready(
     node_devices = {n.container_name: n.device for n in db_nodes}
     node_images = {n.container_name: n.image for n in db_nodes}
 
-    # Get agent for readiness checks
+    # Build per-node placement/agent mapping (multi-host safe).
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id)
+        .all()
+    )
+    placement_by_node = {p.node_name: p.host_id for p in placements}
+    host_ids = set(placement_by_node.values())
+    if lab.agent_id:
+        host_ids.add(lab.agent_id)
+    hosts = {}
+    if host_ids:
+        hosts = {
+            h.id: h
+            for h in database.query(models.Host).filter(models.Host.id.in_(host_ids)).all()
+        }
     lab_provider = get_lab_provider(lab)
-    agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
+    fallback_agent = await get_online_agent_for_lab(
+        database, lab, required_provider=lab_provider
+    )
 
     nodes_out = []
     ready_count = 0
@@ -1640,13 +1657,24 @@ async def check_nodes_ready(
 
         if state.actual_state == "running":
             running_count += 1
+            db_node = nodes_by_name.get(state.node_name)
+            host_id = placement_by_node.get(state.node_name)
+            if not host_id and db_node is not None and db_node.host_id:
+                host_id = db_node.host_id
+            if not host_id:
+                host_id = lab.agent_id
+            agent = hosts.get(host_id) if host_id else None
+            if agent is not None and not agent_client.is_agent_online(agent):
+                agent = None
+            if agent is None and fallback_agent is not None:
+                agent = fallback_agent
+
             if agent:
                 try:
                     device_kind = node_devices.get(state.node_name)
                     node_image = node_images.get(state.node_name)
                     provider_type = None
                     if node_image:
-                        db_node = nodes_by_name.get(state.node_name)
                         if db_node is not None:
                             provider_type = get_node_provider(db_node)
                     readiness = await agent_client.check_node_readiness(
@@ -1664,6 +1692,8 @@ async def check_nodes_ready(
                     message = readiness.get("message")
                 except Exception as e:
                     message = f"Readiness check failed: {e}"
+            else:
+                message = "No online agent available for node placement"
 
         if state.is_ready and state.actual_state == "running":
             ready_count += 1

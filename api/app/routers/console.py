@@ -9,6 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app import agent_client, models
 from app.db import get_session
 from app.services.topology import TopologyService
+from app.utils.lab import get_node_provider
 from app.utils.agents import get_online_agent_for_lab
 
 logger = logging.getLogger(__name__)
@@ -85,11 +86,23 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
         if node_state and node_state.actual_state == "running" and not node_state.is_ready:
             # Node is running but not ready - check readiness from agent
             try:
-                readiness = await agent_client.check_node_readiness(agent, lab_id, node_name)
+                provider_type = get_node_provider(node_def) if node_def is not None else None
+                device_kind = node_def.device if node_def is not None else None
+                readiness = await agent_client.check_node_readiness(
+                    agent,
+                    lab_id,
+                    node_name,
+                    kind=device_kind,
+                    provider_type=provider_type,
+                )
                 if not readiness.get("is_ready", False):
                     progress = readiness.get("progress_percent")
                     progress_str = f" ({progress}%)" if progress is not None else ""
-                    boot_warning = f"\r\n[Boot in progress{progress_str}... Console may be unresponsive]\r\n\r\n"
+                    detail = readiness.get("message") or "Console may be unresponsive"
+                    boot_warning = (
+                        f"\r\n[Boot in progress{progress_str}: {detail}]\r\n"
+                        "[For SSH-console VMs, no CLI appears until management IP/SSH is available.]\r\n\r\n"
+                    )
             except Exception as e:
                 logger.debug(f"Readiness check failed for {node_name}: {e}")
 
