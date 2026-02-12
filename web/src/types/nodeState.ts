@@ -106,6 +106,11 @@ export function mapActualToRuntime(
   displayState?: string,
 ): NodeRuntimeStatus | null {
   const canAutoRetry = willRetry && desiredState === 'running';
+  // Guard against transient out-of-order payloads that can briefly report
+  // display_state='starting' while actual_state is already running.
+  if (actualState === 'running' && desiredState === 'running' && displayState === 'starting') {
+    return 'running';
+  }
   // Prefer server-computed display_state
   if (displayState) {
     if (displayState === 'error' && canAutoRetry) return 'booting';

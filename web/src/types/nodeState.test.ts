@@ -67,6 +67,10 @@ describe('mapActualToRuntime', () => {
     expect(mapActualToRuntime('pending', 'running', false, 'starting')).toBe('booting');
   });
 
+  it('keeps running when actual is running but display_state is transiently starting', () => {
+    expect(mapActualToRuntime('running', 'running', false, 'starting')).toBe('running');
+  });
+
   it('prefers server display_state "stopping"', () => {
     expect(mapActualToRuntime('stopping', 'stopped', false, 'stopping')).toBe('stopping');
   });
