@@ -14,11 +14,21 @@ import { API_BASE_URL } from '../api';
 const PREFS_KEY = 'archetype_theme_prefs';
 const CUSTOM_THEMES_KEY = 'archetype_custom_themes';
 
+function resolvePreferenceMode(mode: unknown): 'light' | 'dark' {
+  if (mode === 'light' || mode === 'dark') {
+    return mode;
+  }
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  return 'light';
+}
+
 // Default preferences
 const defaultPreferences: ThemePreferences = {
   themeId: DEFAULT_THEME_ID,
   mode: 'system',
-  backgroundId: getSuggestedBackgroundForTheme(DEFAULT_THEME_ID),
+  backgroundId: getSuggestedBackgroundForTheme(DEFAULT_THEME_ID, 'light'),
   backgroundOpacity: 50,
   taskLogOpacity: 92,
   favoriteBackgrounds: [],
@@ -37,10 +47,13 @@ function loadPreferences(): ThemePreferences {
     const stored = localStorage.getItem(PREFS_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
+      const parsedThemeId = parsed.themeId || DEFAULT_THEME_ID;
+      const parsedMode = parsed.mode || 'system';
+      const suggestedMode = resolvePreferenceMode(parsedMode);
       return {
-        themeId: parsed.themeId || DEFAULT_THEME_ID,
-        mode: parsed.mode || 'system',
-        backgroundId: parsed.backgroundId || getSuggestedBackgroundForTheme(parsed.themeId || DEFAULT_THEME_ID),
+        themeId: parsedThemeId,
+        mode: parsedMode,
+        backgroundId: parsed.backgroundId || getSuggestedBackgroundForTheme(parsedThemeId, suggestedMode),
         backgroundOpacity: typeof parsed.backgroundOpacity === 'number' ? parsed.backgroundOpacity : 50,
         taskLogOpacity: typeof parsed.taskLogOpacity === 'number' ? parsed.taskLogOpacity : 92,
         favoriteBackgrounds: Array.isArray(parsed.favoriteBackgrounds) ? parsed.favoriteBackgrounds : [],
@@ -60,16 +73,15 @@ function normalizePreferences(raw: unknown): ThemePreferences {
   }
   const parsed = raw as Record<string, unknown>;
   const themeId = typeof parsed.themeId === 'string' ? parsed.themeId : DEFAULT_THEME_ID;
+  const mode = parsed.mode === 'light' || parsed.mode === 'dark' || parsed.mode === 'system' ? parsed.mode : 'system';
+  const suggestionMode = resolvePreferenceMode(mode);
   const backgroundId = typeof parsed.backgroundId === 'string'
     ? parsed.backgroundId
-    : getSuggestedBackgroundForTheme(themeId);
+    : getSuggestedBackgroundForTheme(themeId, suggestionMode);
   return {
     themeId,
-    mode:
-      parsed.mode === 'light' || parsed.mode === 'dark' || parsed.mode === 'system'
-        ? parsed.mode
-        : 'system',
-    backgroundId: getBackgroundById(backgroundId) ? backgroundId : getSuggestedBackgroundForTheme(themeId),
+    mode,
+    backgroundId: getBackgroundById(backgroundId) ? backgroundId : getSuggestedBackgroundForTheme(themeId, suggestionMode),
     backgroundOpacity:
       typeof parsed.backgroundOpacity === 'number' ? Math.max(0, Math.min(100, parsed.backgroundOpacity)) : 50,
     taskLogOpacity:
@@ -379,8 +391,8 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   // Set theme by ID
   const setTheme = useCallback((themeId: string) => {
     setPreferences(prev => {
-      const previousSuggested = getSuggestedBackgroundForTheme(prev.themeId);
-      const nextSuggested = getSuggestedBackgroundForTheme(themeId);
+      const previousSuggested = getSuggestedBackgroundForTheme(prev.themeId, effectiveMode);
+      const nextSuggested = getSuggestedBackgroundForTheme(themeId, effectiveMode);
       const shouldFollowSuggestion = prev.backgroundId === 'minimal' || prev.backgroundId === previousSuggested;
 
       return {
@@ -389,7 +401,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
         backgroundId: shouldFollowSuggestion ? nextSuggested : prev.backgroundId,
       };
     });
-  }, []);
+  }, [effectiveMode]);
 
   const setBackground = useCallback((backgroundId: string) => {
     const exists = getBackgroundById(backgroundId);
@@ -436,16 +448,37 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
   // Set mode (light/dark/system)
   const setMode = useCallback((mode: 'light' | 'dark' | 'system') => {
-    setPreferences(prev => ({ ...prev, mode }));
-  }, []);
+    setPreferences(prev => {
+      const currentMode = prev.mode === 'system' ? effectiveMode : prev.mode;
+      const nextMode = mode === 'system'
+        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : mode;
+      const currentSuggested = getSuggestedBackgroundForTheme(prev.themeId, currentMode);
+      const nextSuggested = getSuggestedBackgroundForTheme(prev.themeId, nextMode);
+      const shouldFollowSuggestion = prev.backgroundId === 'minimal' || prev.backgroundId === currentSuggested;
+      return {
+        ...prev,
+        mode,
+        backgroundId: shouldFollowSuggestion ? nextSuggested : prev.backgroundId,
+      };
+    });
+  }, [effectiveMode]);
 
   // Toggle between light and dark (ignores system)
   const toggleMode = useCallback(() => {
-    setPreferences(prev => ({
-      ...prev,
-      mode: prev.mode === 'dark' || (prev.mode === 'system' && systemDark) ? 'light' : 'dark',
-    }));
-  }, [systemDark]);
+    setPreferences(prev => {
+      const currentMode = prev.mode === 'system' ? effectiveMode : prev.mode;
+      const nextMode = prev.mode === 'dark' || (prev.mode === 'system' && systemDark) ? 'light' : 'dark';
+      const currentSuggested = getSuggestedBackgroundForTheme(prev.themeId, currentMode);
+      const nextSuggested = getSuggestedBackgroundForTheme(prev.themeId, nextMode);
+      const shouldFollowSuggestion = prev.backgroundId === 'minimal' || prev.backgroundId === currentSuggested;
+      return {
+        ...prev,
+        mode: nextMode,
+        backgroundId: shouldFollowSuggestion ? nextSuggested : prev.backgroundId,
+      };
+    });
+  }, [effectiveMode, systemDark]);
 
   // Import a custom theme from JSON string
   const importTheme = useCallback((themeJson: string): Theme | null => {

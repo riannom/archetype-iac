@@ -132,7 +132,10 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const favoriteSet = useMemo(() => new Set(preferences.favoriteBackgrounds || []), [preferences.favoriteBackgrounds]);
   const favoriteThemeSet = useMemo(() => new Set(preferences.favoriteThemeIds || []), [preferences.favoriteThemeIds]);
-  const suggestedBackgroundId = useMemo(() => getSuggestedBackgroundForTheme(theme.id), [theme.id]);
+  const suggestedBackgroundId = useMemo(
+    () => getSuggestedBackgroundForTheme(theme.id, effectiveMode),
+    [theme.id, effectiveMode]
+  );
 
   useEffect(() => {
     setModeFilter(effectiveMode);

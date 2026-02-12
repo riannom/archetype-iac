@@ -28,9 +28,13 @@ function TestConsumer() {
       <span data-testid="effective-mode">{effectiveMode}</span>
       <span data-testid="pref-theme-id">{preferences.themeId}</span>
       <span data-testid="pref-mode">{preferences.mode}</span>
+      <span data-testid="pref-background-id">{preferences.backgroundId}</span>
       <span data-testid="theme-count">{availableThemes.length}</span>
       <button onClick={() => setTheme("ocean")} data-testid="set-ocean">
         Set Ocean
+      </button>
+      <button onClick={() => setTheme("sunrise")} data-testid="set-sunrise">
+        Set Sunrise
       </button>
       <button onClick={() => setMode("light")} data-testid="set-light">
         Set Light
@@ -151,6 +155,21 @@ describe("ThemeProvider", () => {
 
       const stored = JSON.parse(localStorage.getItem("archetype_theme_prefs") || "{}");
       expect(stored.themeId).toBe("ocean");
+    });
+
+    it("selects a dark-compatible suggested background in dark mode", async () => {
+      const user = userEvent.setup();
+
+      render(
+        <ThemeProvider>
+          <TestConsumer />
+        </ThemeProvider>
+      );
+
+      await user.click(screen.getByTestId("set-dark"));
+      await user.click(screen.getByTestId("set-sunrise"));
+
+      expect(screen.getByTestId("pref-background-id")).toHaveTextContent("moonlit-clouds");
     });
   });
 
