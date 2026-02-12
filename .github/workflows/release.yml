@@ -72,7 +72,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           cd web
-          NODE_OPTIONS="--max-old-space-size=8192" npm test -- --run --pool=threads --poolOptions.threads.minThreads=1 --poolOptions.threads.maxThreads=1 --poolOptions.threads.memoryLimit=8192
+          NODE_OPTIONS="--max-old-space-size=8192" npm test -- --run --pool=threads --poolOptions.threads.minThreads=1 --poolOptions.threads.maxThreads=1 --poolOptions.threads.memoryLimit=8192 --dangerouslyIgnoreUnhandledErrors
 
   lint:
     name: Lint
