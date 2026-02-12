@@ -8,6 +8,18 @@ services:
     depends_on:
       - api
 
+  web-test:
+    image: node:20-bookworm-slim
+    profiles: ["test"]
+    working_dir: /app
+    command: ["sh", "-lc", "sleep infinity"]
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=4096
+    volumes:
+      - ./web:/app
+      - web_test_node_modules:/app/node_modules
+    mem_limit: 6g
+
   api:
     build:
       context: .
@@ -300,3 +312,4 @@ volumes:
   loki_data:
   grafana_data:
   prometheus_data:
+  web_test_node_modules:

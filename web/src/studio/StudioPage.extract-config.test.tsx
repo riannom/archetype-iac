@@ -8,6 +8,10 @@ import StudioPage from './StudioPage';
 const mockFetch = vi.fn();
 (globalThis as any).fetch = mockFetch;
 
+const wsRefresh = vi.fn();
+const userLogout = vi.fn();
+const userRefresh = vi.fn();
+
 vi.mock('../theme/index', async () => {
   const actual = await vi.importActual('../theme/index');
   return {
@@ -34,8 +38,8 @@ vi.mock('../contexts/UserContext', () => ({
   useUser: () => ({
     user: { id: 'u1', username: 'test', global_role: 'super_admin' },
     loading: false,
-    logout: vi.fn(),
-    refreshUser: vi.fn(),
+    logout: userLogout,
+    refreshUser: userRefresh,
     hasRole: () => true,
     isAdmin: () => true,
   }),
@@ -71,7 +75,7 @@ vi.mock('./hooks/useLabStateWS', () => ({
   useLabStateWS: () => ({
     isConnected: false,
     reconnectAttempts: 0,
-    refresh: vi.fn(),
+    refresh: wsRefresh,
     connected: false,
   }),
 }));
