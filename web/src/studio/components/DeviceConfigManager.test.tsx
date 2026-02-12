@@ -75,13 +75,15 @@ describe('DeviceConfigManager', () => {
       />
     );
 
-    fireEvent.change(screen.getByPlaceholderText('Device ID (e.g., my-router)'), {
+    fireEvent.click(screen.getByText('Add Custom Device'));
+
+    fireEvent.change(screen.getByPlaceholderText('my-router'), {
       target: { value: 'custom-1' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Display Name (optional)'), {
+    fireEvent.change(screen.getByPlaceholderText('My Router'), {
       target: { value: 'Custom 1' },
     });
-    fireEvent.click(screen.getByText('Add'));
+    fireEvent.click(screen.getByText('Add Device'));
 
     expect(onAddCustomDevice).toHaveBeenCalledWith({ id: 'custom-1', label: 'Custom 1' });
 

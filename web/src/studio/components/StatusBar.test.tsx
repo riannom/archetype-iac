@@ -7,6 +7,10 @@ vi.mock("../../components/VersionBadge", () => ({
   VersionBadge: () => <span data-testid="version-badge">v1.2.3</span>,
 }));
 
+vi.mock("../../theme/index", () => ({
+  useTheme: () => ({ effectiveMode: "light" }),
+}));
+
 // Mock formatUptime
 vi.mock("../../utils/format", () => ({
   formatUptime: vi.fn((ms: number) => {

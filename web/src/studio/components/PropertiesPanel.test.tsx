@@ -626,6 +626,7 @@ describe("PropertiesPanel", () => {
         render(<PropertiesPanel {...defaultProps} />);
 
         await user.click(screen.getByText("hardware"));
+        await user.click(screen.getByText("Locked"));
 
         await user.click(screen.getByText("Reset"));
 
@@ -638,13 +639,11 @@ describe("PropertiesPanel", () => {
         });
       });
 
-      it("locks hardware inputs when toggled", async () => {
+      it("keeps hardware inputs locked by default", async () => {
         const user = userEvent.setup();
         const { container } = render(<PropertiesPanel {...defaultProps} />);
 
         await user.click(screen.getByText("hardware"));
-
-        await user.click(screen.getByText("Unlocked"));
 
         const cpuSlider = container.querySelector('input[type="range"]') as HTMLInputElement;
         const ramInput = container.querySelector('input[type="number"]') as HTMLInputElement;
