@@ -47,6 +47,28 @@ def get_device_override(device_id: str):
     return image_store_get_device_override(device_id)
 
 
+def get_image_runtime_metadata(image_reference: str | None) -> dict:
+    """Get runtime metadata hints for an image reference from manifest."""
+    if not image_reference:
+        return {}
+    try:
+        from app.image_store import find_image_by_reference, load_manifest
+
+        manifest = load_manifest()
+        image = find_image_by_reference(manifest, image_reference) or {}
+    except Exception:
+        return {}
+
+    return {
+        "memory": image.get("memory_mb"),
+        "cpu": image.get("cpu_count"),
+        "disk_driver": image.get("disk_driver"),
+        "nic_driver": image.get("nic_driver"),
+        "machine_type": image.get("machine_type"),
+        "readiness_timeout": image.get("boot_timeout"),
+    }
+
+
 class DeviceNotFoundError(Exception):
     """Raised when a device is not found."""
     pass
@@ -452,7 +474,12 @@ class DeviceService:
 
         return {"message": f"Device '{device_id}' reset to defaults"}
 
-    def resolve_hardware_specs(self, device_id: str, node_config_json: dict | None = None) -> dict:
+    def resolve_hardware_specs(
+        self,
+        device_id: str,
+        node_config_json: dict | None = None,
+        image_reference: str | None = None,
+    ) -> dict:
         """Resolve hardware specs for a device. Per-node overrides > device definition > defaults.
 
         Args:
@@ -491,6 +518,14 @@ class DeviceService:
                             "machineType": "machine_type",
                         }.get(field, field)
                         specs[key] = val
+
+        # Layer 1c: Image metadata (for example VIRL2 node-definition defaults)
+        # should override internal vendor defaults when present.
+        image_meta = get_image_runtime_metadata(image_reference)
+        for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type", "readiness_timeout"):
+            val = image_meta.get(key)
+            if val is not None:
+                specs[key] = val
 
         # Layer 2: Device overrides (device_overrides.json)
         overrides = get_device_override(device_id) or {}

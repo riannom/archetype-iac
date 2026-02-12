@@ -257,6 +257,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         hw_specs = get_device_service().resolve_hardware_specs(
             n.device or kind,
             per_node_hw or None,
+            image,
         )
         for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type"):
             if hw_specs.get(key) is not None:
@@ -268,6 +269,8 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
             readiness_timeout = effective.get("readinessTimeout")
         except Exception:
             pass
+        if hw_specs.get("readiness_timeout") is not None:
+            readiness_timeout = hw_specs.get("readiness_timeout")
         if readiness_probe:
             node_dict["readiness_probe"] = readiness_probe
         if readiness_pattern:
@@ -1432,7 +1435,11 @@ class TopologyService:
         }
         # Resolve hardware specs with the same precedence used by per-node lifecycle.
         from app.services.device_service import get_device_service
-        hw_specs = get_device_service().resolve_hardware_specs(node.device or kind, config)
+        hw_specs = get_device_service().resolve_hardware_specs(
+            node.device or kind,
+            config,
+            image,
+        )
         for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type"):
             if hw_specs.get(key) is not None:
                 node_dict[key] = hw_specs[key]
@@ -1441,6 +1448,8 @@ class TopologyService:
             readiness_probe = effective.get("readinessProbe")
             readiness_pattern = effective.get("readinessPattern")
             readiness_timeout = effective.get("readinessTimeout")
+            if hw_specs.get("readiness_timeout") is not None:
+                readiness_timeout = hw_specs.get("readiness_timeout")
             if readiness_probe:
                 node_dict["readiness_probe"] = readiness_probe
             if readiness_pattern:

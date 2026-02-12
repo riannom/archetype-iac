@@ -1666,7 +1666,11 @@ class NodeLifecycleManager:
         # Resolve hardware specs: per-node config > device overrides > vendor defaults
         from app.services.device_service import get_device_service
         node_config = json.loads(db_node.config_json) if db_node.config_json else None
-        hw_specs = get_device_service().resolve_hardware_specs(kind, node_config)
+        hw_specs = get_device_service().resolve_hardware_specs(
+            kind,
+            node_config,
+            image,
+        )
 
         try:
             # Create container/VM

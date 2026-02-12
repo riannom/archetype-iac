@@ -924,6 +924,10 @@ async def _import_single_image(
 
     # Determine device mapping
     device_id, new_device_config = get_image_device_mapping(image, node_definitions)
+    node_def = next(
+        (n for n in node_definitions if n.id == image.node_definition_id),
+        None,
+    )
 
     # Create device if needed
     if new_device_config and create_devices:
@@ -978,6 +982,11 @@ async def _import_single_image(
             size_bytes=dest_path.stat().st_size,
             source=iso_source,
             compatible_devices=compat,
+            memory_mb=node_def.ram_mb if node_def else None,
+            cpu_count=node_def.cpus if node_def else None,
+            disk_driver=node_def.disk_driver if node_def else None,
+            nic_driver=node_def.nic_driver if node_def else None,
+            boot_timeout=node_def.boot_timeout if node_def else None,
         )
 
     elif image.image_type == "docker":

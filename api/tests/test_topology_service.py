@@ -365,7 +365,7 @@ class TestDeployHardwareProfile:
 
     def test_graph_to_deploy_topology_includes_resolved_hardware_specs(self, monkeypatch):
         class _StubDeviceService:
-            def resolve_hardware_specs(self, _device_id, _node_cfg):
+            def resolve_hardware_specs(self, _device_id, _node_cfg, _image_reference=None):
                 return {
                     "memory": 18432,
                     "cpu": 4,
@@ -416,7 +416,7 @@ class TestDeployHardwareProfile:
         self, test_db, sample_lab, multiple_hosts, monkeypatch
     ):
         class _StubDeviceService:
-            def resolve_hardware_specs(self, _device_id, _node_cfg):
+            def resolve_hardware_specs(self, _device_id, _node_cfg, _image_reference=None):
                 return {
                     "memory": 12288,
                     "cpu": 4,

@@ -310,6 +310,26 @@ class TestImageEntryOperations:
         assert entry["device_id"] is None
         assert entry["version"] is None
 
+    def test_create_image_entry_with_runtime_metadata(self):
+        """Persists optional runtime metadata hints on image entry."""
+        entry = create_image_entry(
+            image_id="qcow2:n9kv.qcow2",
+            kind="qcow2",
+            reference="/var/lib/archetype/images/n9kv.qcow2",
+            filename="n9kv.qcow2",
+            device_id="cisco_n9kv",
+            memory_mb=12288,
+            cpu_count=4,
+            disk_driver="sata",
+            nic_driver="e1000",
+            boot_timeout=480,
+        )
+        assert entry["memory_mb"] == 12288
+        assert entry["cpu_count"] == 4
+        assert entry["disk_driver"] == "sata"
+        assert entry["nic_driver"] == "e1000"
+        assert entry["boot_timeout"] == 480
+
     def test_create_image_entry_normalizes_iosv(self):
         """Legacy iosv assignment is normalized to cisco_iosv."""
         entry = create_image_entry(

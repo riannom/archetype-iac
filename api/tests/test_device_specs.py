@@ -116,3 +116,67 @@ class TestResolveHardwareSpecs:
         specs = self.service.resolve_hardware_specs("unknown", node_config)
         assert specs["memory"] == 16384
         assert specs["cpu"] == 4
+
+    @patch("app.services.device_service.get_image_runtime_metadata")
+    @patch("app.services.device_service.get_device_override", return_value=None)
+    @patch("app.services.device_service.find_custom_device", return_value=None)
+    @patch("app.services.device_service.get_kind_for_device", return_value="cisco_n9kv")
+    @patch("app.services.device_service._get_config_by_kind")
+    def test_image_metadata_overrides_vendor_defaults(
+        self,
+        mock_config,
+        mock_kind,
+        mock_custom,
+        mock_override,
+        mock_image_meta,
+    ):
+        """Imported image metadata should override vendor registry defaults."""
+        mock_config.return_value = MockVendorConfig(
+            memory=8192,
+            cpu=2,
+            disk_driver="virtio",
+            nic_driver="virtio",
+        )
+        mock_image_meta.return_value = {
+            "memory": 12288,
+            "cpu": 4,
+            "disk_driver": "sata",
+            "nic_driver": "e1000",
+            "readiness_timeout": 480,
+        }
+        specs = self.service.resolve_hardware_specs(
+            "cisco_n9kv",
+            None,
+            "/var/lib/archetype/images/n9kv.qcow2",
+        )
+        assert specs["memory"] == 12288
+        assert specs["cpu"] == 4
+        assert specs["disk_driver"] == "sata"
+        assert specs["nic_driver"] == "e1000"
+        assert specs["readiness_timeout"] == 480
+
+    @patch("app.services.device_service.get_image_runtime_metadata")
+    @patch("app.services.device_service.get_device_override")
+    @patch("app.services.device_service.find_custom_device", return_value=None)
+    @patch("app.services.device_service.get_kind_for_device", return_value="cisco_n9kv")
+    @patch("app.services.device_service._get_config_by_kind")
+    def test_override_layers_still_win_over_image_metadata(
+        self,
+        mock_config,
+        mock_kind,
+        mock_custom,
+        mock_override,
+        mock_image_meta,
+    ):
+        """Device overrides and node overrides remain higher priority than image metadata."""
+        mock_config.return_value = MockVendorConfig(memory=8192, cpu=2)
+        mock_image_meta.return_value = {"memory": 12288, "cpu": 4}
+        mock_override.return_value = {"memory": 16384}
+        node_config = {"memory": 24576}
+        specs = self.service.resolve_hardware_specs(
+            "cisco_n9kv",
+            node_config,
+            "/var/lib/archetype/images/n9kv.qcow2",
+        )
+        assert specs["memory"] == 24576
+        assert specs["cpu"] == 4

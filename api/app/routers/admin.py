@@ -214,7 +214,7 @@ async def audit_lab_runtime_drift(
         image = resolve_node_image(node.device, kind, node.image, node.version)
         provider = get_image_provider(image)
         node_cfg = _safe_load_json(node.config_json)
-        hw = device_service.resolve_hardware_specs(node.device or kind, node_cfg)
+        hw = device_service.resolve_hardware_specs(node.device or kind, node_cfg, image)
         effective = device_service.get_device_config(node.device or kind).get("effective", {})
 
         expected = {

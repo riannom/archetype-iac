@@ -589,6 +589,12 @@ def create_image_entry(
     notes: str = "",
     compatible_devices: Optional[list[str]] = None,
     source: Optional[str] = None,
+    memory_mb: Optional[int] = None,
+    cpu_count: Optional[int] = None,
+    disk_driver: Optional[str] = None,
+    nic_driver: Optional[str] = None,
+    machine_type: Optional[str] = None,
+    boot_timeout: Optional[int] = None,
 ) -> dict:
     """Create a new image library entry with all metadata fields.
 
@@ -633,6 +639,13 @@ def create_image_entry(
         "notes": notes,
         "compatible_devices": normalized_compatible_devices,
         "source": source,
+        # Optional runtime hints sourced from vendor image metadata (for example VIRL2 node-definitions).
+        "memory_mb": memory_mb,
+        "cpu_count": cpu_count,
+        "disk_driver": disk_driver,
+        "nic_driver": nic_driver,
+        "machine_type": machine_type,
+        "boot_timeout": boot_timeout,
     }
 
 
