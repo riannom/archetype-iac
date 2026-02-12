@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import DetailPopup from './DetailPopup';
 
 interface JobLogModalProps {
@@ -19,7 +19,8 @@ const JobLogModal: React.FC<JobLogModalProps> = ({
   const [log, setLog] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const copyTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isOpen || !labId || !jobId) return;
@@ -44,10 +45,60 @@ const JobLogModal: React.FC<JobLogModalProps> = ({
     fetchLog();
   }, [isOpen, labId, jobId, studioRequest]);
 
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const setCopyStatusWithTimeout = (status: 'success' | 'error') => {
+    setCopyStatus(status);
+    if (copyTimeoutRef.current) {
+      window.clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = window.setTimeout(() => {
+      setCopyStatus('idle');
+    }, 2000);
+  };
+
+  const fallbackCopy = (text: string) => {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-1000px';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+      const success = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return success;
+    } catch {
+      return false;
+    }
+  };
+
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(log);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(log);
+        setCopyStatusWithTimeout('success');
+        return;
+      }
+    } catch {
+      // Fall back below
+    }
+
+    const success = fallbackCopy(log);
+    if (success) {
+      setCopyStatusWithTimeout('success');
+    } else {
+      setCopyStatusWithTimeout('error');
+    }
   };
 
   return (
@@ -81,8 +132,12 @@ const JobLogModal: React.FC<JobLogModalProps> = ({
               onClick={handleCopy}
               className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium glass-control text-stone-700 dark:text-stone-300 rounded-lg transition-colors"
             >
-              <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`} />
-              {copied ? 'Copied!' : 'Copy'}
+              <i
+                className={`fa-solid ${
+                  copyStatus === 'success' ? 'fa-check' : copyStatus === 'error' ? 'fa-triangle-exclamation' : 'fa-copy'
+                }`}
+              />
+              {copyStatus === 'success' ? 'Copied!' : copyStatus === 'error' ? 'Copy failed' : 'Copy'}
             </button>
           </div>
           <div className="flex-1 overflow-auto bg-stone-950 rounded-lg border border-stone-800">

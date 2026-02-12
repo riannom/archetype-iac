@@ -31,11 +31,6 @@ vi.mock("./DetailPopup", () => ({
 
 // Mock clipboard API
 const mockWriteText = vi.fn();
-Object.assign(navigator, {
-  clipboard: {
-    writeText: mockWriteText,
-  },
-});
 
 describe("JobLogModal", () => {
   let mockStudioRequest: ReturnType<typeof vi.fn>;
@@ -44,6 +39,12 @@ describe("JobLogModal", () => {
     vi.clearAllMocks();
     mockWriteText.mockResolvedValue(undefined);
     mockStudioRequest = vi.fn();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: mockWriteText,
+      },
+    });
   });
 
   afterEach(() => {
@@ -207,6 +208,59 @@ describe("JobLogModal", () => {
 
       await waitFor(() => {
         expect(screen.getByText("Copied!")).toBeInTheDocument();
+      });
+    });
+
+    it("falls back to execCommand when clipboard API fails", async () => {
+      const user = userEvent.setup();
+      const execCommandMock = vi.fn(() => true);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: undefined,
+      });
+      Object.defineProperty(document, "execCommand", {
+        configurable: true,
+        value: execCommandMock,
+      });
+      mockStudioRequest.mockResolvedValueOnce({ log: "Fallback copy content" });
+
+      render(<JobLogModal {...createProps()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Copy")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByText("Copy"));
+
+      expect(execCommandMock).toHaveBeenCalledWith("copy");
+      await waitFor(() => {
+        expect(screen.getByText("Copied!")).toBeInTheDocument();
+      });
+    });
+
+    it("shows copy failed when clipboard and fallback both fail", async () => {
+      const user = userEvent.setup();
+      const execCommandMock = vi.fn(() => false);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: undefined,
+      });
+      Object.defineProperty(document, "execCommand", {
+        configurable: true,
+        value: execCommandMock,
+      });
+      mockStudioRequest.mockResolvedValueOnce({ log: "cannot copy me" });
+
+      render(<JobLogModal {...createProps()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Copy")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByText("Copy"));
+
+      await waitFor(() => {
+        expect(screen.getByText("Copy failed")).toBeInTheDocument();
       });
     });
   });
