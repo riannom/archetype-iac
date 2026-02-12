@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import socket
 import subprocess
 import uuid
 from xml.sax.saxutils import escape as xml_escape
@@ -1799,6 +1800,32 @@ class LibvirtProvider(Provider):
                 progress_percent=0,
             )
 
+        # SSH-console VMs (for example N9Kv) often do not emit reliable serial
+        # output during boot. For these, gate readiness on management reachability
+        # instead of serial log pattern matching.
+        if get_console_method(kind) == "ssh":
+            ip = await self._get_vm_management_ip(domain_name)
+            if not ip:
+                return ReadinessResult(
+                    is_ready=False,
+                    message="Waiting for management IP",
+                    progress_percent=30,
+                )
+
+            ssh_ready = await asyncio.to_thread(self._check_tcp_port, ip, 22, 2.0)
+            if not ssh_ready:
+                return ReadinessResult(
+                    is_ready=False,
+                    message=f"Management IP {ip} reachable, waiting for SSH",
+                    progress_percent=70,
+                )
+
+            return ReadinessResult(
+                is_ready=True,
+                message=f"Management SSH ready on {ip}",
+                progress_percent=100,
+            )
+
         # Apply per-node readiness metadata overrides when present.
         overrides = self._get_domain_readiness_overrides(domain)
         probe = get_libvirt_probe(
@@ -1817,6 +1844,15 @@ class LibvirtProvider(Provider):
             await self._run_post_boot_commands(domain_name, kind)
 
         return result
+
+    @staticmethod
+    def _check_tcp_port(host: str, port: int, timeout: float) -> bool:
+        """Return True when TCP port is connectable."""
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except Exception:
+            return False
 
     def get_readiness_timeout(
         self,
