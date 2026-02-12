@@ -286,6 +286,34 @@ def test_console_extractor_clean_config(monkeypatch) -> None:
     assert "interface eth0" in cleaned
 
 
+def test_console_extractor_disable_paging_waits_for_prompt() -> None:
+    import agent.console_extractor as console_extractor
+
+    class _FakeChild:
+        def __init__(self) -> None:
+            self.sent = []
+            self.expected = []
+
+        def sendline(self, value: str) -> None:
+            self.sent.append(value)
+
+        def expect(self, pattern: str, timeout: int | None = None) -> int:
+            self.expected.append((pattern, timeout))
+            return 0
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    extractor.timeout = 30
+    extractor.child = _FakeChild()
+
+    prompt = r"[\w\-]+[>#]\s*$"
+    extractor._disable_paging("terminal length 0", prompt)
+
+    assert extractor.child.sent == ["terminal length 0"]
+    assert extractor.child.expected == [(prompt, 5)]
+
+
 def test_extract_vm_config_no_pexpect(monkeypatch) -> None:
     import agent.console_extractor as console_extractor
 

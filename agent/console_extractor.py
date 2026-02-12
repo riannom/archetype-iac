@@ -184,7 +184,7 @@ class SerialConsoleExtractor:
 
             # Disable terminal paging (critical for full config output)
             if paging_disable:
-                self._disable_paging(paging_disable)
+                self._disable_paging(paging_disable, prompt_pattern)
 
             # Execute the config extraction command
             config = self._execute_command(command, prompt_pattern)
@@ -270,17 +270,13 @@ class SerialConsoleExtractor:
             logger.warning("Timeout during enable")
             return False
 
-    def _disable_paging(self, paging_command: str) -> None:
+    def _disable_paging(self, paging_command: str, prompt_pattern: str) -> None:
         """Disable terminal paging to get full output."""
         try:
             self.child.sendline(paging_command)
-            # Brief wait, don't wait for specific response
-            time.sleep(0.5)
-            # Consume any output
-            try:
-                self.child.expect(r".", timeout=1)
-            except pexpect.TIMEOUT:
-                pass
+            # Wait for prompt so output from this command does not pollute
+            # the next command capture.
+            self.child.expect(prompt_pattern, timeout=min(self.timeout, 5))
         except Exception as e:
             logger.debug(f"Error disabling paging (non-fatal): {e}")
 
