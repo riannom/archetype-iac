@@ -10,7 +10,11 @@ test-agent:
 	pytest -q agent/tests
 
 test-api:
-	pytest -q api/tests
+	@command -v python3.11 >/dev/null 2>&1 || { \
+		echo "python3.11 is required for API tests. Install Python 3.11 and retry."; \
+		exit 1; \
+	}
+	python3.11 -m pytest -q api/tests
 
 observability-canary:
 	python3 scripts/observability_canary.py

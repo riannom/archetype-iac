@@ -10,7 +10,7 @@
   - `make audit` — dry-run cleanup audit (no deletions).
   - `make audit-ovs` — dry-run cleanup audit including OVS/VXLAN checks.
   - `make test-agent` — run agent test suite.
-  - `make test-api` — run API test suite.
+  - `make test-api` — run API test suite (requires `python3.11`; Python 3.13+ is not supported for API `TestClient` runs yet).
   - `make observability-canary` — run observability canary checks (read-only by default).
   - `make observability-db-report` — print DB-backed duration/failure diagnostics (30-day default).
   - `make observability-canary-nonprod` — run controlled non-prod canary traffic and coverage checks.

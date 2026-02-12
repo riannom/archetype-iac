@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -237,6 +238,62 @@ class TestLabsCRUD:
         # Verify lab is deleted
         deleted_lab = test_db.query(models.Lab).filter(models.Lab.id == lab_id).first()
         assert deleted_lab is None
+
+
+class TestLabReadiness:
+    """Tests for lab readiness endpoints."""
+
+    @patch("app.routers.labs.agent_client.check_node_readiness", new_callable=AsyncMock)
+    @patch("app.routers.labs.get_online_agent_for_lab", new_callable=AsyncMock)
+    def test_nodes_ready_passes_kind_for_vm_nodes(
+        self,
+        mock_get_online_agent_for_lab: AsyncMock,
+        mock_check_node_readiness: AsyncMock,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        sample_node_definitions: list[models.Node],
+        auth_headers: dict,
+    ):
+        """Ensure VM readiness checks include device kind (required for libvirt)."""
+        sample_lab.provider = "libvirt"
+        sample_node_definitions[0].device = "cisco_iosv"
+        sample_node_definitions[0].container_name = "cisco_iosv_6"
+
+        state = models.NodeState(
+            lab_id=sample_lab.id,
+            node_id=sample_node_definitions[0].gui_id,
+            node_name="cisco_iosv_6",
+            node_definition_id=sample_node_definitions[0].id,
+            desired_state="running",
+            actual_state="running",
+            is_ready=False,
+        )
+        test_db.add(state)
+        test_db.commit()
+
+        mock_get_online_agent_for_lab.return_value = sample_host
+        mock_check_node_readiness.return_value = {
+            "is_ready": True,
+            "progress_percent": 100,
+            "message": "ready",
+        }
+
+        response = test_client.get(
+            f"/labs/{sample_lab.id}/nodes/ready",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["all_ready"] is True
+
+        assert mock_check_node_readiness.await_count >= 1
+        _, kwargs = mock_check_node_readiness.await_args
+        assert kwargs.get("kind") == "cisco_iosv"
+
+
+class TestLabClone:
+    """Tests for lab clone operations."""
 
     def test_clone_lab(
         self,
