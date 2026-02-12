@@ -814,8 +814,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
         license_required=True,
         tags=["switching", "vxlan", "evpn", "datacenter", "aci", "vm"],
-        readiness_probe="log_pattern",
-        readiness_pattern=r"login:",
+        # NX-OSv commonly provides no usable serial output in this topology.
+        # Treat VM runtime state as readiness signal to avoid permanent booting.
+        readiness_probe="none",
+        readiness_pattern=None,
         readiness_timeout=600,  # N9Kv takes a long time to boot
         console_method="ssh",
         console_user="admin",
