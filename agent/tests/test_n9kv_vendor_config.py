@@ -37,10 +37,10 @@ def test_n9kv_disk_driver_is_ide():
     assert config.disk_driver == "ide"
 
 
-def test_n9kv_efi_boot_defaults_false():
-    """Vendor default is BIOS; EFI is set via image manifest when needed."""
+def test_n9kv_efi_boot_enabled():
+    """N9Kv image uses UEFI; legacy BIOS drops to boot manager."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
-    assert config.efi_boot is False
+    assert config.efi_boot is True
 
 
 def test_n9kv_console_method_is_ssh():
@@ -57,7 +57,7 @@ def test_n9kv_console_method_is_ssh():
 def test_get_libvirt_config_propagates_n9kv_settings():
     """Vendor config values must propagate through get_libvirt_config."""
     lc = get_libvirt_config("cisco_n9kv")
-    assert lc.efi_boot is False
+    assert lc.efi_boot is True
     assert lc.nic_driver == "e1000"
     assert lc.disk_driver == "ide"
     assert lc.machine_type == "pc-i440fx-6.2"

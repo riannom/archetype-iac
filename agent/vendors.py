@@ -815,6 +815,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         nic_driver="e1000",  # NX-OS lacks virtio drivers; e1000 required
         disk_driver="ide",  # NX-OS bootloader needs IDE; virtio not recognized
         machine_type="pc-i440fx-6.2",  # e1000 TX hangs on Q35; i440fx has native IDE
+        efi_boot=True,  # N9Kv image uses UEFI; legacy BIOS drops to boot manager
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
