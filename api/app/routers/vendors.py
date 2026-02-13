@@ -121,7 +121,7 @@ def add_custom_device(
     - tags: Searchable tags
     """
     from app.image_store import add_custom_device as store_add_device, find_custom_device
-    from agent.vendors import VENDOR_CONFIGS
+    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
 
     device_id = payload.get("id")
     if not device_id:
@@ -129,8 +129,12 @@ def add_custom_device(
     if not payload.get("name"):
         raise HTTPException(status_code=400, detail="Device name is required")
 
-    # Check if device ID conflicts with vendor registry
-    if device_id in VENDOR_CONFIGS:
+    # Check if device ID conflicts with vendor registry (including aliases).
+    # Without this, users can accidentally add "eos" as a custom device even
+    # though it is an alias of the built-in "ceos" vendor kind, causing it to
+    # show up under the "Custom" subcategory in the sidebar.
+    canonical_id = get_kind_for_device(device_id)
+    if device_id in VENDOR_CONFIGS or canonical_id in VENDOR_CONFIGS:
         raise HTTPException(
             status_code=409,
             detail=f"Device ID '{device_id}' conflicts with built-in vendor registry"
