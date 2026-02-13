@@ -1097,7 +1097,7 @@ class LibvirtProvider(Provider):
             resolved_efi_boot = (
                 node.efi_boot if node.efi_boot is not None else libvirt_config.efi_boot
             )
-            resolved_efi_vars = node.efi_vars
+            resolved_efi_vars = node.efi_vars or libvirt_config.efi_vars
             resolved_readiness_probe = (
                 node.readiness_probe if node.readiness_probe is not None else libvirt_config.readiness_probe
             )

@@ -95,6 +95,7 @@ class VendorConfig:
     machine_type: str = "pc-q35-6.2"  # QEMU machine type: pc-q35-* (modern), pc-i440fx-* (legacy IDE)
     data_volume_gb: int = 0      # Size of additional data volume (0 = none)
     efi_boot: bool = False       # Boot with UEFI firmware (OVMF) instead of legacy BIOS
+    efi_vars: str = ""           # EFI NVRAM mode: "" (stateful, default), "stateless" (no persistent NVRAM)
     force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
 
     # Image requirements
@@ -810,12 +811,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="Ethernet1/",
         port_start_index=1,
         max_ports=12,
-        memory=8192,  # 8GB required
+        memory=12288,  # 12GB required (CML minimum 10GB)
         cpu=2,
         nic_driver="e1000",  # NX-OS lacks virtio drivers; e1000 required
         disk_driver="sata",  # NX-OS requires AHCI/SATA to detect bootflash; IDE boots kernel but no bootflash
         machine_type="pc-i440fx-6.2",  # e1000 TX hangs on Q35; i440fx works with explicit AHCI controller
         efi_boot=True,  # N9Kv image uses UEFI; legacy BIOS drops to boot manager
+        efi_vars="stateless",  # N9Kv uses stateless NVRAM per CML spec
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
@@ -1704,6 +1706,7 @@ class LibvirtRuntimeConfig:
     nic_driver: str
     data_volume_gb: int
     efi_boot: bool
+    efi_vars: str
     readiness_probe: str
     readiness_pattern: str | None
     readiness_timeout: int
@@ -1762,6 +1765,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             nic_driver="virtio",
             data_volume_gb=0,
             efi_boot=False,
+            efi_vars="",
             readiness_probe="none",
             readiness_pattern=None,
             readiness_timeout=120,
@@ -1777,6 +1781,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         nic_driver=config.nic_driver,
         data_volume_gb=config.data_volume_gb,
         efi_boot=config.efi_boot,
+        efi_vars=config.efi_vars,
         readiness_probe=config.readiness_probe,
         readiness_pattern=config.readiness_pattern,
         readiness_timeout=config.readiness_timeout,
