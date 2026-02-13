@@ -157,6 +157,37 @@ describe("ConsoleManager", () => {
       expect(screen.getByText("Router 2")).toBeInTheDocument();
     });
 
+    it("brings the most recently clicked window to the front", () => {
+      const windows: ConsoleWindow[] = [
+        {
+          id: "win-1",
+          deviceIds: ["router1"],
+          activeDeviceId: "router1",
+          x: 50,
+          y: 50,
+          isExpanded: true,
+        },
+        {
+          id: "win-2",
+          deviceIds: ["router2"],
+          activeDeviceId: "router2",
+          x: 600,
+          y: 50,
+          isExpanded: true,
+        },
+      ];
+
+      const { container } = render(<ConsoleManager {...defaultProps} windows={windows} />);
+      const winEls = Array.from(container.querySelectorAll(".fixed.z-\\[100\\]")) as HTMLDivElement[];
+      expect(winEls).toHaveLength(2);
+
+      const [w1, w2] = winEls;
+      expect(Number(w2.style.zIndex)).toBeGreaterThan(Number(w1.style.zIndex));
+
+      fireEvent.mouseDown(w1);
+      expect(Number(w1.style.zIndex)).toBeGreaterThan(Number(w2.style.zIndex));
+    });
+
     it("renders window at correct position", () => {
       const windows: ConsoleWindow[] = [
         {

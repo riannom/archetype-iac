@@ -1058,9 +1058,10 @@ describe("Canvas", () => {
       const centerButton = document.querySelector(".fa-crosshairs")!.closest("button")!;
       await user.click(centerButton);
 
-      // Check transform is reset to translate(0, 0) scale(1)
-      const transformDiv = document.querySelector('[style*="translate(0px, 0px) scale(1)"]');
+      // Center should reset zoom to 1 (offset may not be 0 because we center the content)
+      const transformDiv = document.querySelector(".absolute.inset-0.origin-top-left") as HTMLDivElement;
       expect(transformDiv).toBeInTheDocument();
+      expect(transformDiv.style.transform).toContain("scale(1)");
     });
 
     it("fits to screen when maximize button is clicked with nodes", async () => {

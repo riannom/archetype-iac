@@ -66,6 +66,31 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // Window focus + stacking order (higher zIndex on most recently interacted window)
+  const [focusedWindowId, setFocusedWindowId] = useState<string | null>(null);
+  const [zOrder, setZOrder] = useState<string[]>([]);
+  useEffect(() => {
+    const ids = windows.map((w) => w.id);
+    setZOrder((prev) => {
+      const kept = prev.filter((id) => ids.includes(id));
+      const appended = ids.filter((id) => !kept.includes(id));
+      return [...kept, ...appended];
+    });
+    setFocusedWindowId((prev) => {
+      if (prev && ids.includes(prev)) return prev;
+      return ids.length ? ids[ids.length - 1] : null;
+    });
+  }, [windows]);
+
+  const bringToFront = useCallback((windowId: string) => {
+    setFocusedWindowId(windowId);
+    setZOrder((prev) => {
+      const next = prev.filter((id) => id !== windowId);
+      next.push(windowId);
+      return next;
+    });
+  }, []);
+
   // Ref-based drag/resize tracking (no re-renders during movement)
   const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const resizeRef = useRef<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
@@ -144,6 +169,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   }, []);
 
   const handleMouseDown = (e: React.MouseEvent, win: ConsoleWindow, originX: number, originY: number) => {
+    bringToFront(win.id);
     dragRef.current = {
       id: win.id,
       startX: e.clientX - originX,
@@ -517,12 +543,15 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         const dx = dragState?._lastX !== undefined ? dragState._lastX - left : 0;
         const dy = dragState?._lastY !== undefined ? dragState._lastY - top : 0;
         const transform = isDragging === win.id ? `translate3d(${dx}px, ${dy}px, 0)` : undefined;
+        const zIndex = 100 + Math.max(0, zOrder.indexOf(win.id));
+        const isFocused = focusedWindowId === win.id;
 
         return (
           <div
             key={win.id}
             ref={(el) => setWindowRef(win.id, el)}
-            className={`fixed z-[100] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5 ${isMoving ? '' : 'transition-all duration-200'}
+            onMouseDownCapture={() => bringToFront(win.id)}
+            className={`fixed z-[100] bg-stone-900 border border-stone-700 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-white/5 ${isFocused ? 'ring-2 ring-sage-500/40' : ''} ${isMoving ? '' : 'transition-all duration-200'}
               ${isDropTarget ? 'console-drop-target-active' : ''}
               ${isBeingDraggedOverTarget ? 'console-window-dragging-over-target' : ''}`}
             style={{
@@ -530,6 +559,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
               top,
               width,
               height,
+              zIndex,
               transform,
               willChange: isMoving ? 'transform, width, height' : 'auto',
               boxShadow:
