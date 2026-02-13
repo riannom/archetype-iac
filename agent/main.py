@@ -3311,9 +3311,10 @@ async def create_node(
         nic_driver=request.nic_driver,
         machine_type=request.machine_type,
         libvirt_driver=request.libvirt_driver,
-        readiness_probe=request.readiness_probe,
-        readiness_pattern=request.readiness_pattern,
-        readiness_timeout=request.readiness_timeout,
+        # Older controller payloads / current schema may omit readiness overrides.
+        readiness_probe=getattr(request, "readiness_probe", None),
+        readiness_pattern=getattr(request, "readiness_pattern", None),
+        readiness_timeout=getattr(request, "readiness_timeout", None),
         efi_boot=request.efi_boot,
         efi_vars=request.efi_vars,
     )
