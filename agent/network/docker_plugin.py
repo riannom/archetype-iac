@@ -57,6 +57,7 @@ from typing import Any
 from aiohttp import web
 
 from agent.config import settings
+from agent.network.ovs_vlan_tags import used_vlan_tags_on_bridge_from_ovs_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -325,13 +326,44 @@ class DockerOVSPlugin:
         cont_veth = f"vc{endpoint_id[:5]}{suffix}"[:15]
         return host_veth, cont_veth
 
-    def _allocate_vlan(self, lab_bridge: LabBridge) -> int:
-        """Allocate next available VLAN tag across all labs."""
+    async def _get_used_vlan_tags_on_bridge(self, bridge_name: str) -> set[int]:
+        """Return VLAN tags currently in-use on an OVS bridge.
+
+        This is a safety net to prevent VLAN tag collisions across providers
+        sharing the same bridge (docker plugin, libvirt VMs, VXLAN tunnels).
+        """
+        code, ports_out, _ = await self._ovs_vsctl("list-ports", bridge_name)
+        if code != 0:
+            return set()
+        if not ports_out.strip():
+            return set()
+
+        code, csv_out, _ = await self._ovs_vsctl(
+            "--format=csv",
+            "--columns=name,tag",
+            "list",
+            "port",
+        )
+        if code != 0:
+            return set()
+
+        return used_vlan_tags_on_bridge_from_ovs_outputs(
+            bridge_list_ports_output=ports_out,
+            list_port_name_tag_csv=csv_out,
+        )
+
+    async def _allocate_vlan(self, lab_bridge: LabBridge) -> int:
+        """Allocate next available VLAN tag across all labs.
+
+        Avoid reusing tags already in-use on the shared arch-ovs bridge.
+        """
         max_attempts = VLAN_RANGE_END - VLAN_RANGE_START + 1
         vlan = self._global_next_vlan
+        used_on_bridge = await self._get_used_vlan_tags_on_bridge(settings.ovs_bridge_name)
+        used_vlans = set(self._allocated_vlans) | used_on_bridge
 
         for _ in range(max_attempts):
-            if vlan not in self._allocated_vlans:
+            if vlan not in used_vlans:
                 self._allocated_vlans.add(vlan)
                 vlan_next = vlan + 1
                 if vlan_next > VLAN_RANGE_END:
@@ -2200,7 +2232,7 @@ class DockerOVSPlugin:
             host_veth, cont_veth = self._generate_veth_names(endpoint_id)
 
             # Allocate VLAN (isolated until hot_connect)
-            vlan_tag = self._allocate_vlan(lab_bridge)
+            vlan_tag = await self._allocate_vlan(lab_bridge)
 
             # Create veth pair
             if not await self._create_veth_pair(host_veth, cont_veth):
@@ -2645,7 +2677,7 @@ class DockerOVSPlugin:
                 return None
 
             # Allocate new unique VLAN
-            new_vlan = self._allocate_vlan(lab_bridge)
+            new_vlan = await self._allocate_vlan(lab_bridge)
 
             code, _, stderr = await self._ovs_vsctl(
                 "set", "port", endpoint.host_veth, f"tag={new_vlan}"

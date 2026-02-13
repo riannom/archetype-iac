@@ -7,7 +7,17 @@ from app.services.link_operational_state import recompute_link_oper_state
 def test_recompute_link_oper_state_peer_host_offline_reason(
     test_db,
     sample_lab,
+    monkeypatch,
 ) -> None:
+    from app import agent_client
+
+    # Keep this test deterministic even if earlier tests patched global agent_client helpers.
+    monkeypatch.setattr(
+        agent_client,
+        "is_agent_online",
+        lambda host: bool(host and host.status == "online" and host.last_heartbeat),
+    )
+
     source_host = models.Host(
         id="h-source",
         name="source",

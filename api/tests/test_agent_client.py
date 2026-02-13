@@ -228,6 +228,18 @@ def test_is_agent_online_uses_settings_cutoff(monkeypatch):
     assert is_agent_online(agent) is False
 
 
+def test_is_agent_online_handles_naive_heartbeat(monkeypatch):
+    """Naive heartbeat timestamps are treated as UTC for compatibility with SQLite."""
+    monkeypatch.setattr(settings, "agent_stale_timeout", 5)
+    agent = MagicMock()
+    agent.status = "online"
+    agent.last_heartbeat = datetime.utcnow() - timedelta(seconds=4)
+    assert is_agent_online(agent) is True
+
+    agent.last_heartbeat = datetime.utcnow() - timedelta(seconds=6)
+    assert is_agent_online(agent) is False
+
+
 def test_agent_job_error():
     """Test AgentJobError properties."""
     error = AgentJobError(

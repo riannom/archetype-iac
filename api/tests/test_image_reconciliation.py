@@ -15,7 +15,7 @@ def _session_ctx(test_db):
 
 
 @pytest.mark.asyncio
-async def test_reconcile_image_hosts_creates_and_removes(test_db, sample_lab) -> None:
+async def test_reconcile_image_hosts_creates_and_removes(test_db, sample_lab, monkeypatch) -> None:
     host_a = models.Host(
         id="host-a",
         name="Host A",
@@ -55,8 +55,8 @@ async def test_reconcile_image_hosts_creates_and_removes(test_db, sample_lab) ->
         ]
     }
 
-    image_reconciliation.load_manifest = lambda: manifest
-    image_reconciliation.get_session = lambda: _session_ctx(test_db)
+    monkeypatch.setattr(image_reconciliation, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
 
     result = await image_reconciliation.reconcile_image_hosts()
 
@@ -68,7 +68,7 @@ async def test_reconcile_image_hosts_creates_and_removes(test_db, sample_lab) ->
 
 
 @pytest.mark.asyncio
-async def test_verify_image_status_on_agents_updates(test_db) -> None:
+async def test_verify_image_status_on_agents_updates(test_db, monkeypatch) -> None:
     host = models.Host(
         id="host-1",
         name="Host 1",
@@ -111,10 +111,14 @@ async def test_verify_image_status_on_agents_updates(test_db) -> None:
     async def fake_get_agent_images(agent):
         return {"images": [{"tags": ["repo:tag"]}]}
 
-    image_reconciliation.load_manifest = lambda: manifest
-    image_reconciliation.get_session = lambda: _session_ctx(test_db)
-    image_reconciliation.agent_client.is_agent_online = lambda h: True
-    image_reconciliation.agent_client.get_agent_images = fake_get_agent_images
+    monkeypatch.setattr(image_reconciliation, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "get_agent_images",
+        fake_get_agent_images,
+    )
 
     result = await image_reconciliation.verify_image_status_on_agents()
 

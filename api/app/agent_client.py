@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import socket
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Any
 
 import httpx
@@ -1065,7 +1065,12 @@ def is_agent_online(agent: models.Host) -> bool:
     if not agent.last_heartbeat:
         return False
 
-    return agent.last_heartbeat >= _agent_online_cutoff()
+    heartbeat = agent.last_heartbeat
+    # SQLite can return naive datetimes in tests; treat those as UTC.
+    if heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+
+    return heartbeat >= _agent_online_cutoff()
 
 
 # --- Reconciliation Functions ---

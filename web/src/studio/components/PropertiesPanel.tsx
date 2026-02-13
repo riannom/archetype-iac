@@ -25,6 +25,15 @@ interface PropertiesPanelProps {
   onOpenConfigViewer?: (nodeId: string, nodeName: string) => void;
   agents?: { id: string; name: string }[];
   nodeStates?: Record<string, NodeStateEntry>;
+  nodeReadinessHints?: Record<
+    string,
+    {
+      is_ready: boolean;
+      actual_state: string;
+      progress_percent?: number | null;
+      message?: string | null;
+    }
+  >;
 }
 
 // Custom dropdown component for agent selection with proper dark mode support

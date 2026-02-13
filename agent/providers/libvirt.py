@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import uuid
+import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -39,6 +40,7 @@ from agent.vendors import (
     get_console_method,
     get_libvirt_config,
 )
+from agent.network.ovs_vlan_tags import used_vlan_tags_on_bridge_from_ovs_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,88 @@ class LibvirtProvider(Provider):
         except Exception as e:
             logger.warning(f"Failed to save VLAN allocations for lab {lab_id}: {e}")
 
+    def _get_used_vlan_tags_on_ovs_bridge(self) -> set[int]:
+        """Return VLAN tags currently in use on the OVS bridge.
+
+        VLAN tags on OVS are global to the bridge, not per-lab. If we reuse a VLAN tag
+        already assigned to another port, we accidentally connect two unrelated L2
+        segments, which can create loops and MAC flapping.
+        """
+        try:
+            ovs_bridge = getattr(settings, "ovs_bridge_name", "arch-ovs")
+
+            ports_res = subprocess.run(
+                ["ovs-vsctl", "list-ports", ovs_bridge],
+                capture_output=True,
+                text=True,
+            )
+            if ports_res.returncode != 0:
+                return set()
+
+            csv_res = subprocess.run(
+                ["ovs-vsctl", "--format=csv", "--columns=name,tag", "list", "port"],
+                capture_output=True,
+                text=True,
+            )
+            if csv_res.returncode != 0:
+                return set()
+
+            return used_vlan_tags_on_bridge_from_ovs_outputs(
+                bridge_list_ports_output=ports_res.stdout,
+                list_port_name_tag_csv=csv_res.stdout,
+            )
+        except Exception:
+            # Non-fatal: older environments may not have OVS CLI access.
+            return set()
+
+    @staticmethod
+    def _extract_domain_vlan_tags(domain) -> list[int]:
+        """Extract VLAN tag ids from a libvirt domain XML (data interfaces only)."""
+        try:
+            xml = domain.XMLDesc(0)
+            root = ET.fromstring(xml)
+            tags: list[int] = []
+            # Only consider bridge interfaces (data plane). Mgmt NIC is type='network'.
+            for iface in root.findall(".//devices/interface[@type='bridge']"):
+                for tag in iface.findall("./vlan/tag"):
+                    raw = tag.get("id")
+                    if not raw:
+                        continue
+                    try:
+                        tags.append(int(raw))
+                    except ValueError:
+                        continue
+            return tags
+        except Exception:
+            return []
+
+    def _discover_vlan_allocations_from_domains(
+        self,
+        lab_id: str,
+    ) -> dict[str, list[int]]:
+        """Discover per-node VLAN tags from currently defined libvirt domains.
+
+        This is a safety net for cases where the agent lost its in-memory VLAN state
+        (restart) or the persisted JSON is missing/incomplete.
+        """
+        discovered: dict[str, list[int]] = {}
+        try:
+            prefix = self._lab_prefix(lab_id)
+            for domain in self.conn.listAllDomains(0):
+                try:
+                    name = domain.name()
+                except Exception:
+                    continue
+                if not name.startswith(prefix + "-"):
+                    continue
+                node_name = name[len(prefix) + 1 :]
+                tags = self._extract_domain_vlan_tags(domain)
+                if tags:
+                    discovered[node_name] = tags
+        except Exception:
+            return {}
+        return discovered
+
     def _load_vlan_allocations(self, lab_id: str, workspace: Path) -> bool:
         """Load VLAN allocations from file.
 
@@ -281,14 +365,15 @@ class LibvirtProvider(Provider):
         """
         recovered: dict[str, list[int]] = {}
 
-        # Try to load existing VLAN allocations
-        if not self._load_vlan_allocations(lab_id, workspace):
-            logger.debug(f"No VLAN allocations to recover for lab {lab_id}")
-            return recovered
+        # Load persisted allocations when available, but also discover from live domains.
+        self._load_vlan_allocations(lab_id, workspace)
 
         allocations = self._vlan_allocations.get(lab_id, {})
-        if not allocations:
-            return recovered
+        discovered = self._discover_vlan_allocations_from_domains(lab_id)
+        if discovered:
+            # Domain XML is source-of-truth for currently running/defined nodes.
+            allocations = {**allocations, **discovered}
+            self._vlan_allocations[lab_id] = allocations
 
         # Check which allocations have valid domains still defined
         # (The OVS ports are created by libvirt when VMs are defined/started)
@@ -362,6 +447,9 @@ class LibvirtProvider(Provider):
         if lab_id not in self._vlan_allocations:
             self._vlan_allocations[lab_id] = {}
 
+        # Always avoid VLAN collisions with existing OVS ports (across all labs).
+        used_on_bridge = self._get_used_vlan_tags_on_ovs_bridge()
+
         # Check if this node already has VLANs allocated (from recovery)
         existing_vlans = self._vlan_allocations[lab_id].get(node_name)
         if existing_vlans:
@@ -379,12 +467,24 @@ class LibvirtProvider(Provider):
                 )
 
         vlans = []
+        # Cap search to range size to avoid infinite loops if exhausted.
+        range_size = (self.VLAN_RANGE_END - self.VLAN_RANGE_START) + 1
         for _ in range(count):
+            attempts = 0
             vlan = self._next_vlan[lab_id]
+            while attempts < range_size and (vlan in used_on_bridge or vlan in vlans):
+                vlan += 1
+                if vlan > self.VLAN_RANGE_END:
+                    vlan = self.VLAN_RANGE_START
+                attempts += 1
+            if attempts >= range_size:
+                raise RuntimeError("No free VLAN tags available on OVS bridge")
             vlans.append(vlan)
-            self._next_vlan[lab_id] += 1
-            if self._next_vlan[lab_id] > self.VLAN_RANGE_END:
-                self._next_vlan[lab_id] = self.VLAN_RANGE_START
+            used_on_bridge.add(vlan)
+            vlan += 1
+            if vlan > self.VLAN_RANGE_END:
+                vlan = self.VLAN_RANGE_START
+            self._next_vlan[lab_id] = vlan
 
         self._vlan_allocations[lab_id][node_name] = vlans
         logger.debug(f"Allocated VLANs for {node_name}: {vlans}")
@@ -1076,6 +1176,12 @@ class LibvirtProvider(Provider):
     ) -> NodeInfo:
         """Deploy a single VM node."""
         domain_name = self._domain_name(lab_id, node_name)
+        # Ensure we have a complete view of existing VLAN allocations before allocating new ones.
+        # This avoids accidentally reusing VLAN tags that are already in use on arch-ovs.
+        try:
+            self._recover_stale_network(lab_id, disks_dir.parent)
+        except Exception:
+            pass
 
         # Check if domain already exists
         try:
@@ -1446,6 +1552,12 @@ class LibvirtProvider(Provider):
         domain_name = self._domain_name(lab_id, node_name)
 
         try:
+            # Ensure allocations are recovered/discovered before handing out VLAN tags.
+            try:
+                self._recover_stale_network(lab_id, workspace)
+            except Exception:
+                pass
+
             # Check if domain already exists
             try:
                 existing = self.conn.lookupByName(domain_name)
@@ -1677,6 +1789,56 @@ class LibvirtProvider(Provider):
                     return ["virsh", "-c", self._uri, "console", "--force", domain_name]
 
                 user, password = get_console_credentials(kind)
+
+                # Some appliances expose a management IP but do not accept SSH yet
+                # (or credentials differ). Probe SSH quickly and fall back to
+                # serial console so the UI console is still usable.
+                try:
+                    probe = await asyncio.to_thread(
+                        subprocess.run,
+                        [
+                            "sshpass",
+                            "-p",
+                            password,
+                            "ssh",
+                            "-o",
+                            "StrictHostKeyChecking=no",
+                            "-o",
+                            "UserKnownHostsFile=/dev/null",
+                            "-o",
+                            "LogLevel=ERROR",
+                            "-o",
+                            "ConnectTimeout=5",
+                            "-o",
+                            "PreferredAuthentications=password",
+                            "-o",
+                            "PubkeyAuthentication=no",
+                            "-o",
+                            "NumberOfPasswordPrompts=1",
+                            f"{user}@{ip}",
+                            "true",
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if probe.returncode != 0:
+                        logger.warning(
+                            "SSH console probe failed for %s (%s@%s rc=%s), falling back to virsh console",
+                            domain_name,
+                            user,
+                            ip,
+                            probe.returncode,
+                        )
+                        return ["virsh", "-c", self._uri, "console", "--force", domain_name]
+                except Exception:
+                    logger.warning(
+                        "SSH console probe errored for %s (%s@%s), falling back to virsh console",
+                        domain_name,
+                        user,
+                        ip,
+                        exc_info=True,
+                    )
+                    return ["virsh", "-c", self._uri, "console", "--force", domain_name]
 
                 # Use sshpass for non-interactive password authentication
                 return [
