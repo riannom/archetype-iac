@@ -1672,6 +1672,7 @@ class NodeLifecycleManager:
                 kind,
                 node_config,
                 image,
+                version=db_node.version,
             )
 
             # Create container/VM

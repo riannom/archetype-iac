@@ -115,6 +115,22 @@ class LibvirtProvider(Provider):
         safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
         return f"arch-{safe_lab_id}"
 
+    def _undefine_domain(self, domain: libvirt.virDomain, domain_name: str) -> None:
+        """Undefine a domain, cleaning up NVRAM when required."""
+        try:
+            domain.undefine()
+            return
+        except libvirt.libvirtError as e:
+            flags = getattr(libvirt, "VIR_DOMAIN_UNDEFINE_NVRAM", None)
+            if not flags:
+                raise e
+            logger.info(
+                "Domain undefine fallback with NVRAM cleanup for %s: %s",
+                domain_name,
+                e,
+            )
+            domain.undefineFlags(flags)
+
     def _disks_dir(self, workspace: Path) -> Path:
         """Get directory for disk overlays."""
         disks = workspace / "disks"
@@ -1179,7 +1195,7 @@ class LibvirtProvider(Provider):
                         domain.destroy()
 
                     # Undefine (remove from libvirt)
-                    domain.undefine()
+                    self._undefine_domain(domain, name)
                     destroyed_count += 1
                     logger.info(f"Destroyed domain {name}")
 
@@ -1572,7 +1588,7 @@ class LibvirtProvider(Provider):
                 domain.destroy()
 
             # Undefine
-            domain.undefine()
+            self._undefine_domain(domain, domain_name)
             logger.info(f"Destroyed domain {domain_name}")
 
             # Clean up disk overlays for this node
@@ -2593,7 +2609,7 @@ class LibvirtProvider(Provider):
                             domain.destroy()
 
                         # Undefine domain (remove from libvirt)
-                        domain.undefine()
+                        self._undefine_domain(domain, domain_name)
                         removed["domains"].append(domain_name)
                         logger.info(f"Removed orphan domain: {domain_name}")
 
@@ -2713,7 +2729,7 @@ class LibvirtProvider(Provider):
                         domain.destroy()
 
                     # Undefine domain (remove from libvirt)
-                    domain.undefine()
+                    self._undefine_domain(domain, name)
                     removed["domains"].append(name)
 
                     # Clean up VLAN allocation for this node

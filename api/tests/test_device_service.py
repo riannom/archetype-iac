@@ -157,3 +157,64 @@ def test_resolve_hardware_specs_includes_efi_fields(monkeypatch) -> None:
     assert specs["cpu_limit"] == 75
     assert specs["max_ports"] == 65
     assert specs["port_naming"] == "Ethernet1/"
+
+
+def test_get_image_runtime_metadata_accepts_image_id(monkeypatch) -> None:
+    manifest = {
+        "images": [
+            {
+                "id": "qcow2:nxosv9000.qcow2",
+                "reference": "/var/lib/archetype/images/nxosv9000.qcow2",
+                "memory_mb": 12288,
+                "cpu_count": 4,
+                "disk_driver": "sata",
+                "nic_driver": "e1000",
+                "efi_boot": True,
+                "efi_vars": "stateless",
+            }
+        ]
+    }
+    monkeypatch.setattr("app.image_store.load_manifest", lambda: manifest)
+
+    meta = device_service.get_image_runtime_metadata("qcow2:nxosv9000.qcow2")
+    assert meta["memory"] == 12288
+    assert meta["cpu"] == 4
+    assert meta["disk_driver"] == "sata"
+    assert meta["nic_driver"] == "e1000"
+    assert meta["efi_boot"] is True
+    assert meta["efi_vars"] == "stateless"
+
+
+def test_resolve_hardware_specs_uses_versioned_manifest_lookup(monkeypatch) -> None:
+    service = device_service.DeviceService()
+
+    monkeypatch.setattr(device_service, "_get_config_by_kind", lambda device_id: None)
+    monkeypatch.setattr(device_service, "get_kind_for_device", lambda _device_id: "nxosv9000")
+    monkeypatch.setattr(device_service, "find_custom_device", lambda device_id: None)
+    monkeypatch.setattr(device_service, "get_device_override", lambda device_id: {})
+
+    lookups = []
+
+    def _fake_find_image_reference(device_id: str, version: str | None = None) -> str | None:
+        lookups.append((device_id, version))
+        if device_id == "nxosv9000" and version == "10.5.3.F":
+            return "/var/lib/archetype/images/nxosv9000.qcow2"
+        return None
+
+    monkeypatch.setattr(device_service, "find_image_reference", _fake_find_image_reference)
+    monkeypatch.setattr(
+        device_service,
+        "get_image_runtime_metadata",
+        lambda image_reference: {
+            "efi_boot": True,
+            "efi_vars": "stateless",
+            "machine_type": "pc-q35-6.2",
+        } if image_reference == "/var/lib/archetype/images/nxosv9000.qcow2" else {},
+    )
+
+    specs = service.resolve_hardware_specs("cisco_n9kv", version="10.5.3.F")
+
+    assert lookups == [("cisco_n9kv", "10.5.3.F"), ("nxosv9000", "10.5.3.F")]
+    assert specs["efi_boot"] is True
+    assert specs["efi_vars"] == "stateless"
+    assert specs["machine_type"] == "pc-q35-6.2"

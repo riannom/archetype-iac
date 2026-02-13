@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from app.services.device_constraints import validate_minimum_hardware
 
@@ -47,15 +48,43 @@ def get_device_override(device_id: str):
     return image_store_get_device_override(device_id)
 
 
+def find_image_reference(device_id: str, version: str | None = None) -> str | None:
+    """Module-level helper kept patchable for tests."""
+    from app.image_store import find_image_reference as image_store_find_image_reference
+
+    return image_store_find_image_reference(device_id, version)
+
+
 def get_image_runtime_metadata(image_reference: str | None) -> dict:
     """Get runtime metadata hints for an image reference from manifest."""
     if not image_reference:
         return {}
     try:
-        from app.image_store import find_image_by_reference, load_manifest
+        from app.image_store import find_image_by_id, find_image_by_reference, load_manifest
 
         manifest = load_manifest()
-        image = find_image_by_reference(manifest, image_reference) or {}
+        image = find_image_by_reference(manifest, image_reference)
+        if not image:
+            image = find_image_by_id(manifest, image_reference)
+
+        # Accept ID-like or basename-only values and map them back to manifest refs.
+        # This keeps metadata resolution stable even when node.image stores an image ID.
+        if not image:
+            candidate_keys = {image_reference, Path(image_reference).name}
+            if ":" in image_reference and "/" not in image_reference:
+                candidate_keys.add(image_reference.split(":", 1)[1])
+            for item in manifest.get("images", []):
+                item_id = str(item.get("id") or "")
+                item_ref = str(item.get("reference") or "")
+                item_ref_name = Path(item_ref).name if item_ref else ""
+                if (
+                    item_id in candidate_keys
+                    or item_ref in candidate_keys
+                    or item_ref_name in candidate_keys
+                ):
+                    image = item
+                    break
+        image = image or {}
     except Exception:
         return {}
 
@@ -493,6 +522,7 @@ class DeviceService:
         device_id: str,
         node_config_json: dict | None = None,
         image_reference: str | None = None,
+        version: str | None = None,
     ) -> dict:
         """Resolve hardware specs for a device. Per-node overrides > device definition > defaults.
 
@@ -550,7 +580,20 @@ class DeviceService:
 
         # Layer 1c: Image metadata (for example VIRL2 node-definition defaults)
         # should override internal vendor defaults when present.
-        image_meta = get_image_runtime_metadata(image_reference)
+        metadata_image_reference = image_reference
+        if not metadata_image_reference and version:
+            candidates = [device_id]
+            canonical = get_kind_for_device(device_id)
+            if canonical and canonical not in candidates:
+                candidates.append(canonical)
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                metadata_image_reference = find_image_reference(candidate, version)
+                if metadata_image_reference:
+                    break
+
+        image_meta = get_image_runtime_metadata(metadata_image_reference)
         for key in ("memory", "cpu", "cpu_limit", "max_ports", "port_naming", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "readiness_timeout", "readiness_probe", "readiness_pattern", "efi_boot", "efi_vars"):
             val = image_meta.get(key)
             if val is not None:

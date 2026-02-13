@@ -11,9 +11,14 @@ class MockVendorConfig:
     kind: str = "cisco_iosv"
     memory: int = 512
     cpu: int = 1
+    max_ports: int = 32
+    port_naming: str = "eth"
     disk_driver: str = "ide"
     nic_driver: str = "e1000"
     machine_type: str = "pc-i440fx-6.2"
+    readiness_probe: str | None = None
+    readiness_pattern: str | None = None
+    readiness_timeout: int | None = None
     supported_image_kinds: list[str] = field(default_factory=lambda: ["qcow2"])
 
 

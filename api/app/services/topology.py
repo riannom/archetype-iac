@@ -152,7 +152,12 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
                         int(match.group(1)),
                     )
 
-    def _effective_max_ports(device_id: str | None, kind: str | None, image_reference: str | None = None) -> int:
+    def _effective_max_ports(
+        device_id: str | None,
+        kind: str | None,
+        image_reference: str | None = None,
+        version: str | None = None,
+    ) -> int:
         try:
             from app.services.device_service import get_device_service
 
@@ -160,6 +165,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
                 device_id or kind or "linux",
                 None,
                 image_reference,
+                version=version,
             )
             resolved_ports = resolved.get("max_ports")
             if resolved_ports is not None:
@@ -252,7 +258,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         else:
             # Use UI-configured maxPorts (vendor defaults/overrides), but ensure
             # we pre-provision enough interfaces for any referenced links.
-            device_ports = _effective_max_ports(n.device, kind, image)
+            device_ports = _effective_max_ports(n.device, kind, image, n.version)
             max_index = max_if_index.get(n.id) or max_if_index.get(node_name) or 0
             interface_count = max(device_ports, max_index)
             if interface_count == 0:
@@ -273,6 +279,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
             n.device or kind,
             per_node_hw or None,
             image,
+            version=n.version,
         )
         for key in ("memory", "cpu", "cpu_limit", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "efi_boot", "efi_vars"):
             if hw_specs.get(key) is not None:
@@ -358,7 +365,7 @@ class TopologyService:
         for n in nodes:
             kind = resolve_device_kind(n.device)
             image = resolve_node_image(n.device, kind, n.image, n.version)
-            max_ports = self._get_effective_max_ports(n.device, kind, image)
+            max_ports = self._get_effective_max_ports(n.device, kind, image, n.version)
             max_index = by_id.get(n.id, 0)
             result[n.container_name] = max(max_ports, max_index)
         return result
@@ -414,6 +421,7 @@ class TopologyService:
         device_id: str | None,
         kind: str | None,
         image_reference: str | None = None,
+        version: str | None = None,
     ) -> int:
         """Get effective maxPorts for a device, including overrides."""
         try:
@@ -423,6 +431,7 @@ class TopologyService:
                 device_id or kind or "linux",
                 None,
                 image_reference,
+                version=version,
             )
             resolved_ports = resolved.get("max_ports")
             if resolved_ports is not None:
@@ -1474,6 +1483,7 @@ class TopologyService:
             node.device or kind,
             config,
             image,
+            version=node.version,
         )
         for key in ("memory", "cpu", "cpu_limit", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "efi_boot", "efi_vars"):
             if hw_specs.get(key) is not None:

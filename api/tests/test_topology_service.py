@@ -159,7 +159,13 @@ class TestInterfaceCountMap:
         test_db.commit()
 
         class _StubDeviceService:
-            def resolve_hardware_specs(self, device_id, node_config_json=None, image_reference=None):
+            def resolve_hardware_specs(
+                self,
+                device_id,
+                node_config_json=None,
+                image_reference=None,
+                version=None,
+            ):
                 return {"max_ports": 26}
 
         monkeypatch.setattr("app.services.device_service.get_device_service", lambda: _StubDeviceService())
@@ -395,7 +401,13 @@ class TestDeployHardwareProfile:
 
     def test_graph_to_deploy_topology_includes_resolved_hardware_specs(self, monkeypatch):
         class _StubDeviceService:
-            def resolve_hardware_specs(self, _device_id, _node_cfg, _image_reference=None):
+            def resolve_hardware_specs(
+                self,
+                _device_id,
+                _node_cfg,
+                _image_reference=None,
+                version=None,
+            ):
                 return {
                     "memory": 18432,
                     "cpu": 4,
@@ -441,7 +453,13 @@ class TestDeployHardwareProfile:
         self, test_db, sample_lab, multiple_hosts, monkeypatch
     ):
         class _StubDeviceService:
-            def resolve_hardware_specs(self, _device_id, _node_cfg, _image_reference=None):
+            def resolve_hardware_specs(
+                self,
+                _device_id,
+                _node_cfg,
+                _image_reference=None,
+                version=None,
+            ):
                 return {
                     "memory": 12288,
                     "cpu": 4,

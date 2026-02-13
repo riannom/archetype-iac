@@ -209,6 +209,35 @@ def test_libvirt_domain_name_and_prefix() -> None:
     assert prefix == "arch-lab"
 
 
+def test_libvirt_undefine_domain_falls_back_to_nvram(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+
+    class _FakeLibvirtError(Exception):
+        pass
+
+    class _DummyLibvirt:
+        VIR_DOMAIN_UNDEFINE_NVRAM = 4
+        libvirtError = _FakeLibvirtError
+
+    class _DummyDomain:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def undefine(self) -> None:
+            self.calls.append("undefine")
+            raise _FakeLibvirtError("cannot undefine domain with nvram")
+
+        def undefineFlags(self, flags: int) -> None:
+            self.calls.append(("undefineFlags", flags))
+
+    monkeypatch.setattr(libvirt_provider, "libvirt", _DummyLibvirt)
+    domain = _DummyDomain()
+
+    provider._undefine_domain(domain, "arch-lab-node1")
+
+    assert domain.calls == ["undefine", ("undefineFlags", 4)]
+
+
 def test_libvirt_allocate_vlans_reuse() -> None:
     provider = _make_libvirt_provider()
     vlans = provider._allocate_vlans("lab1", "node1", 3)
