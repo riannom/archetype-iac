@@ -3,6 +3,12 @@ import { ConsoleWindow, Node } from '../types';
 import TerminalSession from './TerminalSession';
 import { NodeStateEntry } from '../../types/nodeState';
 
+const VIEWPORT_MARGIN_PX = 8;
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(Math.max(n, min), max);
+}
+
 interface ConsoleManagerProps {
   labId: string;
   windows: ConsoleWindow[];
@@ -45,6 +51,21 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   onDockWindow,
 }) => {
   const showConsoles = isVisible;
+
+  const [viewport, setViewport] = useState(() => ({
+    w: typeof window !== 'undefined' ? window.innerWidth : 0,
+    h: typeof window !== 'undefined' ? window.innerHeight : 0,
+  }));
+  const viewportRef = useRef(viewport);
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
+  useEffect(() => {
+    const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   // Ref-based drag/resize tracking (no re-renders during movement)
   const dragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const resizeRef = useRef<{ id: string; startWidth: number; startHeight: number; startX: number; startY: number } | null>(null);
@@ -122,13 +143,13 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     return null;
   }, []);
 
-  const handleMouseDown = (e: React.MouseEvent, win: ConsoleWindow) => {
+  const handleMouseDown = (e: React.MouseEvent, win: ConsoleWindow, originX: number, originY: number) => {
     dragRef.current = {
       id: win.id,
-      startX: e.clientX - win.x,
-      startY: e.clientY - win.y,
-      originX: win.x,
-      originY: win.y,
+      startX: e.clientX - originX,
+      startY: e.clientY - originY,
+      originX,
+      originY,
     };
     const perfEnabled = localStorage.getItem('consoleDragPerf') === '1';
     dragPerfRef.current = perfEnabled
@@ -137,17 +158,27 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
     setIsDragging(win.id);
   };
 
-  const handleResizeMouseDown = (e: React.MouseEvent, win: ConsoleWindow) => {
+  const handleResizeMouseDown = (
+    e: React.MouseEvent,
+    win: ConsoleWindow,
+    originX: number,
+    originY: number,
+    displayedW: number,
+    displayedH: number
+  ) => {
     e.stopPropagation();
     e.preventDefault();
-    const currentW = winSizes[win.id]?.w || 520;
-    const currentH = winSizes[win.id]?.h || 360;
+    // Use the rendered (viewport-clamped) size as the baseline to avoid resize jumps on narrow viewports.
+    const currentW = displayedW;
+    const currentH = displayedH;
     resizeRef.current = {
       id: win.id,
       startWidth: currentW,
       startHeight: currentH,
       startX: e.clientX,
       startY: e.clientY,
+      // Stash origin so we can clamp max size relative to the window's current position.
+      ...( { originX, originY } as any ),
     };
     setIsResizing(win.id);
   };
@@ -252,8 +283,22 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         if (resizeRef.current) {
           const deltaX = e.clientX - resizeRef.current.startX;
           const deltaY = e.clientY - resizeRef.current.startY;
-          const newW = Math.max(320, resizeRef.current.startWidth + deltaX);
-          const newH = Math.max(240, resizeRef.current.startHeight + deltaY);
+          const vp = viewportRef.current;
+          const originX = (resizeRef.current as any).originX as number | undefined;
+          const originY = (resizeRef.current as any).originY as number | undefined;
+          const maxW = vp.w > 0 && originX !== undefined
+            ? Math.max(0, vp.w - VIEWPORT_MARGIN_PX - originX)
+            : Number.POSITIVE_INFINITY;
+          const maxH = vp.h > 0 && originY !== undefined
+            ? Math.max(0, vp.h - VIEWPORT_MARGIN_PX - originY)
+            : Number.POSITIVE_INFINITY;
+
+          // Keep min <= max so tiny viewports don't force overflow.
+          const minW = Math.min(320, maxW);
+          const minH = Math.min(240, maxH);
+
+          const newW = clamp(resizeRef.current.startWidth + deltaX, minW, maxW);
+          const newH = clamp(resizeRef.current.startHeight + deltaY, minH, maxH);
 
           // Direct DOM manipulation for smooth resizing
           const el = windowRefs.current.get(resizeRef.current.id);
@@ -341,12 +386,25 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
 
       // Commit drag position to React state
       if (dragRef.current) {
-        const lastX = (dragRef.current as any)._lastX;
-        const lastY = (dragRef.current as any)._lastY;
+        let lastX = (dragRef.current as any)._lastX;
+        let lastY = (dragRef.current as any)._lastY;
+        const el = windowRefs.current.get(dragRef.current.id);
+        const rect = el?.getBoundingClientRect();
+        const vp = viewportRef.current;
+
+        // Clamp committed position so fixed windows can't create page-level overflow.
+        if (rect && vp.w > 0) {
+          const maxLeft = Math.max(VIEWPORT_MARGIN_PX, vp.w - rect.width - VIEWPORT_MARGIN_PX);
+          lastX = clamp(lastX ?? VIEWPORT_MARGIN_PX, VIEWPORT_MARGIN_PX, maxLeft);
+        }
+        if (rect && vp.h > 0) {
+          const maxTop = Math.max(VIEWPORT_MARGIN_PX, vp.h - rect.height - VIEWPORT_MARGIN_PX);
+          lastY = clamp(lastY ?? VIEWPORT_MARGIN_PX, VIEWPORT_MARGIN_PX, maxTop);
+        }
+
         if (lastX !== undefined && lastY !== undefined) {
           onUpdateWindowPosRef.current(dragRef.current.id, lastX, lastY);
         }
-        const el = windowRefs.current.get(dragRef.current.id);
         if (el) {
           el.style.transform = '';
           el.style.willChange = 'auto';
@@ -431,10 +489,33 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         const isMoving = isDragging === win.id || isResizing === win.id;
         const dragState = dragRef.current && dragRef.current.id === win.id ? (dragRef.current as any) : null;
         const resizeState = resizeRef.current && resizeRef.current.id === win.id ? (resizeRef.current as any) : null;
-        const width = resizeState?._lastW ?? (isMinimized ? 280 : size.w);
-        const height = resizeState?._lastH ?? (isMinimized ? 36 : size.h);
-        const dx = dragState?._lastX !== undefined ? dragState._lastX - win.x : 0;
-        const dy = dragState?._lastY !== undefined ? dragState._lastY - win.y : 0;
+        const desiredW = resizeState?._lastW ?? (isMinimized ? 280 : size.w);
+        const desiredH = resizeState?._lastH ?? (isMinimized ? 36 : size.h);
+
+        // Fixed-position elements can still contribute to document overflow in some browsers.
+        // Clamp size/position to viewport so opening a console can't introduce horizontal scrolling.
+        const vpW = viewport.w || (typeof window !== 'undefined' ? window.innerWidth : 0);
+        const vpH = viewport.h || (typeof window !== 'undefined' ? window.innerHeight : 0);
+        const hasViewport = vpW > 0 && vpH > 0;
+
+        const maxW = hasViewport ? Math.max(0, vpW - VIEWPORT_MARGIN_PX * 2) : Number.POSITIVE_INFINITY;
+        const maxH = hasViewport ? Math.max(0, vpH - VIEWPORT_MARGIN_PX * 2) : Number.POSITIVE_INFINITY;
+        const minW = Math.min(isMinimized ? 200 : 320, maxW);
+        const minH = Math.min(isMinimized ? 36 : 240, maxH);
+
+        const width = clamp(desiredW, minW, maxW);
+        const height = clamp(desiredH, minH, maxH);
+
+        const minLeft = hasViewport ? VIEWPORT_MARGIN_PX : -Number.POSITIVE_INFINITY;
+        const minTop = hasViewport ? VIEWPORT_MARGIN_PX : -Number.POSITIVE_INFINITY;
+        const maxLeft = hasViewport ? Math.max(VIEWPORT_MARGIN_PX, vpW - width - VIEWPORT_MARGIN_PX) : Number.POSITIVE_INFINITY;
+        const maxTop = hasViewport ? Math.max(VIEWPORT_MARGIN_PX, vpH - height - VIEWPORT_MARGIN_PX) : Number.POSITIVE_INFINITY;
+
+        const left = clamp(win.x, minLeft, maxLeft);
+        const top = clamp(win.y, minTop, maxTop);
+
+        const dx = dragState?._lastX !== undefined ? dragState._lastX - left : 0;
+        const dy = dragState?._lastY !== undefined ? dragState._lastY - top : 0;
         const transform = isDragging === win.id ? `translate3d(${dx}px, ${dy}px, 0)` : undefined;
 
         return (
@@ -445,8 +526,8 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
               ${isDropTarget ? 'console-drop-target-active' : ''}
               ${isBeingDraggedOverTarget ? 'console-window-dragging-over-target' : ''}`}
             style={{
-              left: win.x,
-              top: win.y,
+              left,
+              top,
               width,
               height,
               transform,
@@ -459,7 +540,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
           >
             <div
               className="h-9 bg-stone-800 border-b border-stone-700 flex items-center cursor-move select-none shrink-0"
-              onMouseDown={(e) => handleMouseDown(e, win)}
+              onMouseDown={(e) => handleMouseDown(e, win, left, top)}
             >
               <div className="flex-1 flex items-center h-full overflow-x-auto no-scrollbar scroll-smooth">
                 {win.deviceIds.map((nodeId, index) => {
@@ -605,7 +686,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
 
                 <div
                   className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize flex items-end justify-end p-0.5 group pointer-events-auto"
-                  onMouseDown={(e) => handleResizeMouseDown(e, win)}
+                  onMouseDown={(e) => handleResizeMouseDown(e, win, left, top, width, height)}
                 >
                   <div className="w-2 h-2 border-r-2 border-b-2 border-stone-700 group-hover:border-sage-500 transition-colors"></div>
                 </div>

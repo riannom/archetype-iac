@@ -27,6 +27,12 @@ describe('TaskLogPanel', () => {
             message: 'Failed',
             jobId: 'job1',
           },
+          {
+            id: '2',
+            timestamp: new Date('2026-02-05T10:00:01Z'),
+            level: 'info',
+            message: 'Saved',
+          },
         ]}
         isVisible={true}
         onToggle={onToggle}
@@ -39,7 +45,8 @@ describe('TaskLogPanel', () => {
     expect(onClear).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByText('Failed'));
-    expect(onEntryClick).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('Saved'));
+    expect(onEntryClick).toHaveBeenCalledTimes(2);
 
     fireEvent.click(screen.getByText('v'));
     expect(onToggle).toHaveBeenCalledTimes(1);

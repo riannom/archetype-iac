@@ -449,7 +449,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
                   <div className="px-4 py-6 text-center text-stone-400 dark:text-stone-600">No task activity yet</div>
                 ) : (
                   entries.map((entry) => {
-                    const isClickable = entry.jobId && onEntryClick;
+                    const isClickable = !!onEntryClick;
                     return (
                       <div
                         key={entry.id}

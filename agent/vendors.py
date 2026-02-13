@@ -128,7 +128,7 @@ class VendorConfig:
     # These settings control how running configs are extracted from devices
     # ==========================================================================
 
-    # Method for extracting config: "serial" (virsh console), "docker" (docker exec), "none"
+    # Method for extracting config: "serial" (virsh console), "docker" (docker exec), "ssh", "none"
     config_extract_method: str = "none"
     # Command to run to extract config (e.g., "show running-config")
     config_extract_command: str = "show running-config"
@@ -829,6 +829,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         console_method="ssh",
         console_user="admin",
         console_password="admin",
+        # Config extraction via serial console (no management IP available for SSH)
+        config_extract_method="serial",
+        config_extract_command="show running-config",
+        config_extract_user="admin",
+        config_extract_password="admin",
+        config_extract_timeout=60,
+        config_extract_paging_disable="terminal length 0",
     ),
 
     # =========================================================================
@@ -1408,6 +1415,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         console_method="ssh",
         console_user="admin",
         console_password="admin",
+        # Config extraction via serial console (IOS-XE)
+        config_extract_method="serial",
+        config_extract_command="show running-config",
+        config_extract_user="admin",
+        config_extract_password="admin",
+        config_extract_timeout=60,
+        config_extract_paging_disable="terminal length 0",
     ),
     "cat9000v-uadp": VendorConfig(
         kind="cisco_cat9kv",
@@ -1442,6 +1456,13 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         console_method="ssh",
         console_user="admin",
         console_password="admin",
+        # Config extraction via serial console (IOS-XE)
+        config_extract_method="serial",
+        config_extract_command="show running-config",
+        config_extract_user="admin",
+        config_extract_password="admin",
+        config_extract_timeout=60,
+        config_extract_paging_disable="terminal length 0",
     ),
 }
 

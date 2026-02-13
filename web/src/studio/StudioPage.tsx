@@ -13,6 +13,7 @@ import SystemStatusStrip from './components/SystemStatusStrip';
 import AgentAlertBanner from './components/AgentAlertBanner';
 import ConfigViewerModal from './components/ConfigViewerModal';
 import JobLogModal from './components/JobLogModal';
+import TaskLogEntryModal from './components/TaskLogEntryModal';
 import ConfigsView from './components/ConfigsView';
 import LogsView from './components/LogsView';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
@@ -250,6 +251,9 @@ const StudioPage: React.FC = () => {
   // Job log modal state
   const [jobLogModalOpen, setJobLogModalOpen] = useState(false);
   const [jobLogModalJobId, setJobLogModalJobId] = useState<string | null>(null);
+  // Task log entry modal (for non-job entries)
+  const [taskLogEntryModalOpen, setTaskLogEntryModalOpen] = useState(false);
+  const [taskLogEntryModalEntry, setTaskLogEntryModalEntry] = useState<TaskLogEntry | null>(null);
   // Track pending node operations to prevent race conditions from rapid clicks
   const [pendingNodeOps, setPendingNodeOps] = useState<Set<string>>(new Set());
   // Tracks optimistic updates: nodeId -> expiry timestamp. Prevents polling/WS from
@@ -1464,12 +1468,20 @@ const StudioPage: React.FC = () => {
     if (entry.jobId) {
       setJobLogModalJobId(entry.jobId);
       setJobLogModalOpen(true);
+      return;
     }
+    setTaskLogEntryModalEntry(entry);
+    setTaskLogEntryModalOpen(true);
   }, []);
 
   const handleCloseJobLogModal = useCallback(() => {
     setJobLogModalOpen(false);
     setJobLogModalJobId(null);
+  }, []);
+
+  const handleCloseTaskLogEntryModal = useCallback(() => {
+    setTaskLogEntryModalOpen(false);
+    setTaskLogEntryModalEntry(null);
   }, []);
 
   const handleNodeMove = useCallback((id: string, x: number, y: number) => {
@@ -2122,6 +2134,11 @@ const StudioPage: React.FC = () => {
         labId={activeLab?.id || ''}
         jobId={jobLogModalJobId || ''}
         studioRequest={studioRequest}
+      />
+      <TaskLogEntryModal
+        isOpen={taskLogEntryModalOpen}
+        onClose={handleCloseTaskLogEntryModal}
+        entry={taskLogEntryModalEntry}
       />
     </div>
   );
