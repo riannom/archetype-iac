@@ -96,7 +96,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -215,7 +215,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -334,7 +334,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -453,7 +453,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -572,7 +572,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -691,7 +691,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -810,7 +810,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -928,8 +928,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -1048,7 +1048,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -1167,7 +1167,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -1285,8 +1285,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -1404,8 +1404,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -1523,8 +1523,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -1643,7 +1643,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -1762,7 +1762,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -1881,7 +1881,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -2000,7 +2000,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -2119,7 +2119,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -2238,7 +2238,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -2356,8 +2356,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -2475,8 +2475,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -2595,7 +2595,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -2713,8 +2713,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -2833,7 +2833,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
@@ -2951,8 +2951,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -3070,8 +3070,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -3189,8 +3189,8 @@
           "name": "cpu_limit",
           "parsed": 100,
           "stored": 100,
-          "runtime": null,
-          "status": "stored_not_applied"
+          "runtime": 100,
+          "status": "applied"
         },
         {
           "name": "has_loopback",
@@ -3309,7 +3309,7 @@
           "parsed": 100,
           "stored": 100,
           "runtime": null,
-          "status": "stored_not_applied"
+          "status": "stored_only"
         },
         {
           "name": "has_loopback",
