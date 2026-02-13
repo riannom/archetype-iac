@@ -62,6 +62,86 @@ except ImportError:
     LIBVIRT_AVAILABLE = False
 
 
+# Inline Python script for TCP telnet console bridging.
+# Connects stdin/stdout to a TCP telnet serial port with IAC negotiation.
+# Spawned as a subprocess with PTY like virsh console — the existing
+# _console_websocket_libvirt handler works without modification.
+_TCP_TELNET_CONSOLE_SCRIPT = r'''
+import sys, os, socket, select, struct, tty, termios
+
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(10)
+try:
+    sock.connect(("127.0.0.1", port))
+except Exception as e:
+    sys.stderr.write(f"Failed to connect to TCP serial port {port}: {e}\n")
+    sys.exit(1)
+sock.setblocking(False)
+
+fd = sys.stdin.fileno()
+old_settings = termios.tcgetattr(fd)
+try:
+    tty.setraw(fd)
+    while True:
+        readable, _, _ = select.select([sock, fd], [], [], 1.0)
+        for r in readable:
+            if r is sock:
+                try:
+                    data = sock.recv(4096)
+                except (BlockingIOError, ConnectionError):
+                    continue
+                if not data:
+                    sys.exit(0)
+                # Strip telnet IAC sequences
+                out = bytearray()
+                i = 0
+                while i < len(data):
+                    if data[i] == 0xFF and i + 1 < len(data):
+                        cmd = data[i + 1]
+                        if cmd == 0xFF:
+                            out.append(0xFF)
+                            i += 2
+                        elif cmd in (0xFB, 0xFC, 0xFD, 0xFE) and i + 2 < len(data):
+                            # WILL/WONT/DO/DONT + option: reject
+                            opt = data[i + 2]
+                            if cmd == 0xFD:  # DO -> WONT
+                                sock.sendall(bytes([0xFF, 0xFC, opt]))
+                            elif cmd == 0xFB:  # WILL -> DONT
+                                sock.sendall(bytes([0xFF, 0xFE, opt]))
+                            i += 3
+                        elif cmd in (0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA):
+                            if cmd == 0xFA:
+                                # Skip subnegotiation until SE (0xF0)
+                                i += 2
+                                while i < len(data):
+                                    if data[i] == 0xFF and i + 1 < len(data) and data[i + 1] == 0xF0:
+                                        i += 2
+                                        break
+                                    i += 1
+                            else:
+                                i += 2
+                        else:
+                            i += 2
+                    else:
+                        out.append(data[i])
+                        i += 1
+                if out:
+                    os.write(sys.stdout.fileno(), bytes(out))
+            elif r is fd:
+                data = sys.stdin.buffer.read1(4096)
+                if not data:
+                    sys.exit(0)
+                try:
+                    sock.sendall(data)
+                except ConnectionError:
+                    sys.exit(0)
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    sock.close()
+'''
+
+
 class LibvirtProvider(Provider):
     """Provider for libvirt/QEMU-based virtual machine labs.
 
@@ -886,6 +966,9 @@ class LibvirtProvider(Provider):
                     readiness_xml += f"\n      <archetype:readiness_timeout>{int(readiness_timeout)}</archetype:readiness_timeout>"
                 except (TypeError, ValueError):
                     logger.debug(f"Skipping invalid readiness_timeout value in metadata: {readiness_timeout}")
+            serial_type = node_config.get("serial_type", "pty")
+            if serial_type and serial_type != "pty":
+                readiness_xml += f"\n      <archetype:serial_type>{xml_escape(str(serial_type))}</archetype:serial_type>"
             metadata_xml = f'''
   <metadata>
     <archetype:node xmlns:archetype="http://archetype.io/libvirt/1">
@@ -933,6 +1016,28 @@ class LibvirtProvider(Provider):
             except (TypeError, ValueError):
                 logger.debug("Skipping invalid cpu_limit value in domain XML: %s", cpu_limit)
 
+        # Build serial/console XML — PTY (default) or TCP telnet
+        serial_type = node_config.get("serial_type", "pty")
+        if serial_type == "tcp":
+            tcp_port = self._allocate_tcp_serial_port()
+            serial_xml = f"""    <serial type='tcp'>
+      <source mode='bind' host='127.0.0.1' service='{tcp_port}'/>
+      <protocol type='telnet'/>
+      <target port='0'/>
+    </serial>
+    <console type='tcp'>
+      <source mode='bind' host='127.0.0.1' service='{tcp_port}'/>
+      <protocol type='telnet'/>
+      <target type='serial' port='0'/>
+    </console>"""
+        else:
+            serial_xml = """    <serial type='pty'>
+      <target port='0'/>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>"""
+
         xml = f'''<domain type='{libvirt_driver}'>
   <name>{name}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
@@ -955,12 +1060,7 @@ class LibvirtProvider(Provider):
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
 {disks_xml}
 {interfaces_xml}
-    <serial type='pty'>
-      <target port='0'/>
-    </serial>
-    <console type='pty'>
-      <target type='serial' port='0'/>
-    </console>
+{serial_xml}
     <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
@@ -971,6 +1071,36 @@ class LibvirtProvider(Provider):
 </domain>'''
 
         return xml
+
+    @staticmethod
+    def _allocate_tcp_serial_port() -> int:
+        """Allocate a free TCP port for serial console.
+
+        Uses the OS to find an available port by binding to port 0.
+        """
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    @staticmethod
+    def _get_tcp_serial_port(domain) -> int | None:
+        """Extract TCP serial port from a running domain's XML.
+
+        Parses the domain XML for <serial type='tcp'> and returns
+        the service port number. Returns None if not a TCP serial domain.
+        """
+        try:
+            xml_str = domain.XMLDesc(0)
+            root = ET.fromstring(xml_str)
+            for serial in root.findall(".//devices/serial[@type='tcp']"):
+                source = serial.find("source")
+                if source is not None:
+                    port_str = source.get("service")
+                    if port_str:
+                        return int(port_str)
+        except Exception:
+            pass
+        return None
 
     def _get_domain_status(self, domain) -> NodeStatus:
         """Map libvirt domain state to NodeStatus."""
@@ -1600,6 +1730,7 @@ class LibvirtProvider(Provider):
                 "readiness_timeout": readiness_timeout if readiness_timeout is not None else libvirt_config.readiness_timeout,
                 "efi_boot": efi_boot if efi_boot is not None else libvirt_config.efi_boot,
                 "efi_vars": efi_vars,
+                "serial_type": libvirt_config.serial_type,
                 "data_volume_gb": libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
@@ -1840,6 +1971,11 @@ class LibvirtProvider(Provider):
                     f"{user}@{ip}",
                 ]
             else:
+                # Check for TCP serial port (e.g., IOS-XRv 9000)
+                tcp_port = self._get_tcp_serial_port(domain)
+                if tcp_port:
+                    return ["python3", "-c", _TCP_TELNET_CONSOLE_SCRIPT, str(tcp_port)]
+
                 # Default: virsh console (serial console)
                 # --force takes over console even if another session is connected
                 return ["virsh", "-c", self._uri, "console", "--force", domain_name]
@@ -1919,11 +2055,18 @@ class LibvirtProvider(Provider):
             return None
 
     def _node_uses_dedicated_mgmt_interface(self, kind: str | None) -> bool:
-        """Return True when VM should have a dedicated management interface."""
+        """Return True when VM should have a dedicated management interface.
+
+        Needed when console_method is SSH, or when config_extract_method is SSH
+        (e.g., IOS-XRv uses TCP serial for console but SSH for config extraction).
+        """
         if not kind:
             return False
         try:
-            return get_console_method(kind) == "ssh"
+            if get_console_method(kind) == "ssh":
+                return True
+            extract_settings = get_config_extraction_settings(kind)
+            return extract_settings.method == "ssh"
         except Exception:
             return False
 

@@ -6426,7 +6426,8 @@ async def _console_websocket_libvirt(
                     await websocket.send_text(f"\r\n{error_data.decode('utf-8', errors='replace')}\r\n")
             except Exception:
                 pass
-            await websocket.send_text(f"\r\nError: virsh console exited with code {process.returncode}\r\n")
+            _label = "virsh console" if _is_virsh else "console"
+            await websocket.send_text(f"\r\nError: {_label} exited with code {process.returncode}\r\n")
             await websocket.send_text(f"Command was: {' '.join(console_cmd)}\r\n")
             await websocket.close(code=1011)
             return
@@ -6547,8 +6548,9 @@ async def _console_websocket_libvirt(
 
             # Send disconnect message with reason
             if process.returncode is not None:
+                _label = "virsh console" if _is_virsh else "console"
                 await websocket.send_text(
-                    f"\r\n\x1b[90m[virsh console exited with code {process.returncode}]\x1b[0m\r\n"
+                    f"\r\n\x1b[90m[{_label} exited with code {process.returncode}]\x1b[0m\r\n"
                 )
             else:
                 await websocket.send_text("\r\n\x1b[90m[console disconnected]\x1b[0m\r\n")

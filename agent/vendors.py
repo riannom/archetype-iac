@@ -96,6 +96,7 @@ class VendorConfig:
     data_volume_gb: int = 0      # Size of additional data volume (0 = none)
     efi_boot: bool = False       # Boot with UEFI firmware (OVMF) instead of legacy BIOS
     efi_vars: str = ""           # EFI NVRAM mode: "" (stateful, default), "stateless" (no persistent NVRAM)
+    serial_type: str = "pty"     # Serial port type: "pty" (default virsh console), "tcp" (TCP telnet)
     force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
 
     # Image requirements
@@ -252,13 +253,33 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         icon="fa-arrows-to-dot",
         versions=[],
         is_active=True,
-        notes="IOS-XR starts in bash. Run 'xr' for XR CLI.",
+        notes="IOS-XRv 9000 VM. First 3 interfaces are MgmtEth0/RP0/CPU0/0 + 2x donotuse; data starts at 4th.",
+        # Interfaces: MgmtEth0/RP0/CPU0/0, donotuse0, donotuse1, Gi0/0/0/0, Gi0/0/0/1, ...
         port_naming="GigabitEthernet0/0/0/{index}",
         port_start_index=0,
         max_ports=8,
-        memory=4096,  # 4GB recommended
-        cpu=2,
+        # VM settings per CML reference platform (iosxrv9000 node definition)
+        memory=20480,  # 20GB — CML minimum 10GB, recommended 20GB
+        cpu=4,
+        disk_driver="virtio",
+        nic_driver="virtio",
+        efi_boot=True,
+        serial_type="tcp",  # IOS-XRv requires TCP telnet serial (PTY outputs to VGA)
         requires_image=True,
+        supported_image_kinds=["qcow2"],
+        # Boot readiness: detect XR CLI prompt or config dialog
+        readiness_probe="log_pattern",
+        readiness_pattern=r"--- Administrative User Dialog ---|%MGBL-CVAC-4-CONFIG_DONE",
+        readiness_timeout=600,
+        # Config extraction via SSH (console is TCP serial, not docker exec)
+        config_extract_method="ssh",
+        config_extract_command="show running-config",
+        config_extract_user="cisco",
+        config_extract_password="cisco",
+        config_extract_timeout=30,
+        config_extract_prompt_pattern=r"RP/\d+/RP\d+/CPU\d+:[\w\-]+#",
+        console_user="cisco",
+        console_password="cisco",
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "segment-routing", "netconf"],
@@ -1710,6 +1731,7 @@ class LibvirtRuntimeConfig:
     readiness_probe: str
     readiness_pattern: str | None
     readiness_timeout: int
+    serial_type: str = "pty"  # "pty" (default virsh console) or "tcp" (TCP telnet)
     force_stop: bool = True  # Skip ACPI shutdown (most network VMs don't support it)
     source: str = "vendor"  # "vendor" for matched profile, "fallback" for generic defaults
 
@@ -1769,6 +1791,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             readiness_probe="none",
             readiness_pattern=None,
             readiness_timeout=120,
+            serial_type="pty",
             force_stop=True,
             source="fallback",
         )
@@ -1785,6 +1808,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         readiness_probe=config.readiness_probe,
         readiness_pattern=config.readiness_pattern,
         readiness_timeout=config.readiness_timeout,
+        serial_type=config.serial_type,
         force_stop=config.force_stop,
         source="vendor",
     )

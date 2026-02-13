@@ -344,13 +344,98 @@ class LibvirtLogPatternProbe(ReadinessProbe):
 
         return await asyncio.to_thread(_sync_check)
 
+    def _get_tcp_serial_port(self) -> int | None:
+        """Check if domain uses TCP serial and return the port number."""
+        if not LIBVIRT_AVAILABLE:
+            return None
+        try:
+            import xml.etree.ElementTree as ET
+            conn = libvirt.open(self.uri)
+            if conn is None:
+                return None
+            try:
+                domain = conn.lookupByName(self.domain_name)
+                xml_str = domain.XMLDesc(0)
+                root = ET.fromstring(xml_str)
+                for serial in root.findall(".//devices/serial[@type='tcp']"):
+                    source = serial.find("source")
+                    if source is not None:
+                        port_str = source.get("service")
+                        if port_str:
+                            return int(port_str)
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        return None
+
+    def _get_console_output_tcp(self, port: int) -> str:
+        """Read console output from a TCP telnet serial port.
+
+        No virsh console lock needed — TCP serial has no PTY contention.
+        """
+        import socket as _socket
+        try:
+            sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            sock.settimeout(4)
+            sock.connect(("127.0.0.1", port))
+            sock.sendall(b"\r\n")  # Poke for output
+
+            chunks: list[bytes] = []
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                try:
+                    sock.settimeout(max(0.1, deadline - time.time()))
+                    data = sock.recv(4096)
+                    if not data:
+                        break
+                    # Strip telnet IAC sequences (0xFF prefix)
+                    clean = bytearray()
+                    i = 0
+                    while i < len(data):
+                        if data[i] == 0xFF and i + 1 < len(data):
+                            cmd = data[i + 1]
+                            if cmd == 0xFF:
+                                clean.append(0xFF)
+                                i += 2
+                            elif cmd in (0xFB, 0xFC, 0xFD, 0xFE) and i + 2 < len(data):
+                                i += 3
+                            elif cmd == 0xFA:
+                                i += 2
+                                while i < len(data):
+                                    if data[i] == 0xFF and i + 1 < len(data) and data[i + 1] == 0xF0:
+                                        i += 2
+                                        break
+                                    i += 1
+                            else:
+                                i += 2
+                        else:
+                            clean.append(data[i])
+                            i += 1
+                    chunks.append(bytes(clean))
+                except _socket.timeout:
+                    break
+                except Exception:
+                    break
+            sock.close()
+            return b"".join(chunks).decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.debug(f"Error reading TCP serial port {port}: {e}")
+            return ""
+
     def _get_console_output(self) -> str:
         """Get console output from VM serial port.
 
-        Uses a non-blocking lock to skip gracefully if another session
-        (config extraction or web console) is using the serial console.
-        This prevents readiness probes from force-disconnecting active sessions.
+        For TCP serial VMs: reads directly from the TCP port (no lock needed).
+        For PTY serial VMs: uses virsh console with a non-blocking lock to skip
+        gracefully if another session is using the serial console.
         """
+        # Check for TCP serial first
+        tcp_port = self._get_tcp_serial_port()
+        if tcp_port:
+            return self._get_console_output_tcp(tcp_port)
+
+        # PTY serial: use virsh console with lock
         from agent.virsh_console_lock import try_console_lock
 
         with try_console_lock(self.domain_name) as acquired:
@@ -439,6 +524,19 @@ CISCO_ASA_PROGRESS_PATTERNS = {
     r"crypto": 70,
 }
 
+# Progress patterns for Cisco IOS-XR VM boot sequence
+CISCO_IOSXR_PROGRESS_PATTERNS = {
+    r"Loading|Booting": 5,
+    r"Cisco IOS XR Software": 15,
+    r"System Bootstrap": 10,
+    r"Install Manager": 30,
+    r"calvados": 40,
+    r"ios con": 50,
+    r"RP/\d+/RP": 60,
+    r"syslog": 70,
+    r"SYSTEM_READY": 90,
+}
+
 # Progress patterns for Juniper VM boot sequence
 JUNIPER_PROGRESS_PATTERNS = {
     r"FreeBSD|Booting": 10,
@@ -484,7 +582,9 @@ def get_libvirt_probe(
         # Select progress patterns based on device kind
         progress_patterns: dict[str, int] = {}
         kind_lower = kind.lower()
-        if "iosv" in kind_lower or "csr" in kind_lower or "c8000v" in kind_lower:
+        if "iosxr" in kind_lower or "xrv" in kind_lower:
+            progress_patterns = CISCO_IOSXR_PROGRESS_PATTERNS
+        elif "iosv" in kind_lower or "csr" in kind_lower or "c8000v" in kind_lower:
             progress_patterns = CISCO_IOS_PROGRESS_PATTERNS
         elif "asa" in kind_lower:
             progress_patterns = CISCO_ASA_PROGRESS_PATTERNS
