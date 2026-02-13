@@ -1038,6 +1038,19 @@ class LibvirtProvider(Provider):
       <target type='serial' port='0'/>
     </console>"""
 
+        # VNC graphics + VGA video for PTY serial VMs (default).
+        # TCP serial VMs omit display devices so OVMF outputs to serial.
+        if serial_type == "tcp":
+            graphics_xml = ""
+        else:
+            graphics_xml = """    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
+      <listen type='address' address='127.0.0.1'/>
+    </graphics>
+    <video>
+      <model type='cirrus'/>
+    </video>
+"""
+
         xml = f'''<domain type='{libvirt_driver}'>
   <name>{name}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
@@ -1061,13 +1074,7 @@ class LibvirtProvider(Provider):
 {disks_xml}
 {interfaces_xml}
 {serial_xml}
-    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
-      <listen type='address' address='127.0.0.1'/>
-    </graphics>
-    <video>
-      <model type='cirrus'/>
-    </video>
-  </devices>
+{graphics_xml}  </devices>
 </domain>'''
 
         return xml
