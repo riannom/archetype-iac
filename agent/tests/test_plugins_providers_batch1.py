@@ -352,6 +352,55 @@ def test_libvirt_generate_domain_xml_efi_stateless(monkeypatch, tmp_path: Path) 
     assert "<nvram " not in xml
 
 
+def test_libvirt_generate_domain_xml_cpu_limit_adds_cputune(tmp_path: Path) -> None:
+    provider = _make_libvirt_provider()
+    overlay = tmp_path / "overlay.qcow2"
+    overlay.touch()
+
+    xml = provider._generate_domain_xml(
+        "arch-lab-node1",
+        {
+            "memory": 1024,
+            "cpu": 2,
+            "cpu_limit": 25,
+            "disk_driver": "virtio",
+            "nic_driver": "e1000",
+        },
+        overlay,
+        interface_count=1,
+        vlan_tags=[100],
+        kind="cisco_n9kv",
+    )
+
+    assert "<cputune>" in xml
+    assert "<period>100000</period>" in xml
+    # 2 vCPU * 100000 period * 25%
+    assert "<quota>50000</quota>" in xml
+
+
+def test_libvirt_generate_domain_xml_invalid_cpu_limit_skips_cputune(tmp_path: Path) -> None:
+    provider = _make_libvirt_provider()
+    overlay = tmp_path / "overlay.qcow2"
+    overlay.touch()
+
+    xml = provider._generate_domain_xml(
+        "arch-lab-node1",
+        {
+            "memory": 1024,
+            "cpu": 2,
+            "cpu_limit": "not-a-number",
+            "disk_driver": "virtio",
+            "nic_driver": "e1000",
+        },
+        overlay,
+        interface_count=1,
+        vlan_tags=[100],
+        kind="cisco_n9kv",
+    )
+
+    assert "<cputune>" not in xml
+
+
 def test_libvirt_generate_domain_xml_invalid_driver_falls_back_to_kvm(tmp_path: Path) -> None:
     provider = _make_libvirt_provider()
     overlay = tmp_path / "overlay.qcow2"

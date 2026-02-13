@@ -675,6 +675,7 @@ class LibvirtProvider(Provider):
         # Get resource requirements from node config
         memory_mb = node_config.get("memory", 2048)
         cpus = node_config.get("cpu", 1)
+        cpu_limit = node_config.get("cpu_limit")
 
         # Get driver and machine settings
         machine_type = node_config.get("machine_type", "pc-q35-6.2")
@@ -800,11 +801,27 @@ class LibvirtProvider(Provider):
                 )
 
         # Build the full domain XML
+        cputune_xml = ""
+        if cpu_limit is not None:
+            try:
+                limit_pct = max(1, min(100, int(cpu_limit)))
+                period = 100000
+                quota = int(period * max(1, int(cpus)) * (limit_pct / 100.0))
+                if quota > 0:
+                    cputune_xml = (
+                        "\n  <cputune>"
+                        f"\n    <period>{period}</period>"
+                        f"\n    <quota>{quota}</quota>"
+                        "\n  </cputune>"
+                    )
+            except (TypeError, ValueError):
+                logger.debug("Skipping invalid cpu_limit value in domain XML: %s", cpu_limit)
+
         xml = f'''<domain type='{libvirt_driver}'>
   <name>{name}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
   <memory unit='MiB'>{memory_mb}</memory>
-  <vcpu>{cpus}</vcpu>
+  <vcpu>{cpus}</vcpu>{cputune_xml}
   {os_open}
     {os_type_line}{os_extras}
   </os>
@@ -950,6 +967,7 @@ class LibvirtProvider(Provider):
             interface_count = node.interface_count or 1
             resolved_memory = node.memory if node.memory is not None else libvirt_config.memory_mb
             resolved_cpu = node.cpu if node.cpu is not None else libvirt_config.cpu_count
+            resolved_cpu_limit = node.cpu_limit
             resolved_machine_type = (
                 node.machine_type if node.machine_type is not None else libvirt_config.machine_type
             )
@@ -977,6 +995,7 @@ class LibvirtProvider(Provider):
                 "image": node.image,
                 "memory": resolved_memory,
                 "cpu": resolved_cpu,
+                "cpu_limit": resolved_cpu_limit,
                 "machine_type": resolved_machine_type,
                 "disk_driver": resolved_disk_driver,
                 "nic_driver": resolved_nic_driver,
@@ -994,7 +1013,7 @@ class LibvirtProvider(Provider):
                 f"VM config for {log_name}: {resolved_memory}MB RAM, "
                 f"{resolved_cpu} vCPU, disk={resolved_disk_driver}, "
                 f"nic={resolved_nic_driver}, machine={resolved_machine_type}, "
-                f"driver={resolved_libvirt_driver}, interfaces={interface_count}, "
+                f"driver={resolved_libvirt_driver}, cpu_limit={resolved_cpu_limit}, interfaces={interface_count}, "
                 f"efi_boot={resolved_efi_boot}, efi_vars={resolved_efi_vars}"
             )
 
@@ -1431,6 +1450,7 @@ class LibvirtProvider(Provider):
                 "image": image,
                 "memory": memory or libvirt_config.memory_mb,
                 "cpu": cpu or libvirt_config.cpu_count,
+                "cpu_limit": cpu_limit,
                 "machine_type": machine_type or libvirt_config.machine_type,
                 "disk_driver": disk_driver or libvirt_config.disk_driver,
                 "nic_driver": nic_driver or libvirt_config.nic_driver,
