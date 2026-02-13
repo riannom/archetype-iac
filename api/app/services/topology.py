@@ -789,7 +789,7 @@ class TopologyService:
                         # isn't permanently stuck from failures on the old host
                         node_state = (
                             self.db.query(models.NodeState)
-                            .filter_by(lab_id=lab_id, gui_id=graph_node.id)
+                            .filter_by(lab_id=lab_id, node_id=graph_node.id)
                             .first()
                         )
                         if node_state and (

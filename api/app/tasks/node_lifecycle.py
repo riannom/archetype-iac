@@ -882,24 +882,21 @@ class NodeLifecycleManager:
                     continue
 
                 self.log_parts.append(
-                    f"  Stopping {len(node_names)} container(s) on "
+                    f"  Destroying {len(node_names)} container(s) on "
                     f"{old_agent.name}..."
                 )
 
                 for node_name in node_names:
-                    container_name = _get_container_name(
-                        self.lab.id, node_name
-                    )
                     try:
-                        result = await agent_client.container_action(
+                        result = await agent_client.destroy_node_on_agent(
                             old_agent,
-                            container_name,
-                            "stop",
-                            lab_id=self.lab.id,
+                            self.lab.id,
+                            node_name,
+                            provider=self.provider,
                         )
                         if result.get("success"):
                             self.log_parts.append(
-                                f"    {node_name}: stopped on {old_agent.name}"
+                                f"    {node_name}: destroyed on {old_agent.name}"
                             )
                         else:
                             error = result.get("error", "unknown")
