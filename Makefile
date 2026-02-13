@@ -1,7 +1,9 @@
-.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install
+.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity
 
 API_TEST ?= tests
 WEB_TEST ?=
+ISO ?=
+JSON_OUT ?=
 
 audit:
 	python3 scripts/cleanup_audit.py
@@ -58,3 +60,14 @@ observability-maintenance-nonprod:
 
 observability-cron-install:
 	./scripts/install_observability_cron_nonprod.sh
+
+iso-metadata-parity:
+	@if [ -z "$(ISO)" ]; then \
+		echo "Usage: make iso-metadata-parity ISO=/path/to/file.iso [JSON_OUT=reports/iso-parity.json]"; \
+		exit 1; \
+	fi
+	@if [ -n "$(JSON_OUT)" ]; then \
+		python3 scripts/iso_metadata_parity_report.py --iso "$(ISO)" --json-out "$(JSON_OUT)"; \
+	else \
+		python3 scripts/iso_metadata_parity_report.py --iso "$(ISO)"; \
+	fi

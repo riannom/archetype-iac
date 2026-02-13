@@ -274,6 +274,7 @@ def test_libvirt_generate_domain_xml(monkeypatch, tmp_path: Path) -> None:
     )
 
     assert "<name>arch-lab-node1</name>" in xml
+    assert "<domain type='kvm'>" in xml
     assert "<memory unit='MiB'>1024</memory>" in xml
     assert "arch-ovs-test" in xml
     assert "<tag id='100'/>" in xml
@@ -312,6 +313,66 @@ def test_libvirt_generate_domain_xml_with_dedicated_mgmt_interface(monkeypatch, 
     # Data-plane interface MACs are offset by one when mgmt NIC is present.
     assert provider._generate_mac_address("arch-lab-node1", 1) in xml
     assert provider._generate_mac_address("arch-lab-node1", 2) in xml
+
+
+def test_libvirt_generate_domain_xml_efi_stateless(monkeypatch, tmp_path: Path) -> None:
+    provider = _make_libvirt_provider()
+    overlay = tmp_path / "overlay.qcow2"
+    overlay.touch()
+
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_find_ovmf_code_path",
+        lambda self: "/usr/share/OVMF/OVMF_CODE.fd",
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_find_ovmf_vars_template",
+        lambda self: "/usr/share/OVMF/OVMF_VARS.fd",
+    )
+
+    xml = provider._generate_domain_xml(
+        "arch-lab-node1",
+        {
+            "memory": 1024,
+            "cpu": 2,
+            "disk_driver": "virtio",
+            "nic_driver": "e1000",
+            "efi_boot": True,
+            "efi_vars": "stateless",
+        },
+        overlay,
+        interface_count=1,
+        vlan_tags=[100],
+        kind="cisco_n9kv",
+    )
+
+    assert "<os firmware='efi'>" in xml
+    assert "<loader readonly='yes' type='pflash'>/usr/share/OVMF/OVMF_CODE.fd</loader>" in xml
+    assert "<nvram " not in xml
+
+
+def test_libvirt_generate_domain_xml_invalid_driver_falls_back_to_kvm(tmp_path: Path) -> None:
+    provider = _make_libvirt_provider()
+    overlay = tmp_path / "overlay.qcow2"
+    overlay.touch()
+
+    xml = provider._generate_domain_xml(
+        "arch-lab-node1",
+        {
+            "memory": 1024,
+            "cpu": 2,
+            "disk_driver": "virtio",
+            "nic_driver": "e1000",
+            "libvirt_driver": "not-valid",
+        },
+        overlay,
+        interface_count=1,
+        vlan_tags=[100],
+        kind="cisco_n9kv",
+    )
+
+    assert "<domain type='kvm'>" in xml
 
 
 def test_libvirt_parse_readiness_overrides_from_domain_metadata() -> None:
@@ -406,6 +467,7 @@ def test_libvirt_get_runtime_profile(monkeypatch) -> None:
     assert runtime["disk_driver"] == "ide"
     assert runtime["nic_driver"] == "e1000"
     assert runtime["machine_type"] == "pc-i440fx-6.2"
+    assert runtime["libvirt_driver"] == "kvm"
     assert runtime["kind"] == "cat9000v-uadp"
     assert runtime["readiness_probe"] == "log_pattern"
     assert runtime["readiness_timeout"] == 2400

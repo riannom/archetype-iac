@@ -121,9 +121,16 @@ class DeployNode(BaseModel):
     # Hardware spec overrides (controller-resolved, highest priority at runtime)
     memory: int | None = Field(None, gt=0, description="RAM in MB")
     cpu: int | None = Field(None, gt=0, description="vCPU count")
+    cpu_limit: int | None = Field(None, ge=1, le=100, description="CPU limit percentage")
     disk_driver: str | None = Field(None, description="Disk bus: virtio, ide, sata")
     nic_driver: str | None = Field(None, description="NIC model: virtio, e1000, rtl8139")
     machine_type: str | None = Field(None, description="QEMU machine type")
+    libvirt_driver: str | None = Field(None, description="Libvirt domain driver: kvm or qemu")
+    readiness_probe: str | None = Field(None, description="Readiness probe type override")
+    readiness_pattern: str | None = Field(None, description="Readiness regex override")
+    readiness_timeout: int | None = Field(None, gt=0, description="Readiness timeout override")
+    efi_boot: bool | None = Field(None, description="Enable EFI firmware boot")
+    efi_vars: str | None = Field(None, description="EFI vars mode (e.g., stateless)")
     # Readiness overrides (controller-resolved, used for custom/imported kinds)
     readiness_probe: str | None = None
     readiness_pattern: str | None = None
@@ -1006,9 +1013,13 @@ class CreateNodeRequest(BaseModel):
     # Hardware spec overrides (API-resolved, take priority over VENDOR_CONFIGS)
     memory: int | None = Field(None, gt=0, description="RAM in MB")
     cpu: int | None = Field(None, gt=0, description="vCPU count")
+    cpu_limit: int | None = Field(None, ge=1, le=100, description="CPU limit percentage")
     disk_driver: str | None = Field(None, description="Disk bus: virtio, ide, sata")
     nic_driver: str | None = Field(None, description="NIC model: virtio, e1000, rtl8139")
     machine_type: str | None = Field(None, description="QEMU machine type")
+    libvirt_driver: str | None = Field(None, description="Libvirt domain driver: kvm or qemu")
+    efi_boot: bool | None = Field(None, description="Enable EFI firmware boot")
+    efi_vars: str | None = Field(None, description="EFI vars mode (e.g., stateless)")
 
 
 class CreateNodeResponse(BaseModel):

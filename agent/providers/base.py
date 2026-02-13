@@ -207,9 +207,16 @@ class Provider(ABC):
         startup_config: str | None = None,
         memory: int | None = None,
         cpu: int | None = None,
+        cpu_limit: int | None = None,
         disk_driver: str | None = None,
         nic_driver: str | None = None,
         machine_type: str | None = None,
+        libvirt_driver: str | None = None,
+        readiness_probe: str | None = None,
+        readiness_pattern: str | None = None,
+        readiness_timeout: int | None = None,
+        efi_boot: bool | None = None,
+        efi_vars: str | None = None,
     ) -> NodeActionResult:
         """Create a single node container without starting it.
 

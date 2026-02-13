@@ -37,6 +37,13 @@ interface LabSummary {
   created_at?: string;
 }
 
+interface NodeReadinessHint {
+  is_ready: boolean;
+  actual_state: string;
+  progress_percent?: number | null;
+  message?: string | null;
+}
+
 // RuntimeStatus is an alias for NodeRuntimeStatus for backward compatibility
 type RuntimeStatus = NodeRuntimeStatus;
 
@@ -236,6 +243,7 @@ const StudioPage: React.FC = () => {
   const prevJobsRef = useRef<Map<string, string>>(new Map());
   const isInitialJobLoadRef = useRef(true);
   const [labStatuses, setLabStatuses] = useState<Record<string, { running: number; total: number }>>({});
+  const [nodeReadinessHints, setNodeReadinessHints] = useState<Record<string, NodeReadinessHint>>({});
   // Config viewer modal state
   const [configViewerOpen, setConfigViewerOpen] = useState(false);
   const [configViewerNode, setConfigViewerNode] = useState<{ id: string; name: string } | null>(null);
@@ -766,6 +774,26 @@ const StudioPage: React.FC = () => {
     setJobs(data.jobs || []);
   }, [studioRequest]);
 
+  const loadNodeReadiness = useCallback(async (labId: string) => {
+    try {
+      const data = await studioRequest<{ nodes: Array<NodeReadinessHint & { node_id: string }> }>(
+        `/labs/${labId}/nodes/ready`
+      );
+      const hints: Record<string, NodeReadinessHint> = {};
+      for (const node of data.nodes || []) {
+        hints[node.node_id] = {
+          is_ready: !!node.is_ready,
+          actual_state: node.actual_state,
+          progress_percent: node.progress_percent,
+          message: node.message,
+        };
+      }
+      setNodeReadinessHints(hints);
+    } catch {
+      // Keep previous hints when readiness endpoint is unavailable
+    }
+  }, [studioRequest]);
+
   // Refresh node states from the agent (queries actual container status)
   // This is called once when entering a lab to ensure states are fresh
   const refreshNodeStatesFromAgent = useCallback(async (labId: string) => {
@@ -826,19 +854,22 @@ const StudioPage: React.FC = () => {
       await loadNodeStates(labId, nodes);
       if (cancelled) return;
       await loadJobs(labId, nodes);
+      if (cancelled) return;
+      await loadNodeReadiness(labId);
     };
 
     void syncOnOpen();
     return () => {
       cancelled = true;
     };
-  }, [activeLab, refreshNodeStatesFromAgent, loadNodeStates, loadJobs, nodes]);
+  }, [activeLab, refreshNodeStatesFromAgent, loadNodeStates, loadJobs, loadNodeReadiness, nodes]);
 
   useEffect(() => {
     if (!activeLab || nodes.length === 0) return;
     loadNodeStates(activeLab.id, nodes);
     loadJobs(activeLab.id, nodes);
-  }, [activeLab, nodes, loadNodeStates, loadJobs]);
+    loadNodeReadiness(activeLab.id);
+  }, [activeLab, nodes, loadNodeStates, loadJobs, loadNodeReadiness]);
 
   // Poll for node state and job updates
   // When WebSocket is connected, poll less frequently as a fallback
@@ -851,9 +882,10 @@ const StudioPage: React.FC = () => {
     const timer = setInterval(() => {
       loadNodeStates(activeLab.id, nodes);
       loadJobs(activeLab.id, nodes);
+      loadNodeReadiness(activeLab.id);
     }, interval);
     return () => clearInterval(timer);
-  }, [activeLab, nodes, loadNodeStates, loadJobs, wsConnected]);
+  }, [activeLab, nodes, loadNodeStates, loadJobs, loadNodeReadiness, wsConnected]);
 
   // Cleanup: save layout/topology and clear timeouts on unmount
   useEffect(() => {
@@ -1932,10 +1964,11 @@ const StudioPage: React.FC = () => {
                   deviceModels={deviceModels}
                   onUpdateStatus={handleUpdateStatus}
                   portManager={portManager}
-                  onOpenConfigViewer={handleOpenConfigViewer}
-                  agents={agents}
-                  nodeStates={nodeStates}
-                />
+              onOpenConfigViewer={handleOpenConfigViewer}
+              agents={agents}
+              nodeStates={nodeStates}
+              nodeReadinessHints={nodeReadinessHints}
+            />
               </div>
             </div>
           </>

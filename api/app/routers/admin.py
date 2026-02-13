@@ -215,7 +215,6 @@ async def audit_lab_runtime_drift(
         provider = get_image_provider(image)
         node_cfg = _safe_load_json(node.config_json)
         hw = device_service.resolve_hardware_specs(node.device or kind, node_cfg, image)
-        effective = device_service.get_device_config(node.device or kind).get("effective", {})
 
         expected = {
             "provider": provider,
@@ -226,9 +225,12 @@ async def audit_lab_runtime_drift(
             "disk_driver": hw.get("disk_driver"),
             "nic_driver": hw.get("nic_driver"),
             "machine_type": hw.get("machine_type"),
-            "readiness_probe": effective.get("readinessProbe"),
-            "readiness_pattern": effective.get("readinessPattern"),
-            "readiness_timeout": effective.get("readinessTimeout"),
+            "libvirt_driver": hw.get("libvirt_driver"),
+            "readiness_probe": hw.get("readiness_probe"),
+            "readiness_pattern": hw.get("readiness_pattern"),
+            "readiness_timeout": hw.get("readiness_timeout"),
+            "efi_boot": hw.get("efi_boot"),
+            "efi_vars": hw.get("efi_vars"),
         }
 
         placement = placement_by_node_id.get(node.id) or placement_by_name.get(node.container_name)
@@ -307,6 +309,9 @@ async def audit_lab_runtime_drift(
             "disk_driver",
             "nic_driver",
             "machine_type",
+            "libvirt_driver",
+            "efi_boot",
+            "efi_vars",
             "readiness_probe",
             "readiness_pattern",
             "readiness_timeout",

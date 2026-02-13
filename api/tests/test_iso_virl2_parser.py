@@ -295,6 +295,9 @@ sim:
     ram: 4096
     cpus: 2
     cpu_limit: 80
+    machine_type: pc-q35-6.2
+    efi_boot: true
+    efi_vars: stateless
     libvirt_domain_driver: kvm
     disk_driver: virtio
     nic_driver: virtio
@@ -331,6 +334,9 @@ configuration:
         assert result.libvirt_driver == "kvm"
         assert result.disk_driver == "virtio"
         assert result.nic_driver == "virtio"
+        assert result.machine_type == "pc-q35-6.2"
+        assert result.efi_boot is True
+        assert result.efi_vars == "stateless"
 
     def test_parse_node_definition_invalid_yaml(self):
         """Test parsing invalid YAML returns None."""

@@ -617,6 +617,8 @@ def graph_to_topology_yaml(
             node_data["nic_driver"] = node.nic_driver
         if node.machine_type is not None:
             node_data["machine_type"] = node.machine_type
+        if node.libvirt_driver is not None:
+            node_data["libvirt_driver"] = node.libvirt_driver
 
         # Add startup-config and persistent storage for cEOS nodes
         # This enables config persistence across restarts and redeploys:

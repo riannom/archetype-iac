@@ -51,6 +51,9 @@ class ParsedNodeDefinition(BaseModel):
     libvirt_driver: str = Field(default="kvm", description="Libvirt domain driver")
     disk_driver: str = Field(default="virtio", description="Disk driver type")
     nic_driver: str = Field(default="virtio", description="NIC driver type")
+    machine_type: Optional[str] = Field(default=None, description="QEMU machine type")
+    efi_boot: bool = Field(default=False, description="Whether firmware boot mode is EFI")
+    efi_vars: Optional[str] = Field(default=None, description="EFI vars mode (e.g., stateless)")
 
     # Original YAML content for reference
     raw_yaml: dict = Field(default_factory=dict, description="Original YAML content")

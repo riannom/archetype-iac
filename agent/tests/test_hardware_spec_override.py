@@ -14,23 +14,35 @@ class TestCreateNodeRequestHardwareFields:
             kind="cisco_iosv",
             memory=8192,
             cpu=4,
+            cpu_limit=75,
             disk_driver="ide",
             nic_driver="e1000",
             machine_type="pc-i440fx-6.2",
+            libvirt_driver="qemu",
+            efi_boot=True,
+            efi_vars="stateless",
         )
         assert req.memory == 8192
         assert req.cpu == 4
+        assert req.cpu_limit == 75
         assert req.disk_driver == "ide"
         assert req.nic_driver == "e1000"
         assert req.machine_type == "pc-i440fx-6.2"
+        assert req.libvirt_driver == "qemu"
+        assert req.efi_boot is True
+        assert req.efi_vars == "stateless"
 
     def test_hardware_fields_default_to_none(self):
         req = CreateNodeRequest(node_name="test1")
         assert req.memory is None
         assert req.cpu is None
+        assert req.cpu_limit is None
         assert req.disk_driver is None
         assert req.nic_driver is None
         assert req.machine_type is None
+        assert req.libvirt_driver is None
+        assert req.efi_boot is None
+        assert req.efi_vars is None
 
     def test_rejects_memory_zero(self):
         with pytest.raises(ValidationError) as exc_info:
@@ -50,6 +62,12 @@ class TestCreateNodeRequestHardwareFields:
         with pytest.raises(ValidationError):
             CreateNodeRequest(node_name="test1", cpu=-1)
 
+    def test_rejects_cpu_limit_out_of_range(self):
+        with pytest.raises(ValidationError):
+            CreateNodeRequest(node_name="test1", cpu_limit=0)
+        with pytest.raises(ValidationError):
+            CreateNodeRequest(node_name="test1", cpu_limit=101)
+
     def test_accepts_partial_hardware_fields(self):
         """Only memory specified, rest defaults to None."""
         req = CreateNodeRequest(node_name="test1", memory=18432)
@@ -62,14 +80,19 @@ class TestCreateNodeRequestHardwareFields:
             node_name="test1",
             memory=4096,
             cpu=2,
+            cpu_limit=80,
             disk_driver="virtio",
         )
         data = req.model_dump(exclude_none=True)
         assert data["memory"] == 4096
         assert data["cpu"] == 2
+        assert data["cpu_limit"] == 80
         assert data["disk_driver"] == "virtio"
         assert "nic_driver" not in data
         assert "machine_type" not in data
+        assert "libvirt_driver" not in data
+        assert "efi_boot" not in data
+        assert "efi_vars" not in data
 
     def test_serialization_excludes_none_hardware_fields(self):
         req = CreateNodeRequest(node_name="test1")

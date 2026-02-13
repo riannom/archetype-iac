@@ -94,9 +94,13 @@ class GraphNode(BaseModel):
     # Hardware spec overrides (per-node, takes priority over device defaults)
     memory: int | None = None      # RAM in MB
     cpu: int | None = None         # vCPU count
+    cpu_limit: int | None = None   # CPU limit percentage (1-100)
     disk_driver: str | None = None  # Disk bus: virtio, ide, sata
     nic_driver: str | None = None   # NIC model: virtio, e1000, rtl8139
     machine_type: str | None = None  # QEMU machine type
+    libvirt_driver: str | None = None  # Libvirt domain driver (kvm or qemu)
+    efi_boot: bool | None = None  # Enable EFI firmware boot
+    efi_vars: str | None = None  # EFI vars mode (e.g., stateless)
     # External network fields (when node_type="external")
     managed_interface_id: str | None = None  # FK to AgentManagedInterface
     # Derived fields (populated server-side for frontend display)

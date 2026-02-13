@@ -323,12 +323,24 @@ class TestImageEntryOperations:
             disk_driver="sata",
             nic_driver="e1000",
             boot_timeout=480,
+            max_ports=65,
+            port_naming="Ethernet1/",
+            cpu_limit=100,
+            has_loopback=True,
+            provisioning_driver="nxosv9000",
+            provisioning_media_type="iso",
         )
         assert entry["memory_mb"] == 12288
         assert entry["cpu_count"] == 4
         assert entry["disk_driver"] == "sata"
         assert entry["nic_driver"] == "e1000"
         assert entry["boot_timeout"] == 480
+        assert entry["max_ports"] == 65
+        assert entry["port_naming"] == "Ethernet1/"
+        assert entry["cpu_limit"] == 100
+        assert entry["has_loopback"] is True
+        assert entry["provisioning_driver"] == "nxosv9000"
+        assert entry["provisioning_media_type"] == "iso"
 
     def test_create_image_entry_normalizes_iosv(self):
         """Legacy iosv assignment is normalized to cisco_iosv."""

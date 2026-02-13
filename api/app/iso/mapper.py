@@ -190,6 +190,9 @@ def create_device_config_from_node_def(node_def: ParsedNodeDefinition) -> dict:
         "libvirtDriver": node_def.libvirt_driver,
         "diskDriver": node_def.disk_driver,
         "nicDriver": node_def.nic_driver,
+        "machineType": node_def.machine_type,
+        "efiBoot": node_def.efi_boot,
+        "efiVars": node_def.efi_vars,
         # Mark as imported from ISO
         "importedFromISO": True,
         "isoNodeDefinitionId": node_def.id,

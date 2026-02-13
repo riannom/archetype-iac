@@ -152,7 +152,21 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
                         int(match.group(1)),
                     )
 
-    def _effective_max_ports(device_id: str | None, kind: str | None) -> int:
+    def _effective_max_ports(device_id: str | None, kind: str | None, image_reference: str | None = None) -> int:
+        try:
+            from app.services.device_service import get_device_service
+
+            resolved = get_device_service().resolve_hardware_specs(
+                device_id or kind or "linux",
+                None,
+                image_reference,
+            )
+            resolved_ports = resolved.get("max_ports")
+            if resolved_ports is not None:
+                return int(resolved_ports)
+        except Exception:
+            pass
+
         base_ports: int | None = None
 
         if device_id:
@@ -210,15 +224,16 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         per_node_hw = {
             "memory": n.memory,
             "cpu": n.cpu,
+            "cpu_limit": getattr(n, "cpu_limit", None),
             "disk_driver": n.disk_driver,
             "nic_driver": n.nic_driver,
             "machine_type": n.machine_type,
+            "libvirt_driver": n.libvirt_driver,
+            "efi_boot": n.efi_boot,
+            "efi_vars": n.efi_vars,
         }
         # Drop unset keys so resolver can fall back correctly.
         per_node_hw = {k: v for k, v in per_node_hw.items() if v is not None}
-        readiness_probe = None
-        readiness_pattern = None
-        readiness_timeout = None
 
         # Resolve image using canonical 3-step fallback
         kind = resolve_device_kind(n.device)
@@ -237,7 +252,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         else:
             # Use UI-configured maxPorts (vendor defaults/overrides), but ensure
             # we pre-provision enough interfaces for any referenced links.
-            device_ports = _effective_max_ports(n.device, kind)
+            device_ports = _effective_max_ports(n.device, kind, image)
             max_index = max_if_index.get(n.id) or max_if_index.get(node_name) or 0
             interface_count = max(device_ports, max_index)
             if interface_count == 0:
@@ -259,24 +274,15 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
             per_node_hw or None,
             image,
         )
-        for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type"):
+        for key in ("memory", "cpu", "cpu_limit", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "efi_boot", "efi_vars"):
             if hw_specs.get(key) is not None:
                 node_dict[key] = hw_specs[key]
-        try:
-            effective = get_device_service().get_device_config(n.device or kind).get("effective", {})
-            readiness_probe = effective.get("readinessProbe")
-            readiness_pattern = effective.get("readinessPattern")
-            readiness_timeout = effective.get("readinessTimeout")
-        except Exception:
-            pass
-        if hw_specs.get("readiness_timeout") is not None:
-            readiness_timeout = hw_specs.get("readiness_timeout")
-        if readiness_probe:
-            node_dict["readiness_probe"] = readiness_probe
-        if readiness_pattern:
-            node_dict["readiness_pattern"] = readiness_pattern
-        if readiness_timeout:
-            node_dict["readiness_timeout"] = readiness_timeout
+        if hw_specs.get("readiness_probe"):
+            node_dict["readiness_probe"] = hw_specs.get("readiness_probe")
+        if hw_specs.get("readiness_pattern"):
+            node_dict["readiness_pattern"] = hw_specs.get("readiness_pattern")
+        if hw_specs.get("readiness_timeout"):
+            node_dict["readiness_timeout"] = hw_specs.get("readiness_timeout")
         if interface_count:
             node_dict["interface_count"] = interface_count
         nodes.append(node_dict)
@@ -351,7 +357,8 @@ class TopologyService:
         result: dict[str, int] = {}
         for n in nodes:
             kind = resolve_device_kind(n.device)
-            max_ports = self._get_effective_max_ports(n.device, kind)
+            image = resolve_node_image(n.device, kind, n.image, n.version)
+            max_ports = self._get_effective_max_ports(n.device, kind, image)
             max_index = by_id.get(n.id, 0)
             result[n.container_name] = max(max_ports, max_index)
         return result
@@ -402,8 +409,27 @@ class TopologyService:
 
         return max_by_node
 
-    def _get_effective_max_ports(self, device_id: str | None, kind: str | None) -> int:
+    def _get_effective_max_ports(
+        self,
+        device_id: str | None,
+        kind: str | None,
+        image_reference: str | None = None,
+    ) -> int:
         """Get effective maxPorts for a device, including overrides."""
+        try:
+            from app.services.device_service import get_device_service
+
+            resolved = get_device_service().resolve_hardware_specs(
+                device_id or kind or "linux",
+                None,
+                image_reference,
+            )
+            resolved_ports = resolved.get("max_ports")
+            if resolved_ports is not None:
+                return int(resolved_ports)
+        except Exception:
+            pass
+
         base_ports: int | None = None
 
         if device_id:
@@ -697,6 +723,12 @@ class TopologyService:
                 config["nic_driver"] = graph_node.nic_driver
             if graph_node.machine_type:
                 config["machine_type"] = graph_node.machine_type
+            if graph_node.libvirt_driver:
+                config["libvirt_driver"] = graph_node.libvirt_driver
+            if graph_node.efi_boot is not None:
+                config["efi_boot"] = graph_node.efi_boot
+            if graph_node.efi_vars:
+                config["efi_vars"] = graph_node.efi_vars
             config_json = json.dumps(config) if config else None
 
             # Resolve host name to host_id
@@ -1013,6 +1045,9 @@ class TopologyService:
                 disk_driver=config.get("disk_driver"),
                 nic_driver=config.get("nic_driver"),
                 machine_type=config.get("machine_type"),
+                libvirt_driver=config.get("libvirt_driver"),
+                efi_boot=config.get("efi_boot"),
+                efi_vars=config.get("efi_vars"),
             ))
 
         graph_links: list[GraphLink] = []
@@ -1440,24 +1475,15 @@ class TopologyService:
             config,
             image,
         )
-        for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type"):
+        for key in ("memory", "cpu", "cpu_limit", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "efi_boot", "efi_vars"):
             if hw_specs.get(key) is not None:
                 node_dict[key] = hw_specs[key]
-        try:
-            effective = get_device_service().get_device_config(node.device or kind).get("effective", {})
-            readiness_probe = effective.get("readinessProbe")
-            readiness_pattern = effective.get("readinessPattern")
-            readiness_timeout = effective.get("readinessTimeout")
-            if hw_specs.get("readiness_timeout") is not None:
-                readiness_timeout = hw_specs.get("readiness_timeout")
-            if readiness_probe:
-                node_dict["readiness_probe"] = readiness_probe
-            if readiness_pattern:
-                node_dict["readiness_pattern"] = readiness_pattern
-            if readiness_timeout:
-                node_dict["readiness_timeout"] = readiness_timeout
-        except Exception:
-            pass
+        if hw_specs.get("readiness_probe"):
+            node_dict["readiness_probe"] = hw_specs.get("readiness_probe")
+        if hw_specs.get("readiness_pattern"):
+            node_dict["readiness_pattern"] = hw_specs.get("readiness_pattern")
+        if hw_specs.get("readiness_timeout"):
+            node_dict["readiness_timeout"] = hw_specs.get("readiness_timeout")
         if interface_count and interface_count > 0:
             node_dict["interface_count"] = interface_count
         return node_dict

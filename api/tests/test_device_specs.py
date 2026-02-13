@@ -1,6 +1,6 @@
 """Tests for device hardware spec resolution in DeviceService."""
 from unittest.mock import patch
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.services.device_service import DeviceService
 
@@ -14,6 +14,7 @@ class MockVendorConfig:
     disk_driver: str = "ide"
     nic_driver: str = "e1000"
     machine_type: str = "pc-i440fx-6.2"
+    supported_image_kinds: list[str] = field(default_factory=lambda: ["qcow2"])
 
 
 class TestResolveHardwareSpecs:
@@ -35,6 +36,7 @@ class TestResolveHardwareSpecs:
         assert specs["disk_driver"] == "ide"
         assert specs["nic_driver"] == "e1000"
         assert specs["machine_type"] == "pc-i440fx-6.2"
+        assert specs["libvirt_driver"] == "kvm"
 
     @patch("app.services.device_service.get_device_override", return_value=None)
     @patch("app.services.device_service.find_custom_device")
@@ -140,8 +142,12 @@ class TestResolveHardwareSpecs:
         mock_image_meta.return_value = {
             "memory": 12288,
             "cpu": 4,
+            "cpu_limit": 80,
             "disk_driver": "sata",
             "nic_driver": "e1000",
+            "libvirt_driver": "qemu",
+            "readiness_probe": "log_pattern",
+            "readiness_pattern": "Press RETURN",
             "readiness_timeout": 480,
         }
         specs = self.service.resolve_hardware_specs(
@@ -151,8 +157,12 @@ class TestResolveHardwareSpecs:
         )
         assert specs["memory"] == 12288
         assert specs["cpu"] == 4
+        assert specs["cpu_limit"] == 80
         assert specs["disk_driver"] == "sata"
         assert specs["nic_driver"] == "e1000"
+        assert specs["libvirt_driver"] == "qemu"
+        assert specs["readiness_probe"] == "log_pattern"
+        assert specs["readiness_pattern"] == "Press RETURN"
         assert specs["readiness_timeout"] == 480
 
     @patch("app.services.device_service.get_image_runtime_metadata")
@@ -170,9 +180,9 @@ class TestResolveHardwareSpecs:
     ):
         """Device overrides and node overrides remain higher priority than image metadata."""
         mock_config.return_value = MockVendorConfig(memory=8192, cpu=2)
-        mock_image_meta.return_value = {"memory": 12288, "cpu": 4}
+        mock_image_meta.return_value = {"memory": 12288, "cpu": 4, "cpu_limit": 80}
         mock_override.return_value = {"memory": 16384}
-        node_config = {"memory": 24576}
+        node_config = {"memory": 24576, "cpu_limit": 70}
         specs = self.service.resolve_hardware_specs(
             "cisco_n9kv",
             node_config,
@@ -180,3 +190,4 @@ class TestResolveHardwareSpecs:
         )
         assert specs["memory"] == 24576
         assert specs["cpu"] == 4
+        assert specs["cpu_limit"] == 70

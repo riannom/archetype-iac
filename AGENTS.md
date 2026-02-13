@@ -19,6 +19,7 @@
   - `make observability-canary-nonprod` — run controlled non-prod canary traffic and coverage checks.
   - `make observability-maintenance-nonprod` — run canary + DB report bundle and write timestamped logs under `reports/observability/`.
   - `make observability-cron-install` — print suggested non-prod cron entries (use `./scripts/install_observability_cron_nonprod.sh --apply` to install).
+  - `make iso-metadata-parity ISO=<path-to-iso> [JSON_OUT=reports/iso-parity.json]` — show parsed→stored→runtime metadata parity per ISO node definition.
   - `python3 scripts/coverage_map.py` — generate test-to-source coverage mapping and gaps report (outputs under `reports/`).
   - `python3 scripts/backfill_manifest_compatible_devices.py --manifest /var/lib/archetype/images/manifest.json` — dry-run manifest compatibility backfill for shared qcow2 images (`--apply` to write changes).
   - `python3 scripts/observability_canary.py --apply --lab-id <lab_id> --sync-node-id <node_id> --run-up-down` — generate controlled traffic (status/sync/up/down) and validate metric coverage.

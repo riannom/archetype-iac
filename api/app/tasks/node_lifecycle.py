@@ -1687,9 +1687,16 @@ class NodeLifecycleManager:
                 provider=node_provider,
                 memory=hw_specs.get("memory"),
                 cpu=hw_specs.get("cpu"),
+                cpu_limit=hw_specs.get("cpu_limit"),
                 disk_driver=hw_specs.get("disk_driver"),
                 nic_driver=hw_specs.get("nic_driver"),
                 machine_type=hw_specs.get("machine_type"),
+                libvirt_driver=hw_specs.get("libvirt_driver"),
+                readiness_probe=hw_specs.get("readiness_probe"),
+                readiness_pattern=hw_specs.get("readiness_pattern"),
+                readiness_timeout=hw_specs.get("readiness_timeout"),
+                efi_boot=hw_specs.get("efi_boot"),
+                efi_vars=hw_specs.get("efi_vars"),
             )
 
             if not create_result.get("success"):

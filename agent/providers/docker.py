@@ -215,6 +215,8 @@ class TopologyNode:
     ports: list[str] = field(default_factory=list)
     startup_config: str | None = None
     exec_: list[str] = field(default_factory=list)  # Post-start commands
+    cpu: int | None = None
+    cpu_limit: int | None = None
     readiness_probe: str | None = None
     readiness_pattern: str | None = None
     readiness_timeout: int | None = None
@@ -821,6 +823,16 @@ class DockerProvider(Provider):
         # Some images (like cEOS) have ENTRYPOINT [] which clears defaults
         if "entrypoint" not in config and "command" not in config:
             config["command"] = ["sleep", "infinity"]
+
+        # Apply CPU limit as a cgroup quota.
+        # Interpret cpu_limit as a percentage of the requested vCPU count
+        # (or 1 vCPU when no explicit CPU count is provided).
+        if node.cpu_limit is not None:
+            limit_pct = max(1, min(100, int(node.cpu_limit)))
+            vcpus = node.cpu if node.cpu and node.cpu > 0 else 1
+            nano_cpus = int((vcpus * limit_pct / 100.0) * 1_000_000_000)
+            if nano_cpus > 0:
+                config["nano_cpus"] = nano_cpus
 
         return config
 
@@ -2102,6 +2114,8 @@ username admin privilege 15 role network-admin nopassword
                 ports=n.ports,
                 startup_config=n.startup_config,
                 exec_=n.exec_cmds,
+                cpu=n.cpu,
+                cpu_limit=n.cpu_limit,
                 readiness_probe=n.readiness_probe,
                 readiness_pattern=n.readiness_pattern,
                 readiness_timeout=n.readiness_timeout,
@@ -2781,9 +2795,16 @@ username admin privilege 15 role network-admin nopassword
         startup_config: str | None = None,
         memory: int | None = None,
         cpu: int | None = None,
+        cpu_limit: int | None = None,
         disk_driver: str | None = None,
         nic_driver: str | None = None,
         machine_type: str | None = None,
+        libvirt_driver: str | None = None,
+        readiness_probe: str | None = None,
+        readiness_pattern: str | None = None,
+        readiness_timeout: int | None = None,
+        efi_boot: bool | None = None,
+        efi_vars: str | None = None,
     ) -> NodeActionResult:
         """Create a single node container without starting it.
 
@@ -2804,6 +2825,8 @@ username admin privilege 15 role network-admin nopassword
                 binds=binds or [],
                 env=env or {},
                 startup_config=startup_config,
+                cpu=cpu,
+                cpu_limit=cpu_limit,
             )
             log_name = node.log_name()
 

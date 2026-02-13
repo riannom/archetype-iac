@@ -121,6 +121,12 @@ class VIRL2Parser(ISOParser):
                     interface_naming = pattern
                     break
 
+        efi_boot_raw = linux_native.get("efi_boot", False)
+        if isinstance(efi_boot_raw, bool):
+            efi_boot = efi_boot_raw
+        else:
+            efi_boot = str(efi_boot_raw).strip().lower() in {"1", "true", "yes", "on"}
+
         return ParsedNodeDefinition(
             id=node_id,
             label=ui.get("label", general.get("description", node_id)),
@@ -142,6 +148,9 @@ class VIRL2Parser(ISOParser):
             libvirt_driver=linux_native.get("libvirt_domain_driver", "kvm"),
             disk_driver=linux_native.get("disk_driver", "virtio"),
             nic_driver=linux_native.get("nic_driver", "virtio"),
+            machine_type=linux_native.get("machine_type"),
+            efi_boot=efi_boot,
+            efi_vars=linux_native.get("efi_vars"),
             raw_yaml=data,
         )
 

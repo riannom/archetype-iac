@@ -594,7 +594,18 @@ def create_image_entry(
     disk_driver: Optional[str] = None,
     nic_driver: Optional[str] = None,
     machine_type: Optional[str] = None,
+    libvirt_driver: Optional[str] = None,
     boot_timeout: Optional[int] = None,
+    readiness_probe: Optional[str] = None,
+    readiness_pattern: Optional[str] = None,
+    efi_boot: Optional[bool] = None,
+    efi_vars: Optional[str] = None,
+    max_ports: Optional[int] = None,
+    port_naming: Optional[str] = None,
+    cpu_limit: Optional[int] = None,
+    has_loopback: Optional[bool] = None,
+    provisioning_driver: Optional[str] = None,
+    provisioning_media_type: Optional[str] = None,
 ) -> dict:
     """Create a new image library entry with all metadata fields.
 
@@ -645,7 +656,18 @@ def create_image_entry(
         "disk_driver": disk_driver,
         "nic_driver": nic_driver,
         "machine_type": machine_type,
+        "libvirt_driver": libvirt_driver,
         "boot_timeout": boot_timeout,
+        "readiness_probe": readiness_probe,
+        "readiness_pattern": readiness_pattern,
+        "efi_boot": efi_boot,
+        "efi_vars": efi_vars,
+        "max_ports": max_ports,
+        "port_naming": port_naming,
+        "cpu_limit": cpu_limit,
+        "has_loopback": has_loopback,
+        "provisioning_driver": provisioning_driver,
+        "provisioning_media_type": provisioning_media_type,
     }
 
 

@@ -67,3 +67,25 @@ def test_create_containers_attaches_per_node_interface_count(monkeypatch, tmp_pa
     provider._attach_container_to_networks.assert_awaited_once()
     _, kwargs = provider._attach_container_to_networks.call_args
     assert kwargs["interface_count"] == 2
+
+
+def test_create_container_config_applies_cpu_limit(monkeypatch, tmp_path):
+    provider = DockerProvider()
+
+    runtime = SimpleNamespace(
+        image="alpine:latest",
+        hostname="n1",
+        environment={},
+        binds=[],
+        capabilities=[],
+        privileged=False,
+        sysctls={},
+        entrypoint=None,
+        cmd=["sleep", "infinity"],
+    )
+    monkeypatch.setattr("agent.providers.docker.get_container_config", lambda **_kwargs: runtime)
+
+    node = TopologyNode(name="n1", kind="linux", cpu=2, cpu_limit=50)
+    cfg = provider._create_container_config(node, "lab1", tmp_path, interface_count=0)
+
+    assert cfg["nano_cpus"] == 1_000_000_000

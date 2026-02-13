@@ -9,6 +9,7 @@ These tests verify:
 import json
 
 from app import models
+import app.services.topology as topology_module
 from app.schemas import (
     GraphEndpoint,
     GraphLink,
@@ -137,6 +138,35 @@ class TestInterfaceCountMap:
 
         iface_map = service.get_interface_count_map(sample_lab.id)
         assert iface_map["eos_1"] == 20
+
+    def test_interface_count_uses_resolved_hardware_specs(self, test_db, sample_lab, monkeypatch):
+        """Resolved image-backed max_ports should drive interface count."""
+        graph = TopologyGraph(
+            nodes=[
+                GraphNode(
+                    id="node-1",
+                    name="CAT8K-1",
+                    container_name="cat8k_1",
+                    device="c8000v",
+                    image="qcow2:c8000v.qcow2",
+                )
+            ],
+            links=[],
+        )
+
+        service = TopologyService(test_db)
+        service.update_from_graph(sample_lab.id, graph)
+        test_db.commit()
+
+        class _StubDeviceService:
+            def resolve_hardware_specs(self, device_id, node_config_json=None, image_reference=None):
+                return {"max_ports": 26}
+
+        monkeypatch.setattr("app.services.device_service.get_device_service", lambda: _StubDeviceService())
+        monkeypatch.setattr(topology_module, "get_config_by_device", lambda *_args, **_kwargs: None)
+
+        iface_map = service.get_interface_count_map(sample_lab.id)
+        assert iface_map["cat8k_1"] == 26
 
     def test_link_endpoints_swapped_when_reverse_alphabetical(
         self, test_db, sample_lab, multiple_hosts
@@ -372,14 +402,9 @@ class TestDeployHardwareProfile:
                     "disk_driver": "ide",
                     "nic_driver": "e1000",
                     "machine_type": "pc-i440fx-6.2",
-                }
-            def get_device_config(self, _device_id):
-                return {
-                    "effective": {
-                        "readinessProbe": "log_pattern",
-                        "readinessPattern": "Press RETURN",
-                        "readinessTimeout": 2400,
-                    }
+                    "readiness_probe": "log_pattern",
+                    "readiness_pattern": "Press RETURN",
+                    "readiness_timeout": 2400,
                 }
 
         monkeypatch.setattr(
@@ -423,14 +448,9 @@ class TestDeployHardwareProfile:
                     "disk_driver": "ide",
                     "nic_driver": "e1000",
                     "machine_type": "pc-i440fx-6.2",
-                }
-            def get_device_config(self, _device_id):
-                return {
-                    "effective": {
-                        "readinessProbe": "log_pattern",
-                        "readinessPattern": "Router>",
-                        "readinessTimeout": 1800,
-                    }
+                    "readiness_probe": "log_pattern",
+                    "readiness_pattern": "Router>",
+                    "readiness_timeout": 1800,
                 }
 
         monkeypatch.setattr(

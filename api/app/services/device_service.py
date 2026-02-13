@@ -62,10 +62,18 @@ def get_image_runtime_metadata(image_reference: str | None) -> dict:
     return {
         "memory": image.get("memory_mb"),
         "cpu": image.get("cpu_count"),
+        "cpu_limit": image.get("cpu_limit"),
+        "max_ports": image.get("max_ports"),
+        "port_naming": image.get("port_naming"),
         "disk_driver": image.get("disk_driver"),
         "nic_driver": image.get("nic_driver"),
         "machine_type": image.get("machine_type"),
+        "libvirt_driver": image.get("libvirt_driver"),
         "readiness_timeout": image.get("boot_timeout"),
+        "readiness_probe": image.get("readiness_probe"),
+        "readiness_pattern": image.get("readiness_pattern"),
+        "efi_boot": image.get("efi_boot"),
+        "efi_vars": image.get("efi_vars"),
     }
 
 
@@ -352,6 +360,9 @@ class DeviceService:
                 "diskDriver": config.disk_driver,
                 "nicDriver": config.nic_driver,
                 "machineType": config.machine_type,
+                "libvirtDriver": "kvm" if "qcow2" in (getattr(config, "supported_image_kinds", []) or []) else None,
+                "efiBoot": None,
+                "efiVars": None,
                 "requiresImage": config.requires_image,
                 "supportedImageKinds": config.supported_image_kinds,
                 "documentationUrl": config.documentation_url,
@@ -405,7 +416,10 @@ class DeviceService:
         ALLOWED_OVERRIDE_FIELDS = {
             "memory", "cpu", "maxPorts", "portNaming", "portStartIndex",
             "readinessTimeout", "vendorOptions",
+            "cpuLimit",
             "diskDriver", "nicDriver", "machineType",
+            "libvirtDriver",
+            "efiBoot", "efiVars",
         }
 
         # Filter payload to only allowed fields
@@ -487,7 +501,8 @@ class DeviceService:
             node_config_json: Per-node config_json dict with optional hardware overrides
 
         Returns:
-            Dict with resolved memory, cpu, disk_driver, nic_driver, machine_type
+            Dict with resolved memory, cpu, cpu_limit, max_ports, port_naming, disk_driver,
+            nic_driver, machine_type, libvirt_driver, efi_boot, efi_vars
             (keys present only when values are non-default / explicitly set)
         """
         specs: dict = {}
@@ -501,28 +516,42 @@ class DeviceService:
         if config:
             specs["memory"] = config.memory
             specs["cpu"] = config.cpu
+            specs["max_ports"] = config.max_ports
+            specs["port_naming"] = config.port_naming
             specs["disk_driver"] = config.disk_driver
             specs["nic_driver"] = config.nic_driver
             specs["machine_type"] = config.machine_type
+            if "qcow2" in (getattr(config, "supported_image_kinds", []) or []):
+                specs["libvirt_driver"] = "kvm"
+            specs["readiness_probe"] = config.readiness_probe
+            specs["readiness_pattern"] = config.readiness_pattern
+            specs["readiness_timeout"] = config.readiness_timeout
+            specs["efi_boot"] = None
+            specs["efi_vars"] = None
         else:
             # Layer 1b: Custom device definition
             custom = find_custom_device(device_id)
             if custom:
-                for field in ("memory", "cpu", "diskDriver", "nicDriver", "machineType"):
+                for field in ("memory", "cpu", "maxPorts", "portNaming", "diskDriver", "nicDriver", "machineType", "libvirtDriver", "efiBoot", "efiVars"):
                     val = custom.get(field)
                     if val is not None:
                         # Normalize camelCase to snake_case for API consistency
                         key = {
+                            "maxPorts": "max_ports",
+                            "portNaming": "port_naming",
                             "diskDriver": "disk_driver",
                             "nicDriver": "nic_driver",
                             "machineType": "machine_type",
+                            "libvirtDriver": "libvirt_driver",
+                            "efiBoot": "efi_boot",
+                            "efiVars": "efi_vars",
                         }.get(field, field)
                         specs[key] = val
 
         # Layer 1c: Image metadata (for example VIRL2 node-definition defaults)
         # should override internal vendor defaults when present.
         image_meta = get_image_runtime_metadata(image_reference)
-        for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type", "readiness_timeout"):
+        for key in ("memory", "cpu", "cpu_limit", "max_ports", "port_naming", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "readiness_timeout", "readiness_probe", "readiness_pattern", "efi_boot", "efi_vars"):
             val = image_meta.get(key)
             if val is not None:
                 specs[key] = val
@@ -530,15 +559,21 @@ class DeviceService:
         # Layer 2: Device overrides (device_overrides.json)
         overrides = get_device_override(device_id) or {}
         for field, key in [("memory", "memory"), ("cpu", "cpu"),
+                           ("cpuLimit", "cpu_limit"),
+                           ("maxPorts", "max_ports"), ("portNaming", "port_naming"),
                            ("diskDriver", "disk_driver"), ("nicDriver", "nic_driver"),
-                           ("machineType", "machine_type")]:
+                           ("machineType", "machine_type"), ("libvirtDriver", "libvirt_driver"),
+                           ("readinessProbe", "readiness_probe"), ("readinessPattern", "readiness_pattern"),
+                           ("readinessTimeout", "readiness_timeout"),
+                           ("efiBoot", "efi_boot"),
+                           ("efiVars", "efi_vars")]:
             val = overrides.get(field)
             if val is not None:
                 specs[key] = val
 
         # Layer 3: Per-node config_json overrides (highest priority)
         if node_config_json:
-            for key in ("memory", "cpu", "disk_driver", "nic_driver", "machine_type"):
+            for key in ("memory", "cpu", "cpu_limit", "max_ports", "port_naming", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "readiness_probe", "readiness_pattern", "readiness_timeout", "efi_boot", "efi_vars"):
                 val = node_config_json.get(key)
                 if val is not None:
                     specs[key] = val

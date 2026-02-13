@@ -283,6 +283,9 @@ class TestCreateDeviceConfigFromNodeDef:
             libvirt_driver="kvm",
             disk_driver="virtio",
             nic_driver="e1000",
+            machine_type="pc-q35-6.2",
+            efi_boot=True,
+            efi_vars="stateless",
         )
 
         config = create_device_config_from_node_def(node_def)
@@ -290,6 +293,9 @@ class TestCreateDeviceConfigFromNodeDef:
         assert config["libvirtDriver"] == "kvm"
         assert config["diskDriver"] == "virtio"
         assert config["nicDriver"] == "e1000"
+        assert config["machineType"] == "pc-q35-6.2"
+        assert config["efiBoot"] is True
+        assert config["efiVars"] == "stateless"
 
     def test_firewall_nature_category(self):
         """Test category mapping for firewall nature."""

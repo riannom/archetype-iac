@@ -986,7 +986,19 @@ async def _import_single_image(
             cpu_count=node_def.cpus if node_def else None,
             disk_driver=node_def.disk_driver if node_def else None,
             nic_driver=node_def.nic_driver if node_def else None,
+            machine_type=node_def.machine_type if node_def else None,
+            libvirt_driver=node_def.libvirt_driver if node_def else None,
             boot_timeout=node_def.boot_timeout if node_def else None,
+            readiness_probe=("log_pattern" if node_def and node_def.boot_completed_patterns else None),
+            readiness_pattern=("|".join(node_def.boot_completed_patterns) if node_def and node_def.boot_completed_patterns else None),
+            efi_boot=node_def.efi_boot if node_def else None,
+            efi_vars=node_def.efi_vars if node_def else None,
+            max_ports=((len(node_def.interfaces) or node_def.interface_count_default) if node_def else None),
+            port_naming=node_def.interface_naming_pattern if node_def else None,
+            cpu_limit=node_def.cpu_limit if node_def else None,
+            has_loopback=node_def.has_loopback if node_def else None,
+            provisioning_driver=node_def.provisioning_driver if node_def else None,
+            provisioning_media_type=node_def.provisioning_media_type if node_def else None,
         )
 
     elif image.image_type == "docker":
@@ -1040,6 +1052,12 @@ async def _import_single_image(
                 version=image.version,
                 size_bytes=temp_path.stat().st_size,
                 source=iso_source,
+                max_ports=((len(node_def.interfaces) or node_def.interface_count_default) if node_def else None),
+                port_naming=node_def.interface_naming_pattern if node_def else None,
+                cpu_limit=node_def.cpu_limit if node_def else None,
+                has_loopback=node_def.has_loopback if node_def else None,
+                provisioning_driver=node_def.provisioning_driver if node_def else None,
+                provisioning_media_type=node_def.provisioning_media_type if node_def else None,
             )
 
     elif image.image_type == "iol":
@@ -1068,6 +1086,12 @@ async def _import_single_image(
             version=image.version,
             size_bytes=dest_path.stat().st_size,
             source=iso_source,
+            max_ports=((len(node_def.interfaces) or node_def.interface_count_default) if node_def else None),
+            port_naming=node_def.interface_naming_pattern if node_def else None,
+            cpu_limit=node_def.cpu_limit if node_def else None,
+            has_loopback=node_def.has_loopback if node_def else None,
+            provisioning_driver=node_def.provisioning_driver if node_def else None,
+            provisioning_media_type=node_def.provisioning_media_type if node_def else None,
         )
 
     else:

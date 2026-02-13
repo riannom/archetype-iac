@@ -3306,9 +3306,16 @@ async def create_node(
         startup_config=request.startup_config,
         memory=request.memory,
         cpu=request.cpu,
+        cpu_limit=request.cpu_limit,
         disk_driver=request.disk_driver,
         nic_driver=request.nic_driver,
         machine_type=request.machine_type,
+        libvirt_driver=request.libvirt_driver,
+        readiness_probe=request.readiness_probe,
+        readiness_pattern=request.readiness_pattern,
+        readiness_timeout=request.readiness_timeout,
+        efi_boot=request.efi_boot,
+        efi_vars=request.efi_vars,
     )
 
     elapsed_ms = int((_time.monotonic() - _t0) * 1000)

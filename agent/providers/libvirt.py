@@ -70,6 +70,7 @@ class LibvirtProvider(Provider):
     # VLAN range for VM interfaces (separate from Docker's 100-2999 range)
     VLAN_RANGE_START = 2000
     VLAN_RANGE_END = 2999
+    ALLOWED_DOMAIN_DRIVERS = {"kvm", "qemu"}
 
     def __init__(self):
         if not LIBVIRT_AVAILABLE:
@@ -602,6 +603,49 @@ class LibvirtProvider(Provider):
         mac = f"52:54:00:{hash_bytes[0]:02x}:{hash_bytes[1]:02x}:{hash_bytes[2]:02x}"
         return mac
 
+    def _find_ovmf_code_path(self) -> str | None:
+        """Find a host OVMF firmware code file for EFI boot."""
+        candidates = [
+            "/usr/share/OVMF/OVMF_CODE.fd",
+            "/usr/share/OVMF/OVMF_CODE_4M.fd",
+            "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+            "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _find_ovmf_vars_template(self) -> str | None:
+        """Find a host OVMF vars template file for stateful EFI boot."""
+        candidates = [
+            "/usr/share/OVMF/OVMF_VARS.fd",
+            "/usr/share/OVMF/OVMF_VARS_4M.fd",
+            "/usr/share/edk2/ovmf/OVMF_VARS.fd",
+            "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _resolve_domain_driver(self, requested: str | None, node_name: str) -> str:
+        """Resolve and validate libvirt domain driver.
+
+        Policy:
+        - enforce when value is valid (kvm|qemu)
+        - warn and fall back to kvm when invalid/unsupported
+        """
+        candidate = (requested or "kvm").strip().lower()
+        if candidate in self.ALLOWED_DOMAIN_DRIVERS:
+            return candidate
+        logger.warning(
+            "Invalid libvirt_driver '%s' for %s; falling back to 'kvm'",
+            requested,
+            node_name,
+        )
+        return "kvm"
+
     def _generate_domain_xml(
         self,
         name: str,
@@ -636,6 +680,12 @@ class LibvirtProvider(Provider):
         machine_type = node_config.get("machine_type", "pc-q35-6.2")
         disk_driver = node_config.get("disk_driver", "virtio")
         nic_driver = node_config.get("nic_driver", "virtio")
+        libvirt_driver = self._resolve_domain_driver(
+            node_config.get("libvirt_driver"),
+            name,
+        )
+        efi_boot = bool(node_config.get("efi_boot", False))
+        efi_vars = str(node_config.get("efi_vars") or "").strip().lower()
 
         # Map bus type to device name prefix
         dev_prefix = {"ide": "hd", "sata": "sd", "scsi": "sd"}.get(disk_driver, "vd")
@@ -726,15 +776,37 @@ class LibvirtProvider(Provider):
     </archetype:node>
   </metadata>'''
 
+        # Build OS section, optionally enabling EFI firmware.
+        os_type_line = f"<type arch='x86_64' machine='{machine_type}'>hvm</type>"
+        os_open = "<os>"
+        os_extras = "\n    <boot dev='hd'/>"
+        if efi_boot:
+            os_open = "<os firmware='efi'>"
+            ovmf_code = self._find_ovmf_code_path()
+            ovmf_vars = self._find_ovmf_vars_template()
+            if ovmf_code:
+                os_extras += f"\n    <loader readonly='yes' type='pflash'>{ovmf_code}</loader>"
+                if efi_vars != "stateless" and ovmf_vars:
+                    # Stateful EFI uses a per-domain writable vars file.
+                    os_extras += (
+                        f"\n    <nvram template='{ovmf_vars}'>"
+                        f"/var/lib/libvirt/qemu/nvram/{name}_VARS.fd</nvram>"
+                    )
+            else:
+                logger.warning(
+                    "EFI boot requested for %s but no OVMF firmware file was found; "
+                    "relying on libvirt firmware auto-selection",
+                    name,
+                )
+
         # Build the full domain XML
-        xml = f'''<domain type='kvm'>
+        xml = f'''<domain type='{libvirt_driver}'>
   <name>{name}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
   <memory unit='MiB'>{memory_mb}</memory>
   <vcpu>{cpus}</vcpu>
-  <os>
-    <type arch='x86_64' machine='{machine_type}'>hvm</type>
-    <boot dev='hd'/>
+  {os_open}
+    {os_type_line}{os_extras}
   </os>
   <features>
     <acpi/>
@@ -887,6 +959,11 @@ class LibvirtProvider(Provider):
             resolved_nic_driver = (
                 node.nic_driver if node.nic_driver is not None else libvirt_config.nic_driver
             )
+            resolved_libvirt_driver = node.libvirt_driver if node.libvirt_driver is not None else "kvm"
+            resolved_efi_boot = (
+                node.efi_boot if node.efi_boot is not None else False
+            )
+            resolved_efi_vars = node.efi_vars
             resolved_readiness_probe = (
                 node.readiness_probe if node.readiness_probe is not None else libvirt_config.readiness_probe
             )
@@ -903,6 +980,9 @@ class LibvirtProvider(Provider):
                 "machine_type": resolved_machine_type,
                 "disk_driver": resolved_disk_driver,
                 "nic_driver": resolved_nic_driver,
+                "libvirt_driver": resolved_libvirt_driver,
+                "efi_boot": resolved_efi_boot,
+                "efi_vars": resolved_efi_vars,
                 "data_volume_gb": libvirt_config.data_volume_gb,
                 "readiness_probe": resolved_readiness_probe,
                 "readiness_pattern": resolved_readiness_pattern,
@@ -913,7 +993,9 @@ class LibvirtProvider(Provider):
             logger.info(
                 f"VM config for {log_name}: {resolved_memory}MB RAM, "
                 f"{resolved_cpu} vCPU, disk={resolved_disk_driver}, "
-                f"nic={resolved_nic_driver}, interfaces={interface_count}"
+                f"nic={resolved_nic_driver}, machine={resolved_machine_type}, "
+                f"driver={resolved_libvirt_driver}, interfaces={interface_count}, "
+                f"efi_boot={resolved_efi_boot}, efi_vars={resolved_efi_vars}"
             )
 
             try:
@@ -1314,9 +1396,16 @@ class LibvirtProvider(Provider):
         startup_config: str | None = None,
         memory: int | None = None,
         cpu: int | None = None,
+        cpu_limit: int | None = None,
         disk_driver: str | None = None,
         nic_driver: str | None = None,
         machine_type: str | None = None,
+        libvirt_driver: str | None = None,
+        readiness_probe: str | None = None,
+        readiness_pattern: str | None = None,
+        readiness_timeout: int | None = None,
+        efi_boot: bool | None = None,
+        efi_vars: str | None = None,
     ) -> NodeActionResult:
         """Create (define) a single VM without starting it."""
         domain_name = self._domain_name(lab_id, node_name)
@@ -1345,6 +1434,12 @@ class LibvirtProvider(Provider):
                 "machine_type": machine_type or libvirt_config.machine_type,
                 "disk_driver": disk_driver or libvirt_config.disk_driver,
                 "nic_driver": nic_driver or libvirt_config.nic_driver,
+                "libvirt_driver": libvirt_driver or "kvm",
+                "readiness_probe": readiness_probe if readiness_probe is not None else libvirt_config.readiness_probe,
+                "readiness_pattern": readiness_pattern if readiness_pattern is not None else libvirt_config.readiness_pattern,
+                "readiness_timeout": readiness_timeout if readiness_timeout is not None else libvirt_config.readiness_timeout,
+                "efi_boot": efi_boot if efi_boot is not None else False,
+                "efi_vars": efi_vars,
                 "data_volume_gb": libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
@@ -2100,9 +2195,20 @@ class LibvirtProvider(Provider):
                 pass
 
         machine_type = None
+        domain_driver = None
+        efi_boot = None
+        efi_vars = None
+        os_elem = root.find("os")
+        domain_driver = root.attrib.get("type")
         os_type = root.find("os/type")
         if os_type is not None:
             machine_type = os_type.attrib.get("machine")
+        if os_elem is not None:
+            firmware = (os_elem.attrib.get("firmware") or "").lower()
+            if firmware:
+                efi_boot = firmware == "efi"
+            if efi_boot:
+                efi_vars = "stateful" if os_elem.find("nvram") is not None else "stateless"
 
         disk_driver = None
         disk_source = None
@@ -2133,6 +2239,9 @@ class LibvirtProvider(Provider):
                 "memory": memory_mb,
                 "cpu": cpu,
                 "machine_type": machine_type,
+                "libvirt_driver": domain_driver,
+                "efi_boot": efi_boot,
+                "efi_vars": efi_vars,
                 "disk_driver": disk_driver,
                 "nic_driver": nic_driver,
                 "disk_source": disk_source,

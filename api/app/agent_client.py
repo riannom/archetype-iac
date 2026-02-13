@@ -1729,9 +1729,16 @@ async def create_node_on_agent(
     provider: str = "docker",
     memory: int | None = None,
     cpu: int | None = None,
+    cpu_limit: int | None = None,
     disk_driver: str | None = None,
     nic_driver: str | None = None,
     machine_type: str | None = None,
+    libvirt_driver: str | None = None,
+    readiness_probe: str | None = None,
+    readiness_pattern: str | None = None,
+    readiness_timeout: int | None = None,
+    efi_boot: bool | None = None,
+    efi_vars: str | None = None,
 ) -> dict:
     """Create a single node container on an agent without starting it.
 
@@ -1768,12 +1775,26 @@ async def create_node_on_agent(
         payload["memory"] = memory
     if cpu:
         payload["cpu"] = cpu
+    if cpu_limit is not None:
+        payload["cpu_limit"] = cpu_limit
     if disk_driver:
         payload["disk_driver"] = disk_driver
     if nic_driver:
         payload["nic_driver"] = nic_driver
     if machine_type:
         payload["machine_type"] = machine_type
+    if libvirt_driver:
+        payload["libvirt_driver"] = libvirt_driver
+    if readiness_probe:
+        payload["readiness_probe"] = readiness_probe
+    if readiness_pattern:
+        payload["readiness_pattern"] = readiness_pattern
+    if readiness_timeout:
+        payload["readiness_timeout"] = readiness_timeout
+    if efi_boot is not None:
+        payload["efi_boot"] = efi_boot
+    if efi_vars:
+        payload["efi_vars"] = efi_vars
 
     import time as _time
     _t0 = _time.monotonic()

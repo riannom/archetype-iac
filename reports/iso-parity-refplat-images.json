@@ -1,0 +1,3338 @@
+{
+  "iso": "/home/azayaka/refplat_images.iso",
+  "node_count": 28,
+  "rows": [
+    {
+      "node_definition_id": "trex",
+      "device_id": "trex",
+      "image_id": "qcow2:alpine-trex-3-21-3.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 512,
+          "runtime": 512,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 60,
+          "stored": 60,
+          "runtime": 60,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "VIRL^2 TRex Node",
+          "stored": "VIRL\\^2\\ TRex\\ Node",
+          "runtime": "VIRL\\^2\\ TRex\\ Node",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 3,
+          "stored": 3,
+          "runtime": 3,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": "kvm",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "alpine",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "wan_emulator",
+      "device_id": "wan_emulator",
+      "image_id": "qcow2:alpine-wanem-3-21-3.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 512,
+          "runtime": 512,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 60,
+          "stored": 60,
+          "runtime": 60,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "VIRL^2 WAN Emulator",
+          "stored": "VIRL\\^2\\ WAN\\ Emulator",
+          "runtime": "VIRL\\^2\\ WAN\\ Emulator",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 2,
+          "stored": 2,
+          "runtime": 2,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": "kvm",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "wan_emulator",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "alpine",
+      "device_id": "linux",
+      "image_id": "qcow2:alpine-base-3-21-3.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 1024,
+          "runtime": 1024,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 60,
+          "stored": 120,
+          "runtime": 120,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Welcome to Alpine Linux",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 8,
+          "runtime": 8,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "alpine",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "asav",
+      "device_id": "cisco_asav",
+      "image_id": "qcow2:asav9-23-1.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 2048,
+          "stored": 2048,
+          "runtime": 2048,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "vmxnet3",
+          "stored": "e1000",
+          "runtime": "e1000",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-i440fx-6.2",
+          "runtime": "pc-i440fx-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 120,
+          "stored": 180,
+          "runtime": 180,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "INFO: Power-On Self-Test complete.",
+          "stored": "ciscoasa>|ciscoasa#",
+          "runtime": "ciscoasa>|ciscoasa#",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 10,
+          "stored": 10,
+          "runtime": 10,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "Management",
+          "stored": "GigabitEthernet0/",
+          "runtime": "GigabitEthernet0/",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "asav",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "cat8000v",
+      "device_id": "c8000v",
+      "image_id": "qcow2:c8000v-universalk9_8G_serial.17.16.01a.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 4096,
+          "stored": null,
+          "runtime": 5120,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": null,
+          "runtime": 2,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": null,
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "vmxnet3",
+          "stored": null,
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 250,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Would you like to enter the initial configuration dialog?|Press RETURN to get started!|%CVAC-4-CONFIG_DONE:",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 26,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "GigabitEthernet",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "csr1000v",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "cat9000v-q200",
+      "device_id": "cat9000v-q200",
+      "image_id": "qcow2:cat9kv_prd.17.15.03.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 12288,
+          "stored": null,
+          "runtime": 18432,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 4,
+          "stored": null,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "ide",
+          "stored": null,
+          "runtime": "ide",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "e1000",
+          "stored": null,
+          "runtime": "e1000",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": "pc-i440fx-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 600,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Would you like to enter the initial configuration dialog?|Press RETURN to get started!|%SSH-5-ENABLED:",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 25,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "GigabitEthernet",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "cat9000v",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "cat9000v-uadp",
+      "device_id": "cat9000v-uadp",
+      "image_id": "qcow2:cat9kv_prd.17.15.03.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 18432,
+          "stored": null,
+          "runtime": 18432,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 4,
+          "stored": null,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "ide",
+          "stored": null,
+          "runtime": "ide",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "e1000",
+          "stored": null,
+          "runtime": "e1000",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": "pc-i440fx-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 600,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Would you like to enter the initial configuration dialog?|Press RETURN to get started!|%SSH-5-ENABLED:",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 25,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "GigabitEthernet",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "cat9000v",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "chrome",
+      "device_id": "chrome",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 4096,
+          "stored": 4096,
+          "runtime": 4096,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": "READY",
+          "runtime": "READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "csr1000v",
+      "device_id": "cisco_csr1000v",
+      "image_id": "qcow2:csr1000v-universalk9.17.03.08a-serial.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 3072,
+          "stored": 4096,
+          "runtime": 4096,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 2,
+          "runtime": 2,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "vmxnet3",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 250,
+          "stored": 300,
+          "runtime": 300,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Would you like to enter the initial configuration dialog?|Press RETURN to get started!|%CVAC-4-CONFIG_DONE:",
+          "stored": "Press RETURN to get started|[\\w.-]+[>#]",
+          "runtime": "Press RETURN to get started|[\\w.-]+[>#]",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 26,
+          "stored": 8,
+          "runtime": 8,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "GigabitEthernet",
+          "stored": "GigabitEthernet",
+          "runtime": "GigabitEthernet",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "csr1000v",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "desktop",
+      "device_id": "desktop",
+      "image_id": "qcow2:alpine-desktop-3-21-3.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 512,
+          "runtime": 512,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 60,
+          "stored": 60,
+          "runtime": 60,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Welcome to Alpine Linux",
+          "stored": "Welcome\\ to\\ Alpine\\ Linux",
+          "runtime": "Welcome\\ to\\ Alpine\\ Linux",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": "kvm",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "alpine",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "dnsmasq",
+      "device_id": "dnsmasq",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 512,
+          "runtime": 512,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": "READY",
+          "runtime": "READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "server",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "firefox",
+      "device_id": "firefox",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 4096,
+          "stored": 4096,
+          "runtime": 4096,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": "READY",
+          "runtime": "READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "frr",
+      "device_id": "frr",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 256,
+          "stored": 1024,
+          "runtime": 1024,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 120,
+          "runtime": 120,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 32,
+          "stored": 8,
+          "runtime": 8,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "iosv",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "iol-xe-serial-4eth",
+      "device_id": "iol-xe",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 1024,
+          "stored": 1024,
+          "runtime": 1024,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 60,
+          "runtime": 60,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Press RETURN to get started!",
+          "stored": "Press RETURN to get started!",
+          "runtime": "Press RETURN to get started!",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 32,
+          "stored": 32,
+          "runtime": 32,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "Ethernet",
+          "stored": "Ethernet0/{index}",
+          "runtime": "Ethernet0/{index}",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "iol",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "iosv",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "iol-xe",
+      "device_id": "iol-xe",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 1024,
+          "stored": 1024,
+          "runtime": 1024,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 60,
+          "runtime": 60,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Press RETURN to get started!",
+          "stored": "Press RETURN to get started!",
+          "runtime": "Press RETURN to get started!",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 32,
+          "stored": 32,
+          "runtime": 32,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "Ethernet",
+          "stored": "Ethernet0/{index}",
+          "runtime": "Ethernet0/{index}",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "iol",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "iosv",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "ioll2-xe",
+      "device_id": "iol-l2",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 1024,
+          "stored": 1024,
+          "runtime": 1024,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 60,
+          "runtime": 60,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Press RETURN to get started!",
+          "stored": "Press RETURN to get started!",
+          "runtime": "Press RETURN to get started!",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 32,
+          "stored": 32,
+          "runtime": 32,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "Ethernet",
+          "stored": "Ethernet0/{index}",
+          "runtime": "Ethernet0/{index}",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "iol",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "iosvl2",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "iosv",
+      "device_id": "cisco_iosv",
+      "image_id": "qcow2:vios-adventerprisek9-m.spa.159-3.m10.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 2048,
+          "runtime": 2048,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "ide",
+          "runtime": "ide",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "e1000",
+          "stored": "e1000",
+          "runtime": "e1000",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-i440fx-6.2",
+          "runtime": "pc-i440fx-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 180,
+          "stored": 180,
+          "runtime": 180,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "%PLATFORM-5-SIGNATURE_VERIFIED:|Would you like to enter the initial configuration dialog?",
+          "stored": "Press RETURN to get started|[\\w.-]+[>#]",
+          "runtime": "Press RETURN to get started|[\\w.-]+[>#]",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 16,
+          "stored": 8,
+          "runtime": 8,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "GigabitEthernet",
+          "stored": "GigabitEthernet0/{index}",
+          "runtime": "GigabitEthernet0/{index}",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "iosv",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "fat",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "iosvl2",
+      "device_id": "iosvl2",
+      "image_id": "qcow2:vios_l2-adventerprisek9-m.ssa.high_iron_20200929.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 768,
+          "stored": 1024,
+          "runtime": 1024,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "ide",
+          "runtime": "ide",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "e1000",
+          "stored": "e1000",
+          "runtime": "e1000",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-i440fx-6.2",
+          "runtime": "pc-i440fx-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 300,
+          "stored": 300,
+          "runtime": 300,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "%PLATFORM-5-SIGNATURE_VERIFIED:|Would you like to enter the initial configuration dialog?",
+          "stored": "Would you like to enter the initial configuration dialog?",
+          "runtime": "Would you like to enter the initial configuration dialog?",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 16,
+          "stored": 16,
+          "runtime": 16,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "GigabitEthernet",
+          "stored": "GigabitEthernet0/{index}",
+          "runtime": "GigabitEthernet0/{index}",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "iosvl2",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "fat",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "iosxrv9000",
+      "device_id": "cisco_iosxr",
+      "image_id": "qcow2:xrv9k-fullk9-x-25.1.1.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 20480,
+          "stored": 4096,
+          "runtime": 4096,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 4,
+          "stored": 2,
+          "runtime": 2,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 3600,
+          "stored": 120,
+          "runtime": 120,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "--- Administrative User Dialog ---|%MGBL-CVAC-4-CONFIG_DONE",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 34,
+          "stored": 8,
+          "runtime": 8,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "GigabitEthernet0/0/0/{index}",
+          "runtime": "GigabitEthernet0/0/0/{index}",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "iosxrv9000",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "net-tools",
+      "device_id": "net-tools",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 512,
+          "runtime": 512,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": "READY",
+          "runtime": "READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "server",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "nginx",
+      "device_id": "nginx",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 256,
+          "stored": 256,
+          "runtime": 256,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": "READY",
+          "runtime": "READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "nxosv9000",
+      "device_id": "cisco_n9kv",
+      "image_id": "qcow2:nexus9300v64.10.5.3.F.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 12288,
+          "stored": 8192,
+          "runtime": 8192,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 2,
+          "stored": 2,
+          "runtime": 2,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "sata",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "e1000",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 480,
+          "stored": 600,
+          "runtime": 600,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "There is no admin password in the bootstrap file|User Access Verification",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 65,
+          "stored": 12,
+          "runtime": 12,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "Ethernet1/",
+          "runtime": "Ethernet1/",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": "stateless",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": true,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "nxosv9000",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "radius",
+      "device_id": "radius",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 512,
+          "runtime": 512,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": "READY",
+          "runtime": "READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "server",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "server",
+      "device_id": "linux",
+      "image_id": "qcow2:tcl-16-0.qcow2",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 128,
+          "stored": 1024,
+          "runtime": 1024,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 20,
+          "stored": 120,
+          "runtime": 120,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "###### BOOT CONFIG DONE ######",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 10,
+          "stored": 8,
+          "runtime": 8,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "server",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "syslog",
+      "device_id": "syslog",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 512,
+          "runtime": 512,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": "READY",
+          "runtime": "READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "tacplus",
+      "device_id": "tacplus",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 512,
+          "stored": 512,
+          "runtime": 512,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "READY",
+          "stored": "READY",
+          "runtime": "READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 4,
+          "stored": 4,
+          "runtime": 4,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "thousandeyes-ea",
+      "device_id": "thousandeyes-ea",
+      "image_id": null,
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 2048,
+          "stored": 2048,
+          "runtime": 2048,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 30,
+          "stored": 30,
+          "runtime": 30,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "ThousandEyes Agent starting up|READY",
+          "stored": "ThousandEyes\\ Agent\\ starting\\ up|READY",
+          "runtime": "ThousandEyes\\ Agent\\ starting\\ up|READY",
+          "status": "applied"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "docker",
+          "stored": "docker",
+          "runtime": null,
+          "status": "stored_not_applied"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "raw",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    },
+    {
+      "node_definition_id": "ubuntu",
+      "device_id": "linux",
+      "image_id": "qcow2:noble-server-cloudimg-amd64.img",
+      "fields": [
+        {
+          "name": "memory",
+          "parsed": 2048,
+          "stored": 1024,
+          "runtime": 1024,
+          "status": "applied"
+        },
+        {
+          "name": "cpu",
+          "parsed": 1,
+          "stored": 1,
+          "runtime": 1,
+          "status": "applied"
+        },
+        {
+          "name": "disk_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "nic_driver",
+          "parsed": "virtio",
+          "stored": "virtio",
+          "runtime": "virtio",
+          "status": "applied"
+        },
+        {
+          "name": "machine_type",
+          "parsed": null,
+          "stored": "pc-q35-6.2",
+          "runtime": "pc-q35-6.2",
+          "status": "n/a"
+        },
+        {
+          "name": "readiness_timeout",
+          "parsed": 180,
+          "stored": 120,
+          "runtime": 120,
+          "status": "applied"
+        },
+        {
+          "name": "readiness_pattern",
+          "parsed": "Cloud-init target|Welcome to Ubuntu|running 'modules:final' at",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "max_ports",
+          "parsed": 8,
+          "stored": 8,
+          "runtime": 8,
+          "status": "applied"
+        },
+        {
+          "name": "port_naming",
+          "parsed": "eth",
+          "stored": "eth",
+          "runtime": "eth",
+          "status": "applied"
+        },
+        {
+          "name": "libvirt_driver",
+          "parsed": "kvm",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "efi_boot",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_only"
+        },
+        {
+          "name": "efi_vars",
+          "parsed": null,
+          "stored": null,
+          "runtime": null,
+          "status": "n/a"
+        },
+        {
+          "name": "cpu_limit",
+          "parsed": 100,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "has_loopback",
+          "parsed": false,
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_driver",
+          "parsed": "ubuntu",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        },
+        {
+          "name": "provisioning_media_type",
+          "parsed": "iso",
+          "stored": null,
+          "runtime": null,
+          "status": "parsed_not_stored"
+        }
+      ]
+    }
+  ]
+}

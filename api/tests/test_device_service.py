@@ -128,3 +128,32 @@ def test_resolve_hardware_specs_rejects_underprovisioned_cat9k(monkeypatch) -> N
 
     with pytest.raises(device_service.DeviceValidationError, match="memory intensive"):
         service.resolve_hardware_specs("cat9000v-uadp")
+
+
+def test_resolve_hardware_specs_includes_efi_fields(monkeypatch) -> None:
+    service = device_service.DeviceService()
+
+    monkeypatch.setattr(device_service, "_get_config_by_kind", lambda device_id: None)
+    monkeypatch.setattr(device_service, "get_kind_for_device", lambda device_id: device_id)
+    monkeypatch.setattr(device_service, "find_custom_device", lambda device_id: None)
+    monkeypatch.setattr(device_service, "get_device_override", lambda device_id: {})
+    monkeypatch.setattr(
+        device_service,
+        "get_image_runtime_metadata",
+        lambda image_reference: {
+            "libvirt_driver": "qemu",
+            "efi_boot": True,
+            "efi_vars": "stateless",
+            "cpu_limit": 75,
+            "max_ports": 65,
+            "port_naming": "Ethernet1/",
+        },
+    )
+
+    specs = service.resolve_hardware_specs("nxosv9000", None, "/tmp/nxosv.qcow2")
+    assert specs["libvirt_driver"] == "qemu"
+    assert specs["efi_boot"] is True
+    assert specs["efi_vars"] == "stateless"
+    assert specs["cpu_limit"] == 75
+    assert specs["max_ports"] == 65
+    assert specs["port_naming"] == "Ethernet1/"
