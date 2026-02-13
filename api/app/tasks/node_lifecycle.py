@@ -1695,6 +1695,7 @@ class NodeLifecycleManager:
                 readiness_timeout=hw_specs.get("readiness_timeout"),
                 efi_boot=hw_specs.get("efi_boot"),
                 efi_vars=hw_specs.get("efi_vars"),
+                data_volume_gb=hw_specs.get("data_volume_gb"),
             )
 
             if not create_result.get("success"):

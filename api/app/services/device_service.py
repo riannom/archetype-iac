@@ -556,13 +556,15 @@ class DeviceService:
             specs["readiness_probe"] = config.readiness_probe
             specs["readiness_pattern"] = config.readiness_pattern
             specs["readiness_timeout"] = config.readiness_timeout
-            specs["efi_boot"] = None
-            specs["efi_vars"] = None
+            specs["efi_boot"] = config.efi_boot
+            specs["efi_vars"] = config.efi_vars
+            if config.data_volume_gb:
+                specs["data_volume_gb"] = config.data_volume_gb
         else:
             # Layer 1b: Custom device definition
             custom = find_custom_device(device_id)
             if custom:
-                for field in ("memory", "cpu", "maxPorts", "portNaming", "diskDriver", "nicDriver", "machineType", "libvirtDriver", "efiBoot", "efiVars"):
+                for field in ("memory", "cpu", "maxPorts", "portNaming", "diskDriver", "nicDriver", "machineType", "libvirtDriver", "efiBoot", "efiVars", "dataVolumeGb"):
                     val = custom.get(field)
                     if val is not None:
                         # Normalize camelCase to snake_case for API consistency
@@ -575,6 +577,7 @@ class DeviceService:
                             "libvirtDriver": "libvirt_driver",
                             "efiBoot": "efi_boot",
                             "efiVars": "efi_vars",
+                            "dataVolumeGb": "data_volume_gb",
                         }.get(field, field)
                         specs[key] = val
 
@@ -594,7 +597,7 @@ class DeviceService:
                     break
 
         image_meta = get_image_runtime_metadata(metadata_image_reference)
-        for key in ("memory", "cpu", "cpu_limit", "max_ports", "port_naming", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "readiness_timeout", "readiness_probe", "readiness_pattern", "efi_boot", "efi_vars"):
+        for key in ("memory", "cpu", "cpu_limit", "max_ports", "port_naming", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "readiness_timeout", "readiness_probe", "readiness_pattern", "efi_boot", "efi_vars", "data_volume_gb"):
             val = image_meta.get(key)
             if val is not None:
                 specs[key] = val
@@ -609,14 +612,15 @@ class DeviceService:
                            ("readinessProbe", "readiness_probe"), ("readinessPattern", "readiness_pattern"),
                            ("readinessTimeout", "readiness_timeout"),
                            ("efiBoot", "efi_boot"),
-                           ("efiVars", "efi_vars")]:
+                           ("efiVars", "efi_vars"),
+                           ("dataVolumeGb", "data_volume_gb")]:
             val = overrides.get(field)
             if val is not None:
                 specs[key] = val
 
         # Layer 3: Per-node config_json overrides (highest priority)
         if node_config_json:
-            for key in ("memory", "cpu", "cpu_limit", "max_ports", "port_naming", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "readiness_probe", "readiness_pattern", "readiness_timeout", "efi_boot", "efi_vars"):
+            for key in ("memory", "cpu", "cpu_limit", "max_ports", "port_naming", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "readiness_probe", "readiness_pattern", "readiness_timeout", "efi_boot", "efi_vars", "data_volume_gb"):
                 val = node_config_json.get(key)
                 if val is not None:
                     specs[key] = val

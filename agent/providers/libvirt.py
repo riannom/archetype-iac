@@ -1227,7 +1227,7 @@ class LibvirtProvider(Provider):
             resolved_efi_boot = (
                 node.efi_boot if node.efi_boot is not None else libvirt_config.efi_boot
             )
-            resolved_efi_vars = node.efi_vars or libvirt_config.efi_vars
+            resolved_efi_vars = node.efi_vars if node.efi_vars is not None else libvirt_config.efi_vars
             resolved_readiness_probe = (
                 node.readiness_probe if node.readiness_probe is not None else libvirt_config.readiness_probe
             )
@@ -1248,7 +1248,7 @@ class LibvirtProvider(Provider):
                 "libvirt_driver": resolved_libvirt_driver,
                 "efi_boot": resolved_efi_boot,
                 "efi_vars": resolved_efi_vars,
-                "data_volume_gb": libvirt_config.data_volume_gb,
+                "data_volume_gb": node.data_volume_gb if node.data_volume_gb is not None else libvirt_config.data_volume_gb,
                 "readiness_probe": resolved_readiness_probe,
                 "readiness_pattern": resolved_readiness_pattern,
                 "readiness_timeout": resolved_readiness_timeout,
@@ -1689,6 +1689,7 @@ class LibvirtProvider(Provider):
         readiness_timeout: int | None = None,
         efi_boot: bool | None = None,
         efi_vars: str | None = None,
+        data_volume_gb: int | None = None,
     ) -> NodeActionResult:
         """Create (define) a single VM without starting it."""
         domain_name = self._domain_name(lab_id, node_name)
@@ -1729,9 +1730,9 @@ class LibvirtProvider(Provider):
                 "readiness_pattern": readiness_pattern if readiness_pattern is not None else libvirt_config.readiness_pattern,
                 "readiness_timeout": readiness_timeout if readiness_timeout is not None else libvirt_config.readiness_timeout,
                 "efi_boot": efi_boot if efi_boot is not None else libvirt_config.efi_boot,
-                "efi_vars": efi_vars,
+                "efi_vars": efi_vars if efi_vars is not None else libvirt_config.efi_vars,
                 "serial_type": libvirt_config.serial_type,
-                "data_volume_gb": libvirt_config.data_volume_gb,
+                "data_volume_gb": data_volume_gb if data_volume_gb is not None else libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
             }

@@ -3323,6 +3323,7 @@ async def create_node(
         readiness_timeout=getattr(request, "readiness_timeout", None),
         efi_boot=request.efi_boot,
         efi_vars=request.efi_vars,
+        data_volume_gb=request.data_volume_gb,
     )
 
     elapsed_ms = int((_time.monotonic() - _t0) * 1000)

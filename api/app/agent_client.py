@@ -1744,6 +1744,7 @@ async def create_node_on_agent(
     readiness_timeout: int | None = None,
     efi_boot: bool | None = None,
     efi_vars: str | None = None,
+    data_volume_gb: int | None = None,
 ) -> dict:
     """Create a single node container on an agent without starting it.
 
@@ -1800,6 +1801,8 @@ async def create_node_on_agent(
         payload["efi_boot"] = efi_boot
     if efi_vars:
         payload["efi_vars"] = efi_vars
+    if data_volume_gb is not None:
+        payload["data_volume_gb"] = data_volume_gb
 
     import time as _time
     _t0 = _time.monotonic()

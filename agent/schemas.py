@@ -131,6 +131,7 @@ class DeployNode(BaseModel):
     readiness_timeout: int | None = Field(None, gt=0, description="Readiness timeout override")
     efi_boot: bool | None = Field(None, description="Enable EFI firmware boot")
     efi_vars: str | None = Field(None, description="EFI vars mode (e.g., stateless)")
+    data_volume_gb: int | None = Field(None, ge=0, description="Data volume size in GB (0 = none)")
     # Readiness overrides (controller-resolved, used for custom/imported kinds)
     readiness_probe: str | None = None
     readiness_pattern: str | None = None
@@ -1023,6 +1024,7 @@ class CreateNodeRequest(BaseModel):
     readiness_timeout: int | None = Field(None, gt=0, description="Boot readiness timeout in seconds")
     efi_boot: bool | None = Field(None, description="Enable EFI firmware boot")
     efi_vars: str | None = Field(None, description="EFI vars mode (e.g., stateless)")
+    data_volume_gb: int | None = Field(None, ge=0, description="Data volume size in GB (0 = none)")
 
 
 class CreateNodeResponse(BaseModel):
