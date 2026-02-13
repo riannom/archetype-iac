@@ -204,8 +204,11 @@ def test_get_interface_vlan_uses_plugin(test_client):
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
+    def _fake_get_provider(name):
+        return provider if name == "docker" else None
+
     with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider", return_value=provider):
+        with patch("agent.main.get_provider", side_effect=_fake_get_provider):
             response = test_client.get(
                 "/labs/lab1/interfaces/r1/eth1/vlan",
             )
@@ -225,8 +228,11 @@ def test_get_interface_vlan_reads_from_ovs(test_client):
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
+    def _fake_get_provider(name):
+        return provider if name == "docker" else None
+
     with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider", return_value=provider):
+        with patch("agent.main.get_provider", side_effect=_fake_get_provider):
             response = test_client.get(
                 "/labs/lab1/interfaces/r1/eth1/vlan?read_from_ovs=true",
             )
