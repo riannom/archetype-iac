@@ -430,10 +430,18 @@ class LibvirtLogPatternProbe(ReadinessProbe):
         For PTY serial VMs: uses virsh console with a non-blocking lock to skip
         gracefully if another session is using the serial console.
         """
-        # Check for TCP serial first
+        # TCP serial VMs: QEMU's chardev TCP only allows one active connection.
+        # Connecting from the readiness probe blocks the user's console session
+        # (CLOSE-WAIT sockets prevent QEMU from accepting new connections).
+        # Skip serial output reading for TCP serial — rely on SSH probe or timeout.
         tcp_port = self._get_tcp_serial_port()
         if tcp_port:
-            return self._get_console_output_tcp(tcp_port)
+            logger.debug(
+                "Skipping serial output read for TCP serial VM %s "
+                "(QEMU TCP chardev is single-connection)",
+                self.domain_name,
+            )
+            return ""
 
         # PTY serial: use virsh console with lock
         from agent.virsh_console_lock import try_console_lock
