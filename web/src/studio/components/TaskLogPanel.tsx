@@ -43,6 +43,7 @@ const DEFAULT_HEIGHT = 200;
 const STORAGE_KEY = 'archetype-tasklog-height';
 const TAB_UNDOCK_THRESHOLD = 30; // pixels of vertical drag to trigger undock
 const TAB_REORDER_THRESHOLD = 10; // pixels of horizontal drag to trigger reorder
+const TAB_STRIP_OUTSIDE_PX = 6;
 
 const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   entries,
@@ -82,9 +83,10 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
     startY: number;
     currentX: number;
     currentY: number;
-    isDragging: boolean; // vertical drag for undock
+    isDragging: boolean; // undock active
     isReordering: boolean; // horizontal drag for reorder
     reorderTargetIndex: number | null;
+    tabStripRect: { left: number; top: number; right: number; bottom: number } | null;
   } | null>(null);
 
   // Refs to track tab elements for calculating drop positions
@@ -101,6 +103,8 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   const handleTabMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
     if (!onUndockConsole && !onReorderTab) return;
     e.stopPropagation();
+    const tabStripEl = (e.currentTarget as HTMLElement | null)?.parentElement as HTMLElement | null;
+    const tabStripRect = tabStripEl?.getBoundingClientRect?.();
     setTabDragState({
       nodeId,
       startX: e.clientX,
@@ -110,6 +114,9 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
       isDragging: false,
       isReordering: false,
       reorderTargetIndex: null,
+      tabStripRect: tabStripRect
+        ? { left: tabStripRect.left, top: tabStripRect.top, right: tabStripRect.right, bottom: tabStripRect.bottom }
+        : null,
     });
   }, [onUndockConsole, onReorderTab]);
 
@@ -164,12 +171,30 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
       const deltaY = e.clientY - tabDragState.startY;
       const absX = Math.abs(deltaX);
       const absY = Math.abs(deltaY);
+      const distance = Math.hypot(deltaX, deltaY);
 
       setTabDragState(prev => {
         if (!prev) return null;
 
-        // If vertical movement exceeds threshold → undock mode
-        if (absY >= TAB_UNDOCK_THRESHOLD && !prev.isReordering) {
+        const undockAllowed = !!onUndockConsole;
+        const reorderAllowed = !!onReorderTab;
+        // Undock should work in any direction once the cursor leaves the tab strip.
+        // Reordering should only happen while the cursor stays within the tab strip.
+        const r = prev.tabStripRect;
+        const isOutsideTabStrip = r
+          ? (
+            e.clientX < r.left - TAB_STRIP_OUTSIDE_PX ||
+            e.clientX > r.right + TAB_STRIP_OUTSIDE_PX ||
+            e.clientY < r.top - TAB_STRIP_OUTSIDE_PX ||
+            e.clientY > r.bottom + TAB_STRIP_OUTSIDE_PX
+          )
+          : absY >= TAB_UNDOCK_THRESHOLD; // Fallback if rect isn't available
+
+        const wantsUndock = undockAllowed && distance >= TAB_UNDOCK_THRESHOLD && isOutsideTabStrip;
+        const wantsReorder = reorderAllowed && absX >= TAB_REORDER_THRESHOLD && !isOutsideTabStrip;
+
+        // Undock overrides reorder if the user drags away from the tab strip.
+        if (wantsUndock) {
           return {
             ...prev,
             currentX: e.clientX,
@@ -185,8 +210,8 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
           return { ...prev, currentX: e.clientX, currentY: e.clientY };
         }
 
-        // If horizontal movement detected and not in undock mode → reorder mode
-        if (absX >= TAB_REORDER_THRESHOLD && !prev.isDragging && onReorderTab) {
+        // Horizontal-dominant movement → reorder mode
+        if (wantsReorder && !prev.isDragging) {
           const targetIndex = calculateReorderIndex(e.clientX, prev.nodeId);
           return {
             ...prev,

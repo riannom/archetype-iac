@@ -127,4 +127,100 @@ describe('TaskLogPanel', () => {
       expect(logContainer.scrollTop).toBe(0);
     });
   });
+
+  it('undocks console tab when dragging out of the tab strip (diagonal)', () => {
+    const onUndockConsole = vi.fn();
+    const onReorderTab = vi.fn();
+
+    render(
+      <TaskLogPanel
+        entries={[]}
+        isVisible={true}
+        onToggle={vi.fn()}
+        onClear={vi.fn()}
+        showConsoles={true}
+        consoleTabs={[
+          { nodeId: 'n1', nodeName: 'Node 1' },
+          { nodeId: 'n2', nodeName: 'Node 2' },
+        ]}
+        activeTabId={'n1'}
+        onSelectTab={vi.fn()}
+        onUndockConsole={onUndockConsole}
+        onReorderTab={onReorderTab}
+        labId={'lab-1'}
+        nodeStates={{}}
+      />
+    );
+
+    const tab = screen.getByText('Node 2').closest('div');
+    expect(tab).toBeTruthy();
+
+    const tabStrip = tab!.parentElement as HTMLElement;
+    vi.spyOn(tabStrip, 'getBoundingClientRect').mockReturnValue({
+      left: 200,
+      top: 50,
+      right: 500,
+      bottom: 90,
+      width: 300,
+      height: 40,
+      x: 200,
+      y: 50,
+      toJSON: () => ({}),
+    } as any);
+
+    fireEvent.mouseDown(tab!, { clientX: 300, clientY: 70 });
+    fireEvent.mouseMove(document, { clientX: 320, clientY: 140 }); // outside bottom
+    fireEvent.mouseUp(document, { clientX: 320, clientY: 140 });
+
+    expect(onUndockConsole).toHaveBeenCalledWith('n2', 60, 90);
+    expect(onReorderTab).not.toHaveBeenCalled();
+  });
+
+  it('undocks console tab when dragging out of the tab strip (horizontal)', () => {
+    const onUndockConsole = vi.fn();
+    const onReorderTab = vi.fn();
+
+    render(
+      <TaskLogPanel
+        entries={[]}
+        isVisible={true}
+        onToggle={vi.fn()}
+        onClear={vi.fn()}
+        showConsoles={true}
+        consoleTabs={[
+          { nodeId: 'n1', nodeName: 'Node 1' },
+          { nodeId: 'n2', nodeName: 'Node 2' },
+        ]}
+        activeTabId={'n1'}
+        onSelectTab={vi.fn()}
+        onUndockConsole={onUndockConsole}
+        onReorderTab={onReorderTab}
+        labId={'lab-1'}
+        nodeStates={{}}
+      />
+    );
+
+    const tab = screen.getByText('Node 2').closest('div');
+    expect(tab).toBeTruthy();
+
+    const tabStrip = tab!.parentElement as HTMLElement;
+    vi.spyOn(tabStrip, 'getBoundingClientRect').mockReturnValue({
+      left: 200,
+      top: 50,
+      right: 500,
+      bottom: 90,
+      width: 300,
+      height: 40,
+      x: 200,
+      y: 50,
+      toJSON: () => ({}),
+    } as any);
+
+    fireEvent.mouseDown(tab!, { clientX: 300, clientY: 70 });
+    fireEvent.mouseMove(document, { clientX: 560, clientY: 75 }); // outside right
+    fireEvent.mouseUp(document, { clientX: 560, clientY: 75 });
+
+    expect(onUndockConsole).toHaveBeenCalledWith('n2', 300, 25);
+    expect(onReorderTab).not.toHaveBeenCalled();
+  });
 });

@@ -415,6 +415,112 @@ describe("ConsoleManager", () => {
     });
   });
 
+  describe("Tab Detach (Split)", () => {
+    it("splits tab when dragging out of the tab strip (diagonal)", async () => {
+      const onSplitTab = vi.fn();
+      const onReorderTab = vi.fn();
+
+      const windows: ConsoleWindow[] = [
+        {
+          id: "win-1",
+          deviceIds: ["router1", "router2"],
+          activeDeviceId: "router1",
+          x: 50,
+          y: 50,
+          isExpanded: true,
+        },
+      ];
+
+      render(
+        <ConsoleManager
+          {...defaultProps}
+          windows={windows}
+          onSplitTab={onSplitTab}
+          onReorderTab={onReorderTab}
+        />
+      );
+
+      const router2Tab = screen.getByText("Router 2").closest("div");
+      expect(router2Tab).toBeTruthy();
+
+      // Mock tab strip bounds so the component can decide between reorder vs detach.
+      const tabStrip = router2Tab!.parentElement as HTMLElement;
+      vi.spyOn(tabStrip, "getBoundingClientRect").mockReturnValue({
+        left: 200,
+        top: 50,
+        right: 500,
+        bottom: 90,
+        width: 300,
+        height: 40,
+        x: 200,
+        y: 50,
+        toJSON: () => ({}),
+      } as any);
+
+      // Start drag on tab (inside tab strip bounds)
+      fireEvent.mouseDown(router2Tab!, { clientX: 300, clientY: 70 });
+
+      // Drag diagonally out of the tab strip bounds
+      fireEvent.mouseMove(window, { clientX: 320, clientY: 140 }); // outside bottom
+
+      // Drop
+      fireEvent.mouseUp(window, { clientX: 320, clientY: 140 });
+
+      expect(onSplitTab).toHaveBeenCalledWith("win-1", "router2", 60, 90);
+      expect(onReorderTab).not.toHaveBeenCalled();
+    });
+
+    it("splits tab when dragging out of the tab strip (horizontal)", async () => {
+      const onSplitTab = vi.fn();
+      const onReorderTab = vi.fn();
+
+      const windows: ConsoleWindow[] = [
+        {
+          id: "win-1",
+          deviceIds: ["router1", "router2"],
+          activeDeviceId: "router1",
+          x: 50,
+          y: 50,
+          isExpanded: true,
+        },
+      ];
+
+      render(
+        <ConsoleManager
+          {...defaultProps}
+          windows={windows}
+          onSplitTab={onSplitTab}
+          onReorderTab={onReorderTab}
+        />
+      );
+
+      const router2Tab = screen.getByText("Router 2").closest("div");
+      expect(router2Tab).toBeTruthy();
+
+      const tabStrip = router2Tab!.parentElement as HTMLElement;
+      vi.spyOn(tabStrip, "getBoundingClientRect").mockReturnValue({
+        left: 200,
+        top: 50,
+        right: 500,
+        bottom: 90,
+        width: 300,
+        height: 40,
+        x: 200,
+        y: 50,
+        toJSON: () => ({}),
+      } as any);
+
+      fireEvent.mouseDown(router2Tab!, { clientX: 300, clientY: 70 });
+
+      // Drag to the right outside the tab strip bounds (no vertical dominance needed)
+      fireEvent.mouseMove(window, { clientX: 560, clientY: 75 });
+      fireEvent.mouseUp(window, { clientX: 560, clientY: 75 });
+
+      expect(onSplitTab).toHaveBeenCalledWith("win-1", "router2", 300, 25);
+      expect(onReorderTab).not.toHaveBeenCalled();
+    });
+  });
+
   describe("Dragging", () => {
     it("commits window position on drag end", async () => {
       const onUpdateWindowPos = vi.fn();

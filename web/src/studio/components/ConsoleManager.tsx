@@ -31,6 +31,8 @@ interface ConsoleManagerProps {
 const TAB_DRAG_THRESHOLD = 30;
 // Threshold for horizontal movement to trigger reorder mode
 const REORDER_THRESHOLD = 10;
+// Cursor must leave the tab strip bounds (plus a small margin) to trigger detach.
+const TAB_STRIP_OUTSIDE_PX = 6;
 // Distance from bottom of viewport to show dock zone (in pixels)
 const DOCK_ZONE_HEIGHT = 100;
 
@@ -110,17 +112,18 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   const windowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Tab drag state for splitting tabs out of windows or reordering within
-  const [tabDragState, setTabDragState] = useState<{
-    windowId: string;
-    deviceId: string;
-    startX: number;
-    startY: number;
-    currentX: number;
-    currentY: number;
-    isDragging: boolean; // true once split threshold is exceeded (vertical)
-    isReordering: boolean; // true for horizontal drag within header
-    reorderTargetIndex: number | null; // drop position indicator
-  } | null>(null);
+	  const [tabDragState, setTabDragState] = useState<{
+	    windowId: string;
+	    deviceId: string;
+	    startX: number;
+	    startY: number;
+	    currentX: number;
+	    currentY: number;
+	    isDragging: boolean; // true once detach is active
+	    isReordering: boolean; // true for horizontal drag within header
+	    reorderTargetIndex: number | null; // drop position indicator
+	    tabStripRect: { left: number; top: number; right: number; bottom: number } | null;
+	  } | null>(null);
 
   // Refs to track tab elements for calculating drop positions
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -210,23 +213,28 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
   };
 
   // Handle tab mousedown for potential split drag or reorder
-  const handleTabMouseDown = (e: React.MouseEvent, win: ConsoleWindow, deviceId: string) => {
-    // Only allow tab drag if window has multiple tabs and at least one handler is available
-    if (win.deviceIds.length <= 1 || (!onSplitTab && !onReorderTab)) return;
+	  const handleTabMouseDown = (e: React.MouseEvent, win: ConsoleWindow, deviceId: string) => {
+	    // Only allow tab drag if window has multiple tabs and at least one handler is available
+	    if (win.deviceIds.length <= 1 || (!onSplitTab && !onReorderTab)) return;
 
-    e.stopPropagation();
-    setTabDragState({
-      windowId: win.id,
-      deviceId,
-      startX: e.clientX,
-      startY: e.clientY,
-      currentX: e.clientX,
-      currentY: e.clientY,
-      isDragging: false,
-      isReordering: false,
-      reorderTargetIndex: null,
-    });
-  };
+	    e.stopPropagation();
+	    const tabStripEl = (e.currentTarget as HTMLElement | null)?.parentElement as HTMLElement | null;
+	    const tabStripRect = tabStripEl?.getBoundingClientRect?.();
+	    setTabDragState({
+	      windowId: win.id,
+	      deviceId,
+	      startX: e.clientX,
+	      startY: e.clientY,
+	      currentX: e.clientX,
+	      currentY: e.clientY,
+	      isDragging: false,
+	      isReordering: false,
+	      reorderTargetIndex: null,
+	      tabStripRect: tabStripRect
+	        ? { left: tabStripRect.left, top: tabStripRect.top, right: tabStripRect.right, bottom: tabStripRect.bottom }
+	        : null,
+	    });
+	  };
 
   // Calculate the target index for reordering based on cursor position
   const calculateReorderIndex = useCallback((clientX: number, windowId: string): number => {
@@ -339,26 +347,44 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
         }
 
         // Handle tab drag for splitting OR reordering
-        if (tabDragState) {
-          const deltaX = e.clientX - tabDragState.startX;
-          const deltaY = e.clientY - tabDragState.startY;
-          const absX = Math.abs(deltaX);
-          const absY = Math.abs(deltaY);
+	        if (tabDragState) {
+	          const deltaX = e.clientX - tabDragState.startX;
+	          const deltaY = e.clientY - tabDragState.startY;
+	          const absX = Math.abs(deltaX);
+	          const absY = Math.abs(deltaY);
+	          const distance = Math.hypot(deltaX, deltaY);
 
-          setTabDragState((prev) => {
-            if (!prev) return null;
+	          setTabDragState((prev) => {
+	            if (!prev) return null;
 
-            // If vertical movement exceeds threshold → split mode (existing behavior)
-            if (absY >= TAB_DRAG_THRESHOLD && !prev.isReordering) {
-              return {
-                ...prev,
-                currentX: e.clientX,
-                currentY: e.clientY,
-                isDragging: true,
-                isReordering: false,
-                reorderTargetIndex: null,
-              };
-            }
+	            const splitAllowed = !!onSplitTabRef.current;
+	            const reorderAllowed = !!onReorderTabRef.current;
+	            // Detach should work in any direction once the cursor leaves the tab strip.
+	            // Reordering should only happen while the cursor stays within the tab strip.
+	            const r = prev.tabStripRect;
+	            const isOutsideTabStrip = r
+	              ? (
+	                e.clientX < r.left - TAB_STRIP_OUTSIDE_PX ||
+	                e.clientX > r.right + TAB_STRIP_OUTSIDE_PX ||
+	                e.clientY < r.top - TAB_STRIP_OUTSIDE_PX ||
+	                e.clientY > r.bottom + TAB_STRIP_OUTSIDE_PX
+	              )
+	              : absY >= TAB_DRAG_THRESHOLD; // Fallback if rect isn't available
+
+	            const wantsSplit = splitAllowed && distance >= TAB_DRAG_THRESHOLD && isOutsideTabStrip;
+	            const wantsReorder = reorderAllowed && absX >= REORDER_THRESHOLD && !isOutsideTabStrip;
+
+	            // Detach overrides reorder if the user drags away from the tab strip.
+	            if (wantsSplit) {
+	              return {
+	                ...prev,
+	                currentX: e.clientX,
+	                currentY: e.clientY,
+	                isDragging: true,
+	                isReordering: false,
+	                reorderTargetIndex: null,
+	              };
+	            }
 
             // If already in split mode, continue tracking position
             if (prev.isDragging) {
@@ -369,8 +395,8 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
               };
             }
 
-            // If horizontal movement detected and not in split mode → reorder mode
-            if (absX >= REORDER_THRESHOLD && !prev.isDragging) {
+            // Horizontal-dominant movement → reorder mode
+            if (wantsReorder && !prev.isDragging) {
               const targetIndex = calculateReorderIndex(e.clientX, prev.windowId);
               return {
                 ...prev,
