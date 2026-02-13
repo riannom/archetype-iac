@@ -809,6 +809,12 @@ const StudioPage: React.FC = () => {
     }
   }, [studioRequest]);
 
+  // Prevent fixed-position console windows from causing document-level horizontal scrollbar
+  useEffect(() => {
+    document.documentElement.style.overflowX = 'hidden';
+    return () => { document.documentElement.style.overflowX = ''; };
+  }, []);
+
   useEffect(() => {
     loadLabs();
     loadSystemMetrics();
