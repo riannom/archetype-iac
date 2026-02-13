@@ -588,7 +588,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         vendor="Arista",
         console_shell="FastCli",  # FastCli is always available; Cli symlink may not exist
         default_image="ceos:latest",
-        aliases=[],
+        # Common IDs seen in imports/manifests/UI; keep these aliases so EOS
+        # does not get treated as a separate "custom" device in the UI.
+        aliases=["eos", "arista_eos", "arista_ceos"],
         # Note: entrypoint is overridden in docker.py to use if-wait.sh wrapper
         entrypoint="/sbin/init",
         device_type=DeviceType.SWITCH,
@@ -811,8 +813,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         memory=8192,  # 8GB required
         cpu=2,
         nic_driver="e1000",  # NX-OS lacks virtio drivers; e1000 required
-        machine_type="pc-i440fx-6.2",  # e1000 TX hangs on Q35; i440fx is reliable
-        efi_boot=True,  # N9Kv image uses UEFI; legacy BIOS drops to boot manager
+        disk_driver="ide",  # NX-OS bootloader needs IDE; virtio not recognized
+        machine_type="pc-i440fx-6.2",  # e1000 TX hangs on Q35; i440fx has native IDE
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",

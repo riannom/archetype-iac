@@ -114,9 +114,9 @@ const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] =>
       y: 180 + row * 140,
       cpu: node.cpu || model?.cpu || 1,
       memory: node.memory || model?.memory || 1024,
-      disk_driver: node.disk_driver || model?.diskDriver,
-      nic_driver: node.nic_driver || model?.nicDriver,
-      machine_type: node.machine_type || model?.machineType,
+      disk_driver: node.disk_driver ?? undefined,
+      nic_driver: node.nic_driver ?? undefined,
+      machine_type: node.machine_type ?? undefined,
       host: (node as any).host, // Preserve host from backend for multi-host placement
     };
     return deviceNode;
@@ -537,12 +537,12 @@ const StudioPage: React.FC = () => {
             device: deviceNode.model,
             version: deviceNode.version,
             host: deviceNode.host,
-            // Hardware spec overrides
+            // Hardware spec overrides (only include when explicitly set by user)
             cpu: deviceNode.cpu,
             memory: deviceNode.memory,
-            disk_driver: deviceNode.disk_driver,
-            nic_driver: deviceNode.nic_driver,
-            machine_type: deviceNode.machine_type,
+            ...(deviceNode.disk_driver ? { disk_driver: deviceNode.disk_driver } : {}),
+            ...(deviceNode.nic_driver ? { nic_driver: deviceNode.nic_driver } : {}),
+            ...(deviceNode.machine_type ? { machine_type: deviceNode.machine_type } : {}),
           };
         }),
         links: currentLinks.map((link) => ({
@@ -1075,9 +1075,9 @@ const StudioPage: React.FC = () => {
       y: y ?? 200 + Math.random() * 50,
       cpu: model.cpu || 1,
       memory: model.memory || 1024,
-      disk_driver: model.diskDriver,
-      nic_driver: model.nicDriver,
-      machine_type: model.machineType,
+      // Don't bake vendor defaults into per-node config; let the backend
+      // resolve disk_driver/nic_driver/machine_type through its layered
+      // resolution (vendor config → image manifest → device overrides).
     };
     setNodes((prev) => [...prev, newNode]);
     // Don't set any status for new nodes - they should show no status icon until deployed

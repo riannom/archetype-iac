@@ -31,10 +31,16 @@ def test_n9kv_machine_type_is_i440fx():
     assert config.machine_type == "pc-i440fx-6.2"
 
 
-def test_n9kv_efi_boot_enabled():
-    """N9Kv qcow2 image uses UEFI; without it BIOS drops to boot manager."""
+def test_n9kv_disk_driver_is_ide():
+    """NX-OS bootloader needs IDE; virtio disk is not recognized."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
-    assert config.efi_boot is True
+    assert config.disk_driver == "ide"
+
+
+def test_n9kv_efi_boot_defaults_false():
+    """Vendor default is BIOS; EFI is set via image manifest when needed."""
+    config = VENDOR_CONFIGS["cisco_n9kv"]
+    assert config.efi_boot is False
 
 
 def test_n9kv_console_method_is_ssh():
@@ -48,11 +54,12 @@ def test_n9kv_console_method_is_ssh():
 # ---------------------------------------------------------------------------
 
 
-def test_get_libvirt_config_returns_efi_boot_true_for_n9kv():
-    """efi_boot from VendorConfig must propagate through get_libvirt_config."""
+def test_get_libvirt_config_propagates_n9kv_settings():
+    """Vendor config values must propagate through get_libvirt_config."""
     lc = get_libvirt_config("cisco_n9kv")
-    assert lc.efi_boot is True
+    assert lc.efi_boot is False
     assert lc.nic_driver == "e1000"
+    assert lc.disk_driver == "ide"
     assert lc.machine_type == "pc-i440fx-6.2"
 
 
