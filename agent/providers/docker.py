@@ -2729,21 +2729,31 @@ username admin privilege 15 role network-admin nopassword
                 error=f"Docker API error: {e}",
             )
 
-    async def stop_node(
+    async def _remove_container(
         self,
         lab_id: str,
         node_name: str,
         workspace: Path,
-    ) -> NodeActionResult:
-        """Stop a specific node."""
+    ) -> None:
+        """Remove a single container and clean up per-node resources.
+
+        Stops the container (if running), removes it, clears post-boot state,
+        and cleans VLAN allocations for this node. Does NOT clean lab-level
+        resources (Docker networks, OVS management network) — that's only done
+        by destroy_node when it's the last container in the lab.
+
+        Raises NotFound if the container doesn't exist (caller should handle).
+        """
         from agent.readiness import clear_post_boot_state
+        import time as _time
+        from agent.metrics import docker_api_duration
 
         container_name = self._container_name(lab_id, node_name)
 
-        try:
-            container = await asyncio.to_thread(self.docker.containers.get, container_name)
-            import time as _time
-            from agent.metrics import docker_api_duration
+        container = await asyncio.to_thread(self.docker.containers.get, container_name)
+
+        # Stop if running
+        if container.status == "running":
             _docker_t0 = _time.monotonic()
             _docker_status = "success"
             try:
@@ -2755,23 +2765,59 @@ username admin privilege 15 role network-admin nopassword
                 docker_api_duration.labels(operation="stop", status=_docker_status).observe(
                     _time.monotonic() - _docker_t0
                 )
-            await asyncio.to_thread(container.reload)
 
-            # Clear post-boot state so commands run again on restart
-            clear_post_boot_state(container_name)
+        # Remove container and volumes
+        _docker_t0 = _time.monotonic()
+        _docker_status = "success"
+        try:
+            await asyncio.to_thread(container.remove, force=True, v=True)
+        except Exception:
+            _docker_status = "error"
+            raise
+        finally:
+            docker_api_duration.labels(operation="remove", status=_docker_status).observe(
+                _time.monotonic() - _docker_t0
+            )
+
+        logger.info(f"Removed container {container_name}")
+
+        # Clear post-boot state so commands run again on fresh create
+        clear_post_boot_state(container_name)
+
+        # Clean up per-node VLAN allocations (keep lab-level tracking)
+        lab_vlans = self._vlan_allocations.get(lab_id, {})
+        lab_vlans.pop(node_name, None)
+
+    async def stop_node(
+        self,
+        lab_id: str,
+        node_name: str,
+        workspace: Path,
+    ) -> NodeActionResult:
+        """Stop a specific node by removing its container entirely.
+
+        After stop, the container is gone. Starting the node again will
+        create a fresh container from the image with the saved startup config.
+        """
+        container_name = self._container_name(lab_id, node_name)
+
+        try:
+            await self._remove_container(lab_id, node_name, workspace)
 
             return NodeActionResult(
                 success=True,
                 node_name=node_name,
-                new_status=self._get_container_status(container),
-                stdout=f"Stopped container {container_name}",
+                new_status=NodeStatus.STOPPED,
+                stdout=f"Stopped and removed container {container_name}",
             )
 
         except NotFound:
+            # Container already gone — treat as success
             return NodeActionResult(
-                success=False,
+                success=True,
                 node_name=node_name,
-                error=f"Container {container_name} not found",
+                new_status=NodeStatus.STOPPED,
+                stdout=f"Container {container_name} already removed",
             )
         except APIError as e:
             return NodeActionResult(
@@ -2954,39 +3000,18 @@ username admin privilege 15 role network-admin nopassword
         node_name: str,
         workspace: Path,
     ) -> NodeActionResult:
-        """Destroy a single node container and clean up resources."""
-        from agent.readiness import clear_post_boot_state
+        """Destroy a single node container and clean up all resources.
 
+        Uses _remove_container for per-node cleanup, then additionally
+        cleans lab-level resources if this was the last container.
+        """
         container_name = self._container_name(lab_id, node_name)
 
         try:
             try:
-                container = await asyncio.to_thread(
-                    self.docker.containers.get, container_name
-                )
-                import time as _time
-                from agent.metrics import docker_api_duration
-                _docker_t0 = _time.monotonic()
-                _docker_status = "success"
-                try:
-                    await asyncio.to_thread(container.remove, force=True, v=True)
-                except Exception:
-                    _docker_status = "error"
-                    raise
-                finally:
-                    docker_api_duration.labels(operation="remove", status=_docker_status).observe(
-                        _time.monotonic() - _docker_t0
-                    )
-                logger.info(f"Removed container {container_name}")
+                await self._remove_container(lab_id, node_name, workspace)
             except NotFound:
                 logger.info(f"Container {container_name} not found, already removed")
-
-            # Clear post-boot state
-            clear_post_boot_state(container_name)
-
-            # Clean up VLAN allocations for this node
-            lab_vlans = self._vlan_allocations.get(lab_id, {})
-            lab_vlans.pop(node_name, None)
 
             # Check if this was the last container in the lab
             remaining = []

@@ -1748,3 +1748,407 @@ class TestIsCeosKind:
         assert _is_ceos_kind("srl") is False
         assert _is_ceos_kind("") is False
         assert _is_ceos_kind(None) is False
+
+
+# ---------------------------------------------------------------------------
+# Unified lifecycle: auto-extract before stop
+# ---------------------------------------------------------------------------
+
+
+class TestAutoExtractBeforeStop:
+    """Tests for _auto_extract_before_stop (unified lifecycle)."""
+
+    @pytest.mark.asyncio
+    async def test_extracts_configs_and_creates_autosave_snapshots(
+        self, test_db, test_user
+    ):
+        """Auto-extract creates autosave snapshots with set_as_active=True."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", device="ceos")
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="stopped", actual="running"
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.placements_map = {}
+
+        mock_save = MagicMock(return_value=MagicMock(id="snap-1"))
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+            mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value={
+                "success": True,
+                "configs": [
+                    {"node_name": "R1", "content": "hostname R1\n!"},
+                ],
+            })
+            with patch(
+                "app.services.config_service.ConfigService.save_extracted_config",
+                mock_save,
+            ):
+                from app.tasks import node_lifecycle
+                original = node_lifecycle.settings.feature_auto_extract_on_stop
+                object.__setattr__(
+                    node_lifecycle.settings, "feature_auto_extract_on_stop", True
+                )
+                try:
+                    await manager._auto_extract_before_stop([ns])
+                finally:
+                    object.__setattr__(
+                        node_lifecycle.settings,
+                        "feature_auto_extract_on_stop",
+                        original,
+                    )
+
+        # Extract called on agent
+        mock_ac.extract_configs_on_agent.assert_awaited_once_with(host, lab.id)
+
+        # Snapshot saved with autosave type and set_as_active=True
+        mock_save.assert_called_once()
+        call_kwargs = mock_save.call_args[1]
+        assert call_kwargs["snapshot_type"] == "autosave"
+        assert call_kwargs["set_as_active"] is True
+        assert call_kwargs["node_name"] == "R1"
+        assert call_kwargs["content"] == "hostname R1\n!"
+
+    @pytest.mark.asyncio
+    async def test_feature_flag_disables_extraction(self, test_db, test_user):
+        """feature_auto_extract_on_stop=False skips extraction entirely."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="stopped", actual="running"
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.placements_map = {}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+            mock_ac.extract_configs_on_agent = AsyncMock()
+
+            from app.tasks import node_lifecycle
+            original = node_lifecycle.settings.feature_auto_extract_on_stop
+            object.__setattr__(
+                node_lifecycle.settings, "feature_auto_extract_on_stop", False
+            )
+            try:
+                await manager._auto_extract_before_stop([ns])
+            finally:
+                object.__setattr__(
+                    node_lifecycle.settings,
+                    "feature_auto_extract_on_stop",
+                    original,
+                )
+
+        # Should NOT have called extract
+        mock_ac.extract_configs_on_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_extracts_from_stopping_nodes(self, test_db, test_user):
+        """Auto-extract also works on nodes in 'stopping' transitional state.
+
+        The NLM sets transitional states before calling auto-extract,
+        so nodes will be in 'stopping' rather than 'running'.
+        """
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", device="ceos")
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="stopped", actual="stopping"
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.placements_map = {}
+
+        mock_save = MagicMock(return_value=MagicMock(id="snap-1"))
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+            mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value={
+                "success": True,
+                "configs": [
+                    {"node_name": "R1", "content": "hostname R1\n!"},
+                ],
+            })
+            with patch(
+                "app.services.config_service.ConfigService.save_extracted_config",
+                mock_save,
+            ):
+                from app.tasks import node_lifecycle
+                original = node_lifecycle.settings.feature_auto_extract_on_stop
+                object.__setattr__(
+                    node_lifecycle.settings, "feature_auto_extract_on_stop", True
+                )
+                try:
+                    await manager._auto_extract_before_stop([ns])
+                finally:
+                    object.__setattr__(
+                        node_lifecycle.settings,
+                        "feature_auto_extract_on_stop",
+                        original,
+                    )
+
+        # Extract called even though state is 'stopping'
+        mock_ac.extract_configs_on_agent.assert_awaited_once()
+        mock_save.assert_called_once()
+        assert mock_save.call_args[1]["snapshot_type"] == "autosave"
+
+    @pytest.mark.asyncio
+    async def test_skips_non_extractable_nodes(self, test_db, test_user):
+        """Auto-extract skips nodes that are already stopped/undeployed."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="stopped", actual="stopped"
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.placements_map = {}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+            mock_ac.extract_configs_on_agent = AsyncMock()
+
+            from app.tasks import node_lifecycle
+            original = node_lifecycle.settings.feature_auto_extract_on_stop
+            object.__setattr__(
+                node_lifecycle.settings, "feature_auto_extract_on_stop", True
+            )
+            try:
+                await manager._auto_extract_before_stop([ns])
+            finally:
+                object.__setattr__(
+                    node_lifecycle.settings,
+                    "feature_auto_extract_on_stop",
+                    original,
+                )
+
+        # No running nodes → no extraction
+        mock_ac.extract_configs_on_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_extraction_failure_does_not_block_stop(self, test_db, test_user):
+        """If auto-extract raises, stop continues (failure-tolerant)."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="stopped", actual="running"
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.placements_map = {}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+            mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.extract_configs_on_agent = AsyncMock(
+                side_effect=Exception("Agent crashed")
+            )
+
+            from app.tasks import node_lifecycle
+            original = node_lifecycle.settings.feature_auto_extract_on_stop
+            object.__setattr__(
+                node_lifecycle.settings, "feature_auto_extract_on_stop", True
+            )
+            try:
+                # Should NOT raise — failure-tolerant
+                await manager._auto_extract_before_stop([ns])
+            finally:
+                object.__setattr__(
+                    node_lifecycle.settings,
+                    "feature_auto_extract_on_stop",
+                    original,
+                )
+
+        # Verify it was called (and failed)
+        mock_ac.extract_configs_on_agent.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Unified lifecycle: stop calls auto-extract
+# ---------------------------------------------------------------------------
+
+
+class TestStopNodesCallsAutoExtract:
+    """Verify _stop_nodes integrates auto-extract before reconcile."""
+
+    @pytest.mark.asyncio
+    async def test_stop_calls_auto_extract_then_reconcile(self, test_db, test_user):
+        """_stop_nodes calls _auto_extract_before_stop before reconcile."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="stopped", actual="running"
+        )
+        container_name = _get_container_name(lab.id, "R1")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.placements_map = {}
+
+        call_order = []
+
+        async def mock_extract(nodes):
+            call_order.append("extract")
+
+        manager._auto_extract_before_stop = mock_extract
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+            mock_ac.is_agent_online = MagicMock(return_value=True)
+
+            async def mock_reconcile(*args, **kwargs):
+                call_order.append("reconcile")
+                return {
+                    "results": [
+                        {"container_name": container_name, "success": True}
+                    ]
+                }
+
+            mock_ac.reconcile_nodes_on_agent = mock_reconcile
+            await manager._stop_nodes([ns])
+
+        assert call_order == ["extract", "reconcile"]
+
+
+# ---------------------------------------------------------------------------
+# Unified lifecycle: start uses deploy (fresh create)
+# ---------------------------------------------------------------------------
+
+
+class TestStartUsesDeployPath:
+    """Verify _start_nodes_per_node uses _deploy_single_node."""
+
+    @pytest.mark.asyncio
+    async def test_start_calls_deploy_single_node(self, test_db, test_user):
+        """_start_nodes_per_node calls _deploy_single_node, not _start_single_node."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", device="linux")
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="running", actual="stopped"
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        deploy_called = []
+
+        async def mock_deploy(node_state):
+            deploy_called.append(node_state.node_name)
+            node_state.actual_state = NodeActualState.RUNNING.value
+            return node_state.node_name
+
+        manager._deploy_single_node = mock_deploy
+        manager._connect_same_host_links = AsyncMock()
+
+        with patch("app.tasks.node_lifecycle.agent_client"):
+            with patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock):
+                with patch(
+                    "app.tasks.jobs._update_node_placements", new_callable=AsyncMock
+                ):
+                    await manager._start_nodes_per_node([ns])
+
+        assert deploy_called == ["R1"]
+
+    @pytest.mark.asyncio
+    async def test_start_updates_placements_for_fresh_containers(
+        self, test_db, test_user
+    ):
+        """_start_nodes_per_node calls _update_node_placements after deploy."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", device="linux")
+        ns = _make_node_state(
+            test_db, lab, "n1", "R1", desired="running", actual="stopped"
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        async def mock_deploy(node_state):
+            node_state.actual_state = NodeActualState.RUNNING.value
+            return node_state.node_name
+
+        manager._deploy_single_node = mock_deploy
+        manager._connect_same_host_links = AsyncMock()
+
+        with patch("app.tasks.node_lifecycle.agent_client"):
+            with patch(
+                "app.tasks.jobs._capture_node_ips", new_callable=AsyncMock
+            ):
+                with patch(
+                    "app.tasks.jobs._update_node_placements",
+                    new_callable=AsyncMock,
+                ) as mock_update_placements:
+                    await manager._start_nodes_per_node([ns])
+
+        mock_update_placements.assert_awaited_once()
+        call_args = mock_update_placements.call_args[0]
+        assert call_args[2] == host.id  # agent_id
+        assert "R1" in call_args[3]  # deployed node names
+
+    @pytest.mark.asyncio
+    async def test_start_ceos_stagger_still_applies(self, test_db, test_user):
+        """cEOS nodes still deploy sequentially with stagger delay."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        node1 = _make_node_def(test_db, lab, "n1", "ceos1", "ceos1", device="ceos")
+        node2 = _make_node_def(test_db, lab, "n2", "ceos2", "ceos2", device="ceos")
+        ns1 = _make_node_state(
+            test_db, lab, "n1", "ceos1", desired="running", actual="stopped"
+        )
+        ns2 = _make_node_state(
+            test_db, lab, "n2", "ceos2", desired="running", actual="stopped"
+        )
+
+        manager = _make_manager(test_db, lab, job, [ns1.node_id, ns2.node_id], agent=host)
+        manager.node_states = [ns1, ns2]
+        manager.db_nodes_map = {"ceos1": node1, "ceos2": node2}
+        manager.placements_map = {}
+        manager.all_lab_states = {"ceos1": ns1, "ceos2": ns2}
+
+        deploy_order = []
+
+        async def mock_deploy(node_state):
+            deploy_order.append(node_state.node_name)
+            node_state.actual_state = NodeActualState.RUNNING.value
+            return node_state.node_name
+
+        manager._deploy_single_node = mock_deploy
+        manager._connect_same_host_links = AsyncMock()
+
+        with patch("app.tasks.node_lifecycle.agent_client"):
+            with patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock):
+                with patch(
+                    "app.tasks.jobs._update_node_placements",
+                    new_callable=AsyncMock,
+                ):
+                    with patch(
+                        "app.tasks.node_lifecycle.asyncio.sleep",
+                        new_callable=AsyncMock,
+                    ) as mock_sleep:
+                        await manager._start_nodes_per_node([ns1, ns2])
+
+        # Both cEOS nodes deployed sequentially
+        assert deploy_order == ["ceos1", "ceos2"]
+        # Stagger delay applied between cEOS nodes
+        mock_sleep.assert_awaited_once()

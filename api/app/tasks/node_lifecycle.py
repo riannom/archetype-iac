@@ -1835,8 +1835,8 @@ class NodeLifecycleManager:
     async def _start_single_node(self, ns: models.NodeState) -> str | None:
         """Start a single node and update its state.
 
-        Returns the node_name on success, None on failure.
-        Used by _start_nodes_per_node for parallel/sequential starts.
+        DEPRECATED: Unified lifecycle always uses _deploy_single_node() for
+        fresh container creation. Kept temporarily for reference.
         """
         db_node = self.db_nodes_map.get(ns.node_name)
         kind = db_node.device if db_node else "linux"
@@ -1926,16 +1926,16 @@ class NodeLifecycleManager:
             return None
 
     async def _start_nodes_per_node(self, nodes_need_start: list[models.NodeState]):
-        """Start stopped nodes via per-node start with veth repair.
+        """Start stopped nodes via fresh container/VM creation.
 
-        Container already exists — just start it, repair veths, fix interfaces,
-        and reconnect same-host links. Non-cEOS nodes start in parallel;
-        cEOS nodes start sequentially with stagger delay.
+        Unified lifecycle: stop removes the container, so start always creates
+        a fresh instance from the image with saved startup config. Non-cEOS
+        nodes deploy in parallel; cEOS nodes deploy sequentially with stagger.
         """
-        from app.tasks.jobs import _capture_node_ips
+        from app.tasks.jobs import _capture_node_ips, _update_node_placements
 
         self.log_parts.append("")
-        self.log_parts.append("=== Phase 2: Start Nodes (per-node) ===")
+        self.log_parts.append("=== Phase 2: Start Nodes (per-node, fresh create) ===")
 
         # Re-read desired_state to catch changes since job was queued
         # (e.g. user clicked Stop All while deploy was in progress)
@@ -1951,7 +1951,7 @@ class NodeLifecycleManager:
 
         started_names = []
 
-        # Split into cEOS (needs stagger) and non-cEOS (can start in parallel)
+        # Split into cEOS (needs stagger) and non-cEOS (can deploy in parallel)
         ceos_nodes = []
         non_ceos_nodes = []
         for ns in nodes_need_start:
@@ -1962,25 +1962,25 @@ class NodeLifecycleManager:
             else:
                 non_ceos_nodes.append(ns)
 
-        # Start all non-cEOS nodes in parallel
+        # Deploy all non-cEOS nodes in parallel (fresh create + start)
         if non_ceos_nodes:
-            self.log_parts.append(f"  Starting {len(non_ceos_nodes)} non-cEOS node(s) in parallel")
-            tasks = [self._start_single_node(ns) for ns in non_ceos_nodes]
+            self.log_parts.append(f"  Deploying {len(non_ceos_nodes)} non-cEOS node(s) in parallel")
+            tasks = [self._deploy_single_node(ns) for ns in non_ceos_nodes]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for ns, result in zip(non_ceos_nodes, results):
                 if isinstance(result, Exception):
-                    logger.exception(f"Parallel start of {ns.node_name} raised: {result}")
+                    logger.exception(f"Parallel deploy of {ns.node_name} raised: {result}")
                 elif result:
                     started_names.append(result)
 
-        # Start cEOS nodes sequentially with stagger
+        # Deploy cEOS nodes sequentially with stagger
         ceos_started = False
         for ns in ceos_nodes:
             if ceos_started:
-                logger.info(f"Waiting {CEOS_STAGGER_SECONDS}s before starting {ns.node_name} (cEOS stagger)")
+                logger.info(f"Waiting {CEOS_STAGGER_SECONDS}s before deploying {ns.node_name} (cEOS stagger)")
                 await asyncio.sleep(CEOS_STAGGER_SECONDS)
 
-            name = await self._start_single_node(ns)
+            name = await self._deploy_single_node(ns)
             if name:
                 started_names.append(name)
                 ceos_started = True
@@ -1988,8 +1988,12 @@ class NodeLifecycleManager:
         self.session.commit()
 
         if started_names:
+            # Update placements for freshly created containers
+            await _update_node_placements(
+                self.session, self.lab.id, self.agent.id, started_names
+            )
             await _capture_node_ips(self.session, self.lab.id, self.agent)
-            # Reconnect same-host links (VLAN tags may have been lost on stop)
+            # Reconnect same-host links
             await self._connect_same_host_links(set(started_names))
 
     def _get_interface_count(self, node_name: str) -> int:
@@ -2114,6 +2118,121 @@ class NodeLifecycleManager:
         if links_connected:
             self.log_parts.append(f"  Connected {links_connected} same-host link(s)")
 
+    async def _auto_extract_before_stop(
+        self, nodes_need_stop: list[models.NodeState]
+    ) -> None:
+        """Auto-extract configs from running nodes before removing them.
+
+        Creates autosave snapshots and sets them as the active config so the
+        next start uses the most recent running config. Failure-tolerant:
+        extraction errors are logged but don't block the stop operation.
+        """
+        if not settings.feature_auto_extract_on_stop:
+            return
+
+        # Extract from nodes that are running or in stopping transition
+        # (transitional states are set before this method is called)
+        extractable_states = {
+            NodeActualState.RUNNING.value,
+            NodeActualState.STOPPING.value,
+        }
+        running_nodes = [
+            ns for ns in nodes_need_stop
+            if ns.actual_state in extractable_states
+        ]
+        if not running_nodes:
+            return
+
+        try:
+            self.log_parts.append("  Auto-extracting configs before stop...")
+
+            # Group nodes by agent
+            agent_node_map: dict[str, tuple[models.Host, list[str]]] = {}
+            for ns in running_nodes:
+                placement = self.placements_map.get(ns.node_name)
+                if placement and placement.host_id != self.agent.id:
+                    extract_agent = self.session.get(
+                        models.Host, placement.host_id
+                    )
+                    if not (extract_agent and agent_client.is_agent_online(extract_agent)):
+                        extract_agent = self.agent
+                else:
+                    extract_agent = self.agent
+
+                entry = agent_node_map.setdefault(
+                    extract_agent.id, (extract_agent, [])
+                )
+                entry[1].append(ns.node_name)
+
+            # Call agents concurrently
+            tasks = [
+                agent_client.extract_configs_on_agent(a, self.lab.id)
+                for a, _ in agent_node_map.values()
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Collect configs (filter to only nodes being stopped)
+            stop_node_names = {ns.node_name for ns in running_nodes}
+            configs = []
+            for (a, _node_names), result in zip(agent_node_map.values(), results):
+                if isinstance(result, Exception):
+                    logger.warning(f"Auto-extract failed on agent {a.id}: {result}")
+                    continue
+                if not result.get("success"):
+                    logger.warning(
+                        f"Auto-extract failed on agent {a.id}: "
+                        f"{result.get('error', 'Unknown')}"
+                    )
+                    continue
+                for cfg in result.get("configs", []):
+                    if cfg.get("node_name") in stop_node_names:
+                        configs.append(cfg)
+
+            if not configs:
+                self.log_parts.append("    No configs extracted")
+                return
+
+            # Save as autosave snapshots with set_as_active=True
+            from app.services.config_service import ConfigService
+            config_svc = ConfigService(self.session)
+
+            node_device_map = {
+                n.container_name: n.device
+                for n in self.session.query(models.Node)
+                .filter(models.Node.lab_id == self.lab.id)
+                .all()
+            }
+
+            snapshots_created = 0
+            for cfg in configs:
+                node_name = cfg.get("node_name")
+                content = cfg.get("content")
+                if not node_name or not content:
+                    continue
+                snapshot = config_svc.save_extracted_config(
+                    lab_id=self.lab.id,
+                    node_name=node_name,
+                    content=content,
+                    snapshot_type="autosave",
+                    device_kind=node_device_map.get(node_name),
+                    set_as_active=True,
+                )
+                if snapshot:
+                    snapshots_created += 1
+
+            self.session.commit()
+            self.log_parts.append(
+                f"    Extracted {len(configs)} config(s), "
+                f"created {snapshots_created} autosave snapshot(s)"
+            )
+            logger.info(
+                f"Auto-extracted {len(configs)} configs before stop for lab {self.lab.id}"
+            )
+
+        except Exception as e:
+            logger.warning(f"Error during auto-extract before stop: {e}")
+            self.log_parts.append(f"    Auto-extract failed: {e} (continuing with stop)")
+
     async def _stop_nodes(self, nodes_need_stop: list[models.NodeState]):
         """Stop running containers using batch reconcile per agent.
 
@@ -2135,6 +2254,9 @@ class NodeLifecycleManager:
         if not nodes_need_stop:
             self.log_parts.append("  All nodes' desired_state changed, nothing to stop")
             return
+
+        # Auto-extract configs before removing containers
+        await self._auto_extract_before_stop(nodes_need_stop)
 
         # Group nodes by target agent
         # agent_id -> (agent, [(ns, container_name)])

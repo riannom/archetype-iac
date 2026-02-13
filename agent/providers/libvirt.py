@@ -1428,6 +1428,53 @@ class LibvirtProvider(Provider):
                 error=str(e),
             )
 
+    async def _remove_vm(
+        self,
+        lab_id: str,
+        node_name: str,
+        workspace: Path,
+    ) -> None:
+        """Remove a single VM and clean up per-node resources.
+
+        Force-stops the domain (if running), undefines it (including NVRAM),
+        deletes overlay disks, and cleans VLAN allocations. Does NOT clean
+        lab-level VLAN tracking — that's only done by destroy_node.
+
+        Raises libvirt.libvirtError if the domain doesn't exist (caller handles).
+        """
+        domain_name = self._domain_name(lab_id, node_name)
+
+        domain = self.conn.lookupByName(domain_name)
+        state, _ = domain.state()
+
+        # Force stop if running or in any active state
+        if state not in (libvirt.VIR_DOMAIN_SHUTOFF, libvirt.VIR_DOMAIN_CRASHED):
+            try:
+                domain.destroy()
+            except libvirt.libvirtError:
+                pass  # May fail if already stopped
+
+        # Undefine domain (removes definition + NVRAM)
+        self._undefine_domain(domain, domain_name)
+        logger.info(f"Undefined domain {domain_name}")
+
+        # Delete overlay disks
+        disks_dir = self._disks_dir(workspace)
+        for suffix in ("", "-data"):
+            disk_path = disks_dir / f"{node_name}{suffix}.qcow2"
+            if disk_path.exists():
+                try:
+                    disk_path.unlink()
+                    logger.info(f"Removed disk: {disk_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove disk {disk_path}: {e}")
+
+        # Clean up per-node VLAN allocations
+        lab_allocs = self._vlan_allocations.get(lab_id, {})
+        if node_name in lab_allocs:
+            del lab_allocs[node_name]
+            self._save_vlan_allocations(lab_id, workspace)
+
     async def stop_node(
         self,
         lab_id: str,
@@ -1435,74 +1482,39 @@ class LibvirtProvider(Provider):
         workspace: Path,
         force: bool = True,
     ) -> NodeActionResult:
-        """Stop a specific VM.
+        """Stop a specific VM by destroying, undefining, and removing disks.
+
+        After stop, the domain and disks are gone. Starting the node again
+        will create a fresh VM from the base image with the saved startup config.
 
         Args:
             lab_id: Lab identifier
             node_name: Node name within the lab
             workspace: Lab workspace path
-            force: If True (default), immediately force stop the VM.
-                   If False, try graceful ACPI shutdown first.
-                   Most network VMs don't support ACPI shutdown, so force=True
-                   is the default to avoid long waits.
+            force: Ignored (kept for API compatibility). VMs are always
+                   force-stopped before removal.
         """
         domain_name = self._domain_name(lab_id, node_name)
 
         try:
-            domain = self.conn.lookupByName(domain_name)
-            state, _ = domain.state()
-
-            # Already stopped or shutoff
-            if state in (libvirt.VIR_DOMAIN_SHUTOFF, libvirt.VIR_DOMAIN_CRASHED):
-                return NodeActionResult(
-                    success=True,
-                    node_name=node_name,
-                    new_status=NodeStatus.STOPPED,
-                    stdout="Domain already stopped",
-                )
-
-            # Not running (paused, shutdown in progress, etc.)
-            if state != libvirt.VIR_DOMAIN_RUNNING:
-                # Force stop to ensure it's fully stopped
-                try:
-                    domain.destroy()
-                except libvirt.libvirtError:
-                    pass  # May fail if already stopped
-                return NodeActionResult(
-                    success=True,
-                    node_name=node_name,
-                    new_status=NodeStatus.STOPPED,
-                    stdout=f"Stopped domain {domain_name}",
-                )
-
-            if force:
-                # Force stop immediately (default for network VMs)
-                domain.destroy()
-                logger.info(f"Force stopped domain {domain_name}")
-            else:
-                # Try graceful shutdown first
-                domain.shutdown()
-
-                # Wait for shutdown (up to 10 seconds, reduced from 30)
-                for _ in range(10):
-                    await asyncio.sleep(1)
-                    state, _ = domain.state()
-                    if state != libvirt.VIR_DOMAIN_RUNNING:
-                        break
-                else:
-                    # Force stop if graceful shutdown didn't work
-                    domain.destroy()
-                    logger.info(f"Force stopped domain {domain_name} after graceful timeout")
+            await self._remove_vm(lab_id, node_name, workspace)
 
             return NodeActionResult(
                 success=True,
                 node_name=node_name,
                 new_status=NodeStatus.STOPPED,
-                stdout=f"Stopped domain {domain_name}",
+                stdout=f"Stopped and removed domain {domain_name}",
             )
 
         except libvirt.libvirtError as e:
-            # Check if it's just "domain not running" which is fine
+            if "domain not found" in str(e).lower():
+                # Domain already gone — treat as success
+                return NodeActionResult(
+                    success=True,
+                    node_name=node_name,
+                    new_status=NodeStatus.STOPPED,
+                    stdout="Domain already removed",
+                )
             if "domain is not running" in str(e).lower():
                 return NodeActionResult(
                     success=True,
@@ -1688,38 +1700,23 @@ class LibvirtProvider(Provider):
         node_name: str,
         workspace: Path,
     ) -> NodeActionResult:
-        """Destroy a single VM and clean up its resources."""
+        """Destroy a single VM and clean up all resources.
+
+        Uses _remove_vm for per-node cleanup. Lab-level VLAN tracking
+        is cleaned up if needed.
+        """
         domain_name = self._domain_name(lab_id, node_name)
 
         try:
-            domain = self.conn.lookupByName(domain_name)
+            try:
+                await self._remove_vm(lab_id, node_name, workspace)
+            except libvirt.libvirtError as e:
+                if "domain not found" in str(e).lower():
+                    logger.info(f"Domain {domain_name} not found, already removed")
+                else:
+                    raise
 
-            # Stop if running
-            state, _ = domain.state()
-            if state == libvirt.VIR_DOMAIN_RUNNING:
-                domain.destroy()
-
-            # Undefine
-            self._undefine_domain(domain, domain_name)
             logger.info(f"Destroyed domain {domain_name}")
-
-            # Clean up disk overlays for this node
-            disks_dir = self._disks_dir(workspace)
-            for suffix in ("", "-data"):
-                disk_path = disks_dir / f"{node_name}{suffix}.qcow2"
-                if disk_path.exists():
-                    try:
-                        disk_path.unlink()
-                        logger.info(f"Removed disk: {disk_path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to remove disk {disk_path}: {e}")
-
-            # Clean up VLAN allocations for this specific node
-            lab_allocs = self._vlan_allocations.get(lab_id, {})
-            if node_name in lab_allocs:
-                del lab_allocs[node_name]
-                # Persist updated allocations
-                self._save_vlan_allocations(lab_id, workspace)
 
             return NodeActionResult(
                 success=True,
@@ -1729,13 +1726,6 @@ class LibvirtProvider(Provider):
             )
 
         except libvirt.libvirtError as e:
-            if "domain not found" in str(e).lower():
-                return NodeActionResult(
-                    success=True,
-                    node_name=node_name,
-                    new_status=NodeStatus.STOPPED,
-                    stdout="Domain already absent",
-                )
             return NodeActionResult(
                 success=False,
                 node_name=node_name,

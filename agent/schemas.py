@@ -230,7 +230,7 @@ class NodeReconcileRequest(BaseModel):
 class NodeReconcileResult(BaseModel):
     """Result of reconciling a single node."""
     container_name: str
-    action: Literal["started", "stopped", "already_running", "already_stopped", "error"]
+    action: Literal["started", "stopped", "removed", "already_running", "already_stopped", "error"]
     success: bool
     error: str | None = None
 

@@ -1625,20 +1625,18 @@ async def _reconcile_single_node(
                 )
 
         elif desired == "stopped":
-            if current_status in ("exited", "created", "dead"):
-                return NodeReconcileResult(
-                    container_name=container_name,
-                    action="already_stopped",
-                    success=True,
-                )
-            else:
+            from agent.readiness import clear_post_boot_state
+            # Unified lifecycle: stop = remove container entirely
+            if current_status == "running":
                 await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
-                logger.info(f"Stopped container {container_name}")
-                return NodeReconcileResult(
-                    container_name=container_name,
-                    action="stopped",
-                    success=True,
-                )
+            await asyncio.to_thread(container.remove, force=True, v=True)
+            clear_post_boot_state(container_name)
+            logger.info(f"Stopped and removed container {container_name}")
+            return NodeReconcileResult(
+                container_name=container_name,
+                action="removed",
+                success=True,
+            )
 
     except docker.errors.NotFound:
         # Docker container not found, try libvirt below
@@ -1709,6 +1707,14 @@ async def _reconcile_single_node(
             logger.error(f"Error reconciling libvirt VM {container_name}: {e}")
 
     # Neither Docker nor libvirt found the node
+    if desired == "stopped":
+        # Unified lifecycle: if node is already gone and we want it stopped, that's fine
+        logger.info(f"Node {container_name} already absent (desired=stopped)")
+        return NodeReconcileResult(
+            container_name=container_name,
+            action="already_stopped",
+            success=True,
+        )
     logger.warning(f"Node {container_name} not found in Docker or libvirt")
     return NodeReconcileResult(
         container_name=container_name,

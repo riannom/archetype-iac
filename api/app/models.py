@@ -393,7 +393,8 @@ class ConfigSnapshot(Base):
 
     Features:
     - Content hash (SHA256) for deduplication - identical configs share hash
-    - Snapshot types: "manual" (user-triggered), "auto_stop" (on node stop)
+    - Snapshot types: "manual" (user-triggered), "auto_stop" (on lab destroy),
+      "autosave" (on node stop, set as active for next start)
     - Per-node snapshots with timestamps for timeline views
     - device_kind for type-matching when mapping orphaned configs to new nodes
     - mapped_to_node_id for reassigning stranded configs to replacement nodes
@@ -407,7 +408,7 @@ class ConfigSnapshot(Base):
     content: Mapped[str] = mapped_column(Text)
     # SHA256 hash of content for deduplication detection
     content_hash: Mapped[str] = mapped_column(String(64))
-    # Snapshot type: "manual" or "auto_stop"
+    # Snapshot type: "manual", "auto_stop", or "autosave"
     snapshot_type: Mapped[str] = mapped_column(String(50))
     # Device type (e.g., "ceos", "srl") for type-matching during config mapping
     device_kind: Mapped[str | None] = mapped_column(String(100), nullable=True)

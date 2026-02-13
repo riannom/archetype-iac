@@ -485,7 +485,7 @@ async def test_destroy_node_not_found(provider, workspace, mock_docker_client):
     # No remaining containers at all
     mock_docker_client.containers.list.return_value = []
 
-    with patch("agent.readiness.clear_post_boot_state") as mock_clear:
+    with patch("agent.readiness.clear_post_boot_state"):
         with patch.object(
             provider, "_delete_lab_networks", new_callable=AsyncMock
         ) as mock_delete_nets:
@@ -498,9 +498,133 @@ async def test_destroy_node_not_found(provider, workspace, mock_docker_client):
     assert result.success is True
     assert result.node_name == "ghost_node"
 
-    # Post-boot state should still be cleared (idempotent)
-    container_name = provider._container_name("lab1", "ghost_node")
-    mock_clear.assert_called_once_with(container_name)
-
     # Since no containers remain, networks should be deleted
     mock_delete_nets.assert_awaited_once_with("lab1")
+
+
+# ---------------------------------------------------------------------------
+# stop_node tests (unified lifecycle: stop = remove)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stop_node_removes_container(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """stop_node stops and removes the container entirely."""
+    mock_container.status = "running"
+    mock_docker_client.containers.get.return_value = mock_container
+
+    # Pre-populate VLAN allocations
+    provider._vlan_allocations["lab1"] = {"node1": [100, 101], "node2": [200]}
+
+    with patch("agent.readiness.clear_post_boot_state") as mock_clear:
+        result = await provider.stop_node(
+            lab_id="lab1",
+            node_name="node1",
+            workspace=workspace,
+        )
+
+    assert result.success is True
+    assert result.node_name == "node1"
+    assert result.new_status == NodeStatus.STOPPED
+    assert "removed" in result.stdout.lower()
+
+    # Container should have been stopped then removed
+    mock_container.stop.assert_called_once()
+    mock_container.remove.assert_called_once_with(force=True, v=True)
+
+    # Post-boot state should be cleared
+    mock_clear.assert_called_once_with("archetype-lab1-node1")
+
+    # Per-node VLAN allocations cleaned, other nodes untouched
+    assert "node1" not in provider._vlan_allocations["lab1"]
+    assert "node2" in provider._vlan_allocations["lab1"]
+
+
+@pytest.mark.asyncio
+async def test_stop_node_already_stopped_removes(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """stop_node removes an already-stopped (exited) container."""
+    mock_container.status = "exited"
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("agent.readiness.clear_post_boot_state"):
+        result = await provider.stop_node(
+            lab_id="lab1",
+            node_name="node1",
+            workspace=workspace,
+        )
+
+    assert result.success is True
+    assert result.new_status == NodeStatus.STOPPED
+
+    # Should NOT have called stop (already exited), but should have removed
+    mock_container.stop.assert_not_called()
+    mock_container.remove.assert_called_once_with(force=True, v=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_node_not_found_is_success(
+    provider, workspace, mock_docker_client
+):
+    """stop_node returns success when container is already gone."""
+    mock_docker_client.containers.get.side_effect = NotFound("not found")
+
+    result = await provider.stop_node(
+        lab_id="lab1",
+        node_name="gone_node",
+        workspace=workspace,
+    )
+
+    assert result.success is True
+    assert result.node_name == "gone_node"
+    assert result.new_status == NodeStatus.STOPPED
+    assert "already removed" in result.stdout.lower()
+
+
+@pytest.mark.asyncio
+async def test_stop_node_does_not_clean_lab_networks(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """stop_node does NOT clean up lab-level Docker networks (only destroy does)."""
+    mock_container.status = "running"
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("agent.readiness.clear_post_boot_state"):
+        with patch.object(
+            provider, "_delete_lab_networks", new_callable=AsyncMock
+        ) as mock_delete_nets:
+            result = await provider.stop_node(
+                lab_id="lab1",
+                node_name="node1",
+                workspace=workspace,
+            )
+
+    assert result.success is True
+    # Lab networks should NOT be deleted on stop
+    mock_delete_nets.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_destroy_node_uses_remove_container_helper(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """destroy_node uses _remove_container internally (DRY)."""
+    mock_docker_client.containers.get.return_value = mock_container
+    mock_docker_client.containers.list.return_value = []  # last container
+
+    with patch("agent.readiness.clear_post_boot_state"):
+        with patch.object(
+            provider, "_delete_lab_networks", new_callable=AsyncMock
+        ):
+            result = await provider.destroy_node(
+                lab_id="lab1",
+                node_name="node1",
+                workspace=workspace,
+            )
+
+    assert result.success is True
+    # Container should be removed (via _remove_container)
+    mock_container.remove.assert_called_once_with(force=True, v=True)

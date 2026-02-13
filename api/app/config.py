@@ -121,6 +121,8 @@ class Settings(BaseSettings):
     feature_vxlan_overlay: bool = True
     # Auto-extract configs before destroy operations
     feature_auto_extract_on_destroy: bool = True
+    # Auto-extract configs before stop operations (unified lifecycle)
+    feature_auto_extract_on_stop: bool = True
     # Auto-extract configs before enforcement restart of crashed/exited nodes
     feature_auto_extract_on_enforcement: bool = True
     # Per-node lifecycle: create/start/stop/destroy individual containers
