@@ -44,4 +44,27 @@ describe('AgentAlertBanner', () => {
       expect(screen.queryByText('Agent Error')).toBeNull();
     });
   });
+
+  it('does not immediately refetch alerts in a render loop', async () => {
+    apiRequest.mockResolvedValue({
+      alerts: [
+        {
+          agent_id: 'agent-1',
+          agent_name: 'Agent One',
+          error_message: 'Disconnected',
+          error_since: new Date(Date.now() - 60000).toISOString(),
+        },
+      ],
+      agent_error_count: 1,
+    });
+
+    render(<AgentAlertBanner />);
+
+    expect(await screen.findByText('Agent Error')).toBeInTheDocument();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+
+    // The next fetch should happen on the 30s poll interval, not immediately.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+  });
 });

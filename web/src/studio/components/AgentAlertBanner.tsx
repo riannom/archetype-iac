@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../api';
 
@@ -49,28 +49,46 @@ const AgentAlertBanner: React.FC<AgentAlertBannerProps> = ({ className = '' }) =
   const [alerts, setAlerts] = useState<AgentAlert[]>([]);
   const [dismissed, setDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const alertsRef = useRef<AgentAlert[]>([]);
+  const dismissedRef = useRef(false);
+  const isFetchingRef = useRef(false);
+
+  useEffect(() => {
+    alertsRef.current = alerts;
+  }, [alerts]);
+
+  useEffect(() => {
+    dismissedRef.current = dismissed;
+  }, [dismissed]);
 
   const fetchAlerts = useCallback(async () => {
+    if (isFetchingRef.current) {
+      return;
+    }
+    isFetchingRef.current = true;
+
     try {
       const data = await apiRequest<SystemAlertsResponse>('/system/alerts');
-      setAlerts(data.alerts || []);
+      const nextAlerts = data.alerts || [];
+
       // If new alerts appear after dismissal, show banner again
-      if (data.alerts.length > 0 && dismissed) {
+      if (nextAlerts.length > 0 && dismissedRef.current) {
         // Only reset dismissed if we have different alerts
-        const currentIds = new Set(alerts.map(a => a.agent_id));
-        const newIds = new Set(data.alerts.map(a => a.agent_id));
-        const hasNewAlerts = data.alerts.some(a => !currentIds.has(a.agent_id));
+        const currentIds = new Set(alertsRef.current.map(a => a.agent_id));
+        const hasNewAlerts = nextAlerts.some(a => !currentIds.has(a.agent_id));
         if (hasNewAlerts) {
           setDismissed(false);
         }
       }
+      setAlerts(nextAlerts);
     } catch (err) {
       // Silently fail - alerts endpoint may not exist on older API versions
       console.debug('Failed to fetch system alerts:', err);
     } finally {
       setLoading(false);
+      isFetchingRef.current = false;
     }
-  }, [alerts, dismissed]);
+  }, []);
 
   useEffect(() => {
     fetchAlerts();
