@@ -1018,6 +1018,9 @@ class CreateNodeRequest(BaseModel):
     nic_driver: str | None = Field(None, description="NIC model: virtio, e1000, rtl8139")
     machine_type: str | None = Field(None, description="QEMU machine type")
     libvirt_driver: str | None = Field(None, description="Libvirt domain driver: kvm or qemu")
+    readiness_probe: str | None = Field(None, description="Readiness probe type override")
+    readiness_pattern: str | None = Field(None, description="Readiness regex override")
+    readiness_timeout: int | None = Field(None, gt=0, description="Boot readiness timeout in seconds")
     efi_boot: bool | None = Field(None, description="Enable EFI firmware boot")
     efi_vars: str | None = Field(None, description="EFI vars mode (e.g., stateless)")
 
