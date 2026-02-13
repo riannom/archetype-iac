@@ -97,6 +97,7 @@ class VendorConfig:
     efi_boot: bool = False       # Boot with UEFI firmware (OVMF) instead of legacy BIOS
     efi_vars: str = ""           # EFI NVRAM mode: "" (stateful, default), "stateless" (no persistent NVRAM)
     serial_type: str = "pty"     # Serial port type: "pty" (default virsh console), "tcp" (TCP telnet)
+    nographic: bool = False      # Remove VGA/VNC display; forces UEFI output to serial console
     force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
 
     # Image requirements
@@ -264,7 +265,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         disk_driver="virtio",
         nic_driver="virtio",
         efi_boot=True,
-        serial_type="tcp",  # IOS-XRv requires TCP telnet serial (PTY outputs to VGA)
+        nographic=True,  # Remove VGA so OVMF outputs to serial (virsh console)
         requires_image=True,
         supported_image_kinds=["qcow2"],
         # Boot readiness: detect XR CLI prompt or config dialog
@@ -1734,6 +1735,7 @@ class LibvirtRuntimeConfig:
     readiness_pattern: str | None
     readiness_timeout: int
     serial_type: str = "pty"  # "pty" (default virsh console) or "tcp" (TCP telnet)
+    nographic: bool = False  # Remove VGA/VNC; forces UEFI output to serial
     force_stop: bool = True  # Skip ACPI shutdown (most network VMs don't support it)
     source: str = "vendor"  # "vendor" for matched profile, "fallback" for generic defaults
 
@@ -1794,6 +1796,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             readiness_pattern=None,
             readiness_timeout=120,
             serial_type="pty",
+            nographic=False,
             force_stop=True,
             source="fallback",
         )
@@ -1811,6 +1814,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         readiness_pattern=config.readiness_pattern,
         readiness_timeout=config.readiness_timeout,
         serial_type=config.serial_type,
+        nographic=config.nographic,
         force_stop=config.force_stop,
         source="vendor",
     )

@@ -1038,9 +1038,10 @@ class LibvirtProvider(Provider):
       <target type='serial' port='0'/>
     </console>"""
 
-        # VNC graphics + VGA video for PTY serial VMs (default).
-        # TCP serial VMs omit display devices so OVMF outputs to serial.
-        if serial_type == "tcp":
+        # VNC graphics + VGA video by default.
+        # nographic=True omits display devices so OVMF outputs to serial.
+        nographic = node_config.get("nographic", False)
+        if nographic or serial_type == "tcp":
             graphics_xml = ""
         else:
             graphics_xml = """    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
@@ -1739,6 +1740,7 @@ class LibvirtProvider(Provider):
                 "efi_boot": efi_boot if efi_boot is not None else libvirt_config.efi_boot,
                 "efi_vars": efi_vars if efi_vars is not None else libvirt_config.efi_vars,
                 "serial_type": libvirt_config.serial_type,
+                "nographic": libvirt_config.nographic,
                 "data_volume_gb": data_volume_gb if data_volume_gb is not None else libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
