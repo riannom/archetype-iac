@@ -49,6 +49,7 @@ import logging
 import os
 import secrets
 import signal
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -148,7 +149,12 @@ class DockerOVSPlugin:
         self.networks: dict[str, NetworkState] = {}  # network_id -> NetworkState
         self.endpoints: dict[str, EndpointState] = {}  # endpoint_id -> EndpointState
         self.management_networks: dict[str, ManagementNetwork] = {}  # lab_id -> ManagementNetwork
-        self._lock = asyncio.Lock()
+        # Lazily initialized the first time we need mutual exclusion inside an
+        # async context. Creating asyncio primitives in __init__ can bind them
+        # to a non-running (or already closed) loop, which breaks under pytest
+        # on Python 3.11+ with "Event loop is closed".
+        self._lock: asyncio.Lock | None = None
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._started_at = datetime.now(timezone.utc)
         self._cleanup_task: asyncio.Task | None = None
         self._binding_audit_task: asyncio.Task | None = None
@@ -162,6 +168,26 @@ class DockerOVSPlugin:
         workspace.mkdir(parents=True, exist_ok=True)
         self._state_file = workspace / STATE_PERSISTENCE_FILE
         self._state_dirty = False  # Track if state needs saving
+
+    @asynccontextmanager
+    async def _locked(self):
+        """Serialize plugin state mutations without binding locks at __init__."""
+        # In production the plugin lives for the lifetime of the agent, so the
+        # running loop is stable. In unit tests (and Starlette/FastAPI
+        # TestClient), it's common to create and destroy multiple event loops in
+        # a single process. If we keep a lock bound to a loop that's now closed,
+        # subsequent uses can fail with "Event loop is closed".
+        loop = asyncio.get_running_loop()
+        if (
+            self._lock is None
+            or self._lock_loop is None
+            or self._lock_loop is not loop
+            or self._lock_loop.is_closed()
+        ):
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        async with self._lock:
+            yield
 
     # =========================================================================
     # OVS Operations
@@ -1382,7 +1408,7 @@ class DockerOVSPlugin:
         """Verify endpoint host_veth bindings and refresh stale mappings."""
         stats = {"checked": 0, "drifted": 0, "repaired": 0, "failed": 0}
         candidates: list[tuple[str, str, str, str]] = []
-        async with self._lock:
+        async with self._locked():
             for ep in self.endpoints.values():
                 if not ep.container_name:
                     continue
@@ -1417,7 +1443,7 @@ class DockerOVSPlugin:
         ttl = timedelta(seconds=settings.lab_ttl_seconds)
 
         expired_labs = []
-        async with self._lock:
+        async with self._locked():
             for lab_id, bridge in list(self.lab_bridges.items()):
                 age = now - bridge.last_activity
                 if age > ttl:
@@ -1451,7 +1477,7 @@ class DockerOVSPlugin:
 
     async def _full_lab_cleanup(self, lab_id: str) -> None:
         """Clean up all resources for a lab."""
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 return
@@ -1542,7 +1568,7 @@ class DockerOVSPlugin:
         Returns:
             ManagementNetwork with network details
         """
-        async with self._lock:
+        async with self._locked():
             # Check if already exists
             if lab_id in self.management_networks:
                 return self.management_networks[lab_id]
@@ -1764,7 +1790,7 @@ class DockerOVSPlugin:
         Returns:
             VXLAN port name
         """
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 raise ValueError(f"Lab bridge not found for {lab_id}")
@@ -1825,7 +1851,7 @@ class DockerOVSPlugin:
         Returns:
             True if deleted, False if not found
         """
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 return False
@@ -1869,7 +1895,7 @@ class DockerOVSPlugin:
         Returns:
             VLAN tag used (0 for trunk mode)
         """
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 raise ValueError(f"Lab bridge not found for {lab_id}")
@@ -1931,7 +1957,7 @@ class DockerOVSPlugin:
         Returns:
             Shared VLAN tag
         """
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 raise ValueError(f"Lab bridge not found for {lab_id}")
@@ -1980,7 +2006,7 @@ class DockerOVSPlugin:
         Returns:
             True if removed, False if not found
         """
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 return False
@@ -2163,7 +2189,7 @@ class DockerOVSPlugin:
 
         logger.info(f"Creating network {network_id[:12]} for lab={lab_id}, interface={interface_name}")
 
-        async with self._lock:
+        async with self._locked():
             try:
                 # Ensure lab bridge exists
                 lab_bridge = await self._ensure_bridge(lab_id)
@@ -2194,7 +2220,7 @@ class DockerOVSPlugin:
         data = await request.json()
         network_id = data.get("NetworkID", "")
 
-        async with self._lock:
+        async with self._locked():
             network = self.networks.pop(network_id, None)
             if network:
                 lab_bridge = self.lab_bridges.get(network.lab_id)
@@ -2219,7 +2245,7 @@ class DockerOVSPlugin:
         network_id = data.get("NetworkID", "")
         endpoint_id = data.get("EndpointID", "")
 
-        async with self._lock:
+        async with self._locked():
             network = self.networks.get(network_id)
             if not network:
                 return web.json_response({"Err": f"Network {network_id[:12]} not found"})
@@ -2273,7 +2299,7 @@ class DockerOVSPlugin:
         network_id = data.get("NetworkID", "")
         endpoint_id = data.get("EndpointID", "")
 
-        async with self._lock:
+        async with self._locked():
             endpoint = self.endpoints.pop(endpoint_id, None)
             if endpoint:
                 self._release_vlan(endpoint.vlan_tag)
@@ -2297,7 +2323,7 @@ class DockerOVSPlugin:
         endpoint_id = data.get("EndpointID", "")
         sandbox_key = data.get("SandboxKey", "")
 
-        async with self._lock:
+        async with self._locked():
             endpoint = self.endpoints.get(endpoint_id)
             if not endpoint:
                 return web.json_response({"Err": f"Endpoint {endpoint_id[:12]} not found"})
@@ -2569,7 +2595,7 @@ class DockerOVSPlugin:
         Returns:
             Shared VLAN tag on success, None on failure
         """
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 logger.error(f"Lab bridge not found for {lab_id}")
@@ -2661,7 +2687,7 @@ class DockerOVSPlugin:
         Returns:
             New unique VLAN tag on success, None on failure
         """
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 return None
@@ -2820,7 +2846,7 @@ class DockerOVSPlugin:
         Returns:
             True on success, False on failure.
         """
-        async with self._lock:
+        async with self._locked():
             lab_bridge = self.lab_bridges.get(lab_id)
             if not lab_bridge:
                 logger.error(f"Lab bridge not found for {lab_id}")
@@ -2876,7 +2902,7 @@ class DockerOVSPlugin:
         Returns:
             VLAN tag if found, None otherwise.
         """
-        async with self._lock:
+        async with self._locked():
             for ep in self.endpoints.values():
                 if ep.container_name == container and ep.interface_name == interface:
                     if read_from_ovs:
@@ -2939,7 +2965,7 @@ class DockerOVSPlugin:
         Returns:
             True if endpoint was found and updated, False otherwise.
         """
-        async with self._lock:
+        async with self._locked():
             for ep in self.endpoints.values():
                 if ep.container_name == container and ep.interface_name == interface:
                     old_vlan = ep.vlan_tag
@@ -2957,7 +2983,7 @@ class DockerOVSPlugin:
         if ep:
             ep.vlan_tag = vlan_tag
             # Add to tracking if discovered
-            async with self._lock:
+            async with self._locked():
                 self.endpoints[ep.endpoint_id] = ep
                 await self._mark_dirty_and_save()
             logger.debug(
@@ -3035,7 +3061,7 @@ class DockerOVSPlugin:
 
     async def set_endpoint_container_name(self, endpoint_id: str, container_name: str) -> None:
         """Associate endpoint with container name for hot-connect lookups."""
-        async with self._lock:
+        async with self._locked():
             endpoint = self.endpoints.get(endpoint_id)
             if endpoint:
                 endpoint.container_name = container_name
@@ -3052,7 +3078,7 @@ class DockerOVSPlugin:
 
         Falls back to endpoint discovery if tracking state is missing.
         """
-        async with self._lock:
+        async with self._locked():
             for ep in self.endpoints.values():
                 network = self.networks.get(ep.network_id)
                 if not network or network.lab_id != lab_id:
@@ -3131,7 +3157,7 @@ class DockerOVSPlugin:
         Returns:
             List of dicts with repair results per endpoint.
         """
-        async with self._lock:
+        async with self._locked():
             return await self._repair_endpoints_locked(lab_id, container_name)
 
     async def _repair_endpoints_locked(
@@ -3139,7 +3165,7 @@ class DockerOVSPlugin:
         lab_id: str,
         container_name: str,
     ) -> list[dict[str, Any]]:
-        """Inner implementation of repair_endpoints, called under self._lock."""
+        """Inner implementation of repair_endpoints, called under self._locked()."""
         results: list[dict[str, Any]] = []
 
         # Collect stale endpoints for this container

@@ -55,7 +55,9 @@ class DockerEventListener(NodeEventListener):
     def __init__(self):
         self._client: docker.DockerClient | None = None
         self._running = False
-        self._stop_event = asyncio.Event()
+        # Lazily initialized in start() to avoid binding asyncio primitives to a
+        # non-running (or already closed) loop during import/unit tests.
+        self._stop_event: asyncio.Event | None = None
         self._thread_stop = threading.Event()
         self._event_queue: queue.Queue = queue.Queue()
         self._reader_thread: threading.Thread | None = None
@@ -69,10 +71,14 @@ class DockerEventListener(NodeEventListener):
             callback: Async function to call with each NodeEvent
         """
         self._running = True
+        # Create a fresh stop event bound to the currently running loop.
+        # This avoids "Event loop is closed" issues when the listener is
+        # instantiated in synchronous code (e.g. tests) and later started.
+        self._stop_event = asyncio.Event()
         self._stop_event.clear()
         self._thread_stop.clear()
 
-        while self._running and not self._stop_event.is_set():
+        while self._running and self._stop_event is not None and not self._stop_event.is_set():
             try:
                 # Connect to Docker
                 self._client = docker.from_env()
@@ -257,7 +263,8 @@ class DockerEventListener(NodeEventListener):
         """Stop listening for events."""
         logger.info("Stopping Docker event listener...")
         self._running = False
-        self._stop_event.set()
+        if self._stop_event is not None:
+            self._stop_event.set()
         self._thread_stop.set()
 
         # Wait for reader thread to finish
