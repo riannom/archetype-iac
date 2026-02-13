@@ -94,6 +94,7 @@ class VendorConfig:
     nic_driver: str = "virtio"   # NIC model: virtio, e1000, rtl8139
     machine_type: str = "pc-q35-6.2"  # QEMU machine type: pc-q35-* (modern), pc-i440fx-* (legacy IDE)
     data_volume_gb: int = 0      # Size of additional data volume (0 = none)
+    efi_boot: bool = False       # Boot with UEFI firmware (OVMF) instead of legacy BIOS
     force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
 
     # Image requirements
@@ -811,6 +812,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         cpu=2,
         nic_driver="e1000",  # NX-OS lacks virtio drivers; e1000 required
         machine_type="pc-i440fx-6.2",  # e1000 TX hangs on Q35; i440fx is reliable
+        efi_boot=True,  # N9Kv image uses UEFI; legacy BIOS drops to boot manager
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
@@ -1677,6 +1679,7 @@ class LibvirtRuntimeConfig:
     disk_driver: str
     nic_driver: str
     data_volume_gb: int
+    efi_boot: bool
     readiness_probe: str
     readiness_pattern: str | None
     readiness_timeout: int
@@ -1734,6 +1737,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             disk_driver="virtio",
             nic_driver="virtio",
             data_volume_gb=0,
+            efi_boot=False,
             readiness_probe="none",
             readiness_pattern=None,
             readiness_timeout=120,
@@ -1748,6 +1752,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         disk_driver=config.disk_driver,
         nic_driver=config.nic_driver,
         data_volume_gb=config.data_volume_gb,
+        efi_boot=config.efi_boot,
         readiness_probe=config.readiness_probe,
         readiness_pattern=config.readiness_pattern,
         readiness_timeout=config.readiness_timeout,
@@ -1905,6 +1910,7 @@ def get_vendors_for_ui() -> list[dict]:
             "diskDriver": config.disk_driver,
             "nicDriver": config.nic_driver,
             "machineType": config.machine_type,
+            "efiBoot": config.efi_boot,
             # Image configuration
             "requiresImage": config.requires_image,
             "supportedImageKinds": config.supported_image_kinds,

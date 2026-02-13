@@ -1095,7 +1095,7 @@ class LibvirtProvider(Provider):
             )
             resolved_libvirt_driver = node.libvirt_driver if node.libvirt_driver is not None else "kvm"
             resolved_efi_boot = (
-                node.efi_boot if node.efi_boot is not None else False
+                node.efi_boot if node.efi_boot is not None else libvirt_config.efi_boot
             )
             resolved_efi_vars = node.efi_vars
             resolved_readiness_probe = (
@@ -1598,7 +1598,7 @@ class LibvirtProvider(Provider):
                 "readiness_probe": readiness_probe if readiness_probe is not None else libvirt_config.readiness_probe,
                 "readiness_pattern": readiness_pattern if readiness_pattern is not None else libvirt_config.readiness_pattern,
                 "readiness_timeout": readiness_timeout if readiness_timeout is not None else libvirt_config.readiness_timeout,
-                "efi_boot": efi_boot if efi_boot is not None else False,
+                "efi_boot": efi_boot if efi_boot is not None else libvirt_config.efi_boot,
                 "efi_vars": efi_vars,
                 "data_volume_gb": libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
