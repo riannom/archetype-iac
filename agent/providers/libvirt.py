@@ -1018,6 +1018,7 @@ class LibvirtProvider(Provider):
 
         # Build serial/console XML — PTY (default) or TCP telnet
         serial_type = node_config.get("serial_type", "pty")
+        serial_port_count = node_config.get("serial_port_count", 1)
         if serial_type == "tcp":
             tcp_port = self._allocate_tcp_serial_port()
             serial_xml = f"""    <serial type='tcp'>
@@ -1037,6 +1038,12 @@ class LibvirtProvider(Provider):
     <console type='pty'>
       <target type='serial' port='0'/>
     </console>"""
+            # Additional serial ports (e.g., IOS-XRv 9000 needs 4 total)
+            for port_idx in range(1, serial_port_count):
+                serial_xml += f"""
+    <serial type='pty'>
+      <target port='{port_idx}'/>
+    </serial>"""
 
         # VNC graphics + VGA video by default.
         # nographic=True omits display devices so OVMF outputs to serial.
@@ -1260,6 +1267,9 @@ class LibvirtProvider(Provider):
                 "readiness_probe": resolved_readiness_probe,
                 "readiness_pattern": resolved_readiness_pattern,
                 "readiness_timeout": resolved_readiness_timeout,
+                "serial_type": libvirt_config.serial_type,
+                "nographic": libvirt_config.nographic,
+                "serial_port_count": libvirt_config.serial_port_count,
                 "interface_count": interface_count,
                 "_display_name": display_name,
             }
@@ -1741,6 +1751,7 @@ class LibvirtProvider(Provider):
                 "efi_vars": efi_vars if efi_vars is not None else libvirt_config.efi_vars,
                 "serial_type": libvirt_config.serial_type,
                 "nographic": libvirt_config.nographic,
+                "serial_port_count": libvirt_config.serial_port_count,
                 "data_volume_gb": data_volume_gb if data_volume_gb is not None else libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
