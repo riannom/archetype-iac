@@ -13,7 +13,6 @@ from app import agent_client, db, models, schemas
 from app.auth import get_current_admin, get_current_user
 from app.config import settings
 from app.utils.lab import get_lab_or_404
-from app.utils.http import require_admin
 
 _SAFE_SERVICE_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 

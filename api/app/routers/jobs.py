@@ -19,8 +19,7 @@ from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_de
 from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
-from app.enums import LabRole
-from app.utils.lab import get_lab_or_404, get_lab_provider, get_lab_with_role, require_lab_editor
+from app.utils.lab import get_lab_or_404, get_lab_provider, require_lab_editor
 from app.utils.logs import get_log_content, _is_likely_file_path
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job

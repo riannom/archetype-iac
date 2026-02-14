@@ -279,6 +279,14 @@ class MockAgent:
         self.resource_usage = None
         self.is_local = False
 
+    def get_capabilities(self) -> dict:
+        """Parse capabilities JSON string into a dict, with safe fallback."""
+        try:
+            import json
+            return json.loads(self.capabilities) if self.capabilities else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
 
 class MockLab:
     """Helper class for creating mock labs in tests."""

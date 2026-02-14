@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 from app import db, models
 from app.auth import get_current_admin, get_current_user
 from app.config import settings
-from app.utils.http import require_admin
 from app.image_store import (
     create_image_entry,
     delete_image_entry,
