@@ -148,7 +148,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           <span>Filters</span>
           {hasActiveFilters && (
             <span className="px-1.5 py-0.5 bg-sage-500 text-white rounded text-[9px]">
-              {selectedVendors.size + selectedTypes.size + (imageStatus !== 'has_image' ? 1 : 0)}
+              {(searchQuery.length > 0 ? 1 : 0) + selectedVendors.size + selectedTypes.size + (imageStatus !== 'has_image' ? 1 : 0)}
             </span>
           )}
           <i className={`fa-solid fa-chevron-down text-[8px] transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
