@@ -23,6 +23,13 @@ from app.utils.timeouts import AGENT_HTTP_TIMEOUT, AGENT_VTEP_TIMEOUT
 logger = logging.getLogger(__name__)
 
 
+def _get_agent_auth_headers() -> dict[str, str]:
+    """Return auth headers for agent requests if secret is configured."""
+    if settings.agent_secret:
+        return {"Authorization": f"Bearer {settings.agent_secret}"}
+    return {}
+
+
 async def resolve_agent_ip(address: str) -> str:
     """Extract and resolve IP address from agent address.
 
@@ -186,6 +193,7 @@ async def _agent_request(
             json=json_body,
             params=params,
             timeout=timeout,
+            headers=_get_agent_auth_headers(),
         )
         response.raise_for_status()
         if response.status_code == 204:
@@ -614,7 +622,7 @@ async def check_agent_health(agent: models.Host) -> bool:
 
     try:
         client = get_http_client()
-        response = await client.get(url, timeout=settings.agent_health_check_timeout)
+        response = await client.get(url, timeout=settings.agent_health_check_timeout, headers=_get_agent_auth_headers())
         if response.status_code == 200:
             return True
     except Exception as e:

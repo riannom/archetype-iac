@@ -7,8 +7,8 @@ XRv9000 VM boots its Host OS (Wind River Linux) successfully, but **XR control p
 ### Issue 1: Spirit grub.cfg failure (FIXED)
 Libvirt auto-created a second pflash device (NVRAM) that confused Spirit's device enumeration during early boot. vrnetlab uses a single read-only pflash (OVMF CODE only). Fix: use `<qemu:commandline>` to bypass libvirt firmware auto-selection.
 
-### Issue 2: XR RPM payload corruption (ROOT CAUSE FOUND)
-After fixing pflash, Spirit successfully installs sysadmin packages and boots Calvados. The XR packages exist as an ISO inside the install repo (`/install_repo/gl/xr/xrv9k-xr-25.1.1`, 552MB ISO). During first boot, the install agent extracts 25 RPMs from this ISO and installs them. **One RPM is corrupted in the base qcow2 image:**
+### Issue 2: XR RPM payload corruption (LIKELY PAGE CACHE, NOT ON-DISK)
+After fixing pflash, Spirit successfully installs sysadmin packages and boots Calvados. The XR packages exist as an ISO inside the install repo (`/install_repo/gl/xr/xrv9k-xr-25.1.1`, 552MB ISO). During first boot, the install agent extracts 25 RPMs from this ISO and installs them. **One RPM appeared corrupted in the base qcow2 image:**
 
 ```
 xrv9k-iosxr-infra-1.0.0.0-r2511.x86_64.rpm: DIGESTS signatures NOT OK
@@ -17,25 +17,63 @@ Expected: e19d706e9e1031313728fdeda93de616c08b0c93f4992c57ccbd5924a0bf8690
 Actual:   4ef2896f8b901850f019cb57a15e3e4e02488b499b8e87666f9e66a47b139726
 ```
 
-All other 24 RPMs verify correctly. The install agent retries once, fails again, then aborts:
-```
-Failed to install iso rpms
-failed to unpack RPM pkgs to /install/tmp/partprep for card 1
-ERROR! instagt_prep_sdr_pkg_and_part_ready failed to prep partition for XR VM
+**UPDATE (Feb 14, 2026):** This corruption was almost certainly caused by QEMU page cache poisoning (Issue 3 below), not actual on-disk corruption. The `writeback` cache mode allowed QEMU COW operations to modify the host page cache of the read-only backing image. The RPM digest failure was the guest reading corrupted page cache data, not corrupted disk data.
+
+### Issue 3: QEMU page cache corruption of backing images (ROOT CAUSE — FIXED)
+
+**Problem:** QEMU 10.0.7 with the default `writeback` cache mode corrupts the **host page cache** of read-only qcow2 backing images during COW operations. The backing file is opened `O_RDONLY` on disk, but QEMU modifies in-memory page cache contents. This causes:
+
+- **I/O errors on the overlay disk** — reads return corrupted data from stale page cache
+- **VM boot failures** — XRv9000 can't read its own disk (RPM SHA256 digest failures)
+- **Unstable file hashes** — MD5/SHA256 of backing image changes between reads while VM runs (4 different hashes observed in a single session)
+- **File on disk is fine** — correct hash returns after killing QEMU + `echo 3 > /proc/sys/vm/drop_caches`
+
+**Evidence collected:**
+- MD5 of backing image changed 4 times during a session: `74e7e943...` → `90ec6c76...` → `ef975712...` → `554d795d...`
+- After QEMU killed + cache drop: hash converged to `554d795d495badf90b6c75a2a342b409` (matches API host)
+- No process had the file open after QEMU was killed — hash still changed until cache drop
+- Agent-01 uses NFS-like shared storage from API host, amplifying cache coherency issues
+
+**Fix (commit `9606ed5`):**
+```xml
+<!-- Before -->
+<driver name='qemu' type='qcow2'/>
+
+<!-- After -->
+<driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
 ```
 
-This means XR packages are never installed, so `show vm` only shows sysadmin.
+- `cache='none'` → O_DIRECT, bypasses host page cache entirely (prevents corruption)
+- `io='native'` → Linux native AIO, required for optimal O_DIRECT performance
+- `discard='unmap'` → passes guest TRIM to host (reclaims overlay disk space)
+
+**Verification results after fix:**
+| Check | Before (writeback) | After (cache=none) |
+|-------|-------------------|-------------------|
+| Backing image MD5 stability | 4 different hashes | 3/3 identical |
+| I/O errors in QEMU log | 6 errors during boot | 0 errors |
+| VM state | Boot failure | Running successfully |
+| QEMU blockdev flags | `cache.direct=false` | `cache.direct=true` + `aio=native` |
+
+**Deployment:**
+- New installs: automatic (fix is in Python code, loaded at agent startup)
+- Docker Compose: automatic (builds from source on `docker compose up --build`)
+- Remote agent updates: automatic (`POST /agents/{id}/update` pulls latest code)
+- **Existing running VMs: require redeploy** (stop → start or destroy → deploy) to pick up new domain XML
+
+**Also added:** Pre-deployment SHA256 integrity check (`_verify_backing_image()`) that detects stale page cache data before overlay creation. On mismatch, drops caches and re-verifies. If still mismatched, reports actual file corruption.
 
 ### Fix for Issue 2
-**Re-download the qcow2 image.** The current image has data corruption in one compressed cluster affecting the `xrv9k-iosxr-infra` RPM payload. `qemu-img check` passes (structure is fine), but the data within the 83.24% compressed clusters has a bad sector.
+**Previously recommended re-downloading the image. This is likely unnecessary** — the corruption was in the page cache, not on disk. The `cache='none'` fix (Issue 3) prevents the page cache from being poisoned. If the RPM digest failure recurs even with `cache='none'`, then the image genuinely needs re-downloading.
 
 Current image:
 - Path: `/var/lib/archetype/images/xrv9k-fullk9-x-25.1.1.qcow2`
 - Size: 2,002,911,232 bytes (1.87GB actual, 64GB virtual)
-- MD5: `74e7e943bc4590753e9a2fcfd6bfd4fc`
+- MD5 (on-disk, correct): `554d795d495badf90b6c75a2a342b409`
+- Previous "corrupted" MD5 `74e7e943bc4590753e9a2fcfd6bfd4fc` was page cache corruption, not on-disk
 - Compression: 83.24% compressed clusters, 86.65% fragmented
 
-After replacing the image, destroy the existing VM and overlay disk, then redeploy.
+After replacing the image (if needed), destroy the existing VM and overlay disk, then redeploy.
 
 ## Current State (Feb 14, 2026)
 
@@ -86,6 +124,7 @@ Also: `pi_update_efi_grub()` in `pd-functions:1129` hardcodes `/dev/sda4` for si
 **Status**: TCP serial is harmless and correct for when XR eventually works, so leaving it in place.
 
 ## Commits Made
+- `9606ed5` - fix: bypass page cache for QEMU backing images to prevent corruption (**THE FIX**)
 - `a2ba969` - fix(agent): use QEMU commandline passthrough for stateless EFI pflash
 - `2255a9d` - fix(agent): align XRv9000 EFI config with vrnetlab (stateless pflash, SMM off)
 - `ec178ea` - fix(agent): set CPU migratable=off for host-passthrough (harmless, not the fix)
@@ -162,6 +201,7 @@ Note: Only Host OS entry. No XR entry (Spirit never added it).
 | Dummy NICs | ctrl-dummy + dev-dummy | ctrl-dummy + dev-dummy (tap) | FIXED |
 | Boot | strict=on | order=c | OK |
 | Serial | serial0=TCP, serial1-3=PTY | 4x TCP telnet | OK |
+| Disk cache | cache='none' io='native' | default (writeback) | FIXED (was writeback, caused page cache corruption) |
 | /dev/sda4 hardcode | same as vrnetlab (non-fatal) | same (non-fatal) | Known, non-blocking |
 
 ## Accessing Host OS from Calvados

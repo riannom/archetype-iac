@@ -174,10 +174,12 @@ async def check_agent_has_image(
 
         # Query the target agent directly for file existence.
         try:
+            from app.agent_client import _get_agent_auth_headers
             async with httpx.AsyncClient(timeout=10.0) as client:
                 encoded_ref = quote(reference, safe="")
                 response = await client.get(
-                    f"http://{host.address}/images/{encoded_ref}"
+                    f"http://{host.address}/images/{encoded_ref}",
+                    headers=_get_agent_auth_headers(),
                 )
                 if response.status_code == 200:
                     result = response.json()
@@ -200,11 +202,13 @@ async def check_agent_has_image(
 
     # Docker image - query agent
     try:
+        from app.agent_client import _get_agent_auth_headers
         async with httpx.AsyncClient(timeout=10.0) as client:
             # URL-encode the reference for the path
             encoded_ref = quote(reference, safe='')
             response = await client.get(
-                f"http://{host.address}/images/{encoded_ref}"
+                f"http://{host.address}/images/{encoded_ref}",
+                headers=_get_agent_auth_headers(),
             )
             if response.status_code == 200:
                 result = response.json()
@@ -225,8 +229,9 @@ async def get_agent_image_inventory(host: models.Host) -> list[dict]:
         List of image info dicts with id, tags, size_bytes
     """
     try:
+        from app.agent_client import _get_agent_auth_headers
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"http://{host.address}/images")
+            response = await client.get(f"http://{host.address}/images", headers=_get_agent_auth_headers())
             if response.status_code == 200:
                 result = response.json()
                 return result.get("images", [])

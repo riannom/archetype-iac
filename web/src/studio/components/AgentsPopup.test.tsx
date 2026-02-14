@@ -3,9 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AgentsPopup from "./AgentsPopup";
 
-// Mock fetch globally
-const mockFetch = vi.fn();
-(globalThis as any).fetch = mockFetch;
+// Mock apiRequest
+const mockApiRequest = vi.fn();
+vi.mock("../../api", () => ({
+  apiRequest: (...args: any[]) => mockApiRequest(...args),
+}));
 
 const mockAgentsData = [
   {
@@ -86,10 +88,7 @@ describe("AgentsPopup", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockAgentsData),
-    });
+    mockApiRequest.mockResolvedValue(mockAgentsData);
   });
 
   it("renders nothing when isOpen is false", () => {
@@ -98,7 +97,7 @@ describe("AgentsPopup", () => {
     );
 
     expect(container.firstChild).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockApiRequest).not.toHaveBeenCalled();
   });
 
   it("shows loading state when opened", () => {
@@ -111,7 +110,7 @@ describe("AgentsPopup", () => {
     render(<AgentsPopup isOpen={true} onClose={mockOnClose} />);
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith("/api/agents/detailed");
+      expect(mockApiRequest).toHaveBeenCalledWith("/agents/detailed");
     });
   });
 
@@ -295,10 +294,7 @@ describe("AgentsPopup", () => {
 
   describe("empty states", () => {
     it("shows empty state when no agents registered", async () => {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve([]),
-      });
+      mockApiRequest.mockResolvedValue([]);
 
       render(<AgentsPopup isOpen={true} onClose={mockOnClose} />);
 

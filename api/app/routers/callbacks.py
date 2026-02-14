@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app import db, models, schemas
+from app.agent_auth import verify_agent_secret
 from app.utils.lab import update_lab_state
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map
 from app import agent_client
@@ -34,6 +35,7 @@ async def job_completion_callback(
     job_id: str,
     payload: schemas.JobCallbackPayload,
     database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
 ) -> schemas.JobCallbackResponse:
     """Receive job completion callback from an agent.
 
@@ -298,6 +300,7 @@ async def _auto_reattach_overlay_endpoints(
 async def job_heartbeat(
     job_id: str,
     database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
 ) -> dict:
     """Receive heartbeat from agent for a running job.
 
@@ -326,6 +329,7 @@ async def dead_letter_callback(
     job_id: str,
     payload: schemas.JobCallbackPayload,
     database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
 ) -> schemas.JobCallbackResponse:
     """Receive a dead letter callback (callback that failed multiple times).
 
@@ -392,6 +396,7 @@ async def update_progress_callback(
     job_id: str,
     payload: UpdateProgressPayload,
     database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
 ) -> dict:
     """Receive update progress from an agent.
 

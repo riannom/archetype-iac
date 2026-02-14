@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -9,13 +10,21 @@ from app.config import settings
 if TYPE_CHECKING:
     from app.schemas import LabLayout
 
+_SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
 
 def workspace_root() -> Path:
     return Path(settings.workspace)
 
 
 def lab_workspace(lab_id: str) -> Path:
-    return workspace_root() / lab_id
+    if not _SAFE_ID_RE.match(lab_id):
+        raise ValueError(f"Invalid lab_id: {lab_id}")
+    workspace = workspace_root() / lab_id
+    resolved = workspace.resolve()
+    if not resolved.is_relative_to(workspace_root().resolve()):
+        raise ValueError(f"Path traversal detected in lab_id: {lab_id}")
+    return workspace
 
 
 def layout_path(lab_id: str) -> Path:

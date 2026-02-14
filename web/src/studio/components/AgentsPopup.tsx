@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import DetailPopup from './DetailPopup';
 import { formatTimestamp, formatUptimeFromBoot } from '../../utils/format';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
+import { apiRequest } from '../../api';
 
 interface AgentDetail {
   id: string;
@@ -52,8 +53,7 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     if (isOpen) {
       setLoading(true);
-      fetch('/api/agents/detailed')
-        .then(res => res.json())
+      apiRequest<AgentDetail[]>('/agents/detailed')
         .then(setAgents)
         .catch(console.error)
         .finally(() => setLoading(false));

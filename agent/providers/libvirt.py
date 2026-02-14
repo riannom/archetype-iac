@@ -155,6 +155,22 @@ class LibvirtProvider(Provider):
     VLAN_RANGE_END = 2999
     ALLOWED_DOMAIN_DRIVERS = {"kvm", "qemu"}
 
+    # Whitelisted values for domain XML generation
+    VALID_MACHINE_TYPES = {
+        "pc", "q35",
+        "pc-i440fx-2.9", "pc-q35-2.9",
+        "pc-i440fx-4.2", "pc-q35-4.2",
+        "pc-i440fx-6.2", "pc-q35-6.2",
+        "pc-i440fx-8.2", "pc-q35-8.2",
+        "pc-q35-9.0",
+        "virt",
+    }
+    VALID_DISK_DRIVERS = {"virtio", "ide", "scsi", "sata"}
+    VALID_NIC_DRIVERS = {
+        "virtio", "e1000", "rtl8139", "i82551", "i82557b",
+        "i82559er", "ne2k_pci", "pcnet",
+    }
+
     def __init__(self):
         if not LIBVIRT_AVAILABLE:
             raise ImportError("libvirt-python package is not installed")
@@ -929,10 +945,16 @@ class LibvirtProvider(Provider):
         cpus = node_config.get("cpu", 1)
         cpu_limit = node_config.get("cpu_limit")
 
-        # Get driver and machine settings
+        # Get driver and machine settings (whitelist-validated)
         machine_type = node_config.get("machine_type", "pc-q35-6.2")
+        if machine_type not in self.VALID_MACHINE_TYPES:
+            raise ValueError(f"Invalid machine type: {machine_type}")
         disk_driver = node_config.get("disk_driver", "virtio")
+        if disk_driver not in self.VALID_DISK_DRIVERS:
+            raise ValueError(f"Invalid disk driver: {disk_driver}")
         nic_driver = node_config.get("nic_driver", "virtio")
+        if nic_driver not in self.VALID_NIC_DRIVERS:
+            raise ValueError(f"Invalid NIC driver: {nic_driver}")
         libvirt_driver = self._resolve_domain_driver(
             node_config.get("libvirt_driver"),
             name,
@@ -954,7 +976,7 @@ class LibvirtProvider(Provider):
         disks_xml = f'''
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
-      <source file='{overlay_path}'/>
+      <source file='{xml_escape(str(overlay_path))}'/>
       <target dev='{dev_prefix}a' bus='{disk_driver}'/>
     </disk>'''
 
@@ -962,7 +984,7 @@ class LibvirtProvider(Provider):
             disks_xml += f'''
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
-      <source file='{data_volume_path}'/>
+      <source file='{xml_escape(str(data_volume_path))}'/>
       <target dev='{dev_prefix}b' bus='{disk_driver}'/>
     </disk>'''
 
@@ -984,7 +1006,7 @@ class LibvirtProvider(Provider):
             interfaces_xml += f'''
     <interface type='network'>
       <mac address='{mgmt_mac}'/>
-      <source network='{management_network}'/>
+      <source network='{xml_escape(management_network)}'/>
       <model type='{nic_driver}'/>
     </interface>'''
             data_interface_mac_offset = 1
@@ -1064,7 +1086,7 @@ class LibvirtProvider(Provider):
   </metadata>'''
 
         # Build OS section, optionally enabling EFI firmware.
-        os_type_line = f"<type arch='x86_64' machine='{machine_type}'>hvm</type>"
+        os_type_line = f"<type arch='x86_64' machine='{xml_escape(machine_type)}'>hvm</type>"
         os_open = "<os>"
         os_extras = "\n    <boot dev='hd'/>"
         qemu_commandline_xml = ""
@@ -1080,7 +1102,7 @@ class LibvirtProvider(Provider):
                     qemu_commandline_xml = (
                         "\n  <qemu:commandline>"
                         f"\n    <qemu:arg value='-drive'/>"
-                        f"\n    <qemu:arg value='if=pflash,format=raw,readonly=on,file={ovmf_code}'/>"
+                        f"\n    <qemu:arg value='if=pflash,format=raw,readonly=on,file={xml_escape(ovmf_code)}'/>"
                         "\n  </qemu:commandline>"
                     )
                 else:
@@ -1092,11 +1114,11 @@ class LibvirtProvider(Provider):
                 # Stateful EFI: let libvirt manage firmware via firmware='efi'
                 os_open = "<os firmware='efi'>"
                 if ovmf_code:
-                    os_extras += f"\n    <loader readonly='yes' type='pflash'>{ovmf_code}</loader>"
+                    os_extras += f"\n    <loader readonly='yes' type='pflash'>{xml_escape(ovmf_code)}</loader>"
                     if ovmf_vars:
                         os_extras += (
-                            f"\n    <nvram template='{ovmf_vars}'>"
-                            f"/var/lib/libvirt/qemu/nvram/{name}_VARS.fd</nvram>"
+                            f"\n    <nvram template='{xml_escape(ovmf_vars)}'>"
+                            f"/var/lib/libvirt/qemu/nvram/{xml_escape(name)}_VARS.fd</nvram>"
                         )
                 else:
                     logger.warning(
@@ -1204,7 +1226,7 @@ class LibvirtProvider(Provider):
         qemu_ns = " xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'" if qemu_commandline_xml else ""
 
         xml = f'''<domain type='{libvirt_driver}'{qemu_ns}>{sysinfo_xml}
-  <name>{name}</name>
+  <name>{xml_escape(name)}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
   <memory unit='MiB'>{memory_mb}</memory>
   <vcpu>{cpus}</vcpu>{cputune_xml}

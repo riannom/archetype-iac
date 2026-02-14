@@ -3,9 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ContainersPopup from "./ContainersPopup";
 
-// Mock fetch globally
-const mockFetch = vi.fn();
-(globalThis as any).fetch = mockFetch;
+// Mock apiRequest
+const mockApiRequest = vi.fn();
+vi.mock("../../api", () => ({
+  apiRequest: (...args: any[]) => mockApiRequest(...args),
+}));
 
 const mockContainersData = {
   by_lab: {
@@ -91,10 +93,7 @@ describe("ContainersPopup", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockContainersData),
-    });
+    mockApiRequest.mockResolvedValue(mockContainersData);
   });
 
   it("renders nothing when isOpen is false", () => {
@@ -103,7 +102,7 @@ describe("ContainersPopup", () => {
     );
 
     expect(container.firstChild).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockApiRequest).not.toHaveBeenCalled();
   });
 
   it("shows loading state when opened", () => {
@@ -116,7 +115,7 @@ describe("ContainersPopup", () => {
     render(<ContainersPopup isOpen={true} onClose={mockOnClose} />);
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith("/api/dashboard/metrics/containers");
+      expect(mockApiRequest).toHaveBeenCalledWith("/dashboard/metrics/containers");
     });
   });
 
@@ -350,15 +349,11 @@ describe("ContainersPopup", () => {
 
   describe("empty states", () => {
     it("shows empty state when no containers found", async () => {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            by_lab: {},
-            system_containers: [],
-            total_running: 0,
-            total_stopped: 0,
-          }),
+      mockApiRequest.mockResolvedValue({
+        by_lab: {},
+        system_containers: [],
+        total_running: 0,
+        total_stopped: 0,
       });
 
       render(<ContainersPopup isOpen={true} onClose={mockOnClose} />);
@@ -369,10 +364,7 @@ describe("ContainersPopup", () => {
     });
 
     it("shows error state when fetch fails", async () => {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.reject(new Error("Network error")),
-      });
+      mockApiRequest.mockRejectedValue(new Error("Network error"));
 
       render(<ContainersPopup isOpen={true} onClose={mockOnClose} />);
 

@@ -16,25 +16,30 @@ def test_client():
     original_enable_docker = settings.enable_docker
     original_enable_ovs_plugin = settings.enable_ovs_plugin
     original_enable_vxlan = settings.enable_vxlan
+    original_controller_secret = settings.controller_secret
     settings.enable_docker = False
     settings.enable_ovs_plugin = False
     settings.enable_vxlan = True
+    settings.controller_secret = ""  # Disable auth for tests
     client = TestClient(app)
     yield client
     client.close()
     settings.enable_docker = original_enable_docker
     settings.enable_ovs_plugin = original_enable_ovs_plugin
     settings.enable_vxlan = original_enable_vxlan
+    settings.controller_secret = original_controller_secret
 
 
 def _mock_subprocess(outputs: dict[str, tuple[int, str]]):
-    """Create a mock for asyncio.create_subprocess_shell.
+    """Create a mock for asyncio.create_subprocess_exec.
 
     Args:
         outputs: Mapping from command substring to (returncode, stdout).
+                 The substring is matched against the joined args string.
     """
 
-    async def fake_create_subprocess_shell(cmd, **kwargs):
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        cmd = " ".join(str(a) for a in args)
         for key, (code, out) in outputs.items():
             if key in cmd:
                 proc = AsyncMock()
@@ -49,7 +54,7 @@ def _mock_subprocess(outputs: dict[str, tuple[int, str]]):
         proc.communicate = AsyncMock(return_value=(b"", b""))
         return proc
 
-    return fake_create_subprocess_shell
+    return fake_create_subprocess_exec
 
 
 def test_reconcile_removes_stale_ports(test_client):
@@ -62,7 +67,7 @@ def test_reconcile_removes_stale_ports(test_client):
         "del-port": (0, ""),
     }
 
-    with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
+    with patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
             json={"valid_port_names": ["vxlan-aabb1122"]},
@@ -83,7 +88,7 @@ def test_reconcile_keeps_all_valid_ports(test_client):
         "get interface vxlan-ccdd3344 type": (0, "vxlan"),
     }
 
-    with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
+    with patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
             json={"valid_port_names": ["vxlan-aabb1122", "vxlan-ccdd3344"]},
@@ -104,7 +109,7 @@ def test_reconcile_empty_valid_list_removes_all_vxlan(test_client):
         "del-port": (0, ""),
     }
 
-    with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
+    with patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
             json={"valid_port_names": [], "force": True, "confirm": True, "allow_empty": True},
@@ -126,7 +131,7 @@ def test_reconcile_ignores_non_vxlan_ports(test_client):
         "del-port": (0, ""),
     }
 
-    with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
+    with patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
             json={"valid_port_names": [], "force": True, "confirm": True, "allow_empty": True},
@@ -138,12 +143,12 @@ def test_reconcile_ignores_non_vxlan_ports(test_client):
 
 
 def test_reconcile_no_ports_on_bridge(test_client):
-    """No ports on bridge → nothing to reconcile."""
+    """No ports on bridge -> nothing to reconcile."""
     outputs = {
         "list-ports": (0, ""),
     }
 
-    with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
+    with patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
             json={"valid_port_names": ["vxlan-aabb1122"]},
@@ -162,7 +167,7 @@ def test_reconcile_handles_del_port_failure(test_client):
         "del-port": (1, "Error: no port named vxlan-stale1"),
     }
 
-    with patch("asyncio.create_subprocess_shell", side_effect=_mock_subprocess(outputs)):
+    with patch("asyncio.create_subprocess_exec", side_effect=_mock_subprocess(outputs)):
         resp = test_client.post(
             "/overlay/reconcile-ports",
             json={"valid_port_names": [], "force": True, "confirm": True, "allow_empty": True},

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # Controller connection
     controller_url: str = "http://localhost:8000"
     registration_token: str = ""  # Optional auth token for registration
+    controller_secret: str = ""  # Pre-shared secret for agent-controller auth
 
     # Heartbeat settings
     heartbeat_interval: int = 10  # seconds

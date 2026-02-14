@@ -251,6 +251,7 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
 async def lab_state_websocket(
     websocket: WebSocket,
     lab_id: str,
+    token: str | None = None,
 ) -> None:
     """WebSocket endpoint for real-time lab state updates.
 
@@ -273,6 +274,13 @@ async def lab_state_websocket(
     Using a dependency would keep the session open for the entire connection
     lifetime, leading to 'idle in transaction' connection leaks.
     """
+    # Validate JWT token before accepting connection
+    from app.auth import validate_ws_token
+    user = validate_ws_token(token)
+    if not user:
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+
     await manager.connect(websocket, lab_id)
 
     # Start subscription task

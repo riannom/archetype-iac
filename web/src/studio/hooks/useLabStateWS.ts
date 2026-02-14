@@ -134,7 +134,9 @@ export function useLabStateWS(
       baseUrl = baseUrl.replace(/^http/, 'ws');
     }
 
-    return `${baseUrl}/ws/labs/${labId}/state`;
+    const wsUrl = `${baseUrl}/ws/labs/${labId}/state`;
+    const token = localStorage.getItem('token');
+    return token ? `${wsUrl}?token=${encodeURIComponent(token)}` : wsUrl;
   }, [labId]);
 
   // Handle incoming messages - uses refs for callbacks so this doesn't change identity

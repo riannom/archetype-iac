@@ -18,8 +18,15 @@ router = APIRouter(tags=["console"])
 
 
 @router.websocket("/labs/{lab_id}/nodes/{node}/console")
-async def console_ws(websocket: WebSocket, lab_id: str, node: str) -> None:
+async def console_ws(websocket: WebSocket, lab_id: str, node: str, token: str | None = None) -> None:
     """Proxy console WebSocket to agent."""
+    # Validate JWT token before accepting connection
+    from app.auth import validate_ws_token
+    user = validate_ws_token(token)
+    if not user:
+        await websocket.close(code=4401, reason="Authentication required")
+        return
+
     await websocket.accept()
 
     with get_session() as database:

@@ -3,9 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ResourcesPopup from "./ResourcesPopup";
 
-// Mock fetch globally
-const mockFetch = vi.fn();
-(globalThis as any).fetch = mockFetch;
+// Mock apiRequest
+const mockApiRequest = vi.fn();
+vi.mock("../../api", () => ({
+  apiRequest: (...args: any[]) => mockApiRequest(...args),
+}));
 
 const mockResourcesData = {
   by_agent: [
@@ -64,10 +66,7 @@ describe("ResourcesPopup", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockResourcesData),
-    });
+    mockApiRequest.mockResolvedValue(mockResourcesData);
   });
 
   describe("CPU mode", () => {
@@ -77,7 +76,7 @@ describe("ResourcesPopup", () => {
       );
 
       expect(container.firstChild).toBeNull();
-      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockApiRequest).not.toHaveBeenCalled();
     });
 
     it("shows loading state when opened", () => {
@@ -90,7 +89,7 @@ describe("ResourcesPopup", () => {
       render(<ResourcesPopup isOpen={true} onClose={mockOnClose} type="cpu" />);
 
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/dashboard/metrics/resources");
+        expect(mockApiRequest).toHaveBeenCalledWith("/dashboard/metrics/resources");
       });
     });
 
@@ -230,13 +229,9 @@ describe("ResourcesPopup", () => {
 
   describe("empty states", () => {
     it("shows empty state when no agents online", async () => {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            by_agent: [],
-            by_lab: [],
-          }),
+      mockApiRequest.mockResolvedValue({
+        by_agent: [],
+        by_lab: [],
       });
 
       render(<ResourcesPopup isOpen={true} onClose={mockOnClose} type="cpu" />);
@@ -247,13 +242,9 @@ describe("ResourcesPopup", () => {
     });
 
     it("hides lab section when no labs present", async () => {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            by_agent: mockResourcesData.by_agent,
-            by_lab: [],
-          }),
+      mockApiRequest.mockResolvedValue({
+        by_agent: mockResourcesData.by_agent,
+        by_lab: [],
       });
 
       render(<ResourcesPopup isOpen={true} onClose={mockOnClose} type="cpu" />);
@@ -265,10 +256,7 @@ describe("ResourcesPopup", () => {
     });
 
     it("shows error state when fetch fails", async () => {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.reject(new Error("Network error")),
-      });
+      mockApiRequest.mockRejectedValue(new Error("Network error"));
 
       render(<ResourcesPopup isOpen={true} onClose={mockOnClose} type="cpu" />);
 

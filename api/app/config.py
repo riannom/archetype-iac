@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 480
     session_secret: str = ""
+    agent_secret: str = ""  # Pre-shared secret for agent authentication (env: AGENT_SECRET)
 
     max_concurrent_jobs_per_user: int = 2
 

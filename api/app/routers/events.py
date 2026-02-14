@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app import db, models, schemas
+from app.agent_auth import verify_agent_secret
 from app.services.broadcaster import broadcast_node_state_change
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,7 @@ def _event_type_to_actual_state(
 async def receive_node_event(
     payload: schemas.NodeEventPayload,
     database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
 ) -> schemas.NodeEventResponse:
     """Receive a node state change event from an agent.
 
@@ -230,6 +232,7 @@ async def receive_node_event(
 async def receive_batch_events(
     events: list[schemas.NodeEventPayload],
     database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
 ) -> schemas.NodeEventResponse:
     """Receive multiple node events in a single request.
 

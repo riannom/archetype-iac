@@ -14,6 +14,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import db, models
+from app.agent_auth import verify_agent_secret
 from app.auth import get_current_user
 from app.config import settings
 from app.routers.system import get_commit
@@ -122,6 +123,7 @@ class DashboardMetrics(BaseModel):
 async def register_agent(
     request: RegistrationRequest,
     database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
 ) -> RegistrationResponse:
     """Register a new agent or update existing registration.
 
@@ -434,6 +436,7 @@ def heartbeat(
     agent_id: str,
     request: HeartbeatRequest,
     database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
 ) -> HeartbeatResponse:
     """Receive heartbeat from agent."""
     host = database.get(models.Host, agent_id)
@@ -964,8 +967,9 @@ async def list_agent_interfaces(
         raise HTTPException(status_code=503, detail="Agent is offline")
 
     try:
+        from app.agent_client import _get_agent_auth_headers
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{host.address}/interfaces")
+            response = await client.get(f"{host.address}/interfaces", headers=_get_agent_auth_headers())
             response.raise_for_status()
             return response.json()
     except httpx.RequestError as e:
@@ -994,8 +998,9 @@ async def list_agent_bridges(
         raise HTTPException(status_code=503, detail="Agent is offline")
 
     try:
+        from app.agent_client import _get_agent_auth_headers
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{host.address}/bridges")
+            response = await client.get(f"{host.address}/bridges", headers=_get_agent_auth_headers())
             response.raise_for_status()
             return response.json()
     except httpx.RequestError as e:
@@ -1136,6 +1141,7 @@ async def trigger_agent_update(
 
     # Send update request to agent with commit SHA as target
     try:
+        from app.agent_client import _get_agent_auth_headers
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"http://{host.address}/update",
@@ -1144,6 +1150,7 @@ async def trigger_agent_update(
                     "target_version": checkout_ref,
                     "callback_url": callback_url,
                 },
+                headers=_get_agent_auth_headers(),
             )
             response.raise_for_status()
             result = response.json()
@@ -1270,6 +1277,7 @@ async def trigger_bulk_update(
     async def _dispatch_update(agent_id: str, job_id: str, address: str) -> dict:
         callback_url = f"{settings.internal_url}/callbacks/update/{job_id}"
         try:
+            from app.agent_client import _get_agent_auth_headers
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     f"http://{address}/update",
@@ -1278,6 +1286,7 @@ async def trigger_bulk_update(
                         "target_version": checkout_ref,
                         "callback_url": callback_url,
                     },
+                    headers=_get_agent_auth_headers(),
                 )
                 resp.raise_for_status()
                 result = resp.json()

@@ -54,6 +54,14 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Archetype API controller")
 
+    # JWT secret validation - must happen before anything else
+    WEAK_SECRETS = {"", "changeme", "secret", "jwt_secret", "your-secret-key", "test"}
+    if not settings.jwt_secret:
+        logger.critical("JWT_SECRET is not configured - refusing to start")
+        raise SystemExit("JWT_SECRET must be set")
+    if settings.jwt_secret in WEAK_SECRETS:
+        logger.warning("JWT_SECRET appears to be a weak/default value - change it in production!")
+
     # Set up asyncio exception handler for catching unhandled exceptions in tasks
     setup_asyncio_exception_handler()
 
@@ -207,7 +215,6 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         status_code=500,
         content={
             "detail": "Internal server error",
-            "error_type": type(exc).__name__,
             "correlation_id": correlation_id,
             "message": "An unexpected error occurred. Please check server logs for details.",
         },
@@ -251,8 +258,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Correlation-ID"],
 )
 app.add_middleware(CurrentUserMiddleware)
 app.add_middleware(DeprecationMiddleware, sunset_date="2026-12-01")
@@ -350,7 +357,7 @@ def list_images() -> dict[str, object]:
 
 
 @app.get("/dashboard/metrics")
-def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
+def get_dashboard_metrics(database: Session = Depends(db.get_db), _user: models.User = Depends(get_current_user)) -> dict:
     """Get aggregated system metrics for the dashboard.
 
     Returns agent counts, container counts, CPU/memory usage, and lab stats.
@@ -481,7 +488,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db)) -> dict:
 
 
 @app.get("/dashboard/metrics/containers")
-def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
+def get_containers_breakdown(database: Session = Depends(db.get_db), _user: models.User = Depends(get_current_user)) -> dict:
     """Get detailed container and VM breakdown by lab."""
     from app.utils.cache import cache_get, cache_set
     cached = cache_get("dashboard:containers")
@@ -559,7 +566,7 @@ def get_containers_breakdown(database: Session = Depends(db.get_db)) -> dict:
 
 
 @app.get("/dashboard/metrics/resources")
-def get_resource_distribution(database: Session = Depends(db.get_db)) -> dict:
+def get_resource_distribution(database: Session = Depends(db.get_db), _user: models.User = Depends(get_current_user)) -> dict:
     """Get resource usage distribution by agent and lab."""
     from app.utils.cache import cache_get, cache_set
     cached = cache_get("dashboard:resources")

@@ -12,8 +12,10 @@ This agent runs on each compute host and handles:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -23,6 +25,8 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from agent.config import settings
 from agent.network.backends.registry import get_network_backend
@@ -284,6 +288,7 @@ async def forward_event_to_controller(event):
                 f"{settings.controller_url}/events/node",
                 json=payload,
                 timeout=5.0,
+                headers=_get_controller_auth_headers(),
             )
             if response.status_code == 200:
                 logger.debug(f"Forwarded event: {event.event_type.value} for {event.log_name()}")
@@ -295,7 +300,12 @@ async def forward_event_to_controller(event):
 
 def get_workspace(lab_id: str) -> Path:
     """Get workspace directory for a lab."""
+    if not _SAFE_ID_RE.match(lab_id):
+        raise ValueError(f"Invalid lab_id: {lab_id}")
     workspace = Path(settings.workspace_path) / lab_id
+    resolved = workspace.resolve()
+    if not resolved.is_relative_to(Path(settings.workspace_path).resolve()):
+        raise ValueError(f"Path traversal detected in lab_id: {lab_id}")
     workspace.mkdir(parents=True, exist_ok=True)
     return workspace
 
@@ -631,6 +641,7 @@ async def register_with_controller() -> bool:
                 f"{settings.controller_url}/agents/register",
                 json=request.model_dump(mode='json'),
                 timeout=settings.registration_timeout,
+                headers=_get_controller_auth_headers(),
             )
             if response.status_code == 200:
                 result = RegistrationResponse(**response.json())
@@ -676,6 +687,7 @@ async def _bootstrap_transport_config() -> None:
             response = await client.get(
                 f"{settings.controller_url}/infrastructure/agents/{AGENT_ID}/transport-config",
                 timeout=10.0,
+                headers=_get_controller_auth_headers(),
             )
             if response.status_code != 200:
                 logger.debug("No transport config from controller (not configured)")
@@ -778,6 +790,7 @@ async def send_heartbeat() -> HeartbeatResponse | None:
                 f"{settings.controller_url}/agents/{AGENT_ID}/heartbeat",
                 json=request.model_dump(),
                 timeout=settings.heartbeat_timeout,
+                headers=_get_controller_auth_headers(),
             )
             if response.status_code == 200:
                 return HeartbeatResponse(**response.json())
@@ -956,13 +969,69 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_origins = [settings.controller_url] if settings.controller_url else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+class AgentAuthMiddleware(BaseHTTPMiddleware):
+    """Validate pre-shared secret on inbound requests from controller."""
+
+    EXEMPT_PATHS = {"/health", "/healthz"}
+
+    async def dispatch(self, request, call_next):
+        # Skip auth if no secret configured (backward compat)
+        if not settings.controller_secret:
+            return await call_next(request)
+
+        # Skip health endpoints
+        if request.url.path in self.EXEMPT_PATHS:
+            return await call_next(request)
+
+        # Skip WebSocket upgrades (handled in WS handlers)
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            return await call_next(request)
+
+        # Validate Bearer token
+        auth = request.headers.get("authorization", "")
+        if not auth.startswith("Bearer "):
+            return JSONResponse(status_code=403, content={"detail": "Missing authorization"})
+
+        token = auth.split(" ", 1)[1]
+        if not hmac.compare_digest(token, settings.controller_secret):
+            return JSONResponse(status_code=403, content={"detail": "Invalid authorization"})
+
+        return await call_next(request)
+
+
+app.add_middleware(AgentAuthMiddleware)
+
+
+def _get_controller_auth_headers() -> dict[str, str]:
+    """Return auth headers for controller requests if secret is configured."""
+    if settings.controller_secret:
+        return {"Authorization": f"Bearer {settings.controller_secret}"}
+    return {}
+
+
+_SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+_PORT_NAME_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
+_CONTAINER_PREFIX_RE = re.compile(r"^(archetype-|arch-)")
+
+
+def _validate_port_name(name: str) -> bool:
+    """Validate OVS port name to prevent command injection."""
+    return bool(name) and len(name) <= 64 and _PORT_NAME_RE.match(name) is not None
+
+
+def _validate_container_name(name: str) -> bool:
+    """Validate container name has expected prefix."""
+    return bool(name) and _CONTAINER_PREFIX_RE.match(name) is not None
 
 
 # --- Health Endpoints ---
@@ -1974,6 +2043,8 @@ async def start_container(container_name: str) -> dict:
     Used by the sync system to start individual nodes without redeploying.
     Uses asyncio.to_thread() to avoid blocking the event loop.
     """
+    if not _validate_container_name(container_name):
+        raise HTTPException(status_code=400, detail="Invalid container name: must start with 'archetype-' or 'arch-'")
     logger.info(f"Starting container: {container_name}")
 
     try:
@@ -2004,6 +2075,8 @@ async def stop_container(container_name: str) -> dict:
     Used by the sync system to stop individual nodes without destroying the lab.
     Uses asyncio.to_thread() to avoid blocking the event loop.
     """
+    if not _validate_container_name(container_name):
+        raise HTTPException(status_code=400, detail="Invalid container name: must start with 'archetype-' or 'arch-'")
     logger.info(f"Stopping container: {container_name}")
 
     try:
@@ -2034,6 +2107,8 @@ async def remove_container(container_name: str, force: bool = False) -> dict:
     Used to clean up orphan containers or containers that need to be recreated.
     Uses asyncio.to_thread() to avoid blocking the event loop.
     """
+    if not _validate_container_name(container_name):
+        raise HTTPException(status_code=400, detail="Invalid container name: must start with 'archetype-' or 'arch-'")
     logger.info(f"Removing container: {container_name} (force={force})")
 
     try:
@@ -2071,6 +2146,8 @@ async def remove_container_for_lab(
     Returns:
         Dict with success status and message/error
     """
+    if not _validate_container_name(container_name):
+        raise HTTPException(status_code=400, detail="Invalid container name: must start with 'archetype-' or 'arch-'")
     logger.info(f"Removing container {container_name} for lab {lab_id} (force={force})")
 
     try:
@@ -2701,47 +2778,25 @@ async def overlay_status() -> OverlayStatusResponse:
         return OverlayStatusResponse()
 
 
-@app.post("/debug/exec")
-async def debug_exec(request: dict):
-    """Debug: execute a command in a container or on the host."""
-    import asyncio
-
-    try:
-        container = request.get("container")
-        command = request.get("command", "echo ok")
-        if container:
-            cmd = f"docker exec {container} {command}"
-        else:
-            cmd = command
-
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await proc.communicate()
-        return {
-            "returncode": proc.returncode,
-            "stdout": stdout.decode()[:4000],
-            "stderr": stderr.decode()[:2000],
-        }
-    except Exception as e:
-        return {"returncode": -1, "stdout": "", "stderr": str(e)[:2000]}
-
 
 @app.delete("/overlay/bridge-ports/{port_name}")
 async def delete_bridge_port(port_name: str):
     """Delete an OVS port by name (for cleanup of orphaned ports)."""
     import asyncio
 
+    if not _validate_port_name(port_name):
+        return {"deleted": False, "port_name": port_name, "message": "Invalid port name"}
+
     bridge = settings.ovs_bridge_name or "arch-ovs"
 
-    async def run(cmd: str) -> tuple[int, str]:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    async def run(*args: str) -> tuple[int, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await proc.communicate()
         return proc.returncode, (stdout or stderr).decode().strip()
 
-    code, output = await run(f"ovs-vsctl --if-exists del-port {bridge} {port_name}")
+    code, output = await run("ovs-vsctl", "--if-exists", "del-port", bridge, port_name)
     return {
         "deleted": code == 0,
         "port_name": port_name,
@@ -2756,15 +2811,15 @@ async def overlay_bridge_ports():
 
     bridge = settings.ovs_bridge_name or "arch-ovs"
 
-    async def run(cmd: str) -> str:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    async def run(*args: str) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, _ = await proc.communicate()
         return stdout.decode().strip()
 
     # Get all ports on the bridge
-    ports_raw = await run(f"ovs-vsctl list-ports {bridge}")
+    ports_raw = await run("ovs-vsctl", "list-ports", bridge)
     all_ports = ports_raw.split("\n") if ports_raw else []
 
     vxlan_ports = []
@@ -2773,7 +2828,7 @@ async def overlay_bridge_ports():
         if not port_name:
             continue
         iface_type = await run(
-            f"ovs-vsctl get interface {port_name} type"
+            "ovs-vsctl", "get", "interface", port_name, "type"
         )
         # Detect VXLAN ports by OVS type OR by name pattern (Linux VXLAN
         # devices added as system ports have type="" in OVS)
@@ -2782,10 +2837,10 @@ async def overlay_bridge_ports():
             or port_name.startswith(("vxlan-", "vxlan", "vtep"))
         )
         if is_vxlan:
-            tag = await run(f"ovs-vsctl get port {port_name} tag")
-            options = await run(f"ovs-vsctl get interface {port_name} options")
+            tag = await run("ovs-vsctl", "get", "port", port_name, "tag")
+            options = await run("ovs-vsctl", "get", "interface", port_name, "options")
             stats = await run(
-                f"ovs-vsctl get interface {port_name} statistics"
+                "ovs-vsctl", "get", "interface", port_name, "statistics"
             )
             vxlan_ports.append({
                 "name": port_name,
@@ -2795,10 +2850,10 @@ async def overlay_bridge_ports():
                 "type": iface_type,
             })
         else:
-            tag = await run(f"ovs-vsctl get port {port_name} tag")
+            tag = await run("ovs-vsctl", "get", "port", port_name, "tag")
             other_ports.append({"name": port_name, "tag": tag})
 
-    fdb_raw = await run(f"ovs-appctl fdb/show {bridge}")
+    fdb_raw = await run("ovs-appctl", "fdb/show", bridge)
 
     return {
         "bridge": bridge,
@@ -2845,15 +2900,15 @@ async def reconcile_overlay_ports(request: dict):
         }
     bridge = settings.ovs_bridge_name or "arch-ovs"
 
-    async def run(cmd: str) -> tuple[int, str]:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    async def run(*args: str) -> tuple[int, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await proc.communicate()
         return proc.returncode, (stdout or stderr).decode().strip()
 
     # List all ports on the bridge
-    _, ports_raw = await run(f"ovs-vsctl list-ports {bridge}")
+    _, ports_raw = await run("ovs-vsctl", "list-ports", bridge)
     all_ports = ports_raw.split("\n") if ports_raw else []
 
     removed = []
@@ -2861,7 +2916,7 @@ async def reconcile_overlay_ports(request: dict):
         if not port_name:
             continue
         # Check if this port is a VXLAN type (OVS-managed or Linux device)
-        _, iface_type = await run(f"ovs-vsctl get interface {port_name} type")
+        _, iface_type = await run("ovs-vsctl", "get", "interface", port_name, "type")
         is_vxlan = (
             iface_type == "vxlan"
             or port_name.startswith(("vxlan-", "vxlan"))
@@ -2871,11 +2926,15 @@ async def reconcile_overlay_ports(request: dict):
         # Skip if it's in the valid set
         if port_name in valid_port_names:
             continue
+        # Validate port name before deletion to prevent injection
+        if not _validate_port_name(port_name):
+            logger.warning(f"Skipping invalid port name during reconciliation: {port_name!r}")
+            continue
         # Delete the stale VXLAN port from OVS
-        code, msg = await run(f"ovs-vsctl --if-exists del-port {bridge} {port_name}")
+        code, msg = await run("ovs-vsctl", "--if-exists", "del-port", bridge, port_name)
         if code == 0:
             # Clean up Linux VXLAN device (system ports aren't auto-deleted by OVS)
-            await run(f"ip link delete {port_name}")
+            await run("ip", "link", "delete", port_name)
             removed.append(port_name)
             logger.info(f"Removed stale VXLAN port: {port_name}")
         else:
@@ -3152,8 +3211,18 @@ async def test_mtu(request: MtuTestRequest) -> MtuTestResponse:
     Returns:
         MtuTestResponse with test results
     """
+    import ipaddress as _ipaddress
+
     target_ip = request.target_ip
     mtu = request.mtu
+
+    # Validate IP addresses before passing to subprocess
+    try:
+        _ipaddress.ip_address(target_ip)
+        if request.source_ip:
+            _ipaddress.ip_address(request.source_ip)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid IP address")
 
     # Calculate ping payload size: MTU - 20 (IP header) - 8 (ICMP header)
     payload_size = mtu - 28
@@ -5812,6 +5881,9 @@ async def receive_image(
                 )
 
             destination = Path(reference)
+            base = Path(settings.workspace_path).resolve()
+            if not destination.resolve().is_relative_to(base):
+                raise HTTPException(status_code=400, detail="Invalid destination path")
             destination.parent.mkdir(parents=True, exist_ok=True)
             temp_destination = destination.with_name(
                 f"{destination.name}.part-{uuid.uuid4().hex[:8]}"
@@ -6049,7 +6121,7 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
 
         # Stream the image from controller
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
-            async with client.stream("GET", stream_url) as response:
+            async with client.stream("GET", stream_url, headers=_get_controller_auth_headers()) as response:
                 if response.status_code != 200:
                     error_msg = f"Controller returned {response.status_code}"
                     _image_pull_jobs[job_id] = ImagePullProgress(
@@ -6283,7 +6355,8 @@ async def console_websocket(
                     # Docker exec-based console for native containers
                     await _console_websocket_docker(websocket, container_name, node_name, shell_cmd)
             except Exception as e:
-                await websocket.send_text(f"\r\nError: {e}\r\n")
+                logger.error(f"Console error for {node_name}: {e}")
+                await websocket.send_text("\r\nError: Console connection failed\r\n")
                 await websocket.close(code=1011)
             return
 
@@ -6455,8 +6528,8 @@ async def _console_websocket_docker(
 
     # Try to start console session with appropriate shell (using async version)
     if not await console.start_async(shell=shell_cmd):
-        await websocket.send_text(f"\r\nError: Could not connect to {node_name}\r\n")
-        await websocket.send_text(f"Container '{container_name}' may not be running.\r\n")
+        logger.error(f"Console connect failed: container '{container_name}' may not be running")
+        await websocket.send_text(f"\r\nError: Could not connect to {node_name}. Node may not be running.\r\n")
         await websocket.close(code=1011)
         return
 
@@ -6670,12 +6743,12 @@ async def _console_websocket_libvirt(
             try:
                 error_data = os.read(master_fd, 4096)
                 if error_data:
-                    await websocket.send_text(f"\r\n{error_data.decode('utf-8', errors='replace')}\r\n")
+                    logger.error(f"Console process stderr: {error_data.decode('utf-8', errors='replace')}")
             except Exception:
                 pass
             _label = "virsh console" if _is_virsh else "console"
-            await websocket.send_text(f"\r\nError: {_label} exited with code {process.returncode}\r\n")
-            await websocket.send_text(f"Command was: {' '.join(console_cmd)}\r\n")
+            logger.error(f"Console process exited: {_label} code={process.returncode}, cmd={' '.join(console_cmd)}")
+            await websocket.send_text(f"\r\nError: Console process exited unexpectedly\r\n")
             await websocket.close(code=1011)
             return
 

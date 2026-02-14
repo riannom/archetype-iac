@@ -555,6 +555,12 @@ async def scan_iso(
     """
     iso_path = Path(request.iso_path)
 
+    # Validate path is within the upload directory (prevent path traversal)
+    scan_path = iso_path.resolve()
+    upload_dir = Path(settings.iso_upload_dir).resolve()
+    if not scan_path.is_relative_to(upload_dir):
+        raise HTTPException(status_code=400, detail="Invalid scan path")
+
     # Validate path
     if not iso_path.exists():
         raise HTTPException(status_code=404, detail=f"ISO file not found: {iso_path}")

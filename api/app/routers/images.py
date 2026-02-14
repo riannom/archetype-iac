@@ -1448,7 +1448,9 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
 
             # Build agent URL once
             agent_url = f"http://{host.address}/images/receive"
-            async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout)) as client:
+            from app.agent_client import _get_agent_auth_headers
+            _auth_headers = _get_agent_auth_headers()
+            async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout), headers=_auth_headers) as client:
                 if image_kind == "docker":
                     # Get image size from Docker
                     try:

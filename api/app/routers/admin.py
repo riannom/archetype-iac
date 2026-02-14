@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 import json
 import httpx
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
@@ -13,6 +14,8 @@ from app.auth import get_current_user
 from app.config import settings
 from app.utils.lab import get_lab_or_404
 from app.utils.http import require_admin
+
+_SAFE_SERVICE_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 
 logger = logging.getLogger(__name__)
 
@@ -538,6 +541,9 @@ async def get_system_logs(
     # Base selector for archetype services
     label_selectors = []
     if service:
+        # Validate service name to prevent LogQL injection
+        if not _SAFE_SERVICE_RE.match(service):
+            raise HTTPException(status_code=400, detail="Invalid service name")
         label_selectors.append(f'service="{service}"')
     else:
         label_selectors.append('service=~"api|worker|agent"')
@@ -551,11 +557,16 @@ async def get_system_logs(
     pipeline.append("| json")
 
     if level:
+        # Validate level to prevent injection
+        if not _SAFE_SERVICE_RE.match(level):
+            raise HTTPException(status_code=400, detail="Invalid log level")
         pipeline.append(f'| level="{level}"')
 
     if search:
+        # Sanitize search text: escape backslashes and double quotes
+        safe_search = search.replace("\\", "\\\\").replace('"', '\\"')
         # Line filter for search text
-        pipeline.append(f'|~ "{search}"')
+        pipeline.append(f'|~ "{safe_search}"')
 
     query = selector + " " + " ".join(pipeline)
 

@@ -52,7 +52,7 @@ class TestRemoveContainerForLab:
                 # First call: get container, second call: remove
                 mock_thread.side_effect = [mock_container, None]
 
-                result = _run(remove_container_for_lab("test-lab", "test-container"))
+                result = _run(remove_container_for_lab("test-lab", "archetype-test-container"))
 
         assert result["success"] is True
         assert result["message"] == "Container removed"
@@ -68,7 +68,7 @@ class TestRemoveContainerForLab:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("Container not found")
 
-                result = _run(remove_container_for_lab("test-lab", "missing-container"))
+                result = _run(remove_container_for_lab("test-lab", "archetype-missing-container"))
 
         assert result["success"] is True
         assert "not found" in result["message"].lower() or "already removed" in result["message"].lower()
@@ -87,7 +87,7 @@ class TestRemoveContainerForLab:
                 # Sequence: get container -> stop -> remove
                 mock_thread.side_effect = [mock_container, None, None]
 
-                result = _run(remove_container_for_lab("test-lab", "running-container"))
+                result = _run(remove_container_for_lab("test-lab", "archetype-running-container"))
 
         assert result["success"] is True
         assert result["message"] == "Container removed"
@@ -108,7 +108,7 @@ class TestRemoveContainerForLab:
                 mock_thread.side_effect = [mock_container, None]
 
                 with patch("agent.main.logger") as mock_logger:
-                    result = _run(remove_container_for_lab("test-lab", "mismatched-container"))
+                    result = _run(remove_container_for_lab("test-lab", "archetype-mismatched-container"))
 
                     # Should still succeed
                     assert result["success"] is True
@@ -131,7 +131,7 @@ class TestRemoveContainerForLab:
 
                 result = _run(remove_container_for_lab(
                     "test-lab",
-                    "test-container",
+                    "archetype-test-container",
                     force=True,
                 ))
 
@@ -154,7 +154,7 @@ class TestRemoveContainerForLab:
                     docker.errors.APIError("Permission denied"),
                 ]
 
-                result = _run(remove_container_for_lab("test-lab", "test-container"))
+                result = _run(remove_container_for_lab("test-lab", "archetype-test-container"))
 
         assert result["success"] is False
         assert "error" in result
@@ -173,7 +173,7 @@ class TestRemoveContainerForLab:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                result = _run(remove_container_for_lab("test-lab", "unlabeled-container"))
+                result = _run(remove_container_for_lab("test-lab", "archetype-unlabeled-container"))
 
         assert result["success"] is True
 
@@ -194,7 +194,7 @@ class TestRemoveContainerGeneric:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                result = _run(remove_container("test-container"))
+                result = _run(remove_container("archetype-test-container"))
 
         assert result["success"] is True
 
@@ -210,6 +210,13 @@ class TestRemoveContainerGeneric:
                 mock_thread.side_effect = docker.errors.NotFound("not found")
 
                 with pytest.raises(HTTPException) as exc:
-                    _run(remove_container("missing"))
+                    _run(remove_container("archetype-missing"))
 
         assert exc.value.status_code == 404
+
+    def test_delete_container_invalid_name_returns_400(self):
+        """Container name without valid prefix should return 400."""
+        with pytest.raises(HTTPException) as exc:
+            _run(remove_container("bad-name"))
+
+        assert exc.value.status_code == 400

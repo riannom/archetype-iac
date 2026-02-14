@@ -107,7 +107,9 @@ const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActi
         const apiUrl = new URL(API_BASE_URL);
         wsUrl = `${apiUrl.protocol === 'https:' ? 'wss:' : 'ws:'}//${apiUrl.host}`;
       }
-      return `${wsUrl.replace(/\/$/, '')}/labs/${labId}/nodes/${encodeURIComponent(nodeId)}/console`;
+      const consoleUrl = `${wsUrl.replace(/\/$/, '')}/labs/${labId}/nodes/${encodeURIComponent(nodeId)}/console`;
+      const token = localStorage.getItem('token');
+      return token ? `${consoleUrl}?token=${encodeURIComponent(token)}` : consoleUrl;
     };
 
     let dataDisposable: { dispose: () => void } | null = null;

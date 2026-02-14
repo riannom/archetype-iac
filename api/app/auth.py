@@ -92,3 +92,26 @@ def get_current_user_optional(request: Request, database: Session) -> models.Use
     if user and not user.is_active:
         return None
     return user
+
+
+def validate_ws_token(token: str | None) -> models.User | None:
+    """Validate a JWT token for WebSocket connections.
+
+    Returns the authenticated user or None if validation fails.
+    Used by WebSocket handlers to authenticate before accepting connections.
+    """
+    if not token or not settings.jwt_secret:
+        return None
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        subject: str | None = payload.get("sub")
+        if not subject:
+            return None
+    except JWTError:
+        return None
+
+    with db.get_session() as database:
+        user = database.query(models.User).filter(models.User.id == subject).first()
+        if not user or not user.is_active:
+            return None
+        return user

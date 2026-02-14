@@ -22,8 +22,16 @@ from typing import Any
 
 import httpx
 
+from agent.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _get_controller_auth_headers() -> dict[str, str]:
+    """Return auth headers for controller requests if secret is configured."""
+    if settings.controller_secret:
+        return {"Authorization": f"Bearer {settings.controller_secret}"}
+    return {}
 
 # Retry configuration
 DEFAULT_RETRY_DELAYS = [10, 30, 60]  # Seconds between retries
@@ -144,6 +152,7 @@ async def _try_deliver(callback_url: str, payload: CallbackPayload) -> bool:
             callback_url,
             json=payload.to_dict(),
             timeout=30.0,
+            headers=_get_controller_auth_headers(),
         )
 
         if response.status_code >= 200 and response.status_code < 300:
@@ -191,6 +200,7 @@ async def send_to_dead_letter(
                     dead_letter_url,
                     json=payload.to_dict(),
                     timeout=10.0,
+                    headers=_get_controller_auth_headers(),
                 )
                 logger.info(f"Dead letter notification sent for job {payload.job_id}")
     except Exception as e:
@@ -242,7 +252,7 @@ async def send_heartbeat(callback_url: str, job_id: str) -> bool:
 
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(heartbeat_url, timeout=10.0)
+            response = await client.post(heartbeat_url, timeout=10.0, headers=_get_controller_auth_headers())
             if response.status_code >= 200 and response.status_code < 300:
                 logger.debug(f"Heartbeat sent for job {job_id}")
                 return True

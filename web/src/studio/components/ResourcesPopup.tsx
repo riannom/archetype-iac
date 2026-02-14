@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import DetailPopup from './DetailPopup';
 import { getCpuColor, getMemoryColor } from '../../utils/status';
+import { apiRequest } from '../../api';
 
 interface AgentResource {
   id: string;
@@ -47,8 +48,7 @@ const ResourcesPopup: React.FC<ResourcesPopupProps> = ({ isOpen, onClose, type }
   useEffect(() => {
     if (isOpen) {
       setLoading(true);
-      fetch('/api/dashboard/metrics/resources')
-        .then(res => res.json())
+      apiRequest<ResourcesData>('/dashboard/metrics/resources')
         .then(setData)
         .catch(console.error)
         .finally(() => setLoading(false));

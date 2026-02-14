@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
@@ -12,6 +13,47 @@ from starlette.responses import RedirectResponse
 from app import db, models, schemas
 from app.auth import authenticate_user, create_access_token, get_current_user, hash_password
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _check_login_rate_limit(request: Request, username: str) -> None:
+    """Check login rate limits using Redis.
+
+    Per-IP: 20 attempts / 15 min
+    Per-user: 10 attempts / 15 min
+    """
+    import redis
+
+    try:
+        r = redis.from_url(settings.redis_url)
+    except Exception:
+        return  # Don't block login if Redis unavailable
+
+    ip = request.client.host if request.client else "unknown"
+    window = 900  # 15 minutes
+
+    # Per-IP limit
+    ip_key = f"login_rate:ip:{ip}"
+    ip_count = r.incr(ip_key)
+    if ip_count == 1:
+        r.expire(ip_key, window)
+    if ip_count > 20:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Try again later.",
+        )
+
+    # Per-user limit
+    user_key = f"login_rate:user:{username.lower()}"
+    user_count = r.incr(user_key)
+    if user_count == 1:
+        r.expire(user_key, window)
+    if user_count > 10:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts for this account. Try again later.",
+        )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 oauth = OAuth()
@@ -36,6 +78,8 @@ def login(
 
     if not settings.local_auth_enabled:
         raise HTTPException(status_code=403, detail="Local auth is disabled")
+
+    _check_login_rate_limit(request, form_data.username)
 
     ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
           or (request.client.host if request.client else None))
@@ -119,7 +163,7 @@ async def oidc_callback(request: Request, database: Session = Depends(db.get_db)
 
     access_token = create_access_token(user.id)
     if settings.oidc_app_redirect_url:
-        return RedirectResponse(f"{settings.oidc_app_redirect_url}?token={access_token}")
+        return RedirectResponse(f"{settings.oidc_app_redirect_url}#token={access_token}")
     return schemas.TokenOut(access_token=access_token)
 
 

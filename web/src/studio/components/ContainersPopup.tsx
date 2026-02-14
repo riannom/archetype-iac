@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import DetailPopup from './DetailPopup';
+import { apiRequest } from '../../api';
 
 interface ContainerInfo {
   name: string;
@@ -86,8 +87,7 @@ const ContainersPopup: React.FC<ContainersPopupProps> = ({ isOpen, onClose, filt
   useEffect(() => {
     if (isOpen) {
       setLoading(true);
-      fetch('/api/dashboard/metrics/containers')
-        .then(res => res.json())
+      apiRequest<ContainersData>('/dashboard/metrics/containers')
         .then(setData)
         .catch(console.error)
         .finally(() => setLoading(false));
