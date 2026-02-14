@@ -1008,7 +1008,12 @@ class LibvirtProvider(Provider):
         os_open = "<os>"
         os_extras = "\n    <boot dev='hd'/>"
         if efi_boot:
-            os_open = "<os firmware='efi'>"
+            # Stateless EFI: skip firmware='efi' to prevent libvirt auto-creating NVRAM.
+            # We provide an explicit <loader> instead.
+            if efi_vars == "stateless":
+                os_open = "<os>"
+            else:
+                os_open = "<os firmware='efi'>"
             ovmf_code = self._find_ovmf_code_path()
             ovmf_vars = self._find_ovmf_vars_template()
             if ovmf_code:
@@ -1119,6 +1124,8 @@ class LibvirtProvider(Provider):
         else:
             cpu_xml = "<cpu mode='host-passthrough'/>"
 
+        smm_xml = "\n    <smm state='off'/>" if efi_boot else ""
+
         xml = f'''<domain type='{libvirt_driver}'>{sysinfo_xml}
   <name>{name}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
@@ -1129,7 +1136,7 @@ class LibvirtProvider(Provider):
   </os>
   <features>
     <acpi/>
-    <apic/>
+    <apic/>{smm_xml}
   </features>
   {cpu_xml}
   <clock offset='utc'>

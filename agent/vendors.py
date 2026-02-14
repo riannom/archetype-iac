@@ -270,6 +270,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         disk_driver="virtio",
         nic_driver="virtio",
         efi_boot=True,
+        efi_vars="stateless",  # vrnetlab uses single pflash (CODE only); extra NVRAM pflash breaks Spirit grub.cfg
         nographic=True,  # Remove VGA so OVMF outputs to serial (virsh console)
         serial_port_count=4,  # CML refplat: XR console, aux, calvados console, calvados aux
         serial_type="tcp",  # XR CLI lives on TCP telnet serial, not PTY
