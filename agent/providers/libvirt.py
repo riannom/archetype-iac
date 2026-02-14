@@ -1007,29 +1007,43 @@ class LibvirtProvider(Provider):
         os_type_line = f"<type arch='x86_64' machine='{machine_type}'>hvm</type>"
         os_open = "<os>"
         os_extras = "\n    <boot dev='hd'/>"
+        qemu_commandline_xml = ""
         if efi_boot:
-            # Stateless EFI: skip firmware='efi' to prevent libvirt auto-creating NVRAM.
-            # We provide an explicit <loader> instead.
-            if efi_vars == "stateless":
-                os_open = "<os>"
-            else:
-                os_open = "<os firmware='efi'>"
             ovmf_code = self._find_ovmf_code_path()
             ovmf_vars = self._find_ovmf_vars_template()
-            if ovmf_code:
-                os_extras += f"\n    <loader readonly='yes' type='pflash'>{ovmf_code}</loader>"
-                if efi_vars != "stateless" and ovmf_vars:
-                    # Stateful EFI uses a per-domain writable vars file.
-                    os_extras += (
-                        f"\n    <nvram template='{ovmf_vars}'>"
-                        f"/var/lib/libvirt/qemu/nvram/{name}_VARS.fd</nvram>"
+            if efi_vars == "stateless":
+                # Stateless EFI: use QEMU commandline passthrough to inject the
+                # OVMF CODE as a single read-only pflash drive.  This bypasses
+                # libvirt's firmware auto-selection which unconditionally adds a
+                # second pflash device (NVRAM) — matching vrnetlab's approach.
+                if ovmf_code:
+                    qemu_commandline_xml = (
+                        "\n  <qemu:commandline>"
+                        f"\n    <qemu:arg value='-drive'/>"
+                        f"\n    <qemu:arg value='if=pflash,format=raw,readonly=on,file={ovmf_code}'/>"
+                        "\n  </qemu:commandline>"
+                    )
+                else:
+                    logger.warning(
+                        "Stateless EFI boot requested for %s but no OVMF firmware found",
+                        name,
                     )
             else:
-                logger.warning(
-                    "EFI boot requested for %s but no OVMF firmware file was found; "
-                    "relying on libvirt firmware auto-selection",
-                    name,
-                )
+                # Stateful EFI: let libvirt manage firmware via firmware='efi'
+                os_open = "<os firmware='efi'>"
+                if ovmf_code:
+                    os_extras += f"\n    <loader readonly='yes' type='pflash'>{ovmf_code}</loader>"
+                    if ovmf_vars:
+                        os_extras += (
+                            f"\n    <nvram template='{ovmf_vars}'>"
+                            f"/var/lib/libvirt/qemu/nvram/{name}_VARS.fd</nvram>"
+                        )
+                else:
+                    logger.warning(
+                        "EFI boot requested for %s but no OVMF firmware file was found; "
+                        "relying on libvirt firmware auto-selection",
+                        name,
+                    )
 
         # Build the full domain XML
         cputune_xml = ""
@@ -1126,7 +1140,9 @@ class LibvirtProvider(Provider):
 
         smm_xml = "\n    <smm state='off'/>" if efi_boot else ""
 
-        xml = f'''<domain type='{libvirt_driver}'>{sysinfo_xml}
+        qemu_ns = " xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'" if qemu_commandline_xml else ""
+
+        xml = f'''<domain type='{libvirt_driver}'{qemu_ns}>{sysinfo_xml}
   <name>{name}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
   <memory unit='MiB'>{memory_mb}</memory>
@@ -1149,7 +1165,7 @@ class LibvirtProvider(Provider):
 {disks_xml}
 {interfaces_xml}
 {serial_xml}
-{graphics_xml}  </devices>
+{graphics_xml}  </devices>{qemu_commandline_xml}
 </domain>'''
 
         return xml
@@ -2666,6 +2682,14 @@ class LibvirtProvider(Provider):
                 efi_boot = firmware == "efi"
             if efi_boot:
                 efi_vars = "stateful" if os_elem.find("nvram") is not None else "stateless"
+        # Also detect stateless EFI via qemu:commandline pflash passthrough
+        qemu_ns = "http://libvirt.org/schemas/domain/qemu/1.0"
+        for qarg in root.findall(f"{{{qemu_ns}}}commandline/{{{qemu_ns}}}arg"):
+            val = qarg.attrib.get("value", "")
+            if "if=pflash" in val and "readonly=on" in val:
+                efi_boot = True
+                efi_vars = "stateless"
+                break
 
         disk_driver = None
         disk_source = None
