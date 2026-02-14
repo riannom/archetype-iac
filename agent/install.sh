@@ -391,6 +391,47 @@ if [ -f /etc/systemd/logind.conf ]; then
 fi
 log_info "System suspend disabled"
 
+# Prevent NBD/LVM crash cascade
+# When qemu-nbd connects a VM disk image (e.g. N9Kv qcow2), udev triggers LVM to
+# auto-activate internal logical volumes. If NBD disconnects, dangling dm devices
+# cause cascading I/O errors that hang the system (D-state processes, SSH failure).
+log_info "Configuring NBD/LVM crash prevention..."
+
+# Layer 1: LVM global filter - prevent LVM from scanning NBD devices
+if [ -f /etc/lvm/lvm.conf ]; then
+    # Clean up broken filter lines from previous installs (literal \t instead of tab)
+    sed -i '/^\\t.*global_filter.*nbd/d' /etc/lvm/lvm.conf
+    if ! grep -q '^\s*global_filter.*nbd' /etc/lvm/lvm.conf; then
+        # Insert global_filter before the first uncommented filter line, or append to devices section
+        if grep -q '^\s*# global_filter = ' /etc/lvm/lvm.conf; then
+            sed -i $'/^\\s*# global_filter = /a\\\\\tglobal_filter = [ "r|/dev/nbd.*|", "a|.*|" ]' /etc/lvm/lvm.conf
+        else
+            echo 'devices { global_filter = [ "r|/dev/nbd.*|", "a|.*|" ] }' >> /etc/lvm/lvm.conf
+        fi
+        # Verify LVM accepts the config
+        if lvm dumpconfig devices/global_filter 2>/dev/null | grep -q 'nbd'; then
+            log_info "LVM global_filter configured to exclude NBD devices"
+        else
+            log_warn "LVM global_filter may not be valid, check /etc/lvm/lvm.conf manually"
+        fi
+    else
+        log_info "LVM global_filter already excludes NBD devices"
+    fi
+fi
+
+# Layer 2: Blacklist NBD kernel module
+if [ ! -f /etc/modprobe.d/blacklist-nbd.conf ]; then
+    echo "blacklist nbd" > /etc/modprobe.d/blacklist-nbd.conf
+    log_info "NBD kernel module blacklisted"
+else
+    log_info "NBD kernel module already blacklisted"
+fi
+
+# Unload NBD module if currently loaded (non-disruptive)
+if lsmod | grep -q '^nbd '; then
+    rmmod nbd 2>/dev/null && log_info "Unloaded nbd kernel module" || log_warn "nbd module in use, will be blocked after reboot"
+fi
+
 # Install Docker
 if [ "$INSTALL_DOCKER" = true ]; then
     if command -v docker &> /dev/null; then
