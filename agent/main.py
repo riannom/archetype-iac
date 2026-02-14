@@ -5625,7 +5625,16 @@ def check_image(reference: str) -> ImageExistsResponse:
             # qcow2/img requires libvirt provider support.
             if reference.endswith((".qcow2", ".img")) and not settings.enable_libvirt:
                 return ImageExistsResponse(exists=False)
-            return ImageExistsResponse(exists=os.path.exists(reference))
+            exists = os.path.exists(reference)
+            file_sha256 = None
+            if exists:
+                sidecar = reference + ".sha256"
+                if os.path.exists(sidecar):
+                    try:
+                        file_sha256 = open(sidecar).read().strip()
+                    except OSError:
+                        pass
+            return ImageExistsResponse(exists=exists, sha256=file_sha256)
 
         import docker
         client = docker.from_env()
@@ -5657,6 +5666,7 @@ async def receive_image(
     reference: str = "",
     total_bytes: int = 0,
     job_id: str = "",
+    sha256: str = "",
 ) -> ImageReceiveResponse:
     """Receive a streamed Docker image tar from controller.
 
@@ -5734,6 +5744,30 @@ async def receive_image(
                 if temp_destination.exists():
                     temp_destination.unlink(missing_ok=True)
                 raise
+
+            # Compute and verify checksum for file-based images
+            import hashlib
+            import asyncio
+
+            def _compute_file_sha256():
+                h = hashlib.sha256()
+                with open(destination, "rb") as hf:
+                    while True:
+                        block = hf.read(1024 * 1024)
+                        if not block:
+                            break
+                        h.update(block)
+                return h.hexdigest()
+
+            actual_hash = await asyncio.to_thread(_compute_file_sha256)
+            if sha256 and actual_hash != sha256:
+                destination.unlink(missing_ok=True)
+                return ImageReceiveResponse(
+                    success=False,
+                    error=f"Checksum mismatch: expected {sha256[:16]}..., got {actual_hash[:16]}...",
+                )
+            # Write sidecar checksum file for future checks
+            Path(str(destination) + ".sha256").write_text(actual_hash)
 
             if job_id:
                 _image_pull_jobs[job_id] = ImagePullProgress(

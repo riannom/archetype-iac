@@ -839,6 +839,16 @@ def upload_qcow2(
     # Get file size
     file_size = destination.stat().st_size if destination.exists() else None
 
+    # Validate qcow2 format before accepting
+    from app.utils.image_integrity import validate_qcow2, compute_sha256
+    valid, error_msg = validate_qcow2(destination)
+    if not valid:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Invalid qcow2 image: {error_msg}")
+
+    # Compute SHA256 checksum for integrity tracking
+    file_sha256 = compute_sha256(destination)
+
     device_id, version = detect_device_from_filename(destination.name)
     image_id = f"qcow2:{destination.name}"
     entry = create_image_entry(
@@ -849,6 +859,7 @@ def upload_qcow2(
         device_id=device_id,
         version=version,
         size_bytes=file_size,
+        sha256=file_sha256,
     )
     manifest["images"].append(entry)
     save_manifest(manifest)
@@ -1453,6 +1464,7 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                         "reference": reference,
                         "total_bytes": str(size_bytes),
                         "job_id": job_id,
+                        "sha256": image.get("sha256", ""),
                     }
                 else:
                     raise ValueError(f"Unsupported image kind for sync: {image_kind}")

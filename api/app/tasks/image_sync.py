@@ -134,7 +134,9 @@ async def _sync_image_to_agent_impl(
         return False, str(e)
 
 
-async def check_agent_has_image(host: models.Host, reference: str) -> bool:
+async def check_agent_has_image(
+    host: models.Host, reference: str, expected_sha256: str | None = None,
+) -> bool:
     """Check if an agent has a specific image available.
 
     For Docker images: queries the agent's /images endpoint
@@ -143,9 +145,10 @@ async def check_agent_has_image(host: models.Host, reference: str) -> bool:
     Args:
         host: The host/agent to check
         reference: Image reference (Docker tag or file path for qcow2)
+        expected_sha256: Optional expected SHA256 hash for integrity verification
 
     Returns:
-        True if the image is available for the agent
+        True if the image is available (and checksum matches, if both provided)
     """
     import json
     from urllib.parse import quote
@@ -175,7 +178,16 @@ async def check_agent_has_image(host: models.Host, reference: str) -> bool:
                 )
                 if response.status_code == 200:
                     result = response.json()
-                    return result.get("exists", False)
+                    if not result.get("exists", False):
+                        return False
+                    # Compare checksums if both sides have them
+                    if expected_sha256 and result.get("sha256"):
+                        if result["sha256"] != expected_sha256:
+                            print(f"Checksum mismatch on {host.name} for {reference}: "
+                                  f"expected {expected_sha256[:16]}..., "
+                                  f"agent has {result['sha256'][:16]}...")
+                            return False
+                    return True
                 return False
         except Exception as e:
             print(f"Error checking image on {host.name}: {e}")
@@ -498,9 +510,19 @@ async def _ensure_images_for_deployment_impl(
         log_entries.append(f"Checking {len(image_references)} image(s) on agent {host.name}...")
         update_nodes_for_images(image_references, "checking", "Checking image availability...")
 
+        # Build reference -> sha256 map from manifest for integrity checks
+        manifest = load_manifest()
+        ref_sha256_map: dict[str, str | None] = {}
+        for lib_image in manifest.get("images", []):
+            ref = lib_image.get("reference", "")
+            if ref in image_references:
+                ref_sha256_map[ref] = lib_image.get("sha256")
+
         missing = []
         for reference in image_references:
-            exists = await check_agent_has_image(host, reference)
+            exists = await check_agent_has_image(
+                host, reference, expected_sha256=ref_sha256_map.get(reference),
+            )
             if not exists:
                 missing.append(reference)
 

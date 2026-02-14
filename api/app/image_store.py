@@ -606,6 +606,7 @@ def create_image_entry(
     has_loopback: Optional[bool] = None,
     provisioning_driver: Optional[str] = None,
     provisioning_media_type: Optional[str] = None,
+    sha256: Optional[str] = None,
 ) -> dict:
     """Create a new image library entry with all metadata fields.
 
@@ -646,6 +647,7 @@ def create_image_entry(
         "vendor": vendor,
         "uploaded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "size_bytes": size_bytes,
+        "sha256": sha256,
         "is_default": False,
         "notes": notes,
         "compatible_devices": normalized_compatible_devices,

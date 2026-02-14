@@ -559,6 +559,7 @@ class ImageExistsResponse(BaseModel):
     """Agent -> Controller: Whether an image exists."""
     exists: bool
     image: DockerImageInfo | None = None
+    sha256: str | None = None
 
 
 class ImageReceiveRequest(BaseModel):
