@@ -272,15 +272,15 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         efi_boot=True,
         nographic=True,  # Remove VGA so OVMF outputs to serial (virsh console)
         serial_port_count=4,  # CML refplat: XR console, aux, calvados console, calvados aux
+        serial_type="tcp",  # XR CLI lives on TCP telnet serial, not PTY
         smbios_product="Cisco IOS XRv 9000",  # Required for platform identification
         reserved_nics=2,  # ctrl-dummy + dev-dummy between mgmt and data NICs
         cpu_sockets=1,    # SMP: 1 socket × N cores (Spirit bootstrap requires cores, not sockets)
         requires_image=True,
         supported_image_kinds=["qcow2"],
-        # Boot readiness: detect XR CLI prompt or config dialog
-        readiness_probe="log_pattern",
-        readiness_pattern=r"--- Administrative User Dialog ---|%MGBL-CVAC-4-CONFIG_DONE",
-        readiness_timeout=600,
+        # TCP serial is single-connection (QEMU allows one client), so readiness probe can't
+        # read console output without blocking the user's session. Skip the wait.
+        readiness_probe="none",
         # Config extraction via SSH (console is TCP serial, not docker exec)
         config_extract_method="ssh",
         config_extract_command="show running-config",
