@@ -888,6 +888,45 @@ def upload_qcow2(
     return result
 
 
+@router.post("/backfill-checksums")
+def backfill_checksums(
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Compute and backfill SHA256 checksums for existing qcow2 images.
+
+    Only processes images that don't already have a sha256 field.
+    """
+    require_admin(current_user)
+
+    from app.utils.image_integrity import compute_sha256
+
+    manifest = load_manifest()
+    updated = 0
+    errors = []
+
+    for image in manifest.get("images", []):
+        if image.get("sha256"):
+            continue
+        if image.get("kind") not in ("qcow2",):
+            continue
+
+        ref = image.get("reference", "")
+        if not ref or not os.path.exists(ref):
+            errors.append(f"{image.get('id')}: file not found at {ref}")
+            continue
+
+        try:
+            image["sha256"] = compute_sha256(ref)
+            updated += 1
+        except Exception as e:
+            errors.append(f"{image.get('id')}: {e}")
+
+    if updated:
+        save_manifest(manifest)
+
+    return {"updated": updated, "errors": errors}
+
+
 @router.post("/library/{image_id}/build-docker")
 def trigger_docker_build(
     image_id: str,
