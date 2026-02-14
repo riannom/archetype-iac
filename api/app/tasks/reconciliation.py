@@ -366,7 +366,7 @@ async def refresh_states_from_agents():
                 session.query(models.NodeState)
                 .filter(
                     models.NodeState.actual_state == NodeActualState.RUNNING.value,
-                    not models.NodeState.is_ready,
+                    models.NodeState.is_ready.is_(False),
                 )
                 .all()
             )
@@ -619,6 +619,20 @@ async def _check_readiness_for_nodes(session, nodes: list):
                                 phase="boot_wait", device_type=_boot_device, status="success",
                             ).observe(boot_secs)
                         logger.info(f"Node {ns.node_name} in lab {lab_id} is now ready")
+                        # Broadcast readiness change to frontend via WebSocket
+                        asyncio.create_task(
+                            broadcast_node_state_change(
+                                lab_id=lab_id,
+                                node_id=ns.node_id,
+                                node_name=ns.node_name,
+                                desired_state=ns.desired_state,
+                                actual_state=ns.actual_state,
+                                is_ready=True,
+                                error_message=ns.error_message,
+                                host_id=agent.id,
+                                host_name=agent.name,
+                            )
+                        )
                 except Exception as e:
                     logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
 
