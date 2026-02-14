@@ -301,6 +301,7 @@ class TestCarrierOperStateRecomputed:
             ns = models.NodeState(
                 id=f"ns-{node_name}",
                 lab_id=sample_lab.id,
+                node_id=f"nid-{node_name}",
                 node_name=node_name,
                 actual_state="running",
                 desired_state="running",
@@ -360,6 +361,7 @@ class TestCarrierBroadcast:
             ns = models.NodeState(
                 id=f"ns-bc-{node_name}",
                 lab_id=sample_lab.id,
+                node_id=f"nid-bc-{node_name}",
                 node_name=node_name,
                 actual_state="running",
                 desired_state="running",

@@ -144,9 +144,9 @@ class TestWriteLayout:
         """Test write_layout creates parent directories."""
         layout = schemas.LabLayout(version=1)
 
-        write_layout("new-lab/nested", layout)
+        write_layout("new-lab-nested", layout)
 
-        layout_file = mock_workspace / "new-lab/nested" / "layout.json"
+        layout_file = mock_workspace / "new-lab-nested" / "layout.json"
         assert layout_file.exists()
 
     def test_overwrites_existing_file(self, mock_workspace):

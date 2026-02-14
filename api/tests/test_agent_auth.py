@@ -1,7 +1,6 @@
 """Tests for verify_agent_secret dependency from api/app/agent_auth.py."""
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
