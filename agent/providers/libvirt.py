@@ -1058,6 +1058,12 @@ class LibvirtProvider(Provider):
       <protocol type='telnet'/>
       <target type='serial' port='0'/>
     </console>"""
+            # Additional serial ports as PTY (XRv9000 needs 4 total for inner VM)
+            for port_idx in range(1, serial_port_count):
+                serial_xml += f"""
+    <serial type='pty'>
+      <target port='{port_idx}'/>
+    </serial>"""
         else:
             serial_xml = """    <serial type='pty'>
       <target port='0'/>
