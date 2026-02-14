@@ -119,7 +119,8 @@ jobs:
       - name: Shellcheck
         run: |
           shellcheck install.sh install-controller.sh agent/install.sh \
-            scripts/upgrade.sh scripts/bump-version.sh scripts/backup.sh scripts/restore.sh
+            scripts/upgrade.sh scripts/bump-version.sh scripts/backup.sh scripts/restore.sh \
+            scripts/install-gitleaks.sh scripts/install-hooks.sh
 
   script-tests:
     name: Script Tests
