@@ -185,6 +185,10 @@ def load_image(
     """
     require_admin(current_user)
 
+    from app.services.resource_monitor import ResourceMonitor, PressureLevel
+    if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
+        raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
+
     if background:
         # Background mode with polling
         import uuid
@@ -808,6 +812,10 @@ def upload_qcow2(
 ) -> dict[str, str]:
     require_admin(current_user)
 
+    from app.services.resource_monitor import ResourceMonitor, PressureLevel
+    if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
+        raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
+
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
     if not file.filename.lower().endswith((".qcow2", ".qcow")):
@@ -860,6 +868,7 @@ def upload_qcow2(
                 version=version,
                 qcow2_image_id=image_id,
                 job_timeout=3600,  # 60 minutes
+                result_ttl=3600, failure_ttl=86400,
             )
             result["build_job_id"] = job.id
             result["build_status"] = "queued"
@@ -928,6 +937,7 @@ def trigger_docker_build(
         version=image.get("version"),
         qcow2_image_id=image_id,
         job_timeout=3600,  # 60 minutes
+        result_ttl=3600, failure_ttl=86400,
     )
 
     return {

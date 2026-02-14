@@ -257,9 +257,8 @@ async def _maybe_cleanup_labless_containers(session):
         from app.tasks.cleanup_base import get_valid_lab_ids
         valid_lab_ids = list(get_valid_lab_ids(session))
         all_agents = session.query(models.Host).all()
-        for agent in all_agents:
-            if not agent_client.is_agent_online(agent):
-                continue
+
+        async def _cleanup_agent(agent):
             try:
                 result = await agent_client.cleanup_orphans_on_agent(agent, valid_lab_ids)
                 removed = result.get("removed_containers", [])
@@ -269,6 +268,9 @@ async def _maybe_cleanup_labless_containers(session):
                     )
             except Exception as e:
                 logger.warning(f"Failed global orphan check on {agent.name}: {e}")
+
+        online_agents = [a for a in all_agents if agent_client.is_agent_online(a)]
+        await asyncio.gather(*[_cleanup_agent(a) for a in online_agents])
     except Exception as e:
         logger.warning(f"Failed global lab-less container cleanup: {e}")
 
@@ -294,9 +296,8 @@ async def _maybe_cleanup_labless_containers(session):
                     agent_valid_ports.setdefault(aid, set()).add(port_name)
 
         all_agents = session.query(models.Host).all()
-        for agent in all_agents:
-            if not agent_client.is_agent_online(agent):
-                continue
+
+        async def _reconcile_agent_vxlan(agent):
             valid = list(agent_valid_ports.get(str(agent.id), set()))
             try:
                 result = await agent_client.reconcile_vxlan_ports_on_agent(agent, valid)
@@ -307,6 +308,9 @@ async def _maybe_cleanup_labless_containers(session):
                     )
             except Exception as e:
                 logger.warning(f"Failed VXLAN port reconciliation on {agent.name}: {e}")
+
+        online_agents_for_vxlan = [a for a in all_agents if agent_client.is_agent_online(a)]
+        await asyncio.gather(*[_reconcile_agent_vxlan(a) for a in online_agents_for_vxlan])
     except Exception as e:
         logger.warning(f"Failed VXLAN port reconciliation: {e}")
 

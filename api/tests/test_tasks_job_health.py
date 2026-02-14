@@ -1566,3 +1566,352 @@ class TestEdgeCases:
         assert child_job.status == "cancelled"
         assert child_job.log_path is not None
         assert "parent job retried" in child_job.log_path.lower()
+
+
+class TestNonRetryablePatterns:
+    """Tests for _timed_out_job_is_non_retryable() with all known signatures."""
+
+    def test_missing_image_pattern(self) -> None:
+        """'No image available for node' should be non-retryable with reason missing_image."""
+        from app.tasks.job_health import _timed_out_job_is_non_retryable
+
+        non_retryable, reason = _timed_out_job_is_non_retryable(
+            "up",
+            "ERROR: Preflight image check failed. No image available for node R1.",
+        )
+        assert non_retryable is True
+        assert reason == "missing_image"
+
+    def test_no_hosts_registered_pattern(self) -> None:
+        """'No healthy agent available' should be non-retryable with reason host_assignment_or_agent_unavailable."""
+        from app.tasks.job_health import _timed_out_job_is_non_retryable
+
+        non_retryable, reason = _timed_out_job_is_non_retryable(
+            "up",
+            "No healthy agent available for deployment",
+        )
+        assert non_retryable is True
+        assert reason == "host_assignment_or_agent_unavailable"
+
+    def test_host_selection_failed_pattern(self) -> None:
+        """'Explicit host assignments failed' should be non-retryable."""
+        from app.tasks.job_health import _timed_out_job_is_non_retryable
+
+        non_retryable, reason = _timed_out_job_is_non_retryable(
+            "up",
+            "Explicit host assignments failed: agent-01 not reachable",
+        )
+        assert non_retryable is True
+        assert reason == "host_assignment_or_agent_unavailable"
+
+    def test_capacity_exceeded_pattern(self) -> None:
+        """'Missing or unhealthy agents for hosts' should be non-retryable."""
+        from app.tasks.job_health import _timed_out_job_is_non_retryable
+
+        non_retryable, reason = _timed_out_job_is_non_retryable(
+            "up",
+            "Deployment failed: missing or unhealthy agents for hosts [agent-02]",
+        )
+        assert non_retryable is True
+        assert reason == "host_assignment_or_agent_unavailable"
+
+    def test_sync_partial_failure_pattern(self) -> None:
+        """Sync action with 'Completed with N error(s) during sync' should be non-retryable."""
+        from app.tasks.job_health import _timed_out_job_is_non_retryable
+
+        non_retryable, reason = _timed_out_job_is_non_retryable(
+            "sync:lab",
+            "Completed with 3 error(s) during sync",
+        )
+        assert non_retryable is True
+        assert reason == "sync_partial_failure"
+
+    def test_transient_error_is_retryable(self) -> None:
+        """Random transient error message should be retryable."""
+        from app.tasks.job_health import _timed_out_job_is_non_retryable
+
+        non_retryable, reason = _timed_out_job_is_non_retryable(
+            "up",
+            "Transient HTTP timeout contacting agent at 10.0.0.1:8001",
+        )
+        assert non_retryable is False
+        assert reason is None
+
+    def test_empty_log_is_retryable(self) -> None:
+        """None or empty log should be retryable."""
+        from app.tasks.job_health import _timed_out_job_is_non_retryable
+
+        non_retryable, reason = _timed_out_job_is_non_retryable("up", None)
+        assert non_retryable is False
+        assert reason is None
+
+        non_retryable, reason = _timed_out_job_is_non_retryable("up", "")
+        assert non_retryable is False
+        assert reason is None
+
+
+class TestRetryDeduplication:
+    """Tests that retry doesn't create duplicate jobs."""
+
+    @pytest.mark.asyncio
+    async def test_retry_skipped_when_same_action_job_exists(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """If a queued/running job with same action already exists for the lab, retry is skipped."""
+        from app.tasks.job_health import _retry_job
+
+        # Create existing queued job with same lab and action
+        existing_job = models.Job(
+            id="existing-queued-dedup",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="queued",
+        )
+        test_db.add(existing_job)
+
+        # Create stuck job that would normally be retried
+        stuck_job = models.Job(
+            id="stuck-dedup-same-action",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="running",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+        )
+        test_db.add(stuck_job)
+        test_db.commit()
+
+        with patch("app.tasks.job_health._trigger_job_execution", new_callable=AsyncMock) as mock_trigger:
+            await _retry_job(test_db, stuck_job)
+
+            # No new job should be created
+            mock_trigger.assert_not_called()
+
+            # Stuck job should be cancelled with superseded_by pointing to the existing job
+            test_db.refresh(stuck_job)
+            assert stuck_job.status == "cancelled"
+            assert stuck_job.superseded_by_id == existing_job.id
+            assert "duplicate" in stuck_job.log_path.lower()
+
+    @pytest.mark.asyncio
+    async def test_retry_allowed_for_different_action(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """If existing job is a different action, retry proceeds normally."""
+        from app.tasks.job_health import _retry_job
+
+        # Create existing job with different action
+        existing_job = models.Job(
+            id="existing-different-action-dedup",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="down",
+            status="queued",
+        )
+        test_db.add(existing_job)
+
+        # Create stuck job with different action
+        stuck_job = models.Job(
+            id="stuck-dedup-different-action",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="running",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+        )
+        test_db.add(stuck_job)
+        test_db.commit()
+
+        with patch("app.tasks.job_health._trigger_job_execution", new_callable=AsyncMock) as mock_trigger:
+            await _retry_job(test_db, stuck_job)
+
+            # New job should be created since actions are different
+            mock_trigger.assert_called_once()
+
+            test_db.refresh(stuck_job)
+            assert stuck_job.status == "failed"
+            assert stuck_job.superseded_by_id is not None
+            # Superseded by should point to new job, not the existing one
+            assert stuck_job.superseded_by_id != existing_job.id
+
+
+class TestMaxRetryExhaustion:
+    """Tests for max retry count enforcement."""
+
+    @pytest.mark.asyncio
+    async def test_job_at_max_retries_not_retried(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User, sample_host: models.Host
+    ):
+        """Job with retry_count >= job_max_retries (default 2) is not retried."""
+        from app.tasks.job_health import _check_single_job
+
+        # Create stuck job that has already been retried max times
+        job = models.Job(
+            id="maxed-out-job",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="running",
+            agent_id=sample_host.id,
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=60),
+            retry_count=2,  # At max (settings.job_max_retries default is 2)
+        )
+        test_db.add(job)
+        test_db.commit()
+
+        now = datetime.now(timezone.utc)
+
+        with patch("app.tasks.job_health.is_job_stuck", return_value=True):
+            with patch("app.tasks.job_health._retry_job", new_callable=AsyncMock) as mock_retry:
+                with patch("app.tasks.job_health._fail_job", new_callable=AsyncMock) as mock_fail:
+                    await _check_single_job(test_db, job, now)
+
+                    # Should NOT be retried
+                    mock_retry.assert_not_called()
+                    # Should be failed instead
+                    mock_fail.assert_called_once()
+                    # Verify reason mentions max retries
+                    call_args = mock_fail.call_args
+                    assert "maximum retries" in call_args.kwargs.get("reason", call_args[1].get("reason", ""))
+
+    @pytest.mark.asyncio
+    async def test_job_below_max_retries_is_retried(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User, sample_host: models.Host
+    ):
+        """Job with retry_count < max is retried."""
+        from app.tasks.job_health import _check_single_job
+
+        # Create stuck job that has been retried once (still below max of 2)
+        job = models.Job(
+            id="retryable-job",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="running",
+            agent_id=sample_host.id,
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=60),
+            retry_count=1,  # Below max
+        )
+        test_db.add(job)
+        test_db.commit()
+
+        now = datetime.now(timezone.utc)
+
+        with patch("app.tasks.job_health.is_job_stuck", return_value=True):
+            with patch("app.tasks.job_health._retry_job", new_callable=AsyncMock) as mock_retry:
+                with patch("app.tasks.job_health._fail_job", new_callable=AsyncMock) as mock_fail:
+                    await _check_single_job(test_db, job, now)
+
+                    # Should be retried
+                    mock_retry.assert_called_once()
+                    # Should NOT be failed
+                    mock_fail.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_retry_increments_count(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """After retry, new job has incremented retry_count."""
+        from app.tasks.job_health import _retry_job
+
+        # Create stuck job with retry_count=0
+        stuck_job = models.Job(
+            id="retry-increment-job",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="up",
+            status="running",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+            retry_count=0,
+        )
+        test_db.add(stuck_job)
+        test_db.commit()
+
+        with patch("app.tasks.job_health._trigger_job_execution", new_callable=AsyncMock):
+            await _retry_job(test_db, stuck_job)
+
+        test_db.refresh(stuck_job)
+        assert stuck_job.superseded_by_id is not None
+
+        new_job = test_db.get(models.Job, stuck_job.superseded_by_id)
+        assert new_job is not None
+        assert new_job.retry_count == 1
+
+        # Retry again - simulate new job getting stuck
+        new_job.status = "running"
+        new_job.started_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+        test_db.commit()
+
+        with patch("app.tasks.job_health._trigger_job_execution", new_callable=AsyncMock):
+            await _retry_job(test_db, new_job)
+
+        test_db.refresh(new_job)
+        assert new_job.superseded_by_id is not None
+
+        third_job = test_db.get(models.Job, new_job.superseded_by_id)
+        assert third_job is not None
+        assert third_job.retry_count == 2
+
+
+class TestStuckJobDetection:
+    """Tests for stuck job detection and handling."""
+
+    @pytest.mark.asyncio
+    async def test_queued_job_beyond_timeout_marked_failed(
+        self, test_db: Session, stuck_queued_job: models.Job
+    ):
+        """Job queued longer than configured timeout without starting should be handled."""
+        from app.tasks.job_health import check_stuck_jobs
+
+        # stuck_queued_job was created 10 minutes ago with no agent (orphaned queued)
+        # check_stuck_jobs finds active jobs and calls _check_single_job
+        # which uses is_job_stuck (queued > 2 min is stuck)
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
+            with patch("app.tasks.job_health._retry_job", new_callable=AsyncMock) as mock_retry:
+                await check_stuck_jobs()
+
+                # Job should have been detected as stuck and retry attempted
+                # (retry_count=0 < max_retries=2)
+                mock_retry.assert_called_once()
+                call_args = mock_retry.call_args
+                # First positional arg is session, second is the job
+                assert call_args[0][1].id == stuck_queued_job.id
+
+    @pytest.mark.asyncio
+    async def test_running_job_beyond_timeout_marked_failed(
+        self, test_db: Session, stuck_running_job: models.Job
+    ):
+        """Running job past timeout should be detected and handled."""
+        from app.tasks.job_health import check_stuck_jobs
+
+        # stuck_running_job started 60 minutes ago (well past the 20 min deploy timeout)
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
+            with patch("app.tasks.job_health._retry_job", new_callable=AsyncMock) as mock_retry:
+                await check_stuck_jobs()
+
+                # Job should have been detected as stuck and retry attempted
+                mock_retry.assert_called_once()
+                call_args = mock_retry.call_args
+                assert call_args[0][1].id == stuck_running_job.id
+
+    @pytest.mark.asyncio
+    async def test_job_within_grace_period_not_touched(
+        self, test_db: Session, running_job: models.Job
+    ):
+        """Job within timeout grace period should not be touched."""
+        from app.tasks.job_health import check_stuck_jobs
+
+        # running_job was just started (within timeout window)
+        with patch("app.tasks.job_health.get_session", _fake_get_session(test_db)):
+            with patch("app.tasks.job_health._retry_job", new_callable=AsyncMock) as mock_retry:
+                with patch("app.tasks.job_health._fail_job", new_callable=AsyncMock) as mock_fail:
+                    await check_stuck_jobs()
+
+                    # Neither retry nor fail should be called
+                    mock_retry.assert_not_called()
+                    mock_fail.assert_not_called()
+
+                    # Job should still be running
+                    test_db.refresh(running_job)
+                    assert running_job.status == "running"

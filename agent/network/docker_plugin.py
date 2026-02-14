@@ -168,6 +168,7 @@ class DockerOVSPlugin:
         workspace.mkdir(parents=True, exist_ok=True)
         self._state_file = workspace / STATE_PERSISTENCE_FILE
         self._state_dirty = False  # Track if state needs saving
+        self._stale_gc_counter = 0  # Counts audit cycles for periodic GC
 
     @asynccontextmanager
     async def _locked(self):
@@ -625,6 +626,131 @@ class DockerOVSPlugin:
         """
         self._state_dirty = True
         await self._save_state()
+
+    # =========================================================================
+    # Stale State Garbage Collection
+    # =========================================================================
+
+    async def cleanup_stale_state(self) -> dict[str, int]:
+        """Remove plugin state entries that no longer correspond to real Docker resources.
+
+        Cross-references self.networks and self.endpoints against actual Docker
+        networks and containers. Entries whose backing Docker resource no longer
+        exists are removed from plugin state.
+
+        Must be called within ``async with self._locked()`` for thread safety.
+
+        Returns dict with cleanup statistics.
+        """
+        stats = {"networks_removed": 0, "endpoints_removed": 0}
+
+        # --- Discover live Docker networks ---
+        code, stdout, _ = await self._run_cmd(
+            ["docker", "network", "ls", "--no-trunc", "--format", "{{.ID}}"]
+        )
+        if code != 0:
+            logger.warning("cleanup_stale_state: failed to list Docker networks, skipping")
+            return stats
+        live_network_ids: set[str] = set()
+        if stdout.strip():
+            live_network_ids = {line.strip() for line in stdout.strip().splitlines() if line.strip()}
+
+        # --- Discover live Docker containers (by name, matching endpoint.container_name) ---
+        live_container_names: set[str] = set()
+        code, stdout, _ = await self._run_cmd(
+            ["docker", "ps", "-a", "--no-trunc", "--format", "{{.Names}}"]
+        )
+        if code != 0:
+            logger.warning("cleanup_stale_state: failed to list Docker containers, skipping")
+            return stats
+        if stdout.strip():
+            live_container_names = {line.strip() for line in stdout.strip().splitlines() if line.strip()}
+
+        # --- Clean stale networks ---
+        stale_network_ids: list[str] = []
+        for network_id in list(self.networks.keys()):
+            # Docker network IDs from the plugin are full-length (64 chars).
+            # Check both exact match and prefix match for safety.
+            found = network_id in live_network_ids or any(
+                live_id.startswith(network_id) or network_id.startswith(live_id)
+                for live_id in live_network_ids
+            )
+            if not found:
+                stale_network_ids.append(network_id)
+
+        for network_id in stale_network_ids:
+            network = self.networks.pop(network_id)
+            # Also remove from lab_bridge's network_ids set
+            lab_bridge = self.lab_bridges.get(network.lab_id)
+            if lab_bridge and network_id in lab_bridge.network_ids:
+                lab_bridge.network_ids.discard(network_id)
+            logger.info(
+                "cleanup_stale_state: removed stale network %s (lab=%s, iface=%s)",
+                network_id[:12],
+                network.lab_id,
+                network.interface_name,
+            )
+            stats["networks_removed"] += 1
+
+        # --- Clean stale endpoints ---
+        # An endpoint is stale if:
+        #   1. Its network_id is no longer tracked (was just cleaned or was orphaned), AND
+        #   2. Its container_name does not match any live container
+        stale_endpoint_ids: list[str] = []
+        for endpoint_id, ep in list(self.endpoints.items()):
+            network_gone = ep.network_id not in self.networks
+            container_gone = True
+            if ep.container_name:
+                container_gone = ep.container_name not in live_container_names
+            # Conservative: only remove if BOTH the network and container are gone,
+            # OR if the network is gone and there's no container_name to check.
+            if network_gone and container_gone:
+                stale_endpoint_ids.append(endpoint_id)
+
+        for endpoint_id in stale_endpoint_ids:
+            ep = self.endpoints.pop(endpoint_id)
+            self._release_vlan(ep.vlan_tag)
+            logger.info(
+                "cleanup_stale_state: removed stale endpoint %s (container=%s, iface=%s, vlan=%d)",
+                endpoint_id[:12],
+                ep.container_name or "<unknown>",
+                ep.interface_name,
+                ep.vlan_tag,
+            )
+            stats["endpoints_removed"] += 1
+
+        # --- Clean empty lab_bridges ---
+        empty_labs: list[str] = []
+        for lab_id, bridge in list(self.lab_bridges.items()):
+            if not bridge.network_ids and not bridge.vxlan_tunnels and not bridge.external_ports:
+                # No networks, tunnels, or external ports -- check no endpoints reference this lab
+                has_endpoints = any(
+                    self.networks.get(ep.network_id, None) and
+                    self.networks[ep.network_id].lab_id == lab_id
+                    for ep in self.endpoints.values()
+                )
+                if not has_endpoints:
+                    empty_labs.append(lab_id)
+
+        for lab_id in empty_labs:
+            del self.lab_bridges[lab_id]
+            logger.info("cleanup_stale_state: removed empty lab_bridge for lab %s", lab_id)
+
+        # --- Persist if anything changed ---
+        total_removed = stats["networks_removed"] + stats["endpoints_removed"] + len(empty_labs)
+        if total_removed > 0:
+            self._state_dirty = True
+            await self._save_state()
+            logger.info(
+                "cleanup_stale_state: cleaned %d networks, %d endpoints, %d empty bridges",
+                stats["networks_removed"],
+                stats["endpoints_removed"],
+                len(empty_labs),
+            )
+        else:
+            logger.debug("cleanup_stale_state: no stale entries found")
+
+        return stats
 
     # =========================================================================
     # State Reconciliation (compares persisted state with OVS reality)
@@ -1386,7 +1512,11 @@ class DockerOVSPlugin:
                 logger.error(f"TTL cleanup error: {e}")
 
     async def _endpoint_binding_audit_loop(self) -> None:
-        """Background task to verify tracked endpoint bindings remain valid."""
+        """Background task to verify tracked endpoint bindings remain valid.
+
+        Also runs stale state garbage collection every 10 audit cycles
+        (~20 minutes at the default 120s interval).
+        """
         while True:
             try:
                 await asyncio.sleep(settings.endpoint_binding_audit_interval_seconds)
@@ -1399,6 +1529,16 @@ class DockerOVSPlugin:
                         stats["repaired"],
                         stats["failed"],
                     )
+
+                # Run stale state GC every 10 audit cycles
+                self._stale_gc_counter += 1
+                if self._stale_gc_counter >= 10:
+                    self._stale_gc_counter = 0
+                    try:
+                        async with self._locked():
+                            await self.cleanup_stale_state()
+                    except Exception as e:
+                        logger.error(f"Stale state GC error: {e}")
             except asyncio.CancelledError:
                 break
             except Exception as e:

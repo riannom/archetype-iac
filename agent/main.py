@@ -42,6 +42,7 @@ from agent.schemas import (
     CleanupAuditResponse,
     CleanupOverlayRequest,
     CleanupOverlayResponse,
+    CleanupWorkspacesRequest,
     CreateTunnelRequest,
     CreateTunnelResponse,
     DeployRequest,
@@ -975,6 +976,28 @@ def health():
         "commit": get_commit(),
         "registered": _registered,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/disk-usage")
+async def disk_usage():
+    """Return disk and memory usage stats."""
+    import psutil
+    disk_path = settings.workspace_path if settings.workspace_path else "/"
+    disk = psutil.disk_usage(disk_path)
+    memory = psutil.virtual_memory()
+    return {
+        "disk": {
+            "total_gb": round(disk.total / (1024**3), 2),
+            "used_gb": round(disk.used / (1024**3), 2),
+            "free_gb": round(disk.free / (1024**3), 2),
+            "percent": disk.percent,
+        },
+        "memory": {
+            "total_gb": round(memory.total / (1024**3), 2),
+            "used_gb": round(memory.used / (1024**3), 2),
+            "percent": memory.percent,
+        },
     }
 
 
@@ -2248,12 +2271,15 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
     """
     logger.info(
         f"Docker prune request: dangling_images={request.prune_dangling_images}, "
-        f"build_cache={request.prune_build_cache}, unused_volumes={request.prune_unused_volumes}"
+        f"build_cache={request.prune_build_cache}, unused_volumes={request.prune_unused_volumes}, "
+        f"stopped_containers={request.prune_stopped_containers}, unused_networks={request.prune_unused_networks}"
     )
 
     images_removed = 0
     build_cache_removed = 0
     volumes_removed = 0
+    containers_removed = 0
+    networks_removed = 0
     space_reclaimed = 0
     errors = []
 
@@ -2318,11 +2344,46 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
                 errors.append(f"Error pruning volumes: {e}")
                 logger.warning(f"Error pruning volumes: {e}")
 
+        # Prune stopped containers (conservative - only non-lab containers)
+        if request.prune_stopped_containers:
+            try:
+                # Get all stopped containers
+                stopped = client.containers.list(filters={"status": "exited"}, sparse=True)
+                for container in stopped:
+                    labels = container.labels
+                    lab_id = labels.get("archetype.lab_id", "")
+                    # Protect containers from valid labs
+                    if lab_id and lab_id in request.valid_lab_ids:
+                        continue
+                    try:
+                        container.remove(force=False)
+                        containers_removed += 1
+                    except Exception as ce:
+                        errors.append(f"Error removing container {container.short_id}: {ce}")
+                space_reclaimed += 0  # Docker doesn't report space for container removal
+                logger.info(f"Removed {containers_removed} stopped containers")
+            except Exception as e:
+                errors.append(f"Error pruning containers: {e}")
+                logger.warning(f"Error pruning stopped containers: {e}")
+
+        # Prune unused networks
+        if request.prune_unused_networks:
+            try:
+                result = client.networks.prune()
+                pruned = result.get("NetworksDeleted") or []
+                networks_removed = len(pruned)
+                logger.info(f"Pruned {networks_removed} unused networks")
+            except Exception as e:
+                errors.append(f"Error pruning networks: {e}")
+                logger.warning(f"Error pruning networks: {e}")
+
         return DockerPruneResponse(
             success=True,
             images_removed=images_removed,
             build_cache_removed=build_cache_removed,
             volumes_removed=volumes_removed,
+            containers_removed=containers_removed,
+            networks_removed=networks_removed,
             space_reclaimed=space_reclaimed,
             errors=errors,
         )
@@ -2333,6 +2394,55 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
             success=False,
             errors=[str(e)],
         )
+
+
+# --- Workspace Cleanup Endpoints ---
+
+
+@app.delete("/labs/{lab_id}/workspace")
+async def delete_lab_workspace(lab_id: str):
+    """Remove a specific lab's workspace directory."""
+    import shutil
+    workspace = Path(settings.workspace_path) / lab_id
+    if not workspace.exists():
+        return {"success": True, "message": "workspace does not exist"}
+    try:
+        shutil.rmtree(workspace)
+        logger.info(f"Deleted workspace for lab {lab_id}")
+        return {"success": True, "deleted": str(workspace)}
+    except Exception as e:
+        logger.error(f"Failed to delete workspace for lab {lab_id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/cleanup-workspaces")
+async def cleanup_workspaces(request: CleanupWorkspacesRequest):
+    """Remove workspace directories for labs not in the valid list."""
+    import shutil
+    workspace_root = Path(settings.workspace_path)
+    if not workspace_root.exists():
+        return {"success": True, "removed": [], "errors": []}
+
+    valid_set = set(request.valid_lab_ids)
+    removed = []
+    errors = []
+
+    for entry in workspace_root.iterdir():
+        if not entry.is_dir():
+            continue
+        # Skip known non-lab directories
+        if entry.name in ("images", "uploads", ".tmp", "configs"):
+            continue
+        if entry.name not in valid_set:
+            try:
+                shutil.rmtree(entry)
+                removed.append(entry.name)
+                logger.info(f"Cleaned orphaned agent workspace: {entry.name}")
+            except Exception as e:
+                errors.append(f"{entry.name}: {e}")
+                logger.warning(f"Failed to clean workspace {entry.name}: {e}")
+
+    return {"success": True, "removed": removed, "errors": errors}
 
 
 # --- Overlay Networking Endpoints ---

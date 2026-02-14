@@ -11,7 +11,7 @@ import pytest
 
 from app.events.cleanup_events import CleanupEvent, CleanupEventType
 from app.tasks.cleanup_base import CleanupResult
-from app.tasks.cleanup_handler import CleanupEventHandler, _cleanup_dirty_event
+from app.tasks.cleanup_handler import CircuitBreaker, CleanupEventHandler, _cleanup_dirty_event
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,8 @@ class TestHandlerBehavior:
         handler = CleanupEventHandler()
         event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
 
-        with patch("app.tasks.cleanup_handler._runner") as mock_runner:
+        with patch("app.tasks.cleanup_handler._runner") as mock_runner, \
+             patch("app.tasks.cleanup_handler._cleanup_agent_workspaces", new_callable=AsyncMock):
             mock_runner.run_task = AsyncMock(
                 return_value=CleanupResult(task_name="test", deleted=1),
             )
@@ -305,7 +306,8 @@ class TestIdempotency:
         """Second LAB_DELETED for same lab is a no-op (workspace already gone)."""
         handler = CleanupEventHandler()
 
-        with patch("app.tasks.cleanup_handler._runner") as mock_runner:
+        with patch("app.tasks.cleanup_handler._runner") as mock_runner, \
+             patch("app.tasks.cleanup_handler._cleanup_agent_workspaces", new_callable=AsyncMock):
             mock_runner.run_task = AsyncMock(
                 return_value=CleanupResult(task_name="test", deleted=0),
             )
@@ -404,3 +406,245 @@ class TestCleanupEventSerialization:
         bad = json.dumps({"event_type": "nonexistent_type"})
         with pytest.raises(ValueError):
             CleanupEvent.from_json(bad)
+
+
+# ---------------------------------------------------------------------------
+# Backpressure Queue Tests
+# ---------------------------------------------------------------------------
+
+class TestBackpressureQueue:
+    """Verify the bounded asyncio.Queue between subscriber and processor."""
+
+    def test_queue_bounded_at_maxsize(self):
+        """Handler's queue has maxsize == 100."""
+        handler = CleanupEventHandler()
+        assert handler._queue.maxsize == 100
+
+    @pytest.mark.asyncio
+    async def test_queue_accepts_events(self):
+        """Events put into queue are retrievable."""
+        handler = CleanupEventHandler()
+        event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
+        handler._queue.put_nowait(event.to_json())
+        assert handler._queue.qsize() == 1
+
+    @pytest.mark.asyncio
+    async def test_queue_full_drops_gracefully(self):
+        """When queue is at maxsize, put_nowait raises QueueFull."""
+        import asyncio
+
+        handler = CleanupEventHandler()
+        event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
+        payload = event.to_json()
+
+        # Fill queue to capacity
+        for _ in range(handler._QUEUE_MAXSIZE):
+            handler._queue.put_nowait(payload)
+
+        assert handler._queue.qsize() == handler._QUEUE_MAXSIZE
+
+        # Next put_nowait should raise QueueFull
+        with pytest.raises(asyncio.QueueFull):
+            handler._queue.put_nowait(payload)
+
+    def test_queue_depth_warning_threshold(self):
+        """Warning threshold is 50."""
+        assert CleanupEventHandler._QUEUE_WARN_DEPTH == 50
+
+    @pytest.mark.asyncio
+    async def test_fifo_processing_order(self):
+        """Events come out of the queue in FIFO order."""
+        handler = CleanupEventHandler()
+
+        events = [
+            CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id=f"lab-{i}")
+            for i in range(3)
+        ]
+        for e in events:
+            handler._queue.put_nowait(e.to_json())
+
+        for i in range(3):
+            raw = handler._queue.get_nowait()
+            restored = CleanupEvent.from_json(raw)
+            assert restored.lab_id == f"lab-{i}"
+
+
+# ---------------------------------------------------------------------------
+# Agent Workspace Cleanup Tests
+# ---------------------------------------------------------------------------
+
+class TestAgentWorkspaceCleanup:
+    """Test _cleanup_agent_workspaces integration in lab deletion flow."""
+
+    @pytest.mark.asyncio
+    async def test_lab_deleted_calls_agent_workspace_cleanup(self):
+        """_handle_lab_deleted calls _cleanup_agent_workspaces."""
+        handler = CleanupEventHandler()
+        event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
+
+        with patch("app.tasks.cleanup_handler._runner") as mock_runner, \
+             patch("app.tasks.cleanup_handler._cleanup_agent_workspaces", new_callable=AsyncMock) as mock_ws:
+            mock_runner.run_task = AsyncMock(
+                return_value=CleanupResult(task_name="test", deleted=0),
+            )
+            await handler._handle_lab_deleted(event)
+
+            mock_ws.assert_called_once_with("lab-1")
+
+    @pytest.mark.asyncio
+    async def test_agent_workspace_cleanup_handles_offline_agent(self):
+        """If one agent fails, other agents are still cleaned up."""
+        from app.tasks.cleanup_handler import _cleanup_agent_workspaces
+
+        agent_a = type("Agent", (), {"name": "agent-a", "id": "a1"})()
+        agent_b = type("Agent", (), {"name": "agent-b", "id": "b1"})()
+
+        mock_session = type("Session", (), {
+            "query": lambda self, model: self,
+            "filter": lambda self, *a: self,
+            "all": lambda self: [agent_a, agent_b],
+        })()
+
+        with patch("app.tasks.cleanup_handler.get_session") as mock_gs, \
+             patch("app.tasks.cleanup_handler.agent_client") as mock_ac:
+            mock_gs.return_value.__enter__ = lambda s: mock_session
+            mock_gs.return_value.__exit__ = lambda s, *a: None
+
+            # First agent fails, second succeeds
+            mock_ac.cleanup_agent_workspace = AsyncMock(
+                side_effect=[Exception("agent-a offline"), None],
+            )
+
+            # Should not raise — exception is caught per-agent
+            await _cleanup_agent_workspaces("lab-1")
+
+            # Both agents were attempted
+            assert mock_ac.cleanup_agent_workspace.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_agent_workspace_cleanup_skips_when_no_online_agents(self):
+        """When no online agents exist, cleanup completes without calls."""
+        from app.tasks.cleanup_handler import _cleanup_agent_workspaces
+
+        mock_session = type("Session", (), {
+            "query": lambda self, model: self,
+            "filter": lambda self, *a: self,
+            "all": lambda self: [],
+        })()
+
+        with patch("app.tasks.cleanup_handler.get_session") as mock_gs, \
+             patch("app.tasks.cleanup_handler.agent_client") as mock_ac:
+            mock_gs.return_value.__enter__ = lambda s: mock_session
+            mock_gs.return_value.__exit__ = lambda s, *a: None
+            mock_ac.cleanup_agent_workspace = AsyncMock()
+
+            await _cleanup_agent_workspaces("lab-1")
+
+            mock_ac.cleanup_agent_workspace.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_lab_deleted_runs_workspace_cleanup_plus_four_tasks(self):
+        """_handle_lab_deleted runs 4 runner tasks + agent workspace cleanup (5 total operations)."""
+        handler = CleanupEventHandler()
+        event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
+
+        with patch("app.tasks.cleanup_handler._runner") as mock_runner, \
+             patch("app.tasks.cleanup_handler._cleanup_agent_workspaces", new_callable=AsyncMock) as mock_ws:
+            mock_runner.run_task = AsyncMock(
+                return_value=CleanupResult(task_name="test", deleted=0),
+            )
+            await handler._handle_lab_deleted(event)
+
+            # 4 runner.run_task calls
+            assert mock_runner.run_task.call_count == 4
+            # Plus 1 agent workspace cleanup
+            mock_ws.assert_called_once_with("lab-1")
+
+
+# ---------------------------------------------------------------------------
+# Circuit Breaker Integration Tests
+# ---------------------------------------------------------------------------
+
+class TestCircuitBreakerIntegration:
+    """Test circuit breaker behavior within the handler's _process_message flow."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_dirty_flag(self):
+        _cleanup_dirty_event.clear()
+
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_opens_after_max_failures(self):
+        """Circuit breaker opens after 3 total failures (each fail = 2 attempts due to retry)."""
+        handler = CleanupEventHandler()
+
+        async def always_fails(event):
+            raise RuntimeError("persistent error")
+
+        handler._handle_lab_deleted = always_fails
+
+        event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
+
+        # Each _process_message call that fails records 1 failure (after both attempts fail).
+        # CircuitBreaker max_failures defaults to 3, so 3 failing calls should trip it.
+        for _ in range(3):
+            await handler._process_message(event.to_json())
+
+        handler_type = CleanupEventType.LAB_DELETED.value
+        assert handler.circuit_breaker.is_open(handler_type)
+
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_skips_events_when_open(self):
+        """When circuit breaker is open, events are skipped without calling handler."""
+        handler = CleanupEventHandler()
+        call_count = 0
+
+        async def counting_handler(event):
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("fail")
+
+        handler._handle_lab_deleted = counting_handler
+
+        event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
+
+        # Trip the circuit breaker (3 failures, each with 2 attempts = 6 handler calls)
+        for _ in range(3):
+            await handler._process_message(event.to_json())
+
+        calls_before = call_count
+
+        # Next event should be skipped entirely — handler not called
+        await handler._process_message(event.to_json())
+
+        assert call_count == calls_before
+
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_resets_on_success(self):
+        """After cooldown expires, a successful call resets the circuit breaker."""
+        handler = CleanupEventHandler()
+        # Use a very short cooldown for testing
+        handler.circuit_breaker = CircuitBreaker(max_failures=3, cooldown=0.0)
+
+        async def always_fails(event):
+            raise RuntimeError("fail")
+
+        handler._handle_lab_deleted = always_fails
+
+        event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
+
+        # Trip the breaker
+        for _ in range(3):
+            await handler._process_message(event.to_json())
+
+        handler_type = CleanupEventType.LAB_DELETED.value
+
+        # Cooldown is 0.0, so breaker should be half-open immediately
+        assert not handler.circuit_breaker.is_open(handler_type)
+
+        # Now swap to a succeeding handler
+        handler._handle_lab_deleted = AsyncMock()
+        await handler._process_message(event.to_json())
+
+        # Success should reset the breaker — failures cleared
+        assert handler.circuit_breaker._failures.get(handler_type, 0) == 0
+        assert _cleanup_dirty_event.is_set()

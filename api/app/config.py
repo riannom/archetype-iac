@@ -216,6 +216,18 @@ class Settings(BaseSettings):
     cleanup_docker_build_cache: bool = True
     cleanup_docker_unused_volumes: bool = False  # Conservative - may have data
 
+    # Container and network pruning (on agents)
+    cleanup_docker_stopped_containers: bool = False  # Conservative default
+    cleanup_docker_unused_networks: bool = False      # Conservative default
+
+    # Resource pressure thresholds
+    cleanup_disk_warning_pct: int = 75
+    cleanup_disk_critical_pct: int = 85
+    process_memory_warning_mb: int = 1024
+    process_memory_critical_mb: int = 2048
+    db_pool_warning_pct: int = 70
+    db_pool_critical_pct: int = 90
+
     # Event-driven cleanup
     cleanup_event_driven_enabled: bool = True
     reconciliation_interval_extended: int = 120     # 2 min (safety-net when events active)

@@ -2223,6 +2223,8 @@ async def prune_docker_on_agent(
     prune_dangling_images: bool = True,
     prune_build_cache: bool = True,
     prune_unused_volumes: bool = False,
+    prune_stopped_containers: bool = False,
+    prune_unused_networks: bool = False,
 ) -> dict:
     """Request an agent to prune Docker resources.
 
@@ -2232,10 +2234,13 @@ async def prune_docker_on_agent(
         prune_dangling_images: Whether to prune dangling images
         prune_build_cache: Whether to prune build cache
         prune_unused_volumes: Whether to prune unused volumes (conservative)
+        prune_stopped_containers: Whether to prune stopped containers (conservative)
+        prune_unused_networks: Whether to prune unused networks (conservative)
 
     Returns:
         Dict with 'success', 'images_removed', 'build_cache_removed',
-        'volumes_removed', 'space_reclaimed', and 'errors' keys
+        'volumes_removed', 'containers_removed', 'networks_removed',
+        'space_reclaimed', and 'errors' keys
     """
     url = f"{get_agent_url(agent)}/prune-docker"
 
@@ -2248,6 +2253,8 @@ async def prune_docker_on_agent(
                 "prune_dangling_images": prune_dangling_images,
                 "prune_build_cache": prune_build_cache,
                 "prune_unused_volumes": prune_unused_volumes,
+                "prune_stopped_containers": prune_stopped_containers,
+                "prune_unused_networks": prune_unused_networks,
             },
             timeout=120.0,  # Docker prune can take a while
             max_retries=0,
@@ -2259,9 +2266,39 @@ async def prune_docker_on_agent(
             "images_removed": 0,
             "build_cache_removed": 0,
             "volumes_removed": 0,
+            "containers_removed": 0,
+            "networks_removed": 0,
             "space_reclaimed": 0,
             "errors": [str(e)],
         }
+
+
+# --- Workspace Cleanup Functions ---
+
+
+async def cleanup_agent_workspace(agent: models.Host, lab_id: str) -> dict:
+    """Tell an agent to remove workspace for a specific lab."""
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/workspace"
+    try:
+        return await _agent_request("DELETE", url, timeout=30.0, max_retries=0)
+    except Exception as e:
+        logger.warning(f"Failed to cleanup workspace on agent {agent.id} for lab {lab_id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def cleanup_workspaces_on_agent(agent: models.Host, valid_lab_ids: list[str]) -> dict:
+    """Tell an agent to remove orphaned workspace directories."""
+    url = f"{get_agent_url(agent)}/cleanup-workspaces"
+    try:
+        return await _agent_request(
+            "POST", url,
+            json_body={"valid_lab_ids": valid_lab_ids},
+            timeout=60.0,
+            max_retries=0,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to cleanup workspaces on agent {agent.id}: {e}")
+        return {"success": False, "removed": [], "errors": [str(e)]}
 
 
 # --- MTU Testing Functions ---

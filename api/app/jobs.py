@@ -171,5 +171,8 @@ def enqueue_job(lab_id: str, action: str, user_id: str | None) -> Job:
             session.commit()
             session.refresh(job_record)
 
-        queue.enqueue(execute_netlab_action, job_record.id, lab_id, action)
+        queue.enqueue(
+            execute_netlab_action, job_record.id, lab_id, action,
+            result_ttl=3600, failure_ttl=86400,
+        )
         return job_record

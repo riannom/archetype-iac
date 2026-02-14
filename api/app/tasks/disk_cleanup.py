@@ -14,6 +14,7 @@ import asyncio
 import logging
 import shutil
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 
 from app import agent_client, models
@@ -137,8 +138,14 @@ async def cleanup_stale_iso_sessions() -> CleanupResult:
     return result
 
 
-async def cleanup_docker_on_agents() -> CleanupResult:
-    """Call /prune-docker on all online agents."""
+async def cleanup_docker_on_agents(aggressive: bool = False) -> CleanupResult:
+    """Call /prune-docker on all online agents.
+
+    Args:
+        aggressive: When True, override conservative prune defaults to enable
+            container, network, and volume pruning regardless of settings.
+            Triggered automatically when disk pressure >= WARNING.
+    """
     result = CleanupResult(task_name="docker_prune")
     if not settings.cleanup_docker_enabled:
         result.details["skipped"] = "disabled"
@@ -157,32 +164,60 @@ async def cleanup_docker_on_agents() -> CleanupResult:
             valid_lab_ids = list(get_valid_lab_ids(session))
             total_space_reclaimed = 0
 
-            for agent in agents:
+            async def _prune_single_agent(agent, valid_lab_ids) -> tuple[str, dict | None, str | None]:
+                """Prune docker on a single agent, returning (agent_name, result, error)."""
                 try:
                     prune_result = await agent_client.prune_docker_on_agent(
                         agent,
                         valid_lab_ids=valid_lab_ids,
                         prune_dangling_images=settings.cleanup_docker_dangling_images,
                         prune_build_cache=settings.cleanup_docker_build_cache,
-                        prune_unused_volumes=settings.cleanup_docker_unused_volumes,
+                        prune_unused_volumes=settings.cleanup_docker_unused_volumes or aggressive,
+                        prune_stopped_containers=settings.cleanup_docker_stopped_containers or aggressive,
+                        prune_unused_networks=settings.cleanup_docker_unused_networks or aggressive,
                     )
-                    if prune_result.get("success", False):
-                        result.deleted += 1  # Count agents cleaned
-                        space = prune_result.get("space_reclaimed", 0)
-                        total_space_reclaimed += space
-                        logger.info(
-                            f"Docker prune on agent {agent.name}: "
-                            f"images={prune_result.get('images_removed', 0)}, "
-                            f"cache={prune_result.get('build_cache_removed', 0)}, "
-                            f"reclaimed={space} bytes"
-                        )
-                    else:
-                        result.errors.append(f"Agent {agent.name}: {prune_result.get('error', 'unknown error')}")
+                    return (agent.name, prune_result, None)
                 except Exception as e:
-                    result.errors.append(f"Agent {agent.name}: {e}")
-                    logger.warning(f"Failed to prune Docker on agent {agent.name}: {e}")
+                    return (agent.name, None, str(e))
+
+            agent_results = await asyncio.gather(
+                *[_prune_single_agent(a, valid_lab_ids) for a in agents],
+                return_exceptions=False,
+            )
+            for agent_name, prune_result, error in agent_results:
+                if error:
+                    result.errors.append(f"Agent {agent_name}: {error}")
+                    logger.warning(f"Failed to prune Docker on agent {agent_name}: {error}")
+                elif prune_result and prune_result.get("success", False):
+                    result.deleted += 1  # Count agents cleaned
+                    space = prune_result.get("space_reclaimed", 0)
+                    total_space_reclaimed += space
+                    logger.info(
+                        f"Docker prune on agent {agent_name}: "
+                        f"images={prune_result.get('images_removed', 0)}, "
+                        f"cache={prune_result.get('build_cache_removed', 0)}, "
+                        f"containers={prune_result.get('containers_removed', 0)}, "
+                        f"networks={prune_result.get('networks_removed', 0)}, "
+                        f"reclaimed={space} bytes"
+                    )
+                else:
+                    result.errors.append(f"Agent {agent_name}: {prune_result.get('error', 'unknown error') if prune_result else 'unknown error'}")
 
             result.details["space_reclaimed"] = total_space_reclaimed
+
+            # Also clean orphaned agent workspaces
+            for agent in agents:
+                try:
+                    ws_result = await agent_client.cleanup_workspaces_on_agent(
+                        agent, valid_lab_ids
+                    )
+                    removed = ws_result.get("removed", [])
+                    if removed:
+                        logger.info(
+                            f"Cleaned {len(removed)} orphaned workspace(s) on agent {agent.name}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed workspace cleanup on agent {agent.name}: {e}")
         except Exception as e:
             logger.error(f"Error in Docker cleanup: {e}")
             result.errors.append(str(e))
@@ -523,9 +558,16 @@ def get_disk_usage(path: str | Path) -> dict:
         return {"total": 0, "used": 0, "free": 0, "percent": 0, "error": str(e)}
 
 
-async def run_disk_cleanup() -> dict:
-    """Orchestrate all cleanup tasks via CleanupRunner."""
-    logger.info("Starting disk cleanup...")
+async def run_disk_cleanup(aggressive: bool = False) -> dict:
+    """Orchestrate all cleanup tasks via CleanupRunner.
+
+    Args:
+        aggressive: When True, enables aggressive Docker pruning (containers,
+            networks, volumes) regardless of conservative settings.
+    """
+    logger.info(
+        "Starting disk cleanup%s...", " (aggressive)" if aggressive else ""
+    )
 
     workspace_path = Path(settings.workspace)
     upload_path = Path(settings.iso_upload_dir)
@@ -533,12 +575,14 @@ async def run_disk_cleanup() -> dict:
     before_workspace = get_disk_usage(workspace_path)
     before_upload = get_disk_usage(upload_path)
 
+    docker_cleanup = partial(cleanup_docker_on_agents, aggressive=aggressive) if aggressive else cleanup_docker_on_agents
+
     runner = CleanupRunner()
     results = await runner.run_tasks([
         cleanup_orphaned_upload_files,
         cleanup_stale_upload_sessions,
         cleanup_stale_iso_sessions,
-        cleanup_docker_on_agents,
+        docker_cleanup,
         cleanup_old_job_records,
         cleanup_old_webhook_deliveries,
         cleanup_old_config_snapshots,
@@ -586,14 +630,37 @@ async def run_disk_cleanup() -> dict:
 
 
 async def disk_cleanup_monitor():
-    """Background task to periodically run disk cleanup."""
-    interval = settings.get_interval("cleanup")
-    logger.info(f"Disk cleanup monitor started (interval: {interval}s)")
+    """Background task to periodically run disk cleanup.
+
+    Adapts interval based on disk pressure:
+    - Normal: base interval (1 hour default)
+    - Warning: 15 minutes
+    - Critical: 5 minutes + aggressive Docker pruning
+    """
+    from app.services.resource_monitor import PressureLevel, ResourceMonitor
+
+    base_interval = settings.get_interval("cleanup")
+    logger.info(f"Disk cleanup monitor started (base interval: {base_interval}s)")
 
     while True:
         try:
+            pressure = ResourceMonitor.check_disk_pressure()
+            if pressure == PressureLevel.CRITICAL:
+                interval = 300  # 5 minutes
+            elif pressure == PressureLevel.WARNING:
+                interval = 900  # 15 minutes
+            else:
+                interval = base_interval
+
+            if pressure != PressureLevel.NORMAL:
+                logger.warning(
+                    f"Disk pressure {pressure.value}: next cleanup in {interval}s"
+                )
+
             await asyncio.sleep(interval)
-            await run_disk_cleanup()
+
+            aggressive = pressure in (PressureLevel.WARNING, PressureLevel.CRITICAL)
+            await run_disk_cleanup(aggressive=aggressive)
         except asyncio.CancelledError:
             logger.info("Disk cleanup monitor stopped")
             break

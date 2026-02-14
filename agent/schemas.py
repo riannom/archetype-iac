@@ -631,6 +631,8 @@ class DockerPruneRequest(BaseModel):
     prune_dangling_images: bool = True
     prune_build_cache: bool = True
     prune_unused_volumes: bool = False
+    prune_stopped_containers: bool = False
+    prune_unused_networks: bool = False
 
 
 class DockerPruneResponse(BaseModel):
@@ -639,8 +641,17 @@ class DockerPruneResponse(BaseModel):
     images_removed: int = 0
     build_cache_removed: int = 0
     volumes_removed: int = 0
+    containers_removed: int = 0
+    networks_removed: int = 0
     space_reclaimed: int = 0
     errors: list[str] = Field(default_factory=list)
+
+
+# --- Workspace Cleanup ---
+
+class CleanupWorkspacesRequest(BaseModel):
+    """Controller -> Agent: Request to remove orphaned workspace directories."""
+    valid_lab_ids: list[str] = Field(default_factory=list)
 
 
 # --- Hot-Connect Link Management ---

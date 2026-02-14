@@ -210,12 +210,39 @@ async def _cleanup_agent_image_hosts(agent_id: str) -> CleanupResult:
     return result
 
 
+async def _cleanup_agent_workspaces(lab_id: str) -> None:
+    """Tell all online agents to remove workspace for a deleted lab."""
+    with get_session() as session:
+        agents = (
+            session.query(models.Host)
+            .filter(models.Host.status == "online")
+            .all()
+        )
+        for agent in agents:
+            try:
+                await agent_client.cleanup_agent_workspace(agent, lab_id)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to clean agent workspace for lab {lab_id} "
+                    f"on {agent.name}: {e}"
+                )
+
+
 # ---------------------------------------------------------------------------
 # Event handler
 # ---------------------------------------------------------------------------
 
 class CleanupEventHandler:
-    """Subscribe to cleanup events and dispatch targeted cleanup."""
+    """Subscribe to cleanup events and dispatch targeted cleanup.
+
+    Uses a bounded asyncio.Queue between the Redis subscriber and event
+    processing to provide backpressure.  When the queue is full, new events
+    are dropped with a warning — periodic cleanup monitors act as the safety
+    net for any lost events.
+    """
+
+    _QUEUE_MAXSIZE = 100
+    _QUEUE_WARN_DEPTH = 50
 
     _dispatch: dict[CleanupEventType, str] = {
         CleanupEventType.LAB_DELETED: "_handle_lab_deleted",
@@ -232,9 +259,15 @@ class CleanupEventHandler:
 
     def __init__(self) -> None:
         self.circuit_breaker = CircuitBreaker()
+        self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=self._QUEUE_MAXSIZE)
 
     async def run(self) -> None:
-        """Connect to Redis and process events forever."""
+        """Connect to Redis and process events forever.
+
+        Runs two concurrent tasks:
+        - _subscriber_loop: reads from Redis pub/sub and enqueues raw messages
+        - _processor_loop: dequeues and processes events sequentially
+        """
         redis = await aioredis.from_url(
             settings.redis_url, encoding="utf-8", decode_responses=True,
         )
@@ -243,22 +276,54 @@ class CleanupEventHandler:
         logger.info(f"Cleanup event handler subscribed to {CLEANUP_CHANNEL}")
 
         try:
-            while True:
-                try:
-                    msg = await pubsub.get_message(
-                        ignore_subscribe_messages=True, timeout=1.0,
-                    )
-                    if msg is not None and msg["type"] == "message":
-                        await self._process_message(msg["data"])
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"Error receiving cleanup event: {e}")
-                    await asyncio.sleep(0.5)
+            await asyncio.gather(
+                self._subscriber_loop(pubsub),
+                self._processor_loop(),
+            )
         finally:
             await pubsub.unsubscribe(CLEANUP_CHANNEL)
             await pubsub.close()
             await redis.close()
+
+    async def _subscriber_loop(self, pubsub) -> None:
+        """Read from Redis pub/sub and enqueue raw messages."""
+        while True:
+            try:
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0,
+                )
+                if msg is not None and msg["type"] == "message":
+                    try:
+                        self._queue.put_nowait(msg["data"])
+                    except asyncio.QueueFull:
+                        logger.warning(
+                            "Cleanup event queue full (%d), dropping event "
+                            "(periodic cleanup is safety net)",
+                            self._QUEUE_MAXSIZE,
+                        )
+                    else:
+                        depth = self._queue.qsize()
+                        if depth >= self._QUEUE_WARN_DEPTH:
+                            logger.warning(
+                                "Cleanup event queue depth high: %d/%d",
+                                depth, self._QUEUE_MAXSIZE,
+                            )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Error receiving cleanup event: {e}")
+                await asyncio.sleep(0.5)
+
+    async def _processor_loop(self) -> None:
+        """Dequeue and process events sequentially."""
+        while True:
+            try:
+                raw = await self._queue.get()
+                await self._process_message(raw)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Error in cleanup event processor: {e}")
 
     async def _process_message(self, raw: str) -> None:
         try:
@@ -312,6 +377,7 @@ class CleanupEventHandler:
         await _runner.run_task(_cleanup_lab_config_snapshots, lab_id)
         await _runner.run_task(_cleanup_lab_placements, lab_id)
         await _runner.run_task(_cleanup_recovered_vxlan_ports, lab_id)
+        await _cleanup_agent_workspaces(lab_id)
 
     async def _handle_node_removed(self, event: CleanupEvent) -> None:
         if not event.lab_id or not event.node_name:

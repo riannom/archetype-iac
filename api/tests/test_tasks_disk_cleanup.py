@@ -1,6 +1,7 @@
 """Tests for the disk cleanup background task."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import os
@@ -674,3 +675,557 @@ class TestRunDiskCleanup:
             # Should have 1 error from the failed task, but other tasks ran
             assert result["summary"]["total_errors"] == 1
             assert len(result["results"]) == 13  # All 13 tasks attempted
+
+
+class TestAdaptiveCleanupIntervals:
+    """Tests for disk_cleanup_monitor adaptive interval behavior."""
+
+    @pytest.mark.asyncio
+    async def test_normal_pressure_uses_base_interval(self):
+        """Test that NORMAL pressure uses the base interval for sleep."""
+        from app.services.resource_monitor import PressureLevel
+        from app.tasks.disk_cleanup import disk_cleanup_monitor
+
+        mock_sleep = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.services.resource_monitor.ResourceMonitor") as mock_rm, \
+             patch("asyncio.sleep", mock_sleep), \
+             patch("app.tasks.disk_cleanup.run_disk_cleanup", AsyncMock()):
+            mock_settings.get_interval.return_value = 3600
+            mock_rm.check_disk_pressure.return_value = PressureLevel.NORMAL
+
+            await disk_cleanup_monitor()
+
+        mock_sleep.assert_called_once_with(3600)
+
+    @pytest.mark.asyncio
+    async def test_warning_pressure_uses_15min_interval(self):
+        """Test that WARNING pressure reduces interval to 900s (15 minutes)."""
+        from app.services.resource_monitor import PressureLevel
+        from app.tasks.disk_cleanup import disk_cleanup_monitor
+
+        mock_sleep = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.services.resource_monitor.ResourceMonitor") as mock_rm, \
+             patch("asyncio.sleep", mock_sleep), \
+             patch("app.tasks.disk_cleanup.run_disk_cleanup", AsyncMock()):
+            mock_settings.get_interval.return_value = 3600
+            mock_rm.check_disk_pressure.return_value = PressureLevel.WARNING
+
+            await disk_cleanup_monitor()
+
+        mock_sleep.assert_called_once_with(900)
+
+    @pytest.mark.asyncio
+    async def test_critical_pressure_uses_5min_interval(self):
+        """Test that CRITICAL pressure reduces interval to 300s (5 minutes)."""
+        from app.services.resource_monitor import PressureLevel
+        from app.tasks.disk_cleanup import disk_cleanup_monitor
+
+        mock_sleep = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.services.resource_monitor.ResourceMonitor") as mock_rm, \
+             patch("asyncio.sleep", mock_sleep), \
+             patch("app.tasks.disk_cleanup.run_disk_cleanup", AsyncMock()):
+            mock_settings.get_interval.return_value = 3600
+            mock_rm.check_disk_pressure.return_value = PressureLevel.CRITICAL
+
+            await disk_cleanup_monitor()
+
+        mock_sleep.assert_called_once_with(300)
+
+    @pytest.mark.asyncio
+    async def test_warning_pressure_triggers_aggressive(self):
+        """Test that WARNING pressure triggers aggressive cleanup."""
+        from app.services.resource_monitor import PressureLevel
+        from app.tasks.disk_cleanup import disk_cleanup_monitor
+
+        mock_run = AsyncMock()
+        # Let sleep succeed once, then cancel on second iteration
+        call_count = 0
+
+        async def sleep_once_then_cancel(interval):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise asyncio.CancelledError
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.services.resource_monitor.ResourceMonitor") as mock_rm, \
+             patch("asyncio.sleep", AsyncMock(side_effect=sleep_once_then_cancel)), \
+             patch("app.tasks.disk_cleanup.run_disk_cleanup", mock_run):
+            mock_settings.get_interval.return_value = 3600
+            mock_rm.check_disk_pressure.return_value = PressureLevel.WARNING
+
+            await disk_cleanup_monitor()
+
+        mock_run.assert_called_once_with(aggressive=True)
+
+    @pytest.mark.asyncio
+    async def test_critical_pressure_triggers_aggressive(self):
+        """Test that CRITICAL pressure triggers aggressive cleanup."""
+        from app.services.resource_monitor import PressureLevel
+        from app.tasks.disk_cleanup import disk_cleanup_monitor
+
+        mock_run = AsyncMock()
+        call_count = 0
+
+        async def sleep_once_then_cancel(interval):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise asyncio.CancelledError
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.services.resource_monitor.ResourceMonitor") as mock_rm, \
+             patch("asyncio.sleep", AsyncMock(side_effect=sleep_once_then_cancel)), \
+             patch("app.tasks.disk_cleanup.run_disk_cleanup", mock_run):
+            mock_settings.get_interval.return_value = 3600
+            mock_rm.check_disk_pressure.return_value = PressureLevel.CRITICAL
+
+            await disk_cleanup_monitor()
+
+        mock_run.assert_called_once_with(aggressive=True)
+
+    @pytest.mark.asyncio
+    async def test_normal_pressure_not_aggressive(self):
+        """Test that NORMAL pressure runs cleanup without aggressive mode."""
+        from app.services.resource_monitor import PressureLevel
+        from app.tasks.disk_cleanup import disk_cleanup_monitor
+
+        mock_run = AsyncMock()
+        call_count = 0
+
+        async def sleep_once_then_cancel(interval):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise asyncio.CancelledError
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.services.resource_monitor.ResourceMonitor") as mock_rm, \
+             patch("asyncio.sleep", AsyncMock(side_effect=sleep_once_then_cancel)), \
+             patch("app.tasks.disk_cleanup.run_disk_cleanup", mock_run):
+            mock_settings.get_interval.return_value = 3600
+            mock_rm.check_disk_pressure.return_value = PressureLevel.NORMAL
+
+            await disk_cleanup_monitor()
+
+        mock_run.assert_called_once_with(aggressive=False)
+
+
+class TestAggressiveMode:
+    """Tests for aggressive mode overriding conservative prune settings."""
+
+    def _make_mock_session_with_agent(self):
+        """Create a mock session with one online agent."""
+        from contextlib import contextmanager
+
+        mock_agent = MagicMock()
+        mock_agent.id = "agent-1"
+        mock_agent.name = "agent-1"
+        mock_agent.status = "online"
+
+        mock_session = MagicMock()
+        mock_host_query = MagicMock()
+        mock_host_query.filter.return_value = mock_host_query
+        mock_host_query.all.return_value = [mock_agent]
+
+        mock_lab_id_query = MagicMock()
+        mock_lab_id_query.all.return_value = [("lab-1",)]
+
+        def query_side_effect(model):
+            if hasattr(model, 'property') or hasattr(model, 'key'):
+                return mock_lab_id_query
+            if hasattr(model, '__name__') and model.__name__ == "Host":
+                return mock_host_query
+            return mock_lab_id_query
+
+        mock_session.query.side_effect = query_side_effect
+
+        @contextmanager
+        def fake_get_session():
+            yield mock_session
+
+        return fake_get_session, mock_agent
+
+    @pytest.mark.asyncio
+    async def test_aggressive_overrides_container_prune(self):
+        """Test that aggressive=True enables container pruning even when settings say False."""
+        fake_get_session, _ = self._make_mock_session_with_agent()
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 0, "build_cache_removed": 0,
+            "containers_removed": 3, "networks_removed": 0,
+            "volumes_removed": 0, "space_reclaimed": 0,
+        })
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = False
+            mock_settings.cleanup_docker_unused_networks = False
+
+            await cleanup_docker_on_agents(aggressive=True)
+
+        call_kwargs = mock_prune.call_args[1]
+        assert call_kwargs["prune_stopped_containers"] is True
+
+    @pytest.mark.asyncio
+    async def test_aggressive_overrides_network_prune(self):
+        """Test that aggressive=True enables network pruning even when settings say False."""
+        fake_get_session, _ = self._make_mock_session_with_agent()
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 0, "build_cache_removed": 0,
+            "containers_removed": 0, "networks_removed": 2,
+            "volumes_removed": 0, "space_reclaimed": 0,
+        })
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = False
+            mock_settings.cleanup_docker_unused_networks = False
+
+            await cleanup_docker_on_agents(aggressive=True)
+
+        call_kwargs = mock_prune.call_args[1]
+        assert call_kwargs["prune_unused_networks"] is True
+
+    @pytest.mark.asyncio
+    async def test_aggressive_overrides_volume_prune(self):
+        """Test that aggressive=True enables volume pruning even when settings say False."""
+        fake_get_session, _ = self._make_mock_session_with_agent()
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 0, "build_cache_removed": 0,
+            "containers_removed": 0, "networks_removed": 0,
+            "volumes_removed": 5, "space_reclaimed": 500000,
+        })
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = False
+            mock_settings.cleanup_docker_unused_networks = False
+
+            await cleanup_docker_on_agents(aggressive=True)
+
+        call_kwargs = mock_prune.call_args[1]
+        assert call_kwargs["prune_unused_volumes"] is True
+
+    @pytest.mark.asyncio
+    async def test_non_aggressive_respects_settings(self):
+        """Test that aggressive=False uses the settings values as-is."""
+        fake_get_session, _ = self._make_mock_session_with_agent()
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 0, "build_cache_removed": 0,
+            "containers_removed": 0, "networks_removed": 0,
+            "volumes_removed": 0, "space_reclaimed": 0,
+        })
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = False
+            mock_settings.cleanup_docker_unused_networks = False
+
+            await cleanup_docker_on_agents(aggressive=False)
+
+        call_kwargs = mock_prune.call_args[1]
+        assert call_kwargs["prune_unused_volumes"] is False
+        assert call_kwargs["prune_stopped_containers"] is False
+        assert call_kwargs["prune_unused_networks"] is False
+
+
+class TestParallelAgentCalls:
+    """Tests for parallel agent prune calls via asyncio.gather."""
+
+    def _make_mock_session_with_agents(self, agents):
+        """Create a mock session with given agents."""
+        from contextlib import contextmanager
+
+        mock_session = MagicMock()
+        mock_host_query = MagicMock()
+        mock_host_query.filter.return_value = mock_host_query
+        mock_host_query.all.return_value = agents
+
+        mock_lab_id_query = MagicMock()
+        mock_lab_id_query.all.return_value = [("lab-1",)]
+
+        def query_side_effect(model):
+            if hasattr(model, 'property') or hasattr(model, 'key'):
+                return mock_lab_id_query
+            if hasattr(model, '__name__') and model.__name__ == "Host":
+                return mock_host_query
+            return mock_lab_id_query
+
+        mock_session.query.side_effect = query_side_effect
+
+        @contextmanager
+        def fake_get_session():
+            yield mock_session
+
+        return fake_get_session
+
+    def _make_agent(self, agent_id, name):
+        """Create a mock agent."""
+        agent = MagicMock()
+        agent.id = agent_id
+        agent.name = name
+        agent.status = "online"
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_prune_calls_all_agents_in_parallel(self):
+        """Test that prune is called on all 3 online agents."""
+        agents = [
+            self._make_agent("a1", "agent-1"),
+            self._make_agent("a2", "agent-2"),
+            self._make_agent("a3", "agent-3"),
+        ]
+        fake_get_session = self._make_mock_session_with_agents(agents)
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 1, "build_cache_removed": 0,
+            "containers_removed": 0, "networks_removed": 0,
+            "volumes_removed": 0, "space_reclaimed": 100,
+        })
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = False
+            mock_settings.cleanup_docker_unused_networks = False
+
+            result = await cleanup_docker_on_agents()
+
+        assert mock_prune.call_count == 3
+        assert result.deleted == 3  # All 3 agents cleaned
+
+    @pytest.mark.asyncio
+    async def test_single_agent_failure_doesnt_block_others(self):
+        """Test that one agent failure doesn't prevent other agents from being pruned."""
+        agents = [
+            self._make_agent("a1", "agent-1"),
+            self._make_agent("a2", "agent-2"),
+            self._make_agent("a3", "agent-3"),
+        ]
+        fake_get_session = self._make_mock_session_with_agents(agents)
+
+        success_result = {
+            "success": True, "images_removed": 1, "build_cache_removed": 0,
+            "containers_removed": 0, "networks_removed": 0,
+            "volumes_removed": 0, "space_reclaimed": 100,
+        }
+
+        async def prune_side_effect(agent, **kwargs):
+            if agent.name == "agent-2":
+                raise Exception("Agent unreachable")
+            return success_result
+
+        mock_prune = AsyncMock(side_effect=prune_side_effect)
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = False
+            mock_settings.cleanup_docker_unused_networks = False
+
+            result = await cleanup_docker_on_agents()
+
+        # 2 agents succeeded, 1 failed
+        assert result.deleted == 2
+        assert len(result.errors) == 1
+        assert "agent-2" in result.errors[0]
+
+    @pytest.mark.asyncio
+    async def test_agent_workspace_cleanup_after_prune(self):
+        """Test that cleanup_workspaces_on_agent is called for each agent after prune."""
+        agents = [
+            self._make_agent("a1", "agent-1"),
+            self._make_agent("a2", "agent-2"),
+        ]
+        fake_get_session = self._make_mock_session_with_agents(agents)
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 0, "build_cache_removed": 0,
+            "containers_removed": 0, "networks_removed": 0,
+            "volumes_removed": 0, "space_reclaimed": 0,
+        })
+        mock_ws_cleanup = AsyncMock(return_value={"removed": ["orphan-lab-1"]})
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", mock_ws_cleanup):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = False
+            mock_settings.cleanup_docker_unused_networks = False
+
+            await cleanup_docker_on_agents()
+
+        assert mock_ws_cleanup.call_count == 2
+        # Verify each agent was passed to workspace cleanup
+        called_agents = [call.args[0] for call in mock_ws_cleanup.call_args_list]
+        called_names = {a.name for a in called_agents}
+        assert called_names == {"agent-1", "agent-2"}
+
+
+class TestContainerNetworkPrune:
+    """Tests for container and network prune flag forwarding."""
+
+    def _make_mock_session_with_agent(self):
+        """Create a mock session with one online agent."""
+        from contextlib import contextmanager
+
+        mock_agent = MagicMock()
+        mock_agent.id = "agent-1"
+        mock_agent.name = "agent-1"
+        mock_agent.status = "online"
+
+        mock_session = MagicMock()
+        mock_host_query = MagicMock()
+        mock_host_query.filter.return_value = mock_host_query
+        mock_host_query.all.return_value = [mock_agent]
+
+        mock_lab_id_query = MagicMock()
+        mock_lab_id_query.all.return_value = [("lab-1",)]
+
+        def query_side_effect(model):
+            if hasattr(model, 'property') or hasattr(model, 'key'):
+                return mock_lab_id_query
+            if hasattr(model, '__name__') and model.__name__ == "Host":
+                return mock_host_query
+            return mock_lab_id_query
+
+        mock_session.query.side_effect = query_side_effect
+
+        @contextmanager
+        def fake_get_session():
+            yield mock_session
+
+        return fake_get_session
+
+    @pytest.mark.asyncio
+    async def test_container_prune_flag_forwarded(self):
+        """Test that prune_stopped_containers setting is forwarded to agent_client."""
+        fake_get_session = self._make_mock_session_with_agent()
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 0, "build_cache_removed": 0,
+            "containers_removed": 2, "networks_removed": 0,
+            "volumes_removed": 0, "space_reclaimed": 0,
+        })
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = True
+            mock_settings.cleanup_docker_unused_networks = False
+
+            await cleanup_docker_on_agents()
+
+        call_kwargs = mock_prune.call_args[1]
+        assert call_kwargs["prune_stopped_containers"] is True
+
+    @pytest.mark.asyncio
+    async def test_network_prune_flag_forwarded(self):
+        """Test that prune_unused_networks setting is forwarded to agent_client."""
+        fake_get_session = self._make_mock_session_with_agent()
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 0, "build_cache_removed": 0,
+            "containers_removed": 0, "networks_removed": 3,
+            "volumes_removed": 0, "space_reclaimed": 0,
+        })
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})):
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = False
+            mock_settings.cleanup_docker_unused_networks = True
+
+            await cleanup_docker_on_agents()
+
+        call_kwargs = mock_prune.call_args[1]
+        assert call_kwargs["prune_unused_networks"] is True
+
+    @pytest.mark.asyncio
+    async def test_prune_result_includes_container_count(self):
+        """Test that log output includes containers_removed count from prune result."""
+        fake_get_session = self._make_mock_session_with_agent()
+
+        mock_prune = AsyncMock(return_value={
+            "success": True, "images_removed": 0, "build_cache_removed": 0,
+            "containers_removed": 5, "networks_removed": 0,
+            "volumes_removed": 0, "space_reclaimed": 2048,
+        })
+
+        with patch("app.tasks.disk_cleanup.settings") as mock_settings, \
+             patch("app.tasks.disk_cleanup.get_session", fake_get_session), \
+             patch("app.tasks.disk_cleanup.agent_client.prune_docker_on_agent", mock_prune), \
+             patch("app.tasks.disk_cleanup.agent_client.cleanup_workspaces_on_agent", AsyncMock(return_value={"removed": []})), \
+             patch("app.tasks.disk_cleanup.logger") as mock_logger:
+            mock_settings.cleanup_docker_enabled = True
+            mock_settings.cleanup_docker_dangling_images = True
+            mock_settings.cleanup_docker_build_cache = True
+            mock_settings.cleanup_docker_unused_volumes = False
+            mock_settings.cleanup_docker_stopped_containers = True
+            mock_settings.cleanup_docker_unused_networks = False
+
+            result = await cleanup_docker_on_agents()
+
+        # Verify that logger.info was called with a message containing containers count
+        log_calls = [str(call) for call in mock_logger.info.call_args_list]
+        container_logged = any("containers=5" in call for call in log_calls)
+        assert container_logged, f"Expected 'containers=5' in log output, got: {log_calls}"
+        assert result.details["space_reclaimed"] == 2048

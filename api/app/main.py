@@ -28,7 +28,7 @@ from starlette.routing import Route
 
 from app import db, models
 from app.config import settings
-from app.auth import hash_password
+from app.auth import get_current_user, hash_password
 from app.catalog import list_devices as catalog_devices, list_images as catalog_images
 from app.logging_config import (
     correlation_id_var,
@@ -156,6 +156,14 @@ async def healthz(request: StarletteRequest) -> StarletteJSONResponse:
     except Exception:
         pass
 
+    # Process memory (informational)
+    try:
+        import resource as res_mod
+        rusage = res_mod.getrusage(res_mod.RUSAGE_SELF)
+        result["process_memory_mb"] = round(rusage.ru_maxrss / 1024, 1)
+    except Exception:
+        pass
+
     return StarletteJSONResponse(result)
 
 
@@ -280,6 +288,15 @@ def health(request: Request) -> dict[str, str]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "user": user.email if user else "",
     }
+
+
+@app.get("/disk-usage")
+async def disk_usage(current_user: models.User = Depends(get_current_user)):
+    """Resource pressure status (admin only)."""
+    from app.utils.http import require_admin
+    require_admin(current_user)
+    from app.services.resource_monitor import ResourceMonitor
+    return ResourceMonitor.get_status()
 
 
 _metrics_last_update: float = 0.0
