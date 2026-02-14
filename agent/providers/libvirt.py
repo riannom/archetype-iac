@@ -1127,16 +1127,17 @@ class LibvirtProvider(Provider):
 
         # CPU SMP topology — some platforms (e.g., XRv9000) require cores-per-socket
         # instead of sockets-per-core for Spirit bootstrap to detect CPUs correctly.
+        # migratable='off' exposes VMX/SVM for nested KVM (required by XRv9000 XR VM).
         cpu_sockets = node_config.get("cpu_sockets", 0)
         if cpu_sockets > 0:
             cores = max(1, cpus // cpu_sockets)
             cpu_xml = (
-                f"<cpu mode='host-passthrough'>\n"
+                f"<cpu mode='host-passthrough' migratable='off'>\n"
                 f"    <topology sockets='{cpu_sockets}' cores='{cores}' threads='1'/>\n"
                 f"  </cpu>"
             )
         else:
-            cpu_xml = "<cpu mode='host-passthrough'/>"
+            cpu_xml = "<cpu mode='host-passthrough' migratable='off'/>"
 
         smm_xml = "\n    <smm state='off'/>" if efi_boot else ""
 
