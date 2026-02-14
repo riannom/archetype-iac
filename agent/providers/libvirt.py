@@ -1226,7 +1226,11 @@ class LibvirtProvider(Provider):
 {disks_xml}
 {interfaces_xml}
 {serial_xml}
-{graphics_xml}  </devices>{qemu_commandline_xml}
+{graphics_xml}    <memballoon model='none'/>
+    <rng model='virtio'>
+      <backend model='random'>/dev/urandom</backend>
+    </rng>
+  </devices>{qemu_commandline_xml}
 </domain>'''
 
         return xml
