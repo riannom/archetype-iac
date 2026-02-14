@@ -941,6 +941,7 @@ class TestEarlyPlacementUpdate:
                 mock_settings.image_sync_enabled = False
                 mock_settings.image_sync_pre_deploy_check = False
                 mock_settings.per_node_lifecycle_enabled = False
+                mock_settings.placement_scoring_enabled = False
                 with patch.object(test_db, "commit", tracking_commit):
                     await run_node_reconcile(job.id, lab.id, ["node-1"])
 

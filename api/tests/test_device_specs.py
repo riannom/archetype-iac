@@ -20,6 +20,8 @@ class MockVendorConfig:
     readiness_pattern: str | None = None
     readiness_timeout: int | None = None
     supported_image_kinds: list[str] = field(default_factory=lambda: ["qcow2"])
+    efi_boot: bool = False
+    efi_vars: str = ""
 
 
 class TestResolveHardwareSpecs:

@@ -1585,6 +1585,7 @@ class TestStartNodesPerNode:
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock):
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             # deploy_to_agent should NOT be called
             mock_ac.deploy_to_agent = AsyncMock()
             await manager._start_nodes_per_node([ns])
@@ -1612,6 +1613,7 @@ class TestStartNodesPerNode:
             mock_ac.start_node_on_agent = AsyncMock(
                 return_value={"success": False, "error": "Network error"}
             )
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             await manager._start_nodes_per_node([ns])
 
         assert ns.actual_state == NodeActualState.ERROR.value
@@ -1636,6 +1638,7 @@ class TestStartNodesPerNode:
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock) as mock_links:
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             await manager._start_nodes_per_node([ns])
 
         mock_links.assert_called_once_with({"R1"})

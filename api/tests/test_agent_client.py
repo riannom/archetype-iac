@@ -276,6 +276,8 @@ class MockAgent:
         self.capabilities = capabilities or '{"providers": ["docker"], "max_concurrent_jobs": 4}'
         self.version = "0.1.0"
         self.created_at = datetime.now(timezone.utc)
+        self.resource_usage = None
+        self.is_local = False
 
 
 class MockLab:

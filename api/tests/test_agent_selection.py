@@ -123,41 +123,46 @@ class TestGetHealthyAgent:
 
     @pytest.mark.asyncio
     async def test_load_balancing(self, test_db: Session):
-        """Least-loaded agent is preferred."""
-        # Create two agents
-        agent1 = models.Host(
-            id="agent-1",
-            name="Agent 1",
-            address="localhost:8080",
-            status="online",
-            capabilities=json.dumps({"providers": ["docker"], "max_concurrent_jobs": 4}),
-            last_heartbeat=datetime.now(timezone.utc),
-        )
-        agent2 = models.Host(
-            id="agent-2",
-            name="Agent 2",
-            address="localhost:8081",
-            status="online",
-            capabilities=json.dumps({"providers": ["docker"], "max_concurrent_jobs": 4}),
-            last_heartbeat=datetime.now(timezone.utc),
-        )
-        test_db.add_all([agent1, agent2])
-        test_db.commit()
-
-        # Add jobs to agent1
-        for i in range(3):
-            job = models.Job(
-                agent_id="agent-1",
-                action="up",
-                status="running",
+        """Least-loaded agent is preferred (legacy job-count sort)."""
+        # Disable resource-aware scoring to test legacy behavior
+        object.__setattr__(settings, "placement_scoring_enabled", False)
+        try:
+            # Create two agents
+            agent1 = models.Host(
+                id="agent-1",
+                name="Agent 1",
+                address="localhost:8080",
+                status="online",
+                capabilities=json.dumps({"providers": ["docker"], "max_concurrent_jobs": 4}),
+                last_heartbeat=datetime.now(timezone.utc),
             )
-            test_db.add(job)
-        test_db.commit()
+            agent2 = models.Host(
+                id="agent-2",
+                name="Agent 2",
+                address="localhost:8081",
+                status="online",
+                capabilities=json.dumps({"providers": ["docker"], "max_concurrent_jobs": 4}),
+                last_heartbeat=datetime.now(timezone.utc),
+            )
+            test_db.add_all([agent1, agent2])
+            test_db.commit()
 
-        # Should select agent2 (less loaded)
-        result = await agent_client.get_healthy_agent(test_db, required_provider="docker")
-        assert result is not None
-        assert result.id == "agent-2"
+            # Add jobs to agent1
+            for i in range(3):
+                job = models.Job(
+                    agent_id="agent-1",
+                    action="up",
+                    status="running",
+                )
+                test_db.add(job)
+            test_db.commit()
+
+            # Should select agent2 (less loaded)
+            result = await agent_client.get_healthy_agent(test_db, required_provider="docker")
+            assert result is not None
+            assert result.id == "agent-2"
+        finally:
+            object.__setattr__(settings, "placement_scoring_enabled", True)
 
     @pytest.mark.asyncio
     async def test_capacity_limit(self, test_db: Session):

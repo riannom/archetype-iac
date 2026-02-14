@@ -292,7 +292,7 @@ class TestImageEntryOperations:
         assert entry["id"] == "docker:ceos:4.28.0F"
         assert entry["kind"] == "docker"
         assert entry["reference"] == "ceos:4.28.0F"
-        assert entry["device_id"] == "eos"
+        assert entry["device_id"] == "ceos"
         assert entry["version"] == "4.28.0F"
         assert entry["size_bytes"] == 1024000
         assert "uploaded_at" in entry
@@ -391,7 +391,7 @@ class TestImageEntryOperations:
         )
 
         assert updated is not None
-        assert updated["device_id"] == "eos"
+        assert updated["device_id"] == "ceos"
         assert updated["notes"] == "Test image"
         # Original fields preserved
         assert updated["version"] == "1.0"
