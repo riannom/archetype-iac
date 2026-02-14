@@ -2706,22 +2706,25 @@ async def debug_exec(request: dict):
     """Debug: execute a command in a container or on the host."""
     import asyncio
 
-    container = request.get("container")
-    command = request.get("command", "echo ok")
-    if container:
-        cmd = f"docker exec {container} {command}"
-    else:
-        cmd = command
+    try:
+        container = request.get("container")
+        command = request.get("command", "echo ok")
+        if container:
+            cmd = f"docker exec {container} {command}"
+        else:
+            cmd = command
 
-    proc = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await proc.communicate()
-    return {
-        "returncode": proc.returncode,
-        "stdout": stdout.decode()[:4000],
-        "stderr": stderr.decode()[:2000],
-    }
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        return {
+            "returncode": proc.returncode,
+            "stdout": stdout.decode()[:4000],
+            "stderr": stderr.decode()[:2000],
+        }
+    except Exception as e:
+        return {"returncode": -1, "stdout": "", "stderr": str(e)[:2000]}
 
 
 @app.delete("/overlay/bridge-ports/{port_name}")

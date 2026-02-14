@@ -101,6 +101,8 @@ class VendorConfig:
     serial_port_count: int = 1   # Number of serial ports (IOS-XRv 9000 needs 4)
     smbios_product: str = ""     # SMBIOS type=1 product string (e.g., "Cisco IOS XRv 9000")
     force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
+    reserved_nics: int = 0        # Dummy NICs inserted after management, before data (XRv9k needs 2)
+    cpu_sockets: int = 0          # If >0, explicit SMP topology: sockets=N, cores=cpu/N, threads=1
 
     # Image requirements
     requires_image: bool = True
@@ -271,6 +273,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         nographic=True,  # Remove VGA so OVMF outputs to serial (virsh console)
         serial_port_count=4,  # CML refplat: XR console, aux, calvados console, calvados aux
         smbios_product="Cisco IOS XRv 9000",  # Required for platform identification
+        reserved_nics=2,  # ctrl-dummy + dev-dummy between mgmt and data NICs
+        cpu_sockets=1,    # SMP: 1 socket × N cores (Spirit bootstrap requires cores, not sockets)
         requires_image=True,
         supported_image_kinds=["qcow2"],
         # Boot readiness: detect XR CLI prompt or config dialog
@@ -1744,6 +1748,8 @@ class LibvirtRuntimeConfig:
     serial_port_count: int = 1  # Number of serial ports (IOS-XRv 9000 needs 4)
     smbios_product: str = ""  # SMBIOS type=1 product (e.g., "Cisco IOS XRv 9000")
     force_stop: bool = True  # Skip ACPI shutdown (most network VMs don't support it)
+    reserved_nics: int = 0  # Dummy NICs after management, before data interfaces
+    cpu_sockets: int = 0    # If >0, explicit SMP topology: sockets=N, cores=cpu/N
     source: str = "vendor"  # "vendor" for matched profile, "fallback" for generic defaults
 
 
@@ -1807,6 +1813,8 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             serial_port_count=1,
             smbios_product="",
             force_stop=True,
+            reserved_nics=0,
+            cpu_sockets=0,
             source="fallback",
         )
 
@@ -1827,6 +1835,8 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         serial_port_count=config.serial_port_count,
         smbios_product=config.smbios_product,
         force_stop=config.force_stop,
+        reserved_nics=config.reserved_nics,
+        cpu_sockets=config.cpu_sockets,
         source="vendor",
     )
 

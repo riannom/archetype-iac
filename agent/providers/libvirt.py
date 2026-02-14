@@ -914,6 +914,7 @@ class LibvirtProvider(Provider):
 
         # Ensure we have at least 1 interface
         interface_count = max(1, interface_count)
+        reserved_nics = node_config.get("reserved_nics", 0)
         data_interface_mac_offset = 0
 
         # For SSH-console libvirt VMs (e.g., NX-OSv/Cat9k), add a dedicated
@@ -928,16 +929,42 @@ class LibvirtProvider(Provider):
     </interface>'''
             data_interface_mac_offset = 1
 
+        # Reserved (dummy) NICs — placeholder interfaces required by some
+        # platforms (e.g., XRv9000 needs ctrl-dummy + dev-dummy between
+        # management and data interfaces for Spirit bootstrap).
+        # These get their own VLAN tags from the beginning of vlan_tags.
+        for r in range(reserved_nics):
+            mac_address = self._generate_mac_address(name, r + data_interface_mac_offset)
+            interface_id = str(uuid.uuid4())
+            vlan_xml = ""
+            if vlan_tags and r < len(vlan_tags):
+                vlan_xml = f'''
+      <vlan>
+        <tag id='{vlan_tags[r]}'/>
+      </vlan>'''
+            interfaces_xml += f'''
+    <interface type='bridge'>
+      <mac address='{mac_address}'/>
+      <source bridge='{ovs_bridge}'/>
+      <virtualport type='openvswitch'>
+        <parameters interfaceid='{interface_id}'/>
+      </virtualport>{vlan_xml}
+      <model type='{nic_driver}'/>
+    </interface>'''
+        data_interface_mac_offset += reserved_nics
+
         for i in range(interface_count):
             mac_address = self._generate_mac_address(name, i + data_interface_mac_offset)
             interface_id = str(uuid.uuid4())
 
             # Add VLAN tag if provided (for OVS isolation)
+            # Data interfaces use vlan_tags after the reserved_nics offset
             vlan_xml = ""
-            if vlan_tags and i < len(vlan_tags):
+            vlan_idx = i + reserved_nics
+            if vlan_tags and vlan_idx < len(vlan_tags):
                 vlan_xml = f'''
       <vlan>
-        <tag id='{vlan_tags[i]}'/>
+        <tag id='{vlan_tags[vlan_idx]}'/>
       </vlan>'''
 
             interfaces_xml += f'''
@@ -1073,6 +1100,19 @@ class LibvirtProvider(Provider):
   </sysinfo>"""
             smbios_os_xml = "\n    <smbios mode='sysinfo'/>"
 
+        # CPU SMP topology — some platforms (e.g., XRv9000) require cores-per-socket
+        # instead of sockets-per-core for Spirit bootstrap to detect CPUs correctly.
+        cpu_sockets = node_config.get("cpu_sockets", 0)
+        if cpu_sockets > 0:
+            cores = max(1, cpus // cpu_sockets)
+            cpu_xml = (
+                f"<cpu mode='host-passthrough'>\n"
+                f"    <topology sockets='{cpu_sockets}' cores='{cores}' threads='1'/>\n"
+                f"  </cpu>"
+            )
+        else:
+            cpu_xml = "<cpu mode='host-passthrough'/>"
+
         xml = f'''<domain type='{libvirt_driver}'>{sysinfo_xml}
   <name>{name}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
@@ -1085,7 +1125,7 @@ class LibvirtProvider(Provider):
     <acpi/>
     <apic/>
   </features>
-  <cpu mode='host-passthrough'/>
+  {cpu_xml}
   <clock offset='utc'>
     <timer name='rtc' tickpolicy='catchup'/>
     <timer name='pit' tickpolicy='delay'/>
@@ -1285,6 +1325,8 @@ class LibvirtProvider(Provider):
                 "nographic": libvirt_config.nographic,
                 "serial_port_count": libvirt_config.serial_port_count,
                 "smbios_product": libvirt_config.smbios_product,
+                "reserved_nics": libvirt_config.reserved_nics,
+                "cpu_sockets": libvirt_config.cpu_sockets,
                 "interface_count": interface_count,
                 "_display_name": display_name,
             }
@@ -1390,11 +1432,13 @@ class LibvirtProvider(Provider):
 
         # Get interface count from node config (default to 1)
         interface_count = node_config.get("interface_count", 1)
+        reserved_nics = node_config.get("reserved_nics", 0)
 
         # Allocate VLAN tags for each interface (for OVS isolation)
+        # Include reserved (dummy) NICs that need their own VLAN tags
         # Pass workspace (parent of disks_dir) for persisting allocations
         workspace = disks_dir.parent
-        vlan_tags = self._allocate_vlans(lab_id, node_name, interface_count, workspace)
+        vlan_tags = self._allocate_vlans(lab_id, node_name, interface_count + reserved_nics, workspace)
 
         include_management_interface = False
         if kind and self._node_uses_dedicated_mgmt_interface(kind):
@@ -1768,6 +1812,8 @@ class LibvirtProvider(Provider):
                 "nographic": libvirt_config.nographic,
                 "serial_port_count": libvirt_config.serial_port_count,
                 "smbios_product": libvirt_config.smbios_product,
+                "reserved_nics": libvirt_config.reserved_nics,
+                "cpu_sockets": libvirt_config.cpu_sockets,
                 "data_volume_gb": data_volume_gb if data_volume_gb is not None else libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
@@ -1805,9 +1851,10 @@ class LibvirtProvider(Provider):
                         error=f"Failed to create data volume for {node_name}",
                     )
 
-            # Allocate VLAN tags for OVS isolation
+            # Allocate VLAN tags for OVS isolation (include reserved dummy NICs)
             iface_count = node_config.get("interface_count", 1)
-            vlan_tags = self._allocate_vlans(lab_id, node_name, iface_count, workspace)
+            reserved_nics = node_config.get("reserved_nics", 0)
+            vlan_tags = self._allocate_vlans(lab_id, node_name, iface_count + reserved_nics, workspace)
 
             include_management_interface = False
             if self._node_uses_dedicated_mgmt_interface(kind):
