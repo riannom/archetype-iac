@@ -495,6 +495,29 @@ describe("TerminalSession", () => {
     });
   });
 
+  describe("WebSocket Token Authentication", () => {
+    it("includes token in WebSocket URL when present in localStorage", () => {
+      const getItemSpy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(
+        (key: string) => (key === "token" ? "my-jwt-token" : null)
+      );
+
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      expect(mockWebSocketInstances[0].url).toContain("?token=my-jwt-token");
+      getItemSpy.mockRestore();
+    });
+
+    it("omits token param when localStorage has no token", () => {
+      const getItemSpy = vi.spyOn(Storage.prototype, "getItem").mockReturnValue(null);
+
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      expect(mockWebSocketInstances[0].url).not.toContain("?token=");
+      expect(mockWebSocketInstances[0].url).not.toContain("token=");
+      getItemSpy.mockRestore();
+    });
+  });
+
   describe("Protocol Handling", () => {
     it("uses ws:// protocol when location is http://", () => {
       // Default jsdom uses http://localhost

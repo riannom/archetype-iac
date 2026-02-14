@@ -606,6 +606,35 @@ describe("useLabStateWS", () => {
     });
   });
 
+  describe("WebSocket Token Authentication", () => {
+    it("includes token in WebSocket URL when present in localStorage", () => {
+      vi.stubGlobal("localStorage", {
+        getItem: (key: string) => (key === "token" ? "my-jwt-token" : null),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      });
+
+      renderHook(() => useLabStateWS("test-lab"));
+
+      const ws = MockWebSocket.getLastInstance();
+      expect(ws?.url).toContain("?token=my-jwt-token");
+    });
+
+    it("omits token param when localStorage has no token", () => {
+      vi.stubGlobal("localStorage", {
+        getItem: (_key: string) => null,
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      });
+
+      renderHook(() => useLabStateWS("test-lab"));
+
+      const ws = MockWebSocket.getLastInstance();
+      expect(ws?.url).not.toContain("?token=");
+      expect(ws?.url).not.toContain("token=");
+    });
+  });
+
   describe("Cleanup on Unmount", () => {
     it("closes WebSocket on unmount", async () => {
       const { unmount } = renderHook(() => useLabStateWS("test-lab"));
