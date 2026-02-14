@@ -26,7 +26,7 @@ class FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    async def post(self, url: str, json: dict | None = None, timeout: float | None = None):
+    async def post(self, url: str, json: dict | None = None, timeout: float | None = None, **kwargs):
         self.posts.append((url, json, timeout))
         return self._response
 
