@@ -287,6 +287,14 @@ class MockAgent:
         except (json.JSONDecodeError, TypeError):
             return {}
 
+    def get_resource_usage(self) -> dict:
+        """Parse resource_usage JSON string into a dict, with safe fallback."""
+        try:
+            import json
+            return json.loads(self.resource_usage) if self.resource_usage else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
 
 class MockLab:
     """Helper class for creating mock labs in tests."""
@@ -313,9 +321,7 @@ def test_parse_capabilities_valid():
 
 def test_parse_capabilities_empty():
     """Test parsing empty capabilities."""
-    # Create agent directly, bypassing MockAgent default
-    agent = MagicMock()
-    agent.capabilities = ""
+    agent = MockAgent("agent1", "localhost:8001", capabilities="")
 
     caps = agent_client.parse_capabilities(agent)
 
