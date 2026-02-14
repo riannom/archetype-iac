@@ -16,9 +16,10 @@ class TestDashboardMetrics:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test dashboard metrics with no agents or labs."""
-        response = test_client.get("/dashboard/metrics")
+        response = test_client.get("/dashboard/metrics", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -45,9 +46,10 @@ class TestDashboardMetrics:
         test_client: TestClient,
         test_db: Session,
         sample_host: models.Host,
+        auth_headers: dict,
     ):
         """Test dashboard metrics with a single online agent."""
-        response = test_client.get("/dashboard/metrics")
+        response = test_client.get("/dashboard/metrics", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -70,9 +72,10 @@ class TestDashboardMetrics:
         test_client: TestClient,
         test_db: Session,
         multiple_hosts: list[models.Host],
+        auth_headers: dict,
     ):
         """Test dashboard metrics aggregates across multiple agents."""
-        response = test_client.get("/dashboard/metrics")
+        response = test_client.get("/dashboard/metrics", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -105,6 +108,7 @@ class TestDashboardMetrics:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test that labs_running is based on actual container presence."""
         # Create a host with container details that reference a lab
@@ -139,7 +143,7 @@ class TestDashboardMetrics:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/dashboard/metrics")
+        response = test_client.get("/dashboard/metrics", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -150,6 +154,7 @@ class TestDashboardMetrics:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test that offline agents don't contribute to resource totals."""
         # Create only offline agent
@@ -169,7 +174,7 @@ class TestDashboardMetrics:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/dashboard/metrics")
+        response = test_client.get("/dashboard/metrics", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -188,9 +193,10 @@ class TestContainersBreakdown:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test containers breakdown with no agents."""
-        response = test_client.get("/dashboard/metrics/containers")
+        response = test_client.get("/dashboard/metrics/containers", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -203,6 +209,7 @@ class TestContainersBreakdown:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test containers are grouped by lab."""
         # Create lab
@@ -239,7 +246,7 @@ class TestContainersBreakdown:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/dashboard/metrics/containers")
+        response = test_client.get("/dashboard/metrics/containers", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -252,6 +259,7 @@ class TestContainersBreakdown:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test system containers are reported separately."""
         host = models.Host(
@@ -275,7 +283,7 @@ class TestContainersBreakdown:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/dashboard/metrics/containers")
+        response = test_client.get("/dashboard/metrics/containers", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -286,6 +294,7 @@ class TestContainersBreakdown:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test orphan containers (lab deleted) are treated as system containers."""
         host = models.Host(
@@ -309,7 +318,7 @@ class TestContainersBreakdown:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/dashboard/metrics/containers")
+        response = test_client.get("/dashboard/metrics/containers", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -325,9 +334,10 @@ class TestResourceDistribution:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test resource distribution with no agents."""
-        response = test_client.get("/dashboard/metrics/resources")
+        response = test_client.get("/dashboard/metrics/resources", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -341,9 +351,10 @@ class TestResourceDistribution:
         test_client: TestClient,
         test_db: Session,
         multiple_hosts: list[models.Host],
+        auth_headers: dict,
     ):
         """Test resource distribution by agent."""
-        response = test_client.get("/dashboard/metrics/resources")
+        response = test_client.get("/dashboard/metrics/resources", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -360,6 +371,7 @@ class TestResourceDistribution:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test resource distribution by lab."""
         # Create lab
@@ -398,7 +410,7 @@ class TestResourceDistribution:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/dashboard/metrics/resources")
+        response = test_client.get("/dashboard/metrics/resources", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -417,6 +429,7 @@ class TestLabPrefixMatching:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test that truncated lab IDs are matched."""
         # Create lab with long ID (UUID format)
@@ -452,7 +465,7 @@ class TestLabPrefixMatching:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/dashboard/metrics")
+        response = test_client.get("/dashboard/metrics", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -463,6 +476,7 @@ class TestLabPrefixMatching:
         self,
         test_client: TestClient,
         test_db: Session,
+        auth_headers: dict,
     ):
         """Test that partial prefix matching works for short prefixes."""
         lab = models.Lab(name="Test Lab", provider="docker")
@@ -497,7 +511,7 @@ class TestLabPrefixMatching:
         test_db.add(host)
         test_db.commit()
 
-        response = test_client.get("/dashboard/metrics")
+        response = test_client.get("/dashboard/metrics", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 

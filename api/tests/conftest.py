@@ -161,6 +161,12 @@ def auth_headers(test_user: models.User, monkeypatch) -> dict[str, str]:
 
 
 @pytest.fixture(scope="function")
+def ws_token(test_user: models.User) -> str:
+    """Create a JWT token string for WebSocket authentication."""
+    return create_access_token(test_user.id)
+
+
+@pytest.fixture(scope="function")
 def admin_auth_headers(admin_user: models.User, monkeypatch) -> dict[str, str]:
     """Create authentication headers for the admin user."""
     monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret-key-for-testing")

@@ -24,6 +24,7 @@ class TestNodeStateChangeFlow:
         self,
         test_client: TestClient,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
+        ws_token: str,
     ):
         """Node state change should be sent to WebSocket clients."""
         lab, nodes = sample_lab_with_nodes
@@ -52,7 +53,7 @@ class TestNodeStateChangeFlow:
             mock_instance.subscribe = mock_subscribe
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state?token={ws_token}") as ws:
                 # Receive initial messages
                 ws.receive_json()  # lab_state
                 ws.receive_json()  # initial_state
@@ -76,6 +77,7 @@ class TestNodeStateChangeFlow:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Job progress updates should flow to WebSocket clients."""
         job_progress_message = {
@@ -100,7 +102,7 @@ class TestNodeStateChangeFlow:
             mock_instance.subscribe = mock_subscribe
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 # Receive initial messages
                 ws.receive_json()  # lab_state
                 ws.receive_json()  # initial_state
@@ -119,6 +121,7 @@ class TestNodeStateChangeFlow:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Multiple clients on same lab should receive the same update."""
         from app.routers.state_ws import manager
@@ -145,14 +148,14 @@ class TestNodeStateChangeFlow:
             mock_broadcaster.return_value = mock_instance
 
             # Connect first client
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state"):
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}"):
                 # Check connection was registered
                 if sample_lab.id in manager.active_connections:
                     connection_count = len(manager.active_connections[sample_lab.id])
                     assert connection_count >= 1
 
                 # Connect second client
-                with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state"):
+                with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}"):
                     # Should have more connections now
                     if sample_lab.id in manager.active_connections:
                         assert len(manager.active_connections[sample_lab.id]) >= connection_count
@@ -161,6 +164,7 @@ class TestNodeStateChangeFlow:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Disconnecting client should clean up from manager."""
         from app.routers.state_ws import manager
@@ -176,7 +180,7 @@ class TestNodeStateChangeFlow:
 
             initial_count = len(manager.active_connections.get(sample_lab.id, []))
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state"):
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}"):
                 # Connection is active
                 pass
 
@@ -248,6 +252,7 @@ class TestMessageFormats:
         self,
         test_client: TestClient,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
+        ws_token: str,
     ):
         """Initial state message should have correct format."""
         lab, nodes = sample_lab_with_nodes
@@ -261,7 +266,7 @@ class TestMessageFormats:
             mock_instance.subscribe = AsyncMock(return_value=mock_subscribe(lab.id))
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 data = ws.receive_json()  # initial_state
 
@@ -280,6 +285,7 @@ class TestMessageFormats:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Lab state message should have correct format."""
         async def mock_subscribe(lab_id):
@@ -291,7 +297,7 @@ class TestMessageFormats:
             mock_instance.subscribe = AsyncMock(return_value=mock_subscribe(sample_lab.id))
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 data = ws.receive_json()  # lab_state
 
                 assert data["type"] == "lab_state"
@@ -306,6 +312,7 @@ class TestConnectionResilience:
     def test_connection_handles_missing_lab_gracefully(
         self,
         test_client: TestClient,
+        ws_token: str,
     ):
         """Non-existent lab should return error, not crash."""
         async def mock_subscribe(lab_id):
@@ -317,7 +324,7 @@ class TestConnectionResilience:
             mock_instance.subscribe = AsyncMock(return_value=mock_subscribe("fake"))
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect("/ws/labs/nonexistent-lab-id/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/nonexistent-lab-id/state?token={ws_token}") as ws:
                 data = ws.receive_json()
                 assert data["type"] == "error"
                 assert "not found" in data["data"]["message"].lower()
@@ -326,6 +333,7 @@ class TestConnectionResilience:
         self,
         test_client: TestClient,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
+        ws_token: str,
     ):
         """Reconnecting client should receive fresh initial state."""
         lab, nodes = sample_lab_with_nodes
@@ -340,12 +348,12 @@ class TestConnectionResilience:
             mock_broadcaster.return_value = mock_instance
 
             # First connection
-            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 initial1 = ws.receive_json()  # initial_state
 
             # Second connection (reconnect)
-            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 initial2 = ws.receive_json()  # initial_state
 
@@ -362,6 +370,7 @@ class TestConcurrentConnections:
         test_client: TestClient,
         test_db: Session,
         test_user: models.User,
+        ws_token: str,
     ):
         """Connections to different labs should be isolated."""
         from app.routers.state_ws import manager
@@ -392,8 +401,8 @@ class TestConcurrentConnections:
             mock_instance.subscribe = AsyncMock(return_value=mock_subscribe("any"))
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{lab1.id}/state"):
-                with test_client.websocket_connect(f"/ws/labs/{lab2.id}/state"):
+            with test_client.websocket_connect(f"/ws/labs/{lab1.id}/state?token={ws_token}"):
+                with test_client.websocket_connect(f"/ws/labs/{lab2.id}/state?token={ws_token}"):
                     # Both labs should have their own connection lists
                     if lab1.id in manager.active_connections and lab2.id in manager.active_connections:
                         # They should be separate

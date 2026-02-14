@@ -39,6 +39,7 @@ class TestClientReconnection:
         test_client: TestClient,
         test_db: Session,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Reconnecting client should receive current state, not stale data."""
         # Create initial node state
@@ -59,7 +60,7 @@ class TestClientReconnection:
             mock_broadcaster.return_value = mock_instance
 
             # First connection - verify initial state
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 data = ws.receive_json()  # initial_state
 
@@ -75,7 +76,7 @@ class TestClientReconnection:
             test_db.commit()
 
             # Second connection - should get updated state
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 data = ws.receive_json()  # initial_state
 
@@ -88,6 +89,7 @@ class TestClientReconnection:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Reconnection should receive lab state before node states."""
         with patch("app.routers.state_ws.get_broadcaster") as mock_broadcaster:
@@ -96,7 +98,7 @@ class TestClientReconnection:
             mock_broadcaster.return_value = mock_instance
 
             # First message should always be lab_state
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 data = ws.receive_json()
                 assert data["type"] == "lab_state"
                 assert data["data"]["lab_id"] == sample_lab.id
@@ -109,6 +111,7 @@ class TestRapidReconnection:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Server should handle rapid connect/disconnect cycles."""
         from app.routers.state_ws import manager
@@ -120,7 +123,7 @@ class TestRapidReconnection:
 
             # Rapid connect/disconnect 5 times
             for i in range(5):
-                with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+                with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                     # Receive at least one message
                     data = ws.receive_json()
                     assert data["type"] == "lab_state"
@@ -135,6 +138,7 @@ class TestRapidReconnection:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Multiple clients can connect to the same lab simultaneously."""
         from app.routers.state_ws import manager
@@ -146,7 +150,7 @@ class TestRapidReconnection:
 
             # Note: TestClient is synchronous, so we can't truly test concurrent
             # connections. This test verifies the manager handles the registration.
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 data = ws.receive_json()
                 assert data["type"] == "lab_state"
 
@@ -157,6 +161,7 @@ class TestRapidReconnection:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Disconnected connections should be cleaned up from manager."""
         from app.routers.state_ws import manager
@@ -166,7 +171,7 @@ class TestRapidReconnection:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()
 
                 # Verify connected
@@ -189,6 +194,7 @@ class TestPingPong:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Ping message should receive pong response."""
         with patch("app.routers.state_ws.get_broadcaster") as mock_broadcaster:
@@ -196,7 +202,7 @@ class TestPingPong:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 # Skip initial messages
                 ws.receive_json()  # lab_state
                 ws.receive_json()  # initial_state
@@ -213,6 +219,7 @@ class TestPingPong:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Multiple pings should all receive responses."""
         with patch("app.routers.state_ws.get_broadcaster") as mock_broadcaster:
@@ -220,7 +227,7 @@ class TestPingPong:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 ws.receive_json()  # initial_state
 
@@ -233,6 +240,7 @@ class TestPingPong:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Pong response should include valid timestamp."""
         from datetime import datetime
@@ -242,7 +250,7 @@ class TestPingPong:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 ws.receive_json()  # initial_state
 
@@ -262,6 +270,7 @@ class TestRefreshCommand:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Refresh command should resend lab state."""
         with patch("app.routers.state_ws.get_broadcaster") as mock_broadcaster:
@@ -269,7 +278,7 @@ class TestRefreshCommand:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # initial lab_state
                 ws.receive_json()  # initial_state
 
@@ -284,6 +293,7 @@ class TestRefreshCommand:
         self,
         test_client: TestClient,
         sample_lab_with_nodes: tuple[models.Lab, list[models.NodeState]],
+        ws_token: str,
     ):
         """Refresh command should resend all node states."""
         lab, nodes = sample_lab_with_nodes
@@ -293,7 +303,7 @@ class TestRefreshCommand:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # initial lab_state
                 ws.receive_json()  # initial_state
 
@@ -312,6 +322,7 @@ class TestRefreshCommand:
         test_client: TestClient,
         test_db: Session,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Refresh should return current state, not cached data."""
         # Create initial node
@@ -331,7 +342,7 @@ class TestRefreshCommand:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 initial = ws.receive_json()  # initial_state
 
@@ -360,6 +371,7 @@ class TestErrorHandling:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Invalid JSON messages should be ignored without error."""
         with patch("app.routers.state_ws.get_broadcaster") as mock_broadcaster:
@@ -367,7 +379,7 @@ class TestErrorHandling:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 ws.receive_json()  # initial_state
 
@@ -383,6 +395,7 @@ class TestErrorHandling:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Unknown message types should be ignored."""
         with patch("app.routers.state_ws.get_broadcaster") as mock_broadcaster:
@@ -390,7 +403,7 @@ class TestErrorHandling:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()  # lab_state
                 ws.receive_json()  # initial_state
 
@@ -405,6 +418,7 @@ class TestErrorHandling:
     def test_nonexistent_lab_sends_error(
         self,
         test_client: TestClient,
+        ws_token: str,
     ):
         """Connecting to nonexistent lab should receive error message."""
         with patch("app.routers.state_ws.get_broadcaster") as mock_broadcaster:
@@ -412,7 +426,7 @@ class TestErrorHandling:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect("/ws/labs/nonexistent-lab-id/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/nonexistent-lab-id/state?token={ws_token}") as ws:
                 data = ws.receive_json()
                 assert data["type"] == "error"
                 assert "not found" in data["data"]["message"]
@@ -425,6 +439,7 @@ class TestConnectionState:
         self,
         test_client: TestClient,
         sample_lab: models.Lab,
+        ws_token: str,
     ):
         """Connection manager should track connections by lab ID."""
         from app.routers.state_ws import manager
@@ -434,7 +449,7 @@ class TestConnectionState:
             mock_instance.subscribe = AsyncMock(return_value=empty_async_gen())
             mock_broadcaster.return_value = mock_instance
 
-            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state") as ws:
+            with test_client.websocket_connect(f"/ws/labs/{sample_lab.id}/state?token={ws_token}") as ws:
                 ws.receive_json()
 
                 # Lab should be in active connections
@@ -445,6 +460,7 @@ class TestConnectionState:
         test_client: TestClient,
         test_db: Session,
         test_user: models.User,
+        ws_token: str,
     ):
         """Connections to different labs should be tracked separately."""
         from app.routers.state_ws import manager
@@ -473,7 +489,7 @@ class TestConnectionState:
             mock_broadcaster.return_value = mock_instance
 
             # Connect to first lab
-            with test_client.websocket_connect(f"/ws/labs/{lab1.id}/state") as ws1:
+            with test_client.websocket_connect(f"/ws/labs/{lab1.id}/state?token={ws_token}") as ws1:
                 ws1.receive_json()
 
                 assert lab1.id in manager.active_connections

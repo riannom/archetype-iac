@@ -69,11 +69,17 @@ class TestScanISO:
         self,
         test_client: TestClient,
         auth_headers: dict,
+        tmp_path,
+        monkeypatch,
     ):
         """Test scanning non-existent ISO file."""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "iso_upload_dir", str(tmp_path))
+
         response = test_client.post(
             "/iso/scan",
-            json={"iso_path": "/nonexistent/path.iso"},
+            json={"iso_path": str(tmp_path / "nonexistent.iso")},
             headers=auth_headers,
         )
         assert response.status_code == 404

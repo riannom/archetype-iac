@@ -6794,7 +6794,7 @@ async def _console_websocket_libvirt(
                 pass
             _label = "virsh console" if _is_virsh else "console"
             logger.error(f"Console process exited: {_label} code={process.returncode}, cmd={' '.join(console_cmd)}")
-            await websocket.send_text(f"\r\nError: Console process exited unexpectedly\r\n")
+            await websocket.send_text("\r\nError: Console process exited unexpectedly\r\n")
             await websocket.close(code=1011)
             return
 
