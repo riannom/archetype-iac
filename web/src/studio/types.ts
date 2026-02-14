@@ -104,6 +104,7 @@ export interface ImageLibraryEntry {
   notes?: string;
   compatible_devices?: string[];
   source?: string | null; // Import source (e.g., ISO filename)
+  sha256?: string | null; // SHA256 checksum for integrity verification
   // Sync status across agents (populated by API)
   host_status?: ImageHostStatus[];
 }

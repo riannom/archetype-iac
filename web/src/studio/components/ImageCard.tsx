@@ -122,6 +122,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
     image.size_bytes && `Size: ${formatSize(image.size_bytes)}`,
     image.uploaded_at && `Imported: ${formatDate(image.uploaded_at)}`,
     image.source && `Source: ${image.source}`,
+    image.sha256 && `SHA256: ${image.sha256.slice(0, 16)}...`,
     image.notes && `Notes: ${image.notes}`,
   ].filter(Boolean);
   const tooltipText = tooltipLines.join('\n');
@@ -172,6 +173,14 @@ const ImageCard: React.FC<ImageCardProps> = ({
             </div>
             <div className="flex items-center gap-1.5 text-[10px] text-stone-500">
               <span className="uppercase font-bold">{image.kind}</span>
+              {image.sha256 && (
+                <>
+                  <span className="text-stone-300 dark:text-stone-600">•</span>
+                  <span className="text-emerald-600 dark:text-emerald-400" title={`SHA256: ${image.sha256}`}>
+                    <i className="fa-solid fa-check-circle text-[8px]" /> verified
+                  </span>
+                </>
+              )}
               {image.version && (
                 <>
                   <span className="text-stone-300 dark:text-stone-600">•</span>
@@ -203,7 +212,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
 
           {/* Actions */}
           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-            {showSyncStatus && image.kind === 'docker' && (
+            {showSyncStatus && (
               <button
                 onClick={handleSync}
                 disabled={syncing}
