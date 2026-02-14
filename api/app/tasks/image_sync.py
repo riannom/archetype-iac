@@ -153,19 +153,13 @@ async def check_agent_has_image(
     Returns:
         True if the image is available (and checksum matches, if both provided)
     """
-    import json
     from urllib.parse import quote
 
     # Check if this is a file-based image (qcow2, iol)
     if _is_file_reference(reference):
         # Parse host capabilities
-        host_providers = []
-        if host.capabilities:
-            try:
-                caps = json.loads(host.capabilities) if isinstance(host.capabilities, str) else host.capabilities
-                host_providers = caps.get("providers", [])
-            except (json.JSONDecodeError, TypeError):
-                pass
+        caps = host.get_capabilities()
+        host_providers = caps.get("providers", [])
 
         # qcow2/img files need libvirt, iol files need docker
         required_provider = _required_provider_for_reference(reference)
@@ -714,13 +708,8 @@ async def check_and_start_image_sync(
             if ref in missing:
                 lib_images_by_ref[ref] = lib_image
 
-        host_providers: list[str] = []
-        try:
-            import json
-            caps = json.loads(host.capabilities) if isinstance(host.capabilities, str) else (host.capabilities or {})
-            host_providers = caps.get("providers", [])
-        except Exception:
-            host_providers = []
+        caps = host.get_capabilities()
+        host_providers = caps.get("providers", [])
 
         # Fire off non-blocking sync for each missing image
         for reference in missing:

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Node, isDeviceNode } from '../types';
 import type { ConfigSnapshot } from '../components/ConfigsView/types';
+import { downloadBlob } from '../../utils/download';
 
 interface UseConfigManagerOptions {
   labId: string;
@@ -269,15 +270,9 @@ export function useConfigManager({ labId, nodes, studioRequest }: UseConfigManag
       }
 
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download =
+      const filename =
         response.headers.get('Content-Disposition')?.split('filename=')[1] || 'configs.zip';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, filename);
     },
     [labId]
   );

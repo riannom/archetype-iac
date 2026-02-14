@@ -90,3 +90,18 @@ export function formatUptimeFromBoot(bootStartedAt: string | null | undefined): 
   const elapsed = Date.now() - bootTime;
   return formatUptime(elapsed);
 }
+
+/**
+ * Format memory size in GB to human-readable string (MB/GB/TB).
+ * @param gb - Size in gigabytes
+ * @returns Formatted string like "1.5 TB", "4.0 GB", or "512 MB"
+ */
+export function formatMemorySize(gb: number): string {
+  if (gb >= 1024) {
+    return `${(gb / 1024).toFixed(1)} TB`;
+  }
+  if (gb >= 1) {
+    return `${gb.toFixed(1)} GB`;
+  }
+  return `${(gb * 1024).toFixed(0)} MB`;
+}

@@ -11,6 +11,7 @@ import {
   listSupportBundles,
   type SupportBundle,
 } from "../api";
+import { downloadBlob } from "../utils/download";
 
 type LabOption = { id: string; name: string };
 type AgentOption = { id: string; name: string };
@@ -141,14 +142,7 @@ export default function SupportBundlesPage() {
         throw new Error(`Download failed: HTTP ${response.status}`);
       }
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `archetype_support_bundle_${bundleId}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(blob, `archetype_support_bundle_${bundleId}.zip`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to download bundle");
     }

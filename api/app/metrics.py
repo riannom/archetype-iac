@@ -365,7 +365,6 @@ def update_agent_metrics(session: "Session") -> None:
         return
 
     try:
-        import json
         from app import models
         from app import agent_client
 
@@ -386,10 +385,7 @@ def update_agent_metrics(session: "Session") -> None:
                 online_count += 1
 
             # Parse resource usage
-            try:
-                usage = json.loads(host.resource_usage) if host.resource_usage else {}
-            except json.JSONDecodeError:
-                usage = {}
+            usage = host.get_resource_usage()
 
             host_name = host.name or host.id
 

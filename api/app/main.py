@@ -368,7 +368,6 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db), _user: models.
     if cached is not None:
         return cached
 
-    import json
     from app.utils.lab import find_lab_by_prefix
 
     # Get all hosts
@@ -400,54 +399,51 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db), _user: models.
         if host.status != "online":
             continue
         online_count += 1
-        try:
-            usage = json.loads(host.resource_usage) if host.resource_usage else {}
-            host_cpu = usage.get("cpu_percent", 0)
-            host_memory = usage.get("memory_percent", 0)
-            host_memory_used = usage.get("memory_used_gb", 0)
-            host_memory_total = usage.get("memory_total_gb", 0)
-            host_disk_percent = usage.get("disk_percent", 0)
-            host_disk_used = usage.get("disk_used_gb", 0)
-            host_disk_total = usage.get("disk_total_gb", 0)
-            host_containers = usage.get("containers_running", 0)
+        usage = host.get_resource_usage()
+        host_cpu = usage.get("cpu_percent", 0)
+        host_memory = usage.get("memory_percent", 0)
+        host_memory_used = usage.get("memory_used_gb", 0)
+        host_memory_total = usage.get("memory_total_gb", 0)
+        host_disk_percent = usage.get("disk_percent", 0)
+        host_disk_used = usage.get("disk_used_gb", 0)
+        host_disk_total = usage.get("disk_total_gb", 0)
+        host_containers = usage.get("containers_running", 0)
 
-            total_cpu += host_cpu
-            total_memory += host_memory
-            total_memory_used += host_memory_used
-            total_memory_total += host_memory_total
-            total_disk_used += host_disk_used
-            total_disk_total += host_disk_total
-            total_containers_running += host_containers
-            total_containers += usage.get("containers_total", 0)
-            total_vms_running += usage.get("vms_running", 0)
-            total_vms += usage.get("vms_total", 0)
+        total_cpu += host_cpu
+        total_memory += host_memory
+        total_memory_used += host_memory_used
+        total_memory_total += host_memory_total
+        total_disk_used += host_disk_used
+        total_disk_total += host_disk_total
+        total_containers_running += host_containers
+        total_containers += usage.get("containers_total", 0)
+        total_vms_running += usage.get("vms_running", 0)
+        total_vms += usage.get("vms_total", 0)
 
-            # Track per-host data
-            per_host.append({
-                "id": host.id,
-                "name": host.name,
-                "cpu_percent": round(host_cpu, 1),
-                "memory_percent": round(host_memory, 1),
-                "memory_used_gb": host_memory_used,
-                "memory_total_gb": host_memory_total,
-                "storage_percent": round(host_disk_percent, 1),
-                "storage_used_gb": host_disk_used,
-                "storage_total_gb": host_disk_total,
-                "containers_running": host_containers,
-                "vms_running": usage.get("vms_running", 0),
-                "started_at": host.started_at.isoformat() if host.started_at else None,
-            })
+        # Track per-host data
+        per_host.append({
+            "id": host.id,
+            "name": host.name,
+            "cpu_percent": round(host_cpu, 1),
+            "memory_percent": round(host_memory, 1),
+            "memory_used_gb": host_memory_used,
+            "memory_total_gb": host_memory_total,
+            "storage_percent": round(host_disk_percent, 1),
+            "storage_used_gb": host_disk_used,
+            "storage_total_gb": host_disk_total,
+            "containers_running": host_containers,
+            "vms_running": usage.get("vms_running", 0),
+            "started_at": host.started_at.isoformat() if host.started_at else None,
+        })
 
-            # Track which labs have running containers
-            for container in usage.get("container_details", []):
-                if container.get("status") == "running" and not container.get("is_system"):
-                    lab_id = find_lab_by_prefix(
-                        container.get("lab_prefix", ""), labs_by_id, labs_by_prefix
-                    )
-                    if lab_id:
-                        labs_with_containers.add(lab_id)
-        except (json.JSONDecodeError, TypeError):
-            pass
+        # Track which labs have running containers
+        for container in usage.get("container_details", []):
+            if container.get("status") == "running" and not container.get("is_system"):
+                lab_id = find_lab_by_prefix(
+                    container.get("lab_prefix", ""), labs_by_id, labs_by_prefix
+                )
+                if lab_id:
+                    labs_with_containers.add(lab_id)
 
     # Calculate averages
     avg_cpu = total_cpu / online_count if online_count > 0 else 0
@@ -495,7 +491,6 @@ def get_containers_breakdown(database: Session = Depends(db.get_db), _user: mode
     if cached is not None:
         return cached
 
-    import json
     from app.utils.lab import find_lab_with_name
 
     hosts = database.query(models.Host).filter(models.Host.status == "online").all()
@@ -507,28 +502,25 @@ def get_containers_breakdown(database: Session = Depends(db.get_db), _user: mode
     all_containers = []
     all_vms = []
     for host in hosts:
-        try:
-            usage = json.loads(host.resource_usage) if host.resource_usage else {}
-            # Collect containers
-            for container in usage.get("container_details", []):
-                container["agent_name"] = host.name
-                lab_id, lab_name = find_lab_with_name(
-                    container.get("lab_prefix", ""), labs_by_id, labs_by_prefix
-                )
-                container["lab_id"] = lab_id
-                container["lab_name"] = lab_name
-                all_containers.append(container)
-            # Collect VMs
-            for vm in usage.get("vm_details", []):
-                vm["agent_name"] = host.name
-                lab_id, lab_name = find_lab_with_name(
-                    vm.get("lab_prefix", ""), labs_by_id, labs_by_prefix
-                )
-                vm["lab_id"] = lab_id
-                vm["lab_name"] = lab_name
-                all_vms.append(vm)
-        except (json.JSONDecodeError, TypeError):
-            pass
+        usage = host.get_resource_usage()
+        # Collect containers
+        for container in usage.get("container_details", []):
+            container["agent_name"] = host.name
+            lab_id, lab_name = find_lab_with_name(
+                container.get("lab_prefix", ""), labs_by_id, labs_by_prefix
+            )
+            container["lab_id"] = lab_id
+            container["lab_name"] = lab_name
+            all_containers.append(container)
+        # Collect VMs
+        for vm in usage.get("vm_details", []):
+            vm["agent_name"] = host.name
+            lab_id, lab_name = find_lab_with_name(
+                vm.get("lab_prefix", ""), labs_by_id, labs_by_prefix
+            )
+            vm["lab_id"] = lab_id
+            vm["lab_name"] = lab_name
+            all_vms.append(vm)
 
     # Group containers by lab
     by_lab = {}
@@ -573,7 +565,6 @@ def get_resource_distribution(database: Session = Depends(db.get_db), _user: mod
     if cached is not None:
         return cached
 
-    import json
     from app.utils.lab import find_lab_by_prefix
 
     hosts = database.query(models.Host).filter(models.Host.status == "online").all()
@@ -584,7 +575,7 @@ def get_resource_distribution(database: Session = Depends(db.get_db), _user: mod
     lab_containers = {}  # lab_id -> container count
 
     for host in hosts:
-        usage = json.loads(host.resource_usage) if host.resource_usage else {}
+        usage = host.get_resource_usage()
         by_agent.append({
             "id": host.id,
             "name": host.name,

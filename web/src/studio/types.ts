@@ -252,3 +252,42 @@ export interface LabLayout {
   links?: Record<string, LinkLayout>; // link_id -> styling
   custom?: Record<string, unknown>;
 }
+
+// Per-host resource metrics returned by the dashboard API
+export interface PerHostMetrics {
+  id: string;
+  name: string;
+  cpu_percent: number;
+  memory_percent: number;
+  memory_used_gb: number;
+  memory_total_gb: number;
+  storage_percent: number;
+  storage_used_gb: number;
+  storage_total_gb: number;
+  containers_running: number;
+  vms_running?: number;
+  started_at: string | null;
+}
+
+// Aggregated system metrics for the dashboard status strip
+export interface SystemMetrics {
+  agents: { online: number; total: number };
+  containers: { running: number; total: number };
+  vms?: { running: number; total: number };
+  cpu_percent: number;
+  memory_percent: number;
+  memory?: {
+    used_gb: number;
+    total_gb: number;
+    percent: number;
+  };
+  storage?: {
+    used_gb: number;
+    total_gb: number;
+    percent: number;
+  };
+  labs_running: number;
+  labs_total: number;
+  per_host?: PerHostMetrics[];
+  is_multi_host?: boolean;
+}

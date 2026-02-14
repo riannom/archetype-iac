@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
-from app.auth import get_current_user
+from app.auth import get_current_admin, get_current_user
 from app.config import settings
 from app.utils.lab import get_lab_or_404
 from app.utils.http import require_admin
@@ -44,7 +44,7 @@ def _normalize_compare_value(value):
 async def reconcile_state(
     cleanup_orphans: bool = False,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Reconcile lab states with actual container status on agents.
 
@@ -57,7 +57,6 @@ async def reconcile_state(
     Returns:
         Summary of reconciliation actions taken
     """
-    require_admin(current_user)
 
     logger.info("Starting reconciliation")
 
@@ -162,10 +161,9 @@ async def audit_lab_runtime_drift(
         description="Include nodes that are not currently running",
     ),
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Compare expected node specs with live runtime specs to detect drift."""
-    require_admin(current_user)
     get_lab_or_404(lab_id, database, current_user)
 
     from app.image_store import get_image_provider
@@ -356,7 +354,7 @@ async def audit_lab_runtime_drift(
 async def refresh_lab_state(
     lab_id: str,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Refresh a single lab's state from all agents that have nodes for it.
 
@@ -364,7 +362,6 @@ async def refresh_lab_state(
     the lab state and individual NodeState records in the database.
     Supports multi-host labs by querying all agents with NodePlacement records.
     """
-    require_admin(current_user)
 
     lab = get_lab_or_404(lab_id, database, current_user)
 
@@ -512,7 +509,7 @@ async def get_system_logs(
     since: str = Query("1h", description="Time range (15m, 1h, 24h)"),
     search: str | None = Query(None, description="Search text in message"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum entries to return"),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> schemas.SystemLogQueryResponse:
     """Query system logs from Loki.
 
@@ -528,7 +525,6 @@ async def get_system_logs(
     Returns:
         List of log entries matching the query
     """
-    require_admin(current_user)
 
     # Parse time range
     from app.utils.time_range import parse_relative_duration
@@ -647,7 +643,7 @@ async def get_system_logs(
 async def reconcile_images(
     verify_agents: bool = False,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Reconcile image manifest with ImageHost database table.
 
@@ -661,7 +657,6 @@ async def reconcile_images(
     Returns:
         Summary of reconciliation actions taken
     """
-    require_admin(current_user)
 
     from app.tasks.image_reconciliation import (
         reconcile_image_hosts,
@@ -682,7 +677,7 @@ async def reconcile_images(
 async def cleanup_stuck_jobs(
     max_age_minutes: int = Query(5, ge=1, le=60, description="Mark jobs stuck longer than this as failed"),
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Manually clean up stuck jobs.
 
@@ -695,7 +690,6 @@ async def cleanup_stuck_jobs(
     Returns:
         Summary of cleanup actions taken
     """
-    require_admin(current_user)
 
     from datetime import timedelta
 

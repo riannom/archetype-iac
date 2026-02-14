@@ -19,6 +19,7 @@ from typing import Any
 
 import docker
 
+from agent.network.cmd import run_cmd as _shared_run_cmd
 
 
 logger = logging.getLogger(__name__)
@@ -123,17 +124,7 @@ class NetworkCleanupManager:
 
     async def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
         """Run a shell command asynchronously."""
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        return (
-            process.returncode or 0,
-            stdout.decode(errors="replace"),
-            stderr.decode(errors="replace"),
-        )
+        return await _shared_run_cmd(cmd)
 
     def _is_archetype_veth(self, interface_name: str) -> bool:
         """Check if an interface name matches Archetype naming patterns."""

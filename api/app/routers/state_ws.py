@@ -28,6 +28,7 @@ from app import db, models
 from app.config import settings
 from app.services.broadcaster import get_broadcaster
 from app.services.state_machine import NodeStateMachine
+from app.utils.nodes import get_node_placement_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -147,25 +148,9 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
                 )
 
                 # Get host placements for host info
-                placements = (
-                    database.query(models.NodePlacement)
-                    .filter(models.NodePlacement.lab_id == lab_id)
-                    .all()
+                placement_by_node, hosts = get_node_placement_mapping(
+                    database, lab_id, lab.agent_id
                 )
-                placement_by_node = {p.node_name: p.host_id for p in placements}
-
-                # Get host names
-                host_ids = set(placement_by_node.values())
-                if lab.agent_id:
-                    host_ids.add(lab.agent_id)
-                hosts = {}
-                if host_ids:
-                    host_records = (
-                        database.query(models.Host)
-                        .filter(models.Host.id.in_(host_ids))
-                        .all()
-                    )
-                    hosts = {h.id: h.name for h in host_records}
 
                 # Build node data
                 nodes_data = []

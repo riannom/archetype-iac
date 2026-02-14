@@ -43,6 +43,7 @@ from agent.config import settings
 from agent.network.local import LocalNetworkManager, get_local_manager
 from agent.network.ovs import OVSNetworkManager, get_ovs_manager
 from agent.network.docker_plugin import DockerOVSPlugin, get_docker_ovs_plugin
+from agent.providers.naming import docker_container_name as _docker_name
 from agent.providers.base import (
     DeployResult,
     DestroyResult,
@@ -324,9 +325,7 @@ class DockerProvider(Provider):
 
         Format: archetype-{lab_id}-{node_name}
         """
-        safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
-        safe_node = re.sub(r'[^a-zA-Z0-9_-]', '', node_name)
-        return f"{CONTAINER_PREFIX}-{safe_lab_id}-{safe_node}"
+        return _docker_name(lab_id, node_name)
 
     def _lab_prefix(self, lab_id: str) -> str:
         """Get container name prefix for a lab."""

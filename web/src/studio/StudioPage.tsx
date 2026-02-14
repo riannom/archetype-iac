@@ -28,6 +28,7 @@ import { useUser } from '../contexts/UserContext';
 import { canViewInfrastructure } from '../utils/permissions';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
+import { downloadBlob } from '../utils/download';
 import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
 import './studio.css';
 import 'xterm/css/xterm.css';
@@ -1695,16 +1696,10 @@ const StudioPage: React.FC = () => {
       }
 
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download =
+      const filename =
         response.headers.get('Content-Disposition')?.split('filename=')[1] ||
         `${lab.name.replace(/\s+/g, '_')}_bundle.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, filename);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Bundle download failed';
       addNotification('error', 'Download failed', message);

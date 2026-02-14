@@ -6,7 +6,6 @@ requirements to project resource usage.
 """
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 
@@ -130,10 +129,7 @@ def calculate_node_requirements(device_types: list[str]) -> ResourceRequirements
 
 def get_agent_capacity(host: models.Host) -> AgentCapacity:
     """Parse agent heartbeat data into structured capacity info."""
-    try:
-        usage = json.loads(host.resource_usage) if host.resource_usage else {}
-    except (json.JSONDecodeError, TypeError):
-        usage = {}
+    usage = host.get_resource_usage()
 
     memory_total_gb = usage.get("memory_total_gb", 0)
     memory_used_gb = usage.get("memory_used_gb", 0)
@@ -146,10 +142,7 @@ def get_agent_capacity(host: models.Host) -> AgentCapacity:
     # The agent reports cpu_percent as overall utilization
     if not cpu_count:
         # Fallback: try to infer from capabilities
-        try:
-            caps = json.loads(host.capabilities) if host.capabilities else {}
-        except (json.JSONDecodeError, TypeError):
-            caps = {}
+        caps = host.get_capabilities()
         cpu_count = caps.get("cpu_count", 0)
 
     return AgentCapacity(

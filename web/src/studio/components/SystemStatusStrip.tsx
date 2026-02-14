@@ -5,56 +5,10 @@ import ContainersPopup from './ContainersPopup';
 import ResourcesPopup from './ResourcesPopup';
 import StoragePopup from './StoragePopup';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
-import { formatUptimeFromBoot } from '../../utils/format';
+import { formatUptimeFromBoot, formatMemorySize } from '../../utils/format';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useTheme } from '../../theme';
-
-interface PerHostMetrics {
-  id: string;
-  name: string;
-  cpu_percent: number;
-  memory_percent: number;
-  memory_used_gb: number;
-  memory_total_gb: number;
-  storage_percent: number;
-  storage_used_gb: number;
-  storage_total_gb: number;
-  containers_running: number;
-  vms_running?: number;
-  started_at: string | null;
-}
-
-interface SystemMetrics {
-  agents: { online: number; total: number };
-  containers: { running: number; total: number };
-  vms?: { running: number; total: number };
-  cpu_percent: number;
-  memory_percent: number;
-  memory?: {
-    used_gb: number;
-    total_gb: number;
-    percent: number;
-  };
-  storage?: {
-    used_gb: number;
-    total_gb: number;
-    percent: number;
-  };
-  labs_running: number;
-  labs_total: number;
-  per_host?: PerHostMetrics[];
-  is_multi_host?: boolean;
-}
-
-const formatMemorySize = (gb: number): string => {
-  if (gb >= 1024) {
-    return `${(gb / 1024).toFixed(1)} TB`;
-  }
-  if (gb >= 1) {
-    return `${gb.toFixed(1)} GB`;
-  }
-  return `${(gb * 1024).toFixed(0)} MB`;
-};
+import type { SystemMetrics, PerHostMetrics } from '../types';
 
 interface SystemStatusStripProps {
   metrics: SystemMetrics | null;

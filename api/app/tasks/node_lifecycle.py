@@ -2570,9 +2570,7 @@ class NodeLifecycleManager:
                 ns.starting_started_at = None
                 ns.boot_started_at = None
                 ns.is_ready = False
-                ns.enforcement_attempts = 0
-                ns.enforcement_failed_at = None
-                ns.last_enforcement_at = None
+                ns.reset_enforcement()
                 normalized += 1
                 self._broadcast_state(ns, name_suffix="stopped")
         return normalized
@@ -2655,9 +2653,7 @@ class NodeLifecycleManager:
             # so stale circuit breakers don't block future operations
             for ns in self.node_states:
                 if ns.actual_state != NodeActualState.ERROR.value:
-                    ns.enforcement_attempts = 0
-                    ns.enforcement_failed_at = None
-                    ns.last_enforcement_at = None
+                    ns.reset_enforcement()
 
         self.job.completed_at = datetime.now(timezone.utc)
         self.job.log_path = "\n".join(self.log_parts)

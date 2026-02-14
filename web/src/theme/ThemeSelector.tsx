@@ -9,6 +9,7 @@ import {
   type BackgroundCategory,
 } from './backgrounds';
 import { getSuggestedBackgroundForTheme } from './backgroundPairs';
+import { downloadBlob } from '../utils/download';
 
 interface ThemeSelectorProps {
   isOpen: boolean;
@@ -180,14 +181,7 @@ export function ThemeSelector({ isOpen, onClose }: ThemeSelectorProps) {
     const json = exportTheme(themeId);
     if (!json) return;
     const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${themeId}-theme.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `${themeId}-theme.json`);
   }, [exportTheme]);
 
   const handleImportClick = () => fileInputRef.current?.click();

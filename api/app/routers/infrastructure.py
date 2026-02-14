@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import db, models
-from app.auth import get_current_user
+from app.auth import get_current_admin, get_current_user
 from app.utils.http import require_admin, raise_not_found
 from app.schemas import (
     InfraSettingsOut,
@@ -69,14 +69,13 @@ async def get_infrastructure_settings(
 async def update_infrastructure_settings(
     update: InfraSettingsUpdate,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> InfraSettingsOut:
     """Update global infrastructure settings.
 
     Requires admin access. Changes to overlay_mtu will affect new VXLAN
     tunnels but won't modify existing ones.
     """
-    require_admin(current_user)
 
     settings = get_or_create_settings(database)
 
@@ -911,7 +910,7 @@ async def list_agent_network_configs(
 async def get_transport_config(
     agent_id: str,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Get transport configuration for agent bootstrap.
 
@@ -919,7 +918,6 @@ async def get_transport_config(
     transport configuration from the controller.
     Requires admin access.
     """
-    require_admin(current_user)
     agent = database.get(models.Host, agent_id)
     if not agent:
         raise_not_found("Agent not found")
@@ -1331,10 +1329,9 @@ async def create_nic_group(
     host_id: str,
     request: HostNicGroupCreate,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> HostNicGroupOut:
     """Create a NIC group on a host."""
-    require_admin(current_user)
 
     host = database.get(models.Host, host_id)
     if not host:
@@ -1368,10 +1365,9 @@ async def add_nic_group_member(
     group_id: str,
     request: HostNicGroupMemberCreate,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> HostNicGroupMemberOut:
     """Add a managed interface to a NIC group."""
-    require_admin(current_user)
 
     group = database.get(models.HostNicGroup, group_id)
     if not group:
@@ -1415,10 +1411,9 @@ async def delete_nic_group_member(
     group_id: str,
     member_id: str,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Remove a member from a NIC group."""
-    require_admin(current_user)
 
     member = database.get(models.HostNicGroupMember, member_id)
     if not member or member.nic_group_id != group_id:
@@ -1434,10 +1429,9 @@ async def delete_nic_group_member(
 async def delete_nic_group(
     group_id: str,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Delete a NIC group and its members."""
-    require_admin(current_user)
 
     group = database.get(models.HostNicGroup, group_id)
     if not group:

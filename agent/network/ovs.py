@@ -50,6 +50,7 @@ import docker
 from docker.errors import NotFound
 
 from agent.config import settings
+from agent.network.cmd import run_cmd as _shared_run_cmd, ovs_vsctl as _shared_ovs_vsctl, ip_link_exists as _shared_ip_link_exists
 
 
 logger = logging.getLogger(__name__)
@@ -430,42 +431,16 @@ class OVSNetworkManager:
         return self._bridge_name
 
     async def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
-        """Run a shell command asynchronously.
-
-        Args:
-            cmd: Command and arguments as list
-
-        Returns:
-            Tuple of (return_code, stdout, stderr)
-        """
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        return (
-            process.returncode or 0,
-            stdout.decode(errors="replace"),
-            stderr.decode(errors="replace"),
-        )
+        """Run a shell command asynchronously."""
+        return await _shared_run_cmd(cmd)
 
     async def _ovs_vsctl(self, *args: str) -> tuple[int, str, str]:
-        """Run ovs-vsctl command.
-
-        Args:
-            args: Arguments to ovs-vsctl
-
-        Returns:
-            Tuple of (return_code, stdout, stderr)
-        """
-        cmd = ["ovs-vsctl"] + list(args)
-        return await self._run_cmd(cmd)
+        """Run ovs-vsctl command."""
+        return await _shared_ovs_vsctl(*args)
 
     async def _ip_link_exists(self, name: str) -> bool:
         """Check if a network interface exists."""
-        code, _, _ = await self._run_cmd(["ip", "link", "show", name])
-        return code == 0
+        return await _shared_ip_link_exists(name)
 
     async def _get_container_pid(self, container_name: str) -> int | None:
         """Get the PID of a container's init process.

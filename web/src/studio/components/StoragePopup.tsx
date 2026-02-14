@@ -2,14 +2,9 @@ import React from 'react';
 import DetailPopup from './DetailPopup';
 import { getStorageColor } from '../../utils/status';
 import { formatStorageSize } from '../../utils/format';
+import type { PerHostMetrics as FullPerHostMetrics } from '../types';
 
-interface PerHostMetrics {
-  id: string;
-  name: string;
-  storage_percent: number;
-  storage_used_gb: number;
-  storage_total_gb: number;
-}
+type PerHostMetrics = Pick<FullPerHostMetrics, 'id' | 'name' | 'storage_percent' | 'storage_used_gb' | 'storage_total_gb'>;
 
 interface StorageTotals {
   used_gb: number;

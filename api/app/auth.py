@@ -72,6 +72,13 @@ def get_current_user(token: str = Depends(oauth2_scheme), database: Session = De
     return user
 
 
+def get_current_admin(current_user: models.User = Depends(get_current_user)) -> models.User:
+    """FastAPI dependency that requires an admin user. Raises 403 if not admin."""
+    from app.utils.http import require_admin
+    require_admin(current_user)
+    return current_user
+
+
 def get_current_user_optional(request: Request, database: Session) -> models.User | None:
     if not settings.jwt_secret:
         return None

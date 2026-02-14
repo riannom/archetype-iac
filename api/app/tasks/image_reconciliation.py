@@ -186,15 +186,9 @@ async def verify_image_status_on_agents() -> ImageReconciliationResult:
                         .all()
                     )
 
-                    # Get agent's capabilities from host record (stored as JSON string)
-                    host_providers = []
-                    if host.capabilities:
-                        import json
-                        try:
-                            caps = json.loads(host.capabilities) if isinstance(host.capabilities, str) else host.capabilities
-                            host_providers = caps.get("providers", [])
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                    # Get agent's capabilities from host record
+                    caps = host.get_capabilities()
+                    host_providers = caps.get("providers", [])
 
                     for ih in host_image_records:
                         old_status = ih.status

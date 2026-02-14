@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from datetime import datetime
 from uuid import uuid4
 
@@ -184,6 +186,20 @@ class Host(Base):
     data_plane_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    def get_resource_usage(self) -> dict:
+        """Parse resource_usage JSON string into a dict, with safe fallback."""
+        try:
+            return json.loads(self.resource_usage) if self.resource_usage else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def get_capabilities(self) -> dict:
+        """Parse capabilities JSON string into a dict, with safe fallback."""
+        try:
+            return json.loads(self.capabilities) if self.capabilities else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
 
 class NodePlacement(Base):
     """Tracks which host is running which node for a lab."""
@@ -259,6 +275,17 @@ class NodeState(Base):
     enforcement_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def reset_enforcement(self, clear_error: bool = False) -> None:
+        """Reset enforcement tracking fields.
+
+        Called when a node is retried, restarted, or successfully reconciled.
+        """
+        self.enforcement_attempts = 0
+        self.enforcement_failed_at = None
+        self.last_enforcement_at = None
+        if clear_error:
+            self.error_message = None
 
 
 class LinkState(Base):

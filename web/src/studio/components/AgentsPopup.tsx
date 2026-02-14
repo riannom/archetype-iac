@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import DetailPopup from './DetailPopup';
-import { formatTimestamp, formatUptimeFromBoot } from '../../utils/format';
+import { formatTimestamp, formatUptimeFromBoot, formatMemorySize } from '../../utils/format';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
 import { apiRequest } from '../../api';
 
@@ -29,16 +29,6 @@ interface AgentDetail {
   started_at: string | null;
   last_heartbeat: string | null;
 }
-
-const formatMemorySize = (gb: number): string => {
-  if (gb >= 1024) {
-    return `${(gb / 1024).toFixed(1)} TB`;
-  }
-  if (gb >= 1) {
-    return `${gb.toFixed(1)} GB`;
-  }
-  return `${(gb * 1024).toFixed(0)} MB`;
-};
 
 interface AgentsPopupProps {
   isOpen: boolean;

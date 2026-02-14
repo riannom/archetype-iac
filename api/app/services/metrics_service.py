@@ -11,7 +11,6 @@ Usage:
 """
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -120,10 +119,7 @@ class MetricsService:
                 agents_offline += 1
 
             # Parse resource usage
-            try:
-                usage = json.loads(host.resource_usage) if host.resource_usage else {}
-            except json.JSONDecodeError:
-                usage = {}
+            usage = host.get_resource_usage()
 
             if agent_client.is_agent_online(host):
                 total_cpu += usage.get("cpu_percent", 0)
@@ -203,10 +199,7 @@ class MetricsService:
         }
 
         for host in hosts:
-            try:
-                usage = json.loads(host.resource_usage) if host.resource_usage else {}
-            except json.JSONDecodeError:
-                usage = {}
+            usage = host.get_resource_usage()
 
             host_data = {
                 "id": host.id,
@@ -247,10 +240,7 @@ class MetricsService:
         total_memory = 0.0
 
         for host in hosts:
-            try:
-                usage = json.loads(host.resource_usage) if host.resource_usage else {}
-            except json.JSONDecodeError:
-                usage = {}
+            usage = host.get_resource_usage()
 
             is_online = agent_client.is_agent_online(host)
 

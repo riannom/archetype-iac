@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import DetailPopup from './DetailPopup';
 import { getCpuColor, getMemoryColor } from '../../utils/status';
 import { apiRequest } from '../../api';
+import { formatMemorySize } from '../../utils/format';
 
 interface AgentResource {
   id: string;
@@ -12,16 +13,6 @@ interface AgentResource {
   memory_total_gb: number;
   containers: number;
 }
-
-const formatMemorySize = (gb: number): string => {
-  if (gb >= 1024) {
-    return `${(gb / 1024).toFixed(1)} TB`;
-  }
-  if (gb >= 1) {
-    return `${gb.toFixed(1)} GB`;
-  }
-  return `${(gb * 1024).toFixed(0)} MB`;
-};
 
 interface LabResource {
   id: string;

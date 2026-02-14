@@ -8,10 +8,10 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import models
+from app.enums import LabRole
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from app.enums import LabRole
 
 
 def find_lab_by_prefix(
@@ -182,6 +182,14 @@ def get_lab_or_404(lab_id: str, database: Session, user: models.User) -> models.
     Backward-compatible wrapper around get_lab_with_role.
     """
     lab, _role = get_lab_with_role(lab_id, database, user)
+    return lab
+
+
+def require_lab_editor(lab_id: str, database: Session, user: models.User) -> models.Lab:
+    """Get lab and verify user has at least editor role. Raises 403/404."""
+    lab, role = get_lab_with_role(lab_id, database, user)
+    if role < LabRole.EDITOR:
+        raise HTTPException(status_code=403, detail="Editor access required")
     return lab
 
 

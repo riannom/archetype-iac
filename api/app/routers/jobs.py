@@ -20,7 +20,7 @@ from app.topology import analyze_topology
 from app.config import settings
 from app.utils.job import get_job_timeout_at, is_job_stuck
 from app.enums import LabRole
-from app.utils.lab import get_lab_or_404, get_lab_provider, get_lab_with_role
+from app.utils.lab import get_lab_or_404, get_lab_provider, get_lab_with_role, require_lab_editor
 from app.utils.logs import get_log_content, _is_likely_file_path
 from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
@@ -168,9 +168,7 @@ async def lab_up(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab, role = get_lab_with_role(lab_id, database, current_user)
-    if role < LabRole.EDITOR:
-        raise HTTPException(status_code=403, detail="Editor access required")
+    lab = require_lab_editor(lab_id, database, current_user)
 
     # Check for conflicting jobs before proceeding
     has_conflict, conflicting_action = has_conflicting_job(lab_id, "up")
@@ -319,10 +317,7 @@ async def lab_up(
     )
     for ns in node_states:
         ns.desired_state = "running"
-        ns.enforcement_attempts = 0
-        ns.enforcement_failed_at = None
-        ns.last_enforcement_at = None
-        ns.error_message = None
+        ns.reset_enforcement(clear_error=True)
     database.commit()
 
     # Clear enforcement cooldowns so enforcement picks up new desired state immediately
@@ -359,9 +354,7 @@ async def lab_down(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab, role = get_lab_with_role(lab_id, database, current_user)
-    if role < LabRole.EDITOR:
-        raise HTTPException(status_code=403, detail="Editor access required")
+    lab = require_lab_editor(lab_id, database, current_user)
 
     # Check for conflicting jobs before proceeding
     has_conflict, conflicting_action = has_conflicting_job(lab_id, "down")
@@ -401,9 +394,7 @@ async def lab_down(
     )
     for ns in node_states:
         ns.desired_state = "stopped"
-        ns.enforcement_attempts = 0
-        ns.enforcement_failed_at = None
-        ns.last_enforcement_at = None
+        ns.reset_enforcement()
     database.commit()
 
     # Clear enforcement cooldowns so enforcement picks up new desired state immediately
@@ -436,9 +427,7 @@ async def lab_restart(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab, role = get_lab_with_role(lab_id, database, current_user)
-    if role < LabRole.EDITOR:
-        raise HTTPException(status_code=403, detail="Editor access required")
+    lab = require_lab_editor(lab_id, database, current_user)
 
     # Check for conflicting jobs before proceeding (restart involves down + up)
     has_conflict, conflicting_action = has_conflicting_job(lab_id, "down")
@@ -512,9 +501,7 @@ async def node_action(
     if action not in ("start", "stop"):
         raise HTTPException(status_code=400, detail="Unsupported node action")
 
-    lab, role = get_lab_with_role(lab_id, database, current_user)
-    if role < LabRole.EDITOR:
-        raise HTTPException(status_code=403, detail="Editor access required")
+    lab = require_lab_editor(lab_id, database, current_user)
 
     # Resolve node by id or name (with SELECT FOR UPDATE to prevent races)
     node_state = (
@@ -566,10 +553,7 @@ async def node_action(
         and node_state.actual_state == "error"
     ):
         # Retry: reset enforcement state
-        node_state.enforcement_attempts = 0
-        node_state.enforcement_failed_at = None
-        node_state.last_enforcement_at = None
-        node_state.error_message = None
+        node_state.reset_enforcement(clear_error=True)
         database.commit()
         database.refresh(node_state)
 
@@ -772,9 +756,7 @@ async def cancel_job(
     Marks the job as 'cancelled' and sets the lab state to 'unknown'
     so reconciliation can determine actual state.
     """
-    lab, role = get_lab_with_role(lab_id, database, current_user)
-    if role < LabRole.EDITOR:
-        raise HTTPException(status_code=403, detail="Editor access required")
+    lab = require_lab_editor(lab_id, database, current_user)
     job = database.get(models.Job, job_id)
 
     if not job or job.lab_id != lab_id:

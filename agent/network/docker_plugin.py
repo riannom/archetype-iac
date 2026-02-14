@@ -58,6 +58,7 @@ from typing import Any
 from aiohttp import web
 
 from agent.config import settings
+from agent.network.cmd import run_cmd as _shared_run_cmd
 from agent.network.ovs_vlan_tags import used_vlan_tags_on_bridge_from_ovs_outputs
 
 logger = logging.getLogger(__name__)
@@ -196,13 +197,7 @@ class DockerOVSPlugin:
 
     async def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
         """Run a shell command asynchronously."""
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        return proc.returncode or 0, stdout.decode(), stderr.decode()
+        return await _shared_run_cmd(cmd)
 
     async def _ovs_vsctl(self, *args: str) -> tuple[int, str, str]:
         """Run ovs-vsctl command."""

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app import db, models
 from app.agent_auth import verify_agent_secret
-from app.auth import get_current_user
+from app.auth import get_current_admin, get_current_user
 from app.config import settings
 from app.routers.system import get_commit
 from app.utils.http import require_admin
@@ -472,10 +472,7 @@ def list_agents(
 
     result = []
     for host in hosts:
-        try:
-            capabilities = json.loads(host.capabilities)
-        except (json.JSONDecodeError, TypeError):
-            capabilities = {}
+        capabilities = host.get_capabilities()
 
         result.append(HostOut(
             id=host.id,
@@ -564,15 +561,8 @@ def list_agents_detailed(
 
     result = []
     for host in hosts:
-        try:
-            capabilities = json.loads(host.capabilities) if host.capabilities else {}
-        except (json.JSONDecodeError, TypeError):
-            capabilities = {}
-
-        try:
-            resource_usage = json.loads(host.resource_usage) if host.resource_usage else {}
-        except (json.JSONDecodeError, TypeError):
-            resource_usage = {}
+        capabilities = host.get_capabilities()
+        resource_usage = host.get_resource_usage()
 
         # Determine role based on capabilities and is_local flag
         providers = capabilities.get("providers", [])
@@ -646,10 +636,7 @@ def get_agent(
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    try:
-        capabilities = json.loads(host.capabilities)
-    except (json.JSONDecodeError, TypeError):
-        capabilities = {}
+    capabilities = host.get_capabilities()
 
     return HostOut(
         id=host.id,
@@ -671,14 +658,13 @@ def get_agent(
 def get_deregister_info(
     agent_id: str,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Get pre-flight information before deregistering an agent.
 
     Returns counts of affected resources so the UI can show an
     informed confirmation dialog.
     """
-    require_admin(current_user)
 
     host = database.get(models.Host, agent_id)
     if not host:
@@ -849,7 +835,7 @@ def update_sync_strategy(
     agent_id: str,
     request: UpdateSyncStrategyRequest,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Update an agent's image synchronization strategy.
 
@@ -859,7 +845,6 @@ def update_sync_strategy(
     - on_demand: Sync only when deployment requires an image
     - disabled: No automatic sync, manual only
     """
-    require_admin(current_user)
     valid_strategies = {"push", "pull", "on_demand", "disabled"}
     if request.strategy not in valid_strategies:
         raise HTTPException(
@@ -1068,14 +1053,13 @@ async def trigger_agent_update(
     agent_id: str,
     request: TriggerUpdateRequest | None = None,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> UpdateJobResponse:
     """Trigger a software update for a specific agent.
 
     Creates an update job and sends the update request to the agent.
     The agent reports progress via callbacks.
     """
-    require_admin(current_user)
     import httpx
 
     host = database.get(models.Host, agent_id)
@@ -1206,14 +1190,13 @@ async def trigger_agent_update(
 async def trigger_bulk_update(
     request: BulkUpdateRequest,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Trigger updates for multiple agents.
 
     Creates DB jobs sequentially (shared session), then fires HTTP requests
     to agents in parallel via asyncio.gather for faster bulk updates.
     """
-    require_admin(current_user)
     import httpx
     import logging
     logging.getLogger(__name__)
@@ -1431,7 +1414,7 @@ class RebuildResponse(BaseModel):
 async def rebuild_docker_agent(
     agent_id: str,
     database: Session = Depends(db.get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> RebuildResponse:
     """Rebuild a Docker-deployed agent container.
 
@@ -1443,7 +1426,6 @@ async def rebuild_docker_agent(
     2. The agent container is rebuilt with latest code
     3. Agent re-registers with new version after restart
     """
-    require_admin(current_user)
 
     host = database.get(models.Host, agent_id)
     if not host:

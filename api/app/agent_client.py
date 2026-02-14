@@ -333,11 +333,7 @@ async def with_retry(
 
 def parse_capabilities(agent: models.Host) -> dict:
     """Parse agent capabilities from JSON string."""
-    try:
-        return json.loads(agent.capabilities) if agent.capabilities else {}
-    except json.JSONDecodeError:
-        logger.warning(f"Failed to parse capabilities for agent {agent.id}")
-        return {}
+    return agent.get_capabilities()
 
 
 def get_agent_providers(agent: models.Host) -> list[str]:

@@ -8,6 +8,7 @@ import SystemLogsModal from './SystemLogsModal';
 import { ArchetypeIcon } from '../../components/icons';
 import { VersionBadge } from '../../components/VersionBadge';
 import AdminMenuButton from '../../components/AdminMenuButton';
+import type { SystemMetrics } from '../types';
 
 interface LabSummary {
   id: string;
@@ -18,39 +19,6 @@ interface LabSummary {
 interface LabStatus {
   running: number;
   total: number;
-}
-
-interface SystemMetrics {
-  agents: { online: number; total: number };
-  containers: { running: number; total: number };
-  cpu_percent: number;
-  memory_percent: number;
-  memory?: {
-    used_gb: number;
-    total_gb: number;
-    percent: number;
-  };
-  storage?: {
-    used_gb: number;
-    total_gb: number;
-    percent: number;
-  };
-  labs_running: number;
-  labs_total: number;
-  per_host?: {
-    id: string;
-    name: string;
-    cpu_percent: number;
-    memory_percent: number;
-    memory_used_gb: number;
-    memory_total_gb: number;
-    storage_percent: number;
-    storage_used_gb: number;
-    storage_total_gb: number;
-    containers_running: number;
-    started_at: string | null;
-  }[];
-  is_multi_host?: boolean;
 }
 
 interface DashboardProps {

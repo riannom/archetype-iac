@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { TaskLogEntry } from './TaskLogPanel';
 import { LabLogEntry, LabLogJob, LabLogsResponse, LabLogsQueryParams } from '../../api';
 import { usePolling } from '../hooks/usePolling';
+import { downloadBlob } from '../../utils/download';
 
 interface LogsViewProps {
   labId: string;
@@ -284,14 +285,7 @@ const LogsView: React.FC<LogsViewProps> = ({
       .join('\n');
 
     const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `lab-logs-${labId}-${new Date().toISOString().slice(0, 10)}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `lab-logs-${labId}-${new Date().toISOString().slice(0, 10)}.txt`);
   };
 
   return (

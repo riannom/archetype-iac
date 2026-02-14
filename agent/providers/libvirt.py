@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 
 from agent.config import settings
+from agent.providers.naming import libvirt_domain_name as _libvirt_name
 from agent.providers.base import (
     DeployResult,
     DestroyResult,
@@ -204,10 +205,7 @@ class LibvirtProvider(Provider):
 
     def _domain_name(self, lab_id: str, node_name: str) -> str:
         """Generate libvirt domain name for a node."""
-        # Sanitize for valid domain name
-        safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
-        safe_node = re.sub(r'[^a-zA-Z0-9_-]', '', node_name)[:30]
-        return f"arch-{safe_lab_id}-{safe_node}"
+        return _libvirt_name(lab_id, node_name)
 
     def _lab_prefix(self, lab_id: str) -> str:
         """Get domain name prefix for a lab."""

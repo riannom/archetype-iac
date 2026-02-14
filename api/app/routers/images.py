@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import db, models
-from app.auth import get_current_user
+from app.auth import get_current_admin, get_current_user
 from app.config import settings
 from app.utils.http import require_admin
 from app.image_store import (
@@ -172,7 +172,7 @@ def get_upload_progress(
 @router.post("/load")
 def load_image(
     file: UploadFile = File(...),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
     stream: bool = Query(default=False, description="Stream progress updates via SSE"),
     background: bool = Query(default=False, description="Run in background with polling"),
 ):
@@ -183,7 +183,6 @@ def load_image(
     Otherwise returns a JSON response when complete.
     Requires admin access.
     """
-    require_admin(current_user)
 
     from app.services.resource_monitor import ResourceMonitor, PressureLevel
     if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
@@ -807,10 +806,9 @@ def _load_image_sync(file: UploadFile) -> dict:
 @router.post("/qcow2")
 def upload_qcow2(
     file: UploadFile = File(...),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
     auto_build: bool = Query(default=True, description="Auto-trigger vrnetlab Docker build"),
 ) -> dict[str, str]:
-    require_admin(current_user)
 
     from app.services.resource_monitor import ResourceMonitor, PressureLevel
     if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
@@ -890,13 +888,12 @@ def upload_qcow2(
 
 @router.post("/backfill-checksums")
 def backfill_checksums(
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Compute and backfill SHA256 checksums for existing qcow2 images.
 
     Only processes images that don't already have a sha256 field.
     """
-    require_admin(current_user)
 
     from app.utils.image_integrity import compute_sha256
 
@@ -930,7 +927,7 @@ def backfill_checksums(
 @router.post("/library/{image_id}/build-docker")
 def trigger_docker_build(
     image_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict:
     """Trigger vrnetlab Docker image build for a qcow2 image.
 
@@ -941,7 +938,6 @@ def trigger_docker_build(
     Returns:
         Dict with job_id and status
     """
-    require_admin(current_user)
 
     from urllib.parse import unquote
     image_id = unquote(image_id)
@@ -1064,13 +1060,12 @@ def list_image_library(
 def update_image_library(
     image_id: str,
     payload: dict,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict[str, object]:
     """Update an image's metadata (device_id, version, notes, is_default, etc.).
 
     Requires admin access.
     """
-    require_admin(current_user)
 
     manifest = load_manifest()
 
@@ -1099,14 +1094,13 @@ def update_image_library(
 def assign_image_to_device(
     image_id: str,
     payload: dict,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict[str, object]:
     """Assign an image to a device type.
 
     Body: { "device_id": "eos", "is_default": true }
     Requires admin access.
     """
-    require_admin(current_user)
 
     manifest = load_manifest()
 
@@ -1141,13 +1135,12 @@ def assign_image_to_device(
 @router.post("/library/{image_id}/unassign")
 def unassign_image_from_device(
     image_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict[str, object]:
     """Unassign an image from its current device type.
 
     Requires admin access.
     """
-    require_admin(current_user)
 
     manifest = load_manifest()
 
@@ -1167,7 +1160,7 @@ def unassign_image_from_device(
 @router.delete("/library/{image_id}")
 def delete_image(
     image_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
 ) -> dict[str, str]:
     """Delete an image from the library.
 
@@ -1175,7 +1168,6 @@ def delete_image(
     For Docker images, only removes from manifest (does not remove from Docker).
     Requires admin access.
     """
-    require_admin(current_user)
 
     manifest = load_manifest()
 
@@ -1314,7 +1306,7 @@ def get_image_hosts(
 async def push_image_to_hosts(
     image_id: str,
     request: SyncRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
     database: Session = Depends(db.get_db),
 ) -> dict:
     """Push an image to specific or all hosts.
@@ -1323,7 +1315,6 @@ async def push_image_to_hosts(
     push process in the background. Returns the created job IDs.
     Requires admin access.
     """
-    require_admin(current_user)
 
     from urllib.parse import unquote
     image_id = unquote(image_id)
@@ -1753,7 +1744,7 @@ def get_sync_job(
 @router.delete("/sync-jobs/{job_id}")
 def cancel_sync_job(
     job_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_admin),
     database: Session = Depends(db.get_db),
 ) -> dict:
     """Cancel a pending or in-progress sync job.
@@ -1762,7 +1753,6 @@ def cancel_sync_job(
     Completed or failed jobs cannot be cancelled.
     Requires admin access.
     """
-    require_admin(current_user)
 
     job = database.get(models.ImageSyncJob, job_id)
     if not job:

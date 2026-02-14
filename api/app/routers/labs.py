@@ -28,8 +28,9 @@ from app.storage import (
 from app.tasks.jobs import run_agent_job, run_multihost_destroy
 from app.enums import GlobalRole, LabRole
 from app.services.permissions import PermissionService
-from app.utils.lab import get_lab_or_404, get_lab_with_role, get_lab_provider, update_lab_provider_from_nodes
+from app.utils.lab import get_lab_or_404, get_lab_with_role, get_lab_provider, update_lab_provider_from_nodes, require_lab_editor
 from app.utils.agents import get_online_agent_for_lab
+from app.utils.nodes import get_node_placement_mapping
 from app.utils.http import require_lab_owner, raise_not_found, raise_unavailable
 from app.utils.link import generate_link_name
 from app.services.interface_naming import normalize_interface
@@ -52,12 +53,7 @@ def _zip_safe_name(value: str) -> str:
     return (value or "unknown").replace("/", "_").replace("\\", "_")
 
 
-def _require_lab_editor(lab_id: str, database: Session, user: models.User) -> models.Lab:
-    """Get lab and verify user has at least editor role. Raises 403/404."""
-    lab, role = get_lab_with_role(lab_id, database, user)
-    if role < LabRole.EDITOR:
-        raise HTTPException(status_code=403, detail="Editor access required")
-    return lab
+_require_lab_editor = require_lab_editor
 
 
 def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
@@ -183,16 +179,13 @@ def _converge_stopped_error_state(state: models.NodeState) -> bool:
     """Force convergence when desired_state=stopped but actual_state=error."""
     if state.desired_state == "stopped" and state.actual_state == "error":
         state.actual_state = "stopped"
-        state.error_message = None
         state.image_sync_status = None
         state.image_sync_message = None
         state.starting_started_at = None
         state.stopping_started_at = None
         state.boot_started_at = None
         state.is_ready = False
-        state.enforcement_attempts = 0
-        state.enforcement_failed_at = None
-        state.last_enforcement_at = None
+        state.reset_enforcement(clear_error=True)
         return True
     return False
 
@@ -983,30 +976,9 @@ async def list_node_states(
                 pass  # Best effort - don't fail the request if refresh fails
 
     # Enrich states with host information
-    # 1. Query NodePlacement records for node -> host mapping
-    placements = (
-        database.query(models.NodePlacement)
-        .filter(models.NodePlacement.lab_id == lab_id)
-        .all()
-    )
-    placement_by_node = {p.node_name: p.host_id for p in placements}
+    placement_by_node, hosts = get_node_placement_mapping(database, lab_id, lab.agent_id)
 
-    # 2. Get all relevant host IDs (from placements or lab's default agent)
-    host_ids = set(placement_by_node.values())
-    if lab.agent_id:
-        host_ids.add(lab.agent_id)
-
-    # 3. Query host names
-    hosts = {}
-    if host_ids:
-        host_records = (
-            database.query(models.Host)
-            .filter(models.Host.id.in_(host_ids))
-            .all()
-        )
-        hosts = {h.id: h.name for h in host_records}
-
-    # 4. Build enriched response
+    # Build enriched response
     enriched_nodes = []
     for s in states:
         node_data = _enrich_node_state(s)
@@ -1100,10 +1072,7 @@ async def set_node_desired_state(
     ):
         # Retry: node is stuck in error but user wants it running again.
         # Reset enforcement state so the system will attempt reconciliation.
-        state.enforcement_attempts = 0
-        state.enforcement_failed_at = None
-        state.last_enforcement_at = None
-        state.error_message = None
+        state.reset_enforcement(clear_error=True)
         database.commit()
         database.refresh(state)
 
@@ -1186,10 +1155,7 @@ async def set_all_nodes_desired_state(
 
         # Reset enforcement state for error nodes being retried
         if classification == "reset_and_proceed":
-            state.enforcement_attempts = 0
-            state.enforcement_failed_at = None
-            state.last_enforcement_at = None
-            state.error_message = None
+            state.reset_enforcement(clear_error=True)
 
         affected_count += 1
 
@@ -1969,25 +1935,7 @@ async def export_inventory(
             pass
 
     # Get host placements for multi-host
-    placements = (
-        database.query(models.NodePlacement)
-        .filter(models.NodePlacement.lab_id == lab_id)
-        .all()
-    )
-    placement_by_node = {p.node_name: p.host_id for p in placements}
-
-    # Get host names
-    host_ids = set(placement_by_node.values())
-    if lab.agent_id:
-        host_ids.add(lab.agent_id)
-    hosts = {}
-    if host_ids:
-        host_records = (
-            database.query(models.Host)
-            .filter(models.Host.id.in_(host_ids))
-            .all()
-        )
-        hosts = {h.id: h.name for h in host_records}
+    placement_by_node, hosts = get_node_placement_mapping(database, lab_id, lab.agent_id)
 
     # Build inventory entries
     nodes = []
