@@ -1037,6 +1037,7 @@ class CreateNodeRequest(BaseModel):
     efi_boot: bool | None = Field(None, description="Enable EFI firmware boot")
     efi_vars: str | None = Field(None, description="EFI vars mode (e.g., stateless)")
     data_volume_gb: int | None = Field(None, ge=0, description="Data volume size in GB (0 = none)")
+    image_sha256: str | None = Field(None, description="Expected SHA256 of backing image for integrity verification")
 
 
 class CreateNodeResponse(BaseModel):

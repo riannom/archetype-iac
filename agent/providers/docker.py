@@ -2852,6 +2852,7 @@ username admin privilege 15 role network-admin nopassword
         efi_boot: bool | None = None,
         efi_vars: str | None = None,
         data_volume_gb: int | None = None,
+        image_sha256: str | None = None,
     ) -> NodeActionResult:
         """Create a single node container without starting it.
 

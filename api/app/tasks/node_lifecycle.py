@@ -29,7 +29,7 @@ from app.timing import AsyncTimedOperation
 from app.config import settings
 from app.services.broadcaster import broadcast_node_state_change, get_broadcaster
 from app.services.state_machine import NodeStateMachine
-from app.image_store import get_image_provider
+from app.image_store import find_image_by_reference, get_image_provider, load_manifest
 from app.services.topology import TopologyService, graph_to_deploy_topology, resolve_node_image
 from app.state import (
     HostStatus,
@@ -1753,6 +1753,17 @@ class NodeLifecycleManager:
                 version=db_node.version,
             )
 
+            # Look up image SHA256 from manifest for integrity verification
+            image_sha256 = None
+            if node_provider == "libvirt":
+                try:
+                    manifest = load_manifest()
+                    img_entry = find_image_by_reference(manifest, image)
+                    if img_entry:
+                        image_sha256 = img_entry.get("sha256")
+                except Exception:
+                    pass  # Non-critical: integrity check is best-effort
+
             # Create container/VM
             create_result = await agent_client.create_node_on_agent(
                 self.agent,
@@ -1777,6 +1788,7 @@ class NodeLifecycleManager:
                 efi_boot=hw_specs.get("efi_boot"),
                 efi_vars=hw_specs.get("efi_vars"),
                 data_volume_gb=hw_specs.get("data_volume_gb"),
+                image_sha256=image_sha256,
             )
 
             if not create_result.get("success"):

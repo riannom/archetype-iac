@@ -3437,6 +3437,7 @@ async def create_node(
         efi_boot=request.efi_boot,
         efi_vars=request.efi_vars,
         data_volume_gb=request.data_volume_gb,
+        image_sha256=getattr(request, "image_sha256", None),
     )
 
     elapsed_ms = int((_time.monotonic() - _t0) * 1000)

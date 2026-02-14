@@ -7,6 +7,7 @@ like Cisco IOS-XRv, FTDv, vManage, etc.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -651,6 +652,61 @@ class LibvirtProvider(Provider):
 
         return None
 
+    def _compute_file_sha256(self, file_path: str) -> str:
+        """Compute SHA256 hash of a file using streaming 1MB chunks."""
+        h = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _verify_backing_image(self, image_path: str, expected_sha256: str | None) -> None:
+        """Verify backing image integrity before overlay creation.
+
+        QEMU COW operations can corrupt the host page cache of read-only
+        backing images. This check detects stale page cache data by comparing
+        the file's SHA256 against the expected value from the image manifest.
+
+        On mismatch, drops page caches and re-verifies. If the second hash
+        matches, the file is fine (page cache was stale). If it still
+        mismatches, the file is actually corrupted.
+        """
+        if not expected_sha256:
+            return
+
+        actual = self._compute_file_sha256(image_path)
+        if actual == expected_sha256:
+            return
+
+        logger.warning(
+            "Backing image SHA256 mismatch (page cache may be stale): "
+            "expected %s, got %s — dropping caches and re-verifying",
+            expected_sha256[:16], actual[:16],
+        )
+
+        # Drop page caches to flush stale data
+        try:
+            with open("/proc/sys/vm/drop_caches", "w") as f:
+                f.write("3\n")
+        except OSError as e:
+            logger.warning("Could not drop page caches: %s", e)
+
+        actual = self._compute_file_sha256(image_path)
+        if actual == expected_sha256:
+            logger.info(
+                "Backing image OK after cache drop — page cache corruption recovered"
+            )
+            return
+
+        raise RuntimeError(
+            f"Backing image integrity check failed for {image_path}: "
+            f"expected SHA256 {expected_sha256[:16]}..., "
+            f"got {actual[:16]}... (file is corrupted)"
+        )
+
     def _translate_container_path_to_host(self, path: str) -> str:
         """Translate container path to host-accessible path for libvirt.
 
@@ -891,9 +947,13 @@ class LibvirtProvider(Provider):
         domain_uuid = str(uuid.uuid4())
 
         # Build disk elements
+        # cache='none' (O_DIRECT) bypasses page cache — prevents QEMU COW ops
+        # from corrupting the host page cache of read-only backing images.
+        # io='native' is required for optimal O_DIRECT performance.
+        # discard='unmap' passes guest TRIM to reclaim overlay disk space.
         disks_xml = f'''
     <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2'/>
+      <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
       <source file='{overlay_path}'/>
       <target dev='{dev_prefix}a' bus='{disk_driver}'/>
     </disk>'''
@@ -901,7 +961,7 @@ class LibvirtProvider(Provider):
         if data_volume_path:
             disks_xml += f'''
     <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2'/>
+      <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
       <source file='{data_volume_path}'/>
       <target dev='{dev_prefix}b' bus='{disk_driver}'/>
     </disk>'''
@@ -1807,6 +1867,7 @@ class LibvirtProvider(Provider):
         efi_boot: bool | None = None,
         efi_vars: str | None = None,
         data_volume_gb: int | None = None,
+        image_sha256: str | None = None,
     ) -> NodeActionResult:
         """Create (define) a single VM without starting it."""
         domain_name = self._domain_name(lab_id, node_name)
@@ -1887,6 +1948,18 @@ class LibvirtProvider(Provider):
                     success=False,
                     node_name=node_name,
                     error=f"No base image found for node {node_name} (image={image})",
+                )
+
+            # Verify backing image integrity before overlay creation.
+            # QEMU COW operations can corrupt the host page cache of backing
+            # images; this detects and recovers from stale cache data.
+            try:
+                self._verify_backing_image(base_image, image_sha256)
+            except RuntimeError as e:
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=str(e),
                 )
 
             # Create overlay disk
