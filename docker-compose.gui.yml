@@ -61,6 +61,8 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOKI_URL=${LOKI_URL:-http://loki:3100}
+      # Agent auth
+      - AGENT_SECRET=${AGENT_SECRET:-}
       # Agent updates (callback URL for external agents)
       - INTERNAL_URL=${INTERNAL_URL:-http://localhost:8000}
     volumes:
@@ -101,6 +103,7 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOKI_URL=${LOKI_URL:-http://loki:3100}
+      - AGENT_SECRET=${AGENT_SECRET:-}
       - INTERNAL_URL=${INTERNAL_URL:-http://localhost:8000}
       # Smaller pool for background monitors (fewer concurrent queries, can wait longer)
       - DB_POOL_SIZE=5
@@ -143,6 +146,7 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - WORKER_METRICS_PORT=${WORKER_METRICS_PORT:-8003}
+      - AGENT_SECRET=${AGENT_SECRET:-}
       - WORKER_EXECUTION_MODE=${WORKER_EXECUTION_MODE:-simple}
       - VRNETLAB_PATH=${VRNETLAB_PATH:-/opt/vrnetlab}
       - QCOW2_STORE=${QCOW2_STORE:-/var/lib/archetype/images}
@@ -207,6 +211,7 @@ services:
       - ARCHETYPE_AGENT_ENABLE_LIBVIRT=${ARCHETYPE_AGENT_ENABLE_LIBVIRT:-false}
       - ARCHETYPE_AGENT_ENABLE_VXLAN=true
       - ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
+      - ARCHETYPE_AGENT_CONTROLLER_SECRET=${AGENT_SECRET:-}
       - ARCHETYPE_AGENT_LOG_FORMAT=${LOG_FORMAT:-json}
       - ARCHETYPE_AGENT_LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
