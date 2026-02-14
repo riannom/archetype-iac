@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     lab_ttl_seconds: int = 86400  # 24 hours
     lab_ttl_check_interval: int = 3600  # Check every hour
 
+    # Carrier state monitoring (OVS link_state polling)
+    carrier_monitor_interval: float = 3.0  # Seconds between OVS poll cycles
+
     # Endpoint binding audit (container iface -> host veth) drift detection.
     endpoint_binding_audit_enabled: bool = True
     endpoint_binding_audit_interval_seconds: int = 120

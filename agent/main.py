@@ -916,6 +916,25 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to start Docker event listener: {e}")
 
+    # Start carrier state monitor (OVS link_state polling)
+    _carrier_monitor = None
+    if settings.enable_ovs:
+        try:
+            from agent.network.carrier_monitor import CarrierMonitor, build_managed_ports
+            from agent.callbacks import report_carrier_state_change
+
+            ovs_mgr = get_ovs_manager()
+            # Include Docker OVS plugin endpoints when the plugin is enabled
+            plugin = _get_docker_ovs_plugin() if settings.enable_ovs_plugin else None
+            _carrier_monitor = CarrierMonitor(
+                ovs_bridge=settings.ovs_bridge_name,
+                get_managed_ports=lambda: build_managed_ports(ovs_mgr, plugin),
+                notifier=report_carrier_state_change,
+            )
+            await _carrier_monitor.start(interval=settings.carrier_monitor_interval)
+        except Exception as e:
+            logger.error(f"Failed to start carrier monitor: {e}")
+
     yield
 
     # Cleanup
@@ -937,6 +956,10 @@ async def lifespan(app: FastAPI):
             await _event_listener_task
         except asyncio.CancelledError:
             pass
+
+    # Stop carrier monitor
+    if _carrier_monitor is not None:
+        _carrier_monitor.stop()
 
     # Close network backend
     try:
@@ -4673,57 +4696,80 @@ async def set_interface_carrier(
     interface: str,
     request: CarrierStateRequest,
 ) -> CarrierStateResponse:
-    """Set the carrier state of a container interface.
+    """Set the carrier state of a container or VM interface.
 
-    This uses `ip link set carrier on/off` to simulate physical link up/down.
-    When carrier is off, the interface cannot send or receive traffic but
-    remains configured in the container.
-
-    Args:
-        lab_id: Lab identifier
-        node: Node name (container name or node name)
-        interface: Interface name in the container (e.g., "eth1")
-        request: Contains "on" or "off" state
-
-    Returns:
-        CarrierStateResponse with success status
+    Uses ``ip link set carrier on/off`` to simulate physical link up/down.
+    Supports Docker containers (nsenter into namespace) and libvirt VMs
+    (host-side tap interface).
     """
-    if not settings.enable_ovs_plugin:
-        return CarrierStateResponse(
-            success=False,
-            container=node,
-            interface=interface,
-            state=request.state,
-            error="OVS plugin not enabled",
-        )
-
     logger.info(f"Set carrier {request.state}: lab={lab_id}, node={node}, interface={interface}")
 
+    state = request.state
+
+    # Check if this is a libvirt VM node
+    libvirt_provider = get_provider("libvirt")
+    is_libvirt_node = False
+    if libvirt_provider is not None:
+        try:
+            is_libvirt_node = libvirt_provider.get_node_kind(lab_id, node) is not None
+        except Exception:
+            is_libvirt_node = False
+
     try:
-        plugin = _get_docker_ovs_plugin()
-
-        # Resolve container name - might be node name or already container name
-        provider = get_provider_for_request()
-        container_name = provider.get_container_name(lab_id, node)
-
-        success = await plugin.set_carrier_state(lab_id, container_name, interface, request.state)
-
-        return CarrierStateResponse(
-            success=success,
-            container=container_name,
-            interface=interface,
-            state=request.state,
-            error=None if success else "Failed to set carrier state",
-        )
+        if is_libvirt_node:
+            # Libvirt VM: set carrier on the host-side tap interface
+            iface_index = _interface_name_to_index(interface)
+            tap_name = await libvirt_provider.get_vm_interface_port(
+                lab_id, node, iface_index,
+            )
+            if not tap_name:
+                return CarrierStateResponse(
+                    success=False, container=node, interface=interface,
+                    state=state,
+                    error=f"Cannot find tap interface for {node}:{interface}",
+                )
+            proc = await asyncio.create_subprocess_exec(
+                "ip", "link", "set", tap_name, "carrier", state,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr_bytes = await proc.communicate()
+            success = proc.returncode == 0
+            if not success:
+                err = stderr_bytes.decode(errors="replace").strip()
+                logger.error(f"Failed to set carrier on tap {tap_name}: {err}")
+                return CarrierStateResponse(
+                    success=False, container=node, interface=interface,
+                    state=state, error=f"ip link set carrier failed: {err}",
+                )
+            logger.info(f"Set carrier {state} on VM tap {tap_name} ({node}:{interface})")
+            return CarrierStateResponse(
+                success=True, container=node, interface=interface, state=state,
+            )
+        else:
+            # Docker container: use OVS plugin nsenter approach
+            if not settings.enable_ovs_plugin:
+                return CarrierStateResponse(
+                    success=False, container=node, interface=interface,
+                    state=state, error="OVS plugin not enabled",
+                )
+            plugin = _get_docker_ovs_plugin()
+            provider = get_provider_for_request()
+            container_name = provider.get_container_name(lab_id, node)
+            success = await plugin.set_carrier_state(
+                lab_id, container_name, interface, state,
+            )
+            return CarrierStateResponse(
+                success=success, container=container_name,
+                interface=interface, state=state,
+                error=None if success else "Failed to set carrier state",
+            )
 
     except Exception as e:
         logger.error(f"Set carrier state failed: {e}")
         return CarrierStateResponse(
-            success=False,
-            container=node,
-            interface=interface,
-            state=request.state,
-            error=str(e),
+            success=False, container=node, interface=interface,
+            state=state, error=str(e),
         )
 
 

@@ -303,6 +303,55 @@ class HeartbeatSender:
                 await send_heartbeat(self.callback_url, self.job_id)
 
 
+async def report_carrier_state_change(
+    lab_id: str, node: str, interface: str, carrier_state: str
+) -> bool:
+    """Report interface carrier state change to the API controller.
+
+    Fire-and-forget with error logging — the carrier monitor continues
+    even if the API is unreachable.
+
+    Args:
+        lab_id: Lab identifier
+        node: Node name (not container name)
+        interface: Interface name inside container (e.g. "eth1")
+        carrier_state: "on" or "off"
+
+    Returns:
+        True on success, False on failure.
+    """
+    url = f"{settings.controller_url}/callbacks/carrier-state"
+    payload = {
+        "lab_id": lab_id,
+        "node": node,
+        "interface": interface,
+        "carrier_state": carrier_state,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json=payload,
+                timeout=10.0,
+                headers=_get_controller_auth_headers(),
+            )
+            if 200 <= response.status_code < 300:
+                logger.debug(
+                    "Carrier state reported: %s:%s %s (lab=%s)",
+                    node, interface, carrier_state, lab_id,
+                )
+                return True
+            else:
+                logger.warning(
+                    "Carrier state report failed: HTTP %d for %s:%s",
+                    response.status_code, node, interface,
+                )
+                return False
+    except Exception as e:
+        logger.warning("Carrier state report failed for %s:%s: %s", node, interface, e)
+        return False
+
+
 async def execute_with_callback(
     job_id: str,
     agent_id: str,

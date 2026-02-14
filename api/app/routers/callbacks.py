@@ -19,11 +19,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app import db, models, schemas
+from app import db, models, schemas, agent_client
 from app.agent_auth import verify_agent_secret
 from app.utils.lab import update_lab_state
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map
-from app import agent_client
+from app.services.link_operational_state import recompute_link_oper_state
+from app.services.broadcaster import get_broadcaster
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +323,140 @@ async def job_heartbeat(
 
     logger.debug(f"Heartbeat received for job {job_id}")
     return {"success": True, "message": "Heartbeat recorded"}
+
+
+@router.post("/carrier-state")
+async def carrier_state_changed(
+    payload: schemas.CarrierStateChangeRequest,
+    database: Session = Depends(db.get_db),
+    _auth: None = Depends(verify_agent_secret),
+) -> dict:
+    """Agent reports that a container interface's carrier state changed.
+
+    When a NOS shuts down an interface, the host-side veth carrier drops.
+    The agent's CarrierMonitor detects this and reports it here.  This
+    endpoint:
+    1. Updates the matching carrier_state field in the LinkState record
+    2. Propagates carrier on/off to the peer endpoint via the remote agent
+    3. Recomputes link operational state
+    4. Broadcasts the change via WebSocket
+    """
+    lab_id = payload.lab_id
+    node = payload.node
+    interface = payload.interface
+    carrier = payload.carrier_state
+
+    logger.info(
+        "Carrier state change: lab=%s node=%s iface=%s carrier=%s",
+        lab_id, node, interface, carrier,
+    )
+
+    # Find the LinkState where this node:interface is either source or target
+    link_state = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            (
+                (models.LinkState.source_node == node)
+                & (models.LinkState.source_interface == interface)
+            )
+            | (
+                (models.LinkState.target_node == node)
+                & (models.LinkState.target_interface == interface)
+            ),
+        )
+        .first()
+    )
+
+    if not link_state:
+        logger.warning(
+            "No LinkState found for %s:%s in lab %s", node, interface, lab_id,
+        )
+        return {"success": False, "message": "Link not found"}
+
+    # Determine which side matched and update carrier_state
+    is_source = (
+        link_state.source_node == node
+        and link_state.source_interface == interface
+    )
+
+    if is_source:
+        link_state.source_carrier_state = carrier
+        peer_node = link_state.target_node
+        peer_interface = link_state.target_interface
+        peer_host_id = link_state.target_host_id
+    else:
+        link_state.target_carrier_state = carrier
+        peer_node = link_state.source_node
+        peer_interface = link_state.source_interface
+        peer_host_id = link_state.source_host_id
+
+    # Propagate carrier to the peer endpoint via its agent
+    if peer_host_id and peer_node and peer_interface:
+        peer_agent = database.get(models.Host, peer_host_id)
+        if peer_agent and agent_client.is_agent_online(peer_agent):
+            try:
+                url = (
+                    f"http://{peer_agent.address}/labs/{lab_id}"
+                    f"/interfaces/{peer_node}/{peer_interface}/carrier"
+                )
+                client = agent_client.get_http_client()
+                response = await client.post(
+                    url,
+                    json={"state": carrier},
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    # Update peer's carrier_state in DB too
+                    if is_source:
+                        link_state.target_carrier_state = carrier
+                    else:
+                        link_state.source_carrier_state = carrier
+                    logger.info(
+                        "Carrier %s propagated to peer %s:%s",
+                        carrier, peer_node, peer_interface,
+                    )
+                else:
+                    logger.warning(
+                        "Carrier propagation to peer %s:%s failed: HTTP %d",
+                        peer_node, peer_interface, response.status_code,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Carrier propagation to peer %s:%s failed: %s",
+                    peer_node, peer_interface, e,
+                )
+        else:
+            logger.warning(
+                "Peer agent %s offline, skipping carrier propagation", peer_host_id,
+            )
+
+    # Recompute operational state
+    changed = recompute_link_oper_state(database, link_state)
+
+    database.commit()
+
+    # Broadcast via WebSocket if state changed
+    if changed:
+        try:
+            broadcaster = get_broadcaster()
+            await broadcaster.publish_link_state(
+                lab_id=lab_id,
+                link_name=link_state.link_name,
+                desired_state=link_state.desired_state,
+                actual_state=link_state.actual_state,
+                source_node=link_state.source_node,
+                target_node=link_state.target_node,
+                source_oper_state=link_state.source_oper_state,
+                target_oper_state=link_state.target_oper_state,
+                source_oper_reason=link_state.source_oper_reason,
+                target_oper_reason=link_state.target_oper_reason,
+                oper_epoch=link_state.oper_epoch,
+            )
+        except Exception as e:
+            logger.warning("Failed to broadcast link state change: %s", e)
+
+    return {"success": True, "message": f"Carrier {carrier} processed for {node}:{interface}"}
 
 
 @router.post("/dead-letter/{job_id}")

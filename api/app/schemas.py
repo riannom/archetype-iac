@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, model_validator, ConfigDict
 
@@ -386,6 +386,15 @@ class JobCallbackResponse(BaseModel):
 
     success: bool
     message: str | None = None
+
+
+class CarrierStateChangeRequest(BaseModel):
+    """Payload for carrier state change callbacks from agents."""
+
+    lab_id: str
+    node: str
+    interface: str
+    carrier_state: Literal["on", "off"]
 
 
 # =============================================================================
