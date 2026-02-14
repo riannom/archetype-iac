@@ -429,7 +429,11 @@ fi
 
 # Unload NBD module if currently loaded (non-disruptive)
 if lsmod | grep -q '^nbd '; then
-    rmmod nbd 2>/dev/null && log_info "Unloaded nbd kernel module" || log_warn "nbd module in use, will be blocked after reboot"
+    if rmmod nbd 2>/dev/null; then
+        log_info "Unloaded nbd kernel module"
+    else
+        log_warn "nbd module in use, will be blocked after reboot"
+    fi
 fi
 
 # Install Docker

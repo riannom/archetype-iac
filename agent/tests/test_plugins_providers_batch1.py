@@ -376,9 +376,14 @@ def test_libvirt_generate_domain_xml_efi_stateless(monkeypatch, tmp_path: Path) 
         kind="cisco_n9kv",
     )
 
-    assert "<os firmware='efi'>" in xml
-    assert "<loader readonly='yes' type='pflash'>/usr/share/OVMF/OVMF_CODE.fd</loader>" in xml
+    # Stateless EFI uses qemu:commandline passthrough with a single read-only
+    # pflash drive instead of <os firmware='efi'> + <loader>.
+    assert "<os firmware='efi'>" not in xml
+    assert "<loader " not in xml
     assert "<nvram " not in xml
+    assert "<qemu:commandline>" in xml
+    assert "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd" in xml
+    assert "xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'" in xml
 
 
 def test_libvirt_generate_domain_xml_cpu_limit_adds_cputune(tmp_path: Path) -> None:

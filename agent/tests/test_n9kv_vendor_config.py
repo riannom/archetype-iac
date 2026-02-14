@@ -31,10 +31,10 @@ def test_n9kv_machine_type_is_i440fx():
     assert config.machine_type == "pc-i440fx-6.2"
 
 
-def test_n9kv_disk_driver_is_ide():
-    """NX-OS bootloader needs IDE; virtio disk is not recognized."""
+def test_n9kv_disk_driver_is_sata():
+    """NX-OS requires AHCI/SATA to detect bootflash; IDE boots kernel but no bootflash."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
-    assert config.disk_driver == "ide"
+    assert config.disk_driver == "sata"
 
 
 def test_n9kv_efi_boot_enabled():
@@ -59,7 +59,7 @@ def test_get_libvirt_config_propagates_n9kv_settings():
     lc = get_libvirt_config("cisco_n9kv")
     assert lc.efi_boot is True
     assert lc.nic_driver == "e1000"
-    assert lc.disk_driver == "ide"
+    assert lc.disk_driver == "sata"
     assert lc.machine_type == "pc-i440fx-6.2"
 
 
