@@ -264,6 +264,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # VM settings per CML reference platform (iosxrv9000 node definition)
         memory=20480,  # 20GB — CML minimum 10GB, recommended 20GB
         cpu=4,
+        machine_type="pc",  # i440fx — XRv9000 expects i440fx disk paths (q35 breaks Spirit/grub.cfg)
         disk_driver="virtio",
         nic_driver="virtio",
         efi_boot=True,
