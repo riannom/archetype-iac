@@ -99,6 +99,7 @@ class VendorConfig:
     serial_type: str = "pty"     # Serial port type: "pty" (default virsh console), "tcp" (TCP telnet)
     nographic: bool = False      # Remove VGA/VNC display; forces UEFI output to serial console
     serial_port_count: int = 1   # Number of serial ports (IOS-XRv 9000 needs 4)
+    smbios_product: str = ""     # SMBIOS type=1 product string (e.g., "Cisco IOS XRv 9000")
     force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
 
     # Image requirements
@@ -268,6 +269,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         efi_boot=True,
         nographic=True,  # Remove VGA so OVMF outputs to serial (virsh console)
         serial_port_count=4,  # CML refplat: XR console, aux, calvados console, calvados aux
+        smbios_product="Cisco IOS XRv 9000",  # Required for platform identification
         requires_image=True,
         supported_image_kinds=["qcow2"],
         # Boot readiness: detect XR CLI prompt or config dialog
@@ -1739,6 +1741,7 @@ class LibvirtRuntimeConfig:
     serial_type: str = "pty"  # "pty" (default virsh console) or "tcp" (TCP telnet)
     nographic: bool = False  # Remove VGA/VNC; forces UEFI output to serial
     serial_port_count: int = 1  # Number of serial ports (IOS-XRv 9000 needs 4)
+    smbios_product: str = ""  # SMBIOS type=1 product (e.g., "Cisco IOS XRv 9000")
     force_stop: bool = True  # Skip ACPI shutdown (most network VMs don't support it)
     source: str = "vendor"  # "vendor" for matched profile, "fallback" for generic defaults
 
@@ -1801,6 +1804,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             serial_type="pty",
             nographic=False,
             serial_port_count=1,
+            smbios_product="",
             force_stop=True,
             source="fallback",
         )
@@ -1820,6 +1824,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         serial_type=config.serial_type,
         nographic=config.nographic,
         serial_port_count=config.serial_port_count,
+        smbios_product=config.smbios_product,
         force_stop=config.force_stop,
         source="vendor",
     )

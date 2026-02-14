@@ -1059,13 +1059,27 @@ class LibvirtProvider(Provider):
     </video>
 """
 
-        xml = f'''<domain type='{libvirt_driver}'>
+        # SMBIOS product identification (required by some vendors, e.g., IOS-XRv 9000)
+        smbios_product = node_config.get("smbios_product", "")
+        sysinfo_xml = ""
+        smbios_os_xml = ""
+        if smbios_product:
+            sysinfo_xml = f"""
+  <sysinfo type='smbios'>
+    <system>
+      <entry name='manufacturer'>cisco</entry>
+      <entry name='product'>{xml_escape(smbios_product)}</entry>
+    </system>
+  </sysinfo>"""
+            smbios_os_xml = "\n    <smbios mode='sysinfo'/>"
+
+        xml = f'''<domain type='{libvirt_driver}'>{sysinfo_xml}
   <name>{name}</name>
   <uuid>{domain_uuid}</uuid>{metadata_xml}
   <memory unit='MiB'>{memory_mb}</memory>
   <vcpu>{cpus}</vcpu>{cputune_xml}
   {os_open}
-    {os_type_line}{os_extras}
+    {os_type_line}{os_extras}{smbios_os_xml}
   </os>
   <features>
     <acpi/>
@@ -1270,6 +1284,7 @@ class LibvirtProvider(Provider):
                 "serial_type": libvirt_config.serial_type,
                 "nographic": libvirt_config.nographic,
                 "serial_port_count": libvirt_config.serial_port_count,
+                "smbios_product": libvirt_config.smbios_product,
                 "interface_count": interface_count,
                 "_display_name": display_name,
             }
@@ -1752,6 +1767,7 @@ class LibvirtProvider(Provider):
                 "serial_type": libvirt_config.serial_type,
                 "nographic": libvirt_config.nographic,
                 "serial_port_count": libvirt_config.serial_port_count,
+                "smbios_product": libvirt_config.smbios_product,
                 "data_volume_gb": data_volume_gb if data_volume_gb is not None else libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
