@@ -1,0 +1,33 @@
+# Gitleaks configuration for archetype-iac
+# Shared by: git pre-commit hook, Claude Code hook, GitHub Actions CI
+
+title = "archetype-iac secret detection"
+
+# Inherit all default detection rules (without this, a .gitleaks.toml
+# in the repo root replaces the built-in rules entirely).
+[extend]
+  useDefault = true
+
+[allowlist]
+  description = "Known false positives and placeholder credentials"
+
+  paths = [
+    '''\.env\.example$''',
+    '''docker-compose\.gui\.yml$''',
+    '''install-controller\.sh$''',
+    '''scripts/observability_canary\.py$''',
+    '''agent/vendors\.py$''',
+    '''api/tests/''',
+    '''agent/tests/''',
+    '''web/src/.*\.test\.(ts|tsx)$''',
+    '''tasks/''',
+    '''docs/''',
+    '''\.gitleaks\.toml$''',
+  ]
+
+  regexTarget = "line"
+  regexes = [
+    '''CHANGE_ME''',
+    '''changeme123''',
+    '''CHANGE_ME_IN_PRODUCTION''',
+  ]

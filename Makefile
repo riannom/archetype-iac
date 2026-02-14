@@ -1,4 +1,4 @@
-.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity
+.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity install-gitleaks install-hooks scan-secrets
 
 API_TEST ?= tests
 WEB_TEST ?=
@@ -71,3 +71,12 @@ iso-metadata-parity:
 	else \
 		python3 scripts/iso_metadata_parity_report.py --iso "$(ISO)"; \
 	fi
+
+install-gitleaks:
+	bash scripts/install-gitleaks.sh
+
+install-hooks: install-gitleaks
+	bash scripts/install-hooks.sh
+
+scan-secrets:
+	gitleaks detect --config .gitleaks.toml --verbose
