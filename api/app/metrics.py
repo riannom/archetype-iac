@@ -200,6 +200,66 @@ if PROMETHEUS_AVAILABLE:
         ["state"],
     )
 
+    # --- Queue Metrics ---
+
+    job_queue_depth = Gauge(
+        "archetype_job_queue_depth",
+        "Number of jobs currently in the RQ queue",
+    )
+
+    # --- Reconciliation Metrics ---
+
+    reconciliation_cycle_duration = Histogram(
+        "archetype_reconciliation_cycle_seconds",
+        "Duration of a full reconciliation cycle",
+        buckets=(0.5, 1, 2, 5, 10, 30, 60, float("inf")),
+    )
+    reconciliation_labs_checked = Counter(
+        "archetype_reconciliation_labs_checked_total",
+        "Total labs checked during reconciliation cycles",
+    )
+    reconciliation_state_changes = Counter(
+        "archetype_reconciliation_state_changes_total",
+        "Total node state changes detected during reconciliation",
+    )
+
+    # --- State Flap Detection ---
+
+    node_state_transitions = Counter(
+        "archetype_node_state_transitions_total",
+        "Total node state transitions",
+        ["transition_type"],
+    )
+
+    # --- Circuit Breaker Metrics ---
+
+    circuit_breaker_state = Gauge(
+        "archetype_circuit_breaker_state",
+        "Circuit breaker state (0=closed, 1=half-open, 2=open)",
+        ["handler_type"],
+    )
+
+    # --- Broadcast Metrics ---
+
+    broadcast_messages = Counter(
+        "archetype_broadcast_messages_total",
+        "Total broadcast messages published",
+        ["message_type"],
+    )
+    broadcast_failures = Counter(
+        "archetype_broadcast_failures_total",
+        "Total broadcast publish failures",
+        ["message_type"],
+    )
+
+    # --- Enforcement Timing ---
+
+    enforcement_operation_duration = Histogram(
+        "archetype_enforcement_operation_seconds",
+        "Duration of enforcement operations",
+        buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, float("inf")),
+    )
+
 else:
     # Dummy implementations when prometheus_client is not installed
     class DummyMetric:
@@ -238,6 +298,15 @@ else:
     link_oper_transitions = DummyMetric()
     db_connections_idle_in_transaction = DummyMetric()
     db_connections_total = DummyMetric()
+    job_queue_depth = DummyMetric()
+    reconciliation_cycle_duration = DummyMetric()
+    reconciliation_labs_checked = DummyMetric()
+    reconciliation_state_changes = DummyMetric()
+    node_state_transitions = DummyMetric()
+    circuit_breaker_state = DummyMetric()
+    broadcast_messages = DummyMetric()
+    broadcast_failures = DummyMetric()
+    enforcement_operation_duration = DummyMetric()
 
 
 def update_node_metrics(session: "Session") -> None:
@@ -499,6 +568,20 @@ def update_db_metrics(session: "Session") -> None:
         logger.warning(f"Error updating db metrics: {e}")
 
 
+def update_queue_metrics() -> None:
+    """Update RQ queue depth metric."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+
+    try:
+        from app.db import get_redis
+        r = get_redis()
+        depth = r.llen("rq:queue:archetype")
+        job_queue_depth.set(depth)
+    except Exception as e:
+        logger.warning(f"Error updating queue metrics: {e}")
+
+
 def update_all_metrics(session: "Session") -> None:
     """Update all metrics from database.
 
@@ -510,6 +593,7 @@ def update_all_metrics(session: "Session") -> None:
     update_lab_metrics(session)
     update_enforcement_metrics(session)
     update_db_metrics(session)
+    update_queue_metrics()
 
 
 def get_metrics() -> tuple[bytes, str]:
@@ -685,3 +769,39 @@ def record_link_oper_transition(
         reason=reason_label,
         is_cross_host="true" if is_cross_host else "false",
     ).inc()
+
+
+def record_reconciliation_cycle(
+    duration: float, labs_checked: int, state_changes: int
+) -> None:
+    """Record metrics from a reconciliation cycle."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    reconciliation_cycle_duration.observe(duration)
+    reconciliation_labs_checked.inc(labs_checked)
+    if state_changes:
+        reconciliation_state_changes.inc(state_changes)
+
+
+def record_node_state_transition(transition_type: str) -> None:
+    """Record a node state transition for flap detection."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    node_state_transitions.labels(transition_type=transition_type).inc()
+
+
+def record_broadcast(message_type: str, success: bool) -> None:
+    """Record a broadcast publish attempt."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    if success:
+        broadcast_messages.labels(message_type=message_type).inc()
+    else:
+        broadcast_failures.labels(message_type=message_type).inc()
+
+
+def record_enforcement_duration(duration: float) -> None:
+    """Record the duration of an enforcement cycle."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    enforcement_operation_duration.observe(duration)

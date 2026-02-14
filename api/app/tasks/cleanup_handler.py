@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 
 from app import agent_client, models
 from app.config import settings
+from app.metrics import circuit_breaker_state
 from app.db import get_session
 from app.events.cleanup_events import CLEANUP_CHANNEL, CleanupEvent, CleanupEventType
 from app.storage import lab_workspace
@@ -61,20 +62,26 @@ class CircuitBreaker:
         """Return True if the circuit is open (handler should be skipped)."""
         failures = self._failures.get(handler_type, 0)
         if failures < self.max_failures:
+            circuit_breaker_state.labels(handler_type=handler_type).set(0)
             return False
         # Check if cooldown has elapsed (half-open)
         last_time = self._last_failure_time.get(handler_type, 0.0)
         if time.monotonic() - last_time >= self.cooldown:
+            circuit_breaker_state.labels(handler_type=handler_type).set(1)  # half-open
             return False  # Allow one attempt (half-open)
+        circuit_breaker_state.labels(handler_type=handler_type).set(2)  # open
         return True
 
     def record_failure(self, handler_type: str) -> None:
         self._failures[handler_type] = self._failures.get(handler_type, 0) + 1
         self._last_failure_time[handler_type] = time.monotonic()
+        if self._failures[handler_type] >= self.max_failures:
+            circuit_breaker_state.labels(handler_type=handler_type).set(2)
 
     def record_success(self, handler_type: str) -> None:
         self._failures.pop(handler_type, None)
         self._last_failure_time.pop(handler_type, None)
+        circuit_breaker_state.labels(handler_type=handler_type).set(0)
 
 
 # ---------------------------------------------------------------------------

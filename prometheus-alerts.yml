@@ -24,6 +24,10 @@ groups:
         expr: sum(increase(archetype_job_queue_wait_seconds_count{job=~"archetype-(api|worker)"}[2h]))
       - record: archetype:coverage:nlm_samples:2h
         expr: sum(increase(archetype_nlm_phase_duration_seconds_count{job=~"archetype-(api|worker)"}[2h]))
+      - record: archetype:reconciliation_duration:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(archetype_reconciliation_cycle_seconds_bucket{job=~"archetype-(api|worker)"}[5m])))
+      - record: archetype:node_state_transition_rate:5m
+        expr: sum(rate(archetype_node_state_transitions_total{job=~"archetype-(api|worker)"}[5m]))
 
   - name: archetype-jobs
     rules:
@@ -216,3 +220,45 @@ groups:
         annotations:
           summary: "High agent operation error rate"
           description: "Agent node operation errors exceed 0.5/sec for the last 5 minutes."
+
+  - name: archetype-state-health
+    rules:
+      # Alert when nodes are flapping (rapid state transitions)
+      - alert: NodeStateFlapping
+        expr: archetype:node_state_transition_rate:5m > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node state flapping detected"
+          description: "Nodes are transitioning state more than once per second for 5 minutes. Check for crash loops or enforcement oscillation."
+
+      # Alert when reconciliation cycles are slow
+      - alert: ReconciliationSlow
+        expr: archetype:reconciliation_duration:p95_5m > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow reconciliation cycles"
+          description: "P95 reconciliation cycle duration exceeds 30 seconds for the last 10 minutes."
+
+      # Alert when a circuit breaker is open
+      - alert: CircuitBreakerOpen
+        expr: archetype_circuit_breaker_state{job="archetype-api"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker open for {{ $labels.handler_type }}"
+          description: "Cleanup handler circuit breaker has been open for 5 minutes. Cleanup events are being dropped."
+
+      # Alert when job queue is backing up
+      - alert: HighQueueDepth
+        expr: archetype_job_queue_depth{job="archetype-api"} > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High job queue depth"
+          description: "{{ $value }} jobs are queued, indicating worker backpressure."

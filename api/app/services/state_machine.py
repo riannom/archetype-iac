@@ -4,7 +4,10 @@ This module provides state machines for nodes and links, validating
 transitions and computing next states based on desired states.
 """
 
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from app.state import (
     LabState,
@@ -69,7 +72,12 @@ class NodeStateMachine:
         """Check if a state transition is valid."""
         if current == target:
             return True
-        return target in cls.VALID_TRANSITIONS.get(current, set())
+        valid = target in cls.VALID_TRANSITIONS.get(current, set())
+        if not valid:
+            logger.warning(f"Invalid state transition: {current.value} -> {target.value}")
+        else:
+            logger.debug(f"State transition: {current.value} -> {target.value}")
+        return valid
 
     @classmethod
     def get_transition_for_desired(
@@ -151,6 +159,7 @@ class NodeStateMachine:
         Blocks: start while stopping.
         """
         if command == "start" and actual_state == "stopping":
+            logger.warning(f"Command rejected: cannot {command} while in state {actual_state}")
             return False, "Cannot start: node is currently stopping"
         # Allow stop for "starting" nodes — VMs can take minutes to boot
         # and users should be able to abort a slow start.

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Set
 
@@ -27,7 +28,7 @@ from app import models
 from app.config import settings
 from app.db import get_async_redis, get_session
 from app import agent_client
-from app.metrics import record_enforcement_action, record_enforcement_exhausted
+from app.metrics import record_enforcement_action, record_enforcement_exhausted, record_enforcement_duration
 from app.utils.async_tasks import safe_create_task
 from app.state import (
     JobStatus,
@@ -712,6 +713,8 @@ async def enforce_lab_states():
     if not settings.state_enforcement_enabled:
         return
 
+    _enforce_start = time.monotonic()
+
     with get_session() as session:
         try:
             from app.tasks.jobs import run_node_reconcile
@@ -892,6 +895,8 @@ async def enforce_lab_states():
                 session.rollback()
             except Exception:
                 pass
+        finally:
+            record_enforcement_duration(time.monotonic() - _enforce_start)
 
 
 async def state_enforcement_monitor():

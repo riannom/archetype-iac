@@ -25,6 +25,7 @@ from typing import AsyncGenerator
 import redis.asyncio as aioredis
 
 from app.config import settings
+from app.metrics import record_broadcast
 from app.utils.timeouts import REDIS_OPERATION_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -143,9 +144,11 @@ class StateBroadcaster:
             channel = self._channel_name(lab_id)
             count = await self._publish(channel, json.dumps(message))
             logger.debug(f"Published node state to {channel}: {node_name} -> {actual_state} ({count} subscribers)")
+            record_broadcast("node_state", True)
             return count
         except Exception as e:
             logger.warning(f"Failed to publish node state for {node_name}: {e}")
+            record_broadcast("node_state", False)
             return 0
 
     async def publish_link_state(
@@ -198,9 +201,11 @@ class StateBroadcaster:
             channel = self._channel_name(lab_id)
             count = await self._publish(channel, json.dumps(message))
             logger.debug(f"Published link state to {channel}: {link_name} -> {actual_state}")
+            record_broadcast("link_state", True)
             return count
         except Exception as e:
             logger.warning(f"Failed to publish link state for {link_name}: {e}")
+            record_broadcast("link_state", False)
             return 0
 
     async def publish_lab_state(
@@ -232,9 +237,11 @@ class StateBroadcaster:
             channel = self._channel_name(lab_id)
             count = await self._publish(channel, json.dumps(message))
             logger.debug(f"Published lab state to {channel}: {state}")
+            record_broadcast("lab_state", True)
             return count
         except Exception as e:
             logger.warning(f"Failed to publish lab state for {lab_id}: {e}")
+            record_broadcast("lab_state", False)
             return 0
 
     async def publish_job_progress(
@@ -274,9 +281,11 @@ class StateBroadcaster:
             channel = self._channel_name(lab_id)
             count = await self._publish(channel, json.dumps(message))
             logger.debug(f"Published job progress to {channel}: {job_id} -> {status}")
+            record_broadcast("job_progress", True)
             return count
         except Exception as e:
             logger.warning(f"Failed to publish job progress for {job_id}: {e}")
+            record_broadcast("job_progress", False)
             return 0
 
     async def subscribe(self, lab_id: str) -> AsyncGenerator[dict, None]:

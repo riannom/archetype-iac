@@ -4142,6 +4142,67 @@ async def ovs_status() -> OVSStatusResponse:
         )
 
 
+@app.get("/labs/{lab_id}/boot-logs")
+async def lab_boot_logs(lab_id: str):
+    """Get recent boot logs for all nodes in a lab.
+
+    Returns last 200 lines of container logs for each node,
+    useful for diagnosing boot failures.
+    """
+    result: dict[str, str | None] = {}
+
+    docker_provider = get_provider("docker")
+    if docker_provider:
+        try:
+            workspace = get_workspace(lab_id)
+            status = await docker_provider.status(lab_id=lab_id, workspace=workspace)
+            for node in status.nodes:
+                logs = await _get_container_boot_logs(node.name, tail_lines=200)
+                result[node.name] = logs
+        except Exception as e:
+            logger.warning(f"Failed to get Docker boot logs for lab {lab_id}: {e}")
+
+    libvirt_provider = get_provider("libvirt")
+    if libvirt_provider:
+        try:
+            workspace = get_workspace(lab_id)
+            status = await libvirt_provider.status(lab_id=lab_id, workspace=workspace)
+            for node in status.nodes:
+                if node.name not in result:
+                    result[node.name] = None
+        except Exception as e:
+            logger.warning(f"Failed to get libvirt boot logs for lab {lab_id}: {e}")
+
+    return {"lab_id": lab_id, "boot_logs": result}
+
+
+@app.get("/ovs/flows")
+async def ovs_flows():
+    """Get OVS flow table dump for diagnostics.
+
+    Returns the output of ovs-ofctl dump-flows for the OVS bridge.
+    """
+    if not settings.enable_ovs:
+        return {"bridge": "", "flows": "", "error": "OVS not enabled"}
+
+    try:
+        bridge = settings.ovs_bridge_name
+        result = await asyncio.to_thread(
+            lambda: __import__("subprocess").run(
+                ["ovs-ofctl", "dump-flows", bridge],
+                capture_output=True, text=True, timeout=10,
+            )
+        )
+        return {
+            "bridge": bridge,
+            "flows": result.stdout,
+            "error": result.stderr if result.returncode != 0 else None,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get OVS flows: {e}")
+        return {"bridge": settings.ovs_bridge_name, "flows": "", "error": str(e)}
+
+
 # --- Docker OVS Plugin Endpoints ---
 
 def _get_docker_ovs_plugin():

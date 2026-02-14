@@ -207,6 +207,7 @@ async def _collect_agent_snapshot(agent: models.Host) -> dict[str, Any]:
         ("lock_status", agent_client.get_agent_lock_status),
         ("overlay_status", agent_client.get_overlay_status_from_agent),
         ("ovs_status", agent_client.get_ovs_status_from_agent),
+        ("ovs_flows", agent_client.get_agent_ovs_flows),
         ("interface_details", agent_client.get_agent_interface_details),
         ("images", agent_client.get_agent_images),
     ):
@@ -553,6 +554,57 @@ async def build_support_bundle(
         "observability/loki-api-logs.json",
         sanitize_data(loki_logs, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
     )
+
+    # Queue and system health snapshots
+    try:
+        from app.db import get_redis as _get_redis
+        _r = _get_redis()
+        queue_status = {
+            "queue_depth": _r.llen("rq:queue:archetype"),
+            "active_jobs_in_db": session.query(models.Job).filter(
+                models.Job.status.in_(["queued", "running"])
+            ).count(),
+        }
+    except Exception as exc:
+        queue_status = {"error": str(exc)}
+    writer.add_json(
+        "system/queue-status.json",
+        sanitize_data(queue_status, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
+    )
+
+    # Circuit breaker state
+    try:
+        from app.tasks.cleanup_handler import CleanupEventHandler
+        _handler = CleanupEventHandler()
+        cb = _handler.circuit_breaker
+        cb_state = {
+            "failures": dict(cb._failures),
+            "last_failure_times": {k: v for k, v in cb._last_failure_time.items()},
+            "max_failures": cb.max_failures,
+            "cooldown": cb.cooldown,
+        }
+    except Exception as exc:
+        cb_state = {"error": str(exc)}
+    writer.add_json(
+        "system/circuit-breaker.json",
+        sanitize_data(cb_state, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
+    )
+
+    # Boot logs per lab (collected from agents)
+    for lab in selected_labs:
+        for host in selected_agents:
+            if not agent_client.is_agent_online(host):
+                continue
+            try:
+                boot_data = await agent_client.get_agent_boot_logs(host, lab_id=lab.id)
+                boot_logs_map = boot_data.get("boot_logs", {})
+                if boot_logs_map:
+                    writer.add_json(
+                        f"labs/{lab.id}/boot-logs-{host.id}.json",
+                        sanitize_data(boot_logs_map, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
+                    )
+            except Exception:
+                pass  # Best-effort
 
     redaction_report = {
         "pii_safe": pii_safe,

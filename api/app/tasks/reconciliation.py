@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -23,7 +24,7 @@ import redis
 
 from app import agent_client, db, models
 from app.config import settings
-from app.metrics import nlm_phase_duration
+from app.metrics import nlm_phase_duration, record_reconciliation_cycle, record_node_state_transition
 from app.db import get_redis, get_session
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
 from app.services.topology import TopologyService
@@ -329,6 +330,10 @@ async def refresh_states_from_agents():
     to reflect the actual state. For enforcement of desired state, see
     state_enforcement.py.
     """
+    _cycle_start = time.monotonic()
+    _labs_checked = 0
+    _state_changes = 0
+
     with get_session() as session:
         try:
             # Find labs that need reconciliation:
@@ -522,9 +527,10 @@ async def refresh_states_from_agents():
 
             if labs_to_reconcile:
                 logger.info(f"Reconciling state for {len(labs_to_reconcile)} lab(s)")
+                _labs_checked = len(labs_to_reconcile)
 
                 for lab_id in labs_to_reconcile:
-                    await _reconcile_single_lab(session, lab_id)
+                    _state_changes += await _reconcile_single_lab(session, lab_id)
 
             # Periodic global orphan cleanup: remove containers from deleted labs
             # Runs less frequently than per-lab reconciliation since it scans ALL
@@ -533,6 +539,9 @@ async def refresh_states_from_agents():
 
         except Exception as e:
             logger.error(f"Error in state reconciliation: {e}")
+        finally:
+            elapsed = time.monotonic() - _cycle_start
+            record_reconciliation_cycle(elapsed, _labs_checked, _state_changes)
 
 
 async def _check_readiness_for_nodes(session, nodes: list):
@@ -623,18 +632,21 @@ async def _check_readiness_for_nodes(session, nodes: list):
                 pass
 
 
-async def _reconcile_single_lab(session, lab_id: str):
-    """Reconcile a single lab's state with actual container status."""
+async def _reconcile_single_lab(session, lab_id: str) -> int:
+    """Reconcile a single lab's state with actual container status.
 
+    Returns:
+        Number of node state changes detected.
+    """
     lab = session.get(models.Lab, lab_id)
     if not lab:
-        return
+        return 0
 
     # Acquire distributed lock to prevent concurrent reconciliation
     with reconciliation_lock(lab_id) as lock_acquired:
         if not lock_acquired:
             logger.debug(f"Lab {lab_id} reconciliation skipped - another process holds lock")
-            return
+            return 0
 
         # Check if there's an active job for this lab
         active_job = (
@@ -655,7 +667,7 @@ async def _reconcile_single_lab(session, lab_id: str):
                 active_job.created_at,
             ):
                 logger.debug(f"Lab {lab_id} has active job {active_job.id}, skipping reconciliation")
-                return
+                return 0
             else:
                 # Job is stuck - log warning but proceed with reconciliation
                 # The job_health_monitor will handle the stuck job separately
@@ -666,15 +678,21 @@ async def _reconcile_single_lab(session, lab_id: str):
                 )
 
         # Call the actual reconciliation logic (extracted to allow locking)
-        await _do_reconcile_lab(session, lab, lab_id)
+        return await _do_reconcile_lab(session, lab, lab_id)
+    return 0
 
 
-async def _do_reconcile_lab(session, lab, lab_id: str):
+async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
     """Perform the actual reconciliation logic for a lab.
 
     This is called by _reconcile_single_lab after acquiring the lock.
+
+    Returns:
+        Number of node state changes detected.
     """
     from app.utils.lab import get_lab_provider
+
+    _reconcile_state_changes = 0
 
     # Ensure link states exist for this lab using database (source of truth)
     try:
@@ -1071,6 +1089,16 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
                     )
 
             if ns.actual_state != old_state or (ns.is_ready != old_is_ready and ns.is_ready):
+                _reconcile_state_changes += 1
+                # Classify the transition for flap detection
+                if ns.actual_state == NodeActualState.ERROR.value:
+                    record_node_state_transition("error")
+                elif ns.actual_state == NodeActualState.RUNNING.value:
+                    record_node_state_transition("start")
+                elif ns.actual_state in (NodeActualState.STOPPED.value, NodeActualState.UNDEPLOYED.value):
+                    record_node_state_transition("stop")
+                elif old_state == NodeActualState.ERROR.value:
+                    record_node_state_transition("recover")
                 logger.info(
                     "Node state transition",
                     extra={
@@ -1397,6 +1425,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str):
         logger.error(f"Failed to reconcile lab {lab_id}: {e}")
         # Rollback any uncommitted changes to prevent idle-in-transaction
         session.rollback()
+
+    return _reconcile_state_changes
 
 
 async def state_reconciliation_monitor():

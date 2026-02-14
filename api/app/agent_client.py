@@ -2615,6 +2615,49 @@ async def get_ovs_status_from_agent(agent: models.Host) -> dict:
         return {"bridge_name": "", "initialized": False, "ports": [], "links": []}
 
 
+async def get_agent_boot_logs(agent: models.Host, lab_id: str | None = None) -> dict:
+    """Get boot logs from an agent for a specific lab.
+
+    Returns:
+        Dict with 'lab_id' and 'boot_logs' mapping node names to log text
+    """
+    if not lab_id:
+        return {"boot_logs": {}, "error": "lab_id required"}
+
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/boot-logs"
+
+    try:
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=15.0,
+            max_retries=0,
+        )
+    except Exception as e:
+        logger.error(f"Failed to get boot logs from agent {agent.id}: {e}")
+        return {"boot_logs": {}, "error": str(e)}
+
+
+async def get_agent_ovs_flows(agent: models.Host) -> dict:
+    """Get OVS flow table from an agent.
+
+    Returns:
+        Dict with 'bridge', 'flows', and optionally 'error'
+    """
+    url = f"{get_agent_url(agent)}/ovs/flows"
+
+    try:
+        return await _agent_request(
+            "GET",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
+    except Exception as e:
+        logger.error(f"Failed to get OVS flows from agent {agent.id}: {e}")
+        return {"bridge": "", "flows": "", "error": str(e)}
+
+
 async def connect_external_on_agent(
     agent: models.Host,
     lab_id: str,

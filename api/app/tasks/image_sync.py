@@ -9,6 +9,7 @@ the controller and agents. It supports multiple sync strategies:
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -19,6 +20,8 @@ from app import models
 from app.config import settings
 from app.db import get_session
 from app.image_store import find_image_by_id, load_manifest
+
+logger = logging.getLogger(__name__)
 
 
 def _is_file_reference(reference: str) -> bool:
@@ -183,14 +186,16 @@ async def check_agent_has_image(
                     # Compare checksums if both sides have them
                     if expected_sha256 and result.get("sha256"):
                         if result["sha256"] != expected_sha256:
-                            print(f"Checksum mismatch on {host.name} for {reference}: "
+                            logger.warning(
+                                  f"Checksum mismatch on {host.name} for {reference}: "
                                   f"expected {expected_sha256[:16]}..., "
-                                  f"agent has {result['sha256'][:16]}...")
+                                  f"agent has {result['sha256'][:16]}..."
+                            )
                             return False
                     return True
                 return False
         except Exception as e:
-            print(f"Error checking image on {host.name}: {e}")
+            logger.error(f"Error checking image on {host.name}: {e}")
             return False
 
     # Docker image - query agent
@@ -206,7 +211,7 @@ async def check_agent_has_image(
                 return result.get("exists", False)
             return False
     except Exception as e:
-        print(f"Error checking image on {host.name}: {e}")
+        logger.error(f"Error checking image on {host.name}: {e}")
         return False
 
 
@@ -227,7 +232,7 @@ async def get_agent_image_inventory(host: models.Host) -> list[dict]:
                 return result.get("images", [])
             return []
     except Exception as e:
-        print(f"Error getting image inventory from {host.name}: {e}")
+        logger.error(f"Error getting image inventory from {host.name}: {e}")
         return []
 
 
@@ -321,12 +326,10 @@ async def _reconcile_agent_images_impl(host_id: str, database: Session):
                     database.add(image_host)
 
         database.commit()
-        print(f"Reconciled images for agent {host.name}")
+        logger.info(f"Reconciled images for agent {host.name}")
 
     except Exception as e:
-        print(f"Error reconciling images for host {host_id}: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error reconciling images for host {host_id}: {e}", exc_info=True)
 
 
 async def push_image_on_upload(image_id: str, database: Session | None = None):
@@ -359,7 +362,7 @@ async def _push_image_on_upload_impl(image_id: str, database: Session):
     if not hosts:
         return
 
-    print(f"Pushing image {image_id} to {len(hosts)} agents")
+    logger.info(f"Pushing image {image_id} to {len(hosts)} agents")
 
     # Start sync tasks for each host
     for host in hosts:
@@ -399,7 +402,7 @@ async def _pull_images_on_registration_impl(host_id: str, database: Session):
     if strategy != "pull":
         return
 
-    print(f"Agent {host.name} has 'pull' strategy, syncing all images")
+    logger.info(f"Agent {host.name} has 'pull' strategy, syncing all images")
 
     # First reconcile to see what's already there
     await reconcile_agent_images(host_id, database)
@@ -425,7 +428,7 @@ async def _pull_images_on_registration_impl(host_id: str, database: Session):
             continue
 
         # Need to sync
-        print(f"Syncing {image_id} to {host.name}")
+        logger.info(f"Syncing {image_id} to {host.name}")
         asyncio.create_task(sync_image_to_agent(image_id, host_id))
 
 
@@ -1132,7 +1135,7 @@ def get_images_from_topology(topology_yaml: str) -> list[str]:
         return list(images)
 
     except Exception as e:
-        print(f"Error parsing topology: {e}")
+        logger.error(f"Error parsing topology: {e}")
         return []
 
 
@@ -1188,7 +1191,7 @@ def get_image_to_nodes_map(topology_yaml: str) -> dict[str, list[str]]:
         return image_to_nodes
 
     except Exception as e:
-        print(f"Error parsing topology: {e}")
+        logger.error(f"Error parsing topology: {e}")
         return {}
 
 
