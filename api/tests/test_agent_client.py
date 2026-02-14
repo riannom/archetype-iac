@@ -273,7 +273,7 @@ class MockAgent:
         self.status = status
         self.last_heartbeat = datetime.now(timezone.utc)
         self.name = f"agent-{agent_id}"
-        self.capabilities = capabilities or '{"providers": ["docker"], "max_concurrent_jobs": 4}'
+        self.capabilities = capabilities if capabilities is not None else '{"providers": ["docker"], "max_concurrent_jobs": 4}'
         self.version = "0.1.0"
         self.created_at = datetime.now(timezone.utc)
         self.resource_usage = None
