@@ -1401,14 +1401,24 @@ class LibvirtProvider(Provider):
                         container_id=existing.UUIDString()[:12],
                     )
                 else:
-                    # Start the existing domain
-                    existing.create()
-                    await self._set_vm_tap_mtu(lab_id, node_name)
-                    return NodeInfo(
-                        name=node_name,
-                        status=NodeStatus.RUNNING,
-                        container_id=existing.UUIDString()[:12],
+                    # Shut-off domain may have stale XML from a previous
+                    # vendor config.  Undefine it so we recreate with the
+                    # latest definition instead of booting the old one.
+                    logger.info(
+                        "Undefining stale shut-off domain %s for fresh creation",
+                        domain_name,
                     )
+                    self._undefine_domain(existing, domain_name)
+                    for suffix in ("", "-data"):
+                        disk = disks_dir / f"{node_name}{suffix}.qcow2"
+                        if disk.exists():
+                            disk.unlink()
+                            logger.info("Removed stale disk: %s", disk)
+                    lab_allocs = self._vlan_allocations.get(lab_id, {})
+                    if node_name in lab_allocs:
+                        del lab_allocs[node_name]
+                        self._save_vlan_allocations(lab_id, disks_dir.parent)
+                    # Fall through to fresh creation below
         except libvirt.libvirtError:
             pass  # Domain doesn't exist, we'll create it
 
@@ -1783,12 +1793,31 @@ class LibvirtProvider(Provider):
                 existing = self.conn.lookupByName(domain_name)
                 if existing:
                     state = self._get_domain_status(existing)
-                    return NodeActionResult(
-                        success=True,
-                        node_name=node_name,
-                        new_status=state,
-                        stdout=f"Domain {domain_name} already exists",
+                    if state == NodeStatus.RUNNING:
+                        return NodeActionResult(
+                            success=True,
+                            node_name=node_name,
+                            new_status=state,
+                            stdout=f"Domain {domain_name} already running",
+                        )
+                    # Shut-off domain may have stale XML — undefine so we
+                    # recreate with the latest vendor config.
+                    logger.info(
+                        "Undefining stale shut-off domain %s for fresh creation",
+                        domain_name,
                     )
+                    self._undefine_domain(existing, domain_name)
+                    disks_dir = self._disks_dir(workspace)
+                    for suffix in ("", "-data"):
+                        disk = disks_dir / f"{node_name}{suffix}.qcow2"
+                        if disk.exists():
+                            disk.unlink()
+                            logger.info("Removed stale disk: %s", disk)
+                    lab_allocs = self._vlan_allocations.get(lab_id, {})
+                    if node_name in lab_allocs:
+                        del lab_allocs[node_name]
+                        self._save_vlan_allocations(lab_id, workspace)
+                    # Fall through to fresh creation below
             except libvirt.libvirtError:
                 pass  # Domain doesn't exist, we'll create it
 
