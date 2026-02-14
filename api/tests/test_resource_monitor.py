@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.services.resource_monitor import PressureLevel, ResourceMonitor
 
 

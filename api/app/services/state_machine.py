@@ -7,8 +7,6 @@ transitions and computing next states based on desired states.
 import logging
 from typing import Optional
 
-logger = logging.getLogger(__name__)
-
 from app.state import (
     LabState,
     LinkActualState,
@@ -16,6 +14,8 @@ from app.state import (
     NodeActualState,
     NodeDesiredState,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class NodeStateMachine:

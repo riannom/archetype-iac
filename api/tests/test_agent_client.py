@@ -503,7 +503,11 @@ async def test_get_healthy_agent_load_balancing():
     mock_db.query.return_value = mock_query
 
     # agent1 has 3 jobs, agent2 has 1 job
-    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={"agent1": 3, "agent2": 1}):
+    # Disable resource-aware scoring to test legacy load-balancing path
+    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={"agent1": 3, "agent2": 1}), \
+         patch.object(agent_client, 'settings') as mock_settings:
+        mock_settings.placement_scoring_enabled = False
+        mock_settings.agent_stale_timeout = 120
         result = await agent_client.get_healthy_agent(mock_db)
 
     # Should select agent2 (less loaded)

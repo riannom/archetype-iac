@@ -371,10 +371,10 @@ describe("ImageCard", () => {
       expect(syncButton).toBeInTheDocument();
     });
 
-    it("does not show sync button for non-docker images", () => {
+    it("shows sync button for non-docker images when showSyncStatus is true", () => {
       const qcow2Image = { ...defaultImage, kind: "qcow2" };
       render(<ImageCard image={qcow2Image} showSyncStatus />);
-      expect(screen.queryByTitle("Sync to all agents")).not.toBeInTheDocument();
+      expect(screen.getByTitle("Sync to all agents")).toBeInTheDocument();
     });
 
     it("does not show sync button when showSyncStatus is false", () => {

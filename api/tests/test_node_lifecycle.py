@@ -1769,7 +1769,7 @@ class TestAutoExtractBeforeStop:
         host = _make_host(test_db)
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
-        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", device="ceos")
+        _make_node_def(test_db, lab, "n1", "R1", "R1", device="ceos")
         ns = _make_node_state(
             test_db, lab, "n1", "R1", desired="stopped", actual="running"
         )
@@ -1861,7 +1861,7 @@ class TestAutoExtractBeforeStop:
         host = _make_host(test_db)
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
-        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", device="ceos")
+        _make_node_def(test_db, lab, "n1", "R1", "R1", device="ceos")
         ns = _make_node_state(
             test_db, lab, "n1", "R1", desired="stopped", actual="stopping"
         )

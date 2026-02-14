@@ -22,6 +22,7 @@ class MockVendorConfig:
     supported_image_kinds: list[str] = field(default_factory=lambda: ["qcow2"])
     efi_boot: bool = False
     efi_vars: str = ""
+    data_volume_gb: int = 0
 
 
 class TestResolveHardwareSpecs:

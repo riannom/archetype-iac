@@ -491,14 +491,14 @@ class TestImageHostsAndSync:
         )
         assert response.status_code == 404
 
-    def test_sync_image_only_docker(
+    def test_sync_non_docker_image_accepted(
         self,
         test_client: TestClient,
         admin_user: models.User,
         admin_auth_headers: dict,
         monkeypatch,
     ):
-        """Test that only Docker images can be synced."""
+        """Test that non-docker images can also be synced (all kinds supported)."""
         manifest = {
             "images": [
                 {"id": "qcow2:test.qcow2", "kind": "qcow2", "reference": "/path"}
@@ -519,8 +519,9 @@ class TestImageHostsAndSync:
             json={},
             headers=admin_auth_headers,
         )
+        # No docker-only restriction; fails because no online hosts in test DB
         assert response.status_code == 400
-        assert "docker" in response.json()["detail"].lower()
+        assert "no online hosts" in response.json()["detail"].lower()
 
 
 class TestSyncJobs:
