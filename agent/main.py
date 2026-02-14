@@ -5659,6 +5659,43 @@ def check_image(reference: str) -> ImageExistsResponse:
         return ImageExistsResponse(exists=False)
 
 
+@app.post("/images/backfill-checksums")
+async def backfill_image_checksums() -> dict:
+    """Compute SHA256 sidecars for existing file-based images missing them."""
+    import asyncio
+    import hashlib
+    import glob as globmod
+
+    image_dir = "/var/lib/archetype/images"
+    if not os.path.isdir(image_dir):
+        return {"updated": 0, "errors": []}
+
+    def _backfill():
+        updated = 0
+        errors = []
+        for path in globmod.glob(os.path.join(image_dir, "*.qcow2")) + \
+                     globmod.glob(os.path.join(image_dir, "*.img")):
+            sidecar = path + ".sha256"
+            if os.path.exists(sidecar):
+                continue
+            try:
+                h = hashlib.sha256()
+                with open(path, "rb") as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                with open(sidecar, "w") as sf:
+                    sf.write(h.hexdigest())
+                updated += 1
+            except Exception as e:
+                errors.append(f"{os.path.basename(path)}: {e}")
+        return {"updated": updated, "errors": errors}
+
+    return await asyncio.to_thread(_backfill)
+
+
 @app.post("/images/receive")
 async def receive_image(
     file: UploadFile,

@@ -1334,10 +1334,6 @@ async def push_image_to_hosts(
     if not image:
         raise HTTPException(status_code=404, detail="Image not found in library")
 
-    # Only Docker images can be synced
-    if image.get("kind") != "docker":
-        raise HTTPException(status_code=400, detail="Only Docker images can be synced")
-
     # Get target hosts
     if request.host_ids:
         hosts = database.query(models.Host).filter(
