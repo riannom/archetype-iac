@@ -14,7 +14,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app import agent_client, models
@@ -487,6 +487,28 @@ class NodeLifecycleManager:
 
         self.session.commit()
 
+    async def _get_candidate_agents(self) -> list[models.Host]:
+        """Return online agents that support the required provider."""
+        from app.agent_client import get_agent_providers
+
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            seconds=settings.agent_stale_timeout
+        )
+        agents = (
+            self.session.query(models.Host)
+            .filter(
+                models.Host.status == "online",
+                models.Host.last_heartbeat >= cutoff,
+            )
+            .all()
+        )
+        if self.provider:
+            agents = [
+                a for a in agents
+                if self.provider in get_agent_providers(a)
+            ]
+        return agents
+
     async def _resolve_agents(self) -> bool:
         """Determine target agent per node. Spawn sub-jobs for other agents.
 
@@ -550,29 +572,88 @@ class NodeLifecycleManager:
             logger.error(f"Sync job {self.job.id} failed: {error_msg}")
             return False
 
-        # Priority 2 & 3: Auto-placed nodes
+        # Priority 2: Sticky placements (NodePlacement affinity)
+        # Priority 3: Auto-placed nodes (resource-aware spread or legacy fallback)
         auto_placed_nodes = [
             ns for ns in self.node_states if ns.node_name not in all_node_agents
         ]
         if auto_placed_nodes:
-            default_agent_id = None
-            if self.lab.agent_id:
-                default_agent = self.session.get(models.Host, self.lab.agent_id)
-                if default_agent and agent_client.is_agent_online(default_agent):
-                    default_agent_id = self.lab.agent_id
-            if not default_agent_id:
-                healthy_agent = await agent_client.get_healthy_agent(
-                    self.session, required_provider=self.provider
-                )
-                if healthy_agent:
-                    default_agent_id = healthy_agent.id
-
+            # Separate sticky (have placement) from truly new
+            sticky_nodes = []
+            new_nodes = []
             for ns in auto_placed_nodes:
                 placement = self.placements_map.get(ns.node_name)
                 if placement:
                     all_node_agents[ns.node_name] = placement.host_id
-                elif default_agent_id:
-                    all_node_agents[ns.node_name] = default_agent_id
+                    sticky_nodes.append(ns.node_name)
+                else:
+                    new_nodes.append(ns)
+
+            if sticky_nodes:
+                logger.debug(
+                    f"Job {self.job.id}: {len(sticky_nodes)} node(s) use "
+                    f"sticky placement: {sticky_nodes}"
+                )
+
+            # Distribute truly new nodes
+            if new_nodes and settings.placement_scoring_enabled:
+                from app.services.resource_capacity import (
+                    distribute_nodes_by_score,
+                    score_agent,
+                )
+
+                # Find all online agents with the required provider
+                candidates = await self._get_candidate_agents()
+                if candidates:
+                    agent_scores = {}
+                    for agent in candidates:
+                        agent_scores[agent.id] = score_agent(agent)
+                        logger.debug(
+                            f"Job {self.job.id}: Agent {agent.id} ({agent.name}) "
+                            f"score={agent_scores[agent.id].score:.3f} "
+                            f"({agent_scores[agent.id].reason})"
+                        )
+
+                    spread = distribute_nodes_by_score(
+                        [ns.node_name for ns in new_nodes], agent_scores
+                    )
+                    for node_name, agent_id in spread.items():
+                        all_node_agents[node_name] = agent_id
+
+                    # Log spread summary
+                    counts: dict[str, int] = {}
+                    for aid in spread.values():
+                        counts[aid] = counts.get(aid, 0) + 1
+                    logger.info(
+                        f"Job {self.job.id}: Resource-aware spread for "
+                        f"{len(new_nodes)} new node(s): {counts}"
+                    )
+
+            # Fallback for unassigned nodes (scoring disabled or no candidates)
+            fallback_nodes = [
+                ns for ns in new_nodes
+                if ns.node_name not in all_node_agents
+            ]
+            if fallback_nodes:
+                default_agent_id = None
+                if self.lab.agent_id:
+                    default_agent = self.session.get(
+                        models.Host, self.lab.agent_id
+                    )
+                    if default_agent and agent_client.is_agent_online(
+                        default_agent
+                    ):
+                        default_agent_id = self.lab.agent_id
+                if not default_agent_id:
+                    healthy_agent = await agent_client.get_healthy_agent(
+                        self.session, required_provider=self.provider
+                    )
+                    if healthy_agent:
+                        default_agent_id = healthy_agent.id
+
+                if default_agent_id:
+                    for ns in fallback_nodes:
+                        all_node_agents[ns.node_name] = default_agent_id
 
         # Group nodes by target agent
         nodes_by_agent: dict[str, list] = {}

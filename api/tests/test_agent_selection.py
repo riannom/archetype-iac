@@ -617,3 +617,191 @@ class TestCountActiveJobs:
         assert counts["agent-1"] == 2
         assert counts["agent-2"] == 1
         assert counts.get("agent-3", 0) == 0
+
+
+class TestResourceAwareSelection:
+    """Tests for resource-aware agent selection in get_healthy_agent."""
+
+    def _set_scoring(self, enabled=True, **overrides):
+        defaults = {
+            "placement_scoring_enabled": enabled,
+            "placement_controller_reserve_mb": 4096,
+            "placement_weight_memory": 0.7,
+            "placement_weight_cpu": 0.3,
+            "placement_local_penalty": 0.85,
+        }
+        defaults.update(overrides)
+        for key, val in defaults.items():
+            object.__setattr__(settings, key, val)
+
+    def _restore(self):
+        self._set_scoring(enabled=True)
+
+    @pytest.fixture(autouse=True)
+    def _cleanup(self):
+        yield
+        self._restore()
+
+    @pytest.mark.asyncio
+    async def test_picks_higher_scored_agent(self, test_db: Session):
+        """Agent with more resources is selected over less-resourced agent."""
+        self._set_scoring(enabled=True)
+
+        # Agent with lots of free memory/cpu
+        rich = models.Host(
+            id="rich-agent", name="Rich Agent",
+            address="localhost:8080", status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            resource_usage=json.dumps({
+                "memory_total_gb": 64, "memory_used_gb": 8,
+                "cpu_count": 16, "cpu_percent": 10,
+            }),
+            last_heartbeat=datetime.now(timezone.utc),
+            is_local=False,
+        )
+        # Agent with most resources used
+        poor = models.Host(
+            id="poor-agent", name="Poor Agent",
+            address="localhost:8081", status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            resource_usage=json.dumps({
+                "memory_total_gb": 64, "memory_used_gb": 56,
+                "cpu_count": 16, "cpu_percent": 90,
+            }),
+            last_heartbeat=datetime.now(timezone.utc),
+            is_local=False,
+        )
+        test_db.add_all([rich, poor])
+        test_db.commit()
+
+        result = await agent_client.get_healthy_agent(
+            test_db, required_provider="docker"
+        )
+        assert result is not None
+        assert result.id == "rich-agent"
+
+    @pytest.mark.asyncio
+    async def test_local_penalty_prefers_remote(self, test_db: Session):
+        """With equal resources, remote agent wins over local due to penalty."""
+        self._set_scoring(enabled=True)
+
+        local = models.Host(
+            id="local-agent", name="Local Agent",
+            address="localhost:8080", status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            resource_usage=json.dumps({
+                "memory_total_gb": 64, "memory_used_gb": 16,
+                "cpu_count": 16, "cpu_percent": 25,
+            }),
+            last_heartbeat=datetime.now(timezone.utc),
+            is_local=True,
+        )
+        remote = models.Host(
+            id="remote-agent", name="Remote Agent",
+            address="192.168.1.10:8080", status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            resource_usage=json.dumps({
+                "memory_total_gb": 64, "memory_used_gb": 16,
+                "cpu_count": 16, "cpu_percent": 25,
+            }),
+            last_heartbeat=datetime.now(timezone.utc),
+            is_local=False,
+        )
+        test_db.add_all([local, remote])
+        test_db.commit()
+
+        result = await agent_client.get_healthy_agent(
+            test_db, required_provider="docker"
+        )
+        assert result is not None
+        assert result.id == "remote-agent"
+
+    @pytest.mark.asyncio
+    async def test_scoring_disabled_uses_legacy(self, test_db: Session):
+        """When scoring is disabled, falls back to job-count-based selection."""
+        self._set_scoring(enabled=False)
+
+        # Agent with more resources but more jobs
+        agent1 = models.Host(
+            id="agent-1", name="Agent 1",
+            address="localhost:8080", status="online",
+            capabilities=json.dumps({
+                "providers": ["docker"], "max_concurrent_jobs": 4,
+            }),
+            resource_usage=json.dumps({
+                "memory_total_gb": 128, "memory_used_gb": 8,
+                "cpu_count": 32, "cpu_percent": 5,
+            }),
+            last_heartbeat=datetime.now(timezone.utc),
+            is_local=False,
+        )
+        # Agent with fewer resources but no jobs
+        agent2 = models.Host(
+            id="agent-2", name="Agent 2",
+            address="localhost:8081", status="online",
+            capabilities=json.dumps({
+                "providers": ["docker"], "max_concurrent_jobs": 4,
+            }),
+            resource_usage=json.dumps({
+                "memory_total_gb": 16, "memory_used_gb": 14,
+                "cpu_count": 4, "cpu_percent": 90,
+            }),
+            last_heartbeat=datetime.now(timezone.utc),
+            is_local=False,
+        )
+        test_db.add_all([agent1, agent2])
+        test_db.commit()
+
+        # Add 2 jobs to agent-1
+        for _ in range(2):
+            test_db.add(models.Job(
+                agent_id="agent-1", action="up", status="running"
+            ))
+        test_db.commit()
+
+        # Legacy sort picks agent-2 (fewer jobs) despite fewer resources
+        result = await agent_client.get_healthy_agent(
+            test_db, required_provider="docker"
+        )
+        assert result is not None
+        assert result.id == "agent-2"
+
+    @pytest.mark.asyncio
+    async def test_affinity_wins_over_scoring(self, test_db: Session):
+        """Preferred agent is selected regardless of resource score."""
+        self._set_scoring(enabled=True)
+
+        # Low-resource preferred agent
+        preferred = models.Host(
+            id="preferred", name="Preferred Agent",
+            address="localhost:8080", status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            resource_usage=json.dumps({
+                "memory_total_gb": 16, "memory_used_gb": 14,
+                "cpu_count": 4, "cpu_percent": 90,
+            }),
+            last_heartbeat=datetime.now(timezone.utc),
+            is_local=False,
+        )
+        # High-resource alternative
+        better = models.Host(
+            id="better", name="Better Agent",
+            address="localhost:8081", status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            resource_usage=json.dumps({
+                "memory_total_gb": 128, "memory_used_gb": 8,
+                "cpu_count": 32, "cpu_percent": 5,
+            }),
+            last_heartbeat=datetime.now(timezone.utc),
+            is_local=False,
+        )
+        test_db.add_all([preferred, better])
+        test_db.commit()
+
+        result = await agent_client.get_healthy_agent(
+            test_db,
+            required_provider="docker",
+            prefer_agent_id="preferred",
+        )
+        assert result is not None
+        assert result.id == "preferred"

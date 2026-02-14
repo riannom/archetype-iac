@@ -116,6 +116,13 @@ class Settings(BaseSettings):
     resource_disk_warning_pct: float = 85.0
     resource_disk_error_pct: float = 95.0
 
+    # Placement scheduling
+    placement_controller_reserve_mb: int = 4096    # Memory reserved on local agent for API/DB/Redis
+    placement_weight_memory: float = 0.7           # Weight for available-memory ratio in scoring
+    placement_weight_cpu: float = 0.3              # Weight for available-CPU ratio in scoring
+    placement_local_penalty: float = 0.85          # Score multiplier for local agent (0.85 = 15% reduction)
+    placement_scoring_enabled: bool = True         # Feature flag (False = legacy job-count sort)
+
     # Feature flags
     feature_multihost_labs: bool = True
     feature_vxlan_overlay: bool = True

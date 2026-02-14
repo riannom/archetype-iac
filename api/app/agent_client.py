@@ -441,7 +441,28 @@ async def get_healthy_agent(
                 logger.debug(f"Using preferred agent {agent.id} (affinity)")
                 return agent
 
-    # Sort by load (active_jobs / max_jobs ratio) - least loaded first
+    # Resource-aware scoring (when enabled)
+    if settings.placement_scoring_enabled:
+        from app.services.resource_capacity import score_agent
+
+        scored = []
+        for agent, active_jobs, max_jobs in agents_with_capacity:
+            agent_score = score_agent(agent)
+            scored.append((agent, agent_score))
+            logger.debug(
+                f"Agent {agent.id} ({agent.name}): score={agent_score.score:.3f} "
+                f"({agent_score.reason})"
+            )
+
+        scored.sort(key=lambda x: x[1].score, reverse=True)
+        selected = scored[0][0]
+        logger.debug(
+            f"Selected agent {selected.id} ({selected.name}) with "
+            f"score={scored[0][1].score:.3f}"
+        )
+        return selected
+
+    # Legacy: sort by load (active_jobs / max_jobs ratio) - least loaded first
     agents_with_capacity.sort(key=lambda x: x[1] / x[2] if x[2] > 0 else float('inf'))
 
     selected = agents_with_capacity[0][0]

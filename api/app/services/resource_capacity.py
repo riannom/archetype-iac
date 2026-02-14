@@ -163,6 +163,109 @@ def get_agent_capacity(host: models.Host) -> AgentCapacity:
     )
 
 
+@dataclass
+class AgentScore:
+    """Placement score for an agent, used for resource-aware scheduling."""
+    score: float = 0.0
+    available_memory_mb: float = 0
+    available_cpu_cores: float = 0
+    reason: str = ""
+
+
+def score_agent(host: models.Host) -> AgentScore:
+    """Compute a placement score in [0, 1] for an agent.
+
+    Higher scores indicate more available resources. The score is a
+    weighted sum of available-memory and available-CPU ratios, with a
+    penalty applied for the local (controller) agent.
+
+    Returns a minimum score of 0.1 for agents without heartbeat data
+    so they remain selectable as a last resort.
+    """
+    capacity = get_agent_capacity(host)
+
+    # No heartbeat data — low-priority fallback
+    if capacity.memory_total_mb == 0 and capacity.cpu_cores_total == 0:
+        return AgentScore(
+            score=0.1,
+            reason="no heartbeat data",
+        )
+
+    # Available memory, with controller reserve subtracted for local agents
+    reserve_mb = settings.placement_controller_reserve_mb if host.is_local else 0
+    usable_memory = max(0, capacity.memory_total_mb - reserve_mb)
+    mem_available = max(0, usable_memory - capacity.memory_used_mb)
+    mem_ratio = mem_available / usable_memory if usable_memory > 0 else 0
+
+    # Available CPU ratio
+    cpu_ratio = (
+        capacity.cpu_available_cores / capacity.cpu_cores_total
+        if capacity.cpu_cores_total > 0
+        else 0
+    )
+
+    # Weighted sum
+    raw_score = (
+        settings.placement_weight_memory * mem_ratio
+        + settings.placement_weight_cpu * cpu_ratio
+    )
+
+    # Local-agent penalty
+    if host.is_local:
+        raw_score *= settings.placement_local_penalty
+
+    score = max(0.0, min(1.0, raw_score))
+
+    reason = (
+        f"mem={mem_available:.0f}/{usable_memory:.0f}MB "
+        f"cpu={capacity.cpu_available_cores:.1f}/{capacity.cpu_cores_total:.0f} "
+        f"raw={raw_score:.3f}"
+    )
+    if host.is_local:
+        reason += f" local_penalty={settings.placement_local_penalty}"
+
+    return AgentScore(
+        score=score,
+        available_memory_mb=mem_available,
+        available_cpu_cores=capacity.cpu_available_cores,
+        reason=reason,
+    )
+
+
+def distribute_nodes_by_score(
+    node_names: list[str],
+    agent_scores: dict[str, AgentScore],
+) -> dict[str, str]:
+    """Distribute nodes across agents proportionally to their scores.
+
+    Returns a mapping of node_name -> agent_id. Uses a greedy approach:
+    each node is assigned to the agent with the highest remaining
+    fractional share, which produces a balanced distribution even for
+    small numbers of nodes.
+    """
+    if not node_names or not agent_scores:
+        return {}
+
+    total_score = sum(s.score for s in agent_scores.values())
+    if total_score == 0:
+        return {}
+
+    # Calculate fractional shares (how many nodes each agent "deserves")
+    shares: dict[str, float] = {
+        agent_id: (s.score / total_score) * len(node_names)
+        for agent_id, s in agent_scores.items()
+    }
+
+    assignments: dict[str, str] = {}
+    for node_name in node_names:
+        # Pick agent with highest remaining share
+        best_agent = max(shares, key=shares.get)  # type: ignore[arg-type]
+        assignments[node_name] = best_agent
+        shares[best_agent] -= 1.0
+
+    return assignments
+
+
 def check_capacity(
     host: models.Host,
     new_devices: list[str],

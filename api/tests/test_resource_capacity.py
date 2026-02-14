@@ -17,15 +17,18 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import settings
 from app.services.resource_capacity import (
+    AgentScore,
     CapacityCheckResult,
     DEFAULT_CPU_CORES,
     DEFAULT_MEMORY_MB,
     calculate_node_requirements,
     check_capacity,
     check_multihost_capacity,
+    distribute_nodes_by_score,
     format_capacity_error,
     format_capacity_warnings,
     get_agent_capacity,
+    score_agent,
 )
 
 
@@ -900,3 +903,232 @@ class TestDetailedEndpointEnrichment:
         # Only synced, syncing, failed should be present
         assert image_statuses == {"synced", "syncing", "failed"}
         assert len(agent["images"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# 8. TestScoreAgent
+# ---------------------------------------------------------------------------
+
+
+class TestScoreAgent:
+    """Tests for score_agent() placement scoring."""
+
+    def _set_placement_settings(self, **overrides):
+        defaults = {
+            "placement_controller_reserve_mb": 4096,
+            "placement_weight_memory": 0.7,
+            "placement_weight_cpu": 0.3,
+            "placement_local_penalty": 0.85,
+            "placement_scoring_enabled": True,
+        }
+        defaults.update(overrides)
+        for key, val in defaults.items():
+            object.__setattr__(settings, key, val)
+
+    def _restore_placement_settings(self):
+        defaults = {
+            "placement_controller_reserve_mb": 4096,
+            "placement_weight_memory": 0.7,
+            "placement_weight_cpu": 0.3,
+            "placement_local_penalty": 0.85,
+            "placement_scoring_enabled": True,
+        }
+        for key, val in defaults.items():
+            object.__setattr__(settings, key, val)
+
+    @pytest.fixture(autouse=True)
+    def _cleanup(self):
+        yield
+        self._restore_placement_settings()
+
+    def test_no_heartbeat_returns_minimum(self):
+        """Agent with no heartbeat data gets score 0.1."""
+        host = _make_host(resource_usage={})
+        result = score_agent(host)
+        assert result.score == pytest.approx(0.1)
+        assert "no heartbeat" in result.reason
+
+    def test_local_penalty_applied(self):
+        """Local agent gets score multiplied by penalty factor."""
+        self._set_placement_settings()
+        usage = {
+            "memory_total_gb": 64, "memory_used_gb": 16,
+            "cpu_count": 16, "cpu_percent": 25,
+        }
+        remote = _make_host(id="remote", resource_usage=usage)
+        remote.is_local = False
+
+        local = _make_host(id="local", resource_usage=usage)
+        local.is_local = True
+
+        remote_score = score_agent(remote)
+        local_score = score_agent(local)
+
+        # Local should be lower due to both reserve and penalty
+        assert local_score.score < remote_score.score
+
+    def test_more_memory_higher_score(self):
+        """Agent with more available memory scores higher."""
+        self._set_placement_settings()
+        low_mem = _make_host(id="low", resource_usage={
+            "memory_total_gb": 32, "memory_used_gb": 28,
+            "cpu_count": 8, "cpu_percent": 50,
+        })
+        low_mem.is_local = False
+
+        high_mem = _make_host(id="high", resource_usage={
+            "memory_total_gb": 32, "memory_used_gb": 8,
+            "cpu_count": 8, "cpu_percent": 50,
+        })
+        high_mem.is_local = False
+
+        assert score_agent(high_mem).score > score_agent(low_mem).score
+
+    def test_more_cpu_higher_score(self):
+        """Agent with more available CPU scores higher."""
+        self._set_placement_settings()
+        low_cpu = _make_host(id="low", resource_usage={
+            "memory_total_gb": 64, "memory_used_gb": 16,
+            "cpu_count": 16, "cpu_percent": 90,
+        })
+        low_cpu.is_local = False
+
+        high_cpu = _make_host(id="high", resource_usage={
+            "memory_total_gb": 64, "memory_used_gb": 16,
+            "cpu_count": 16, "cpu_percent": 10,
+        })
+        high_cpu.is_local = False
+
+        assert score_agent(high_cpu).score > score_agent(low_cpu).score
+
+    def test_score_clamped_to_zero_one(self):
+        """Score never exceeds [0, 1] range."""
+        self._set_placement_settings()
+        # Fully available host
+        host = _make_host(resource_usage={
+            "memory_total_gb": 128, "memory_used_gb": 0,
+            "cpu_count": 32, "cpu_percent": 0,
+        })
+        host.is_local = False
+        result = score_agent(host)
+        assert 0.0 <= result.score <= 1.0
+
+    def test_zero_available_memory(self):
+        """Agent with no available memory gets a low score."""
+        self._set_placement_settings()
+        host = _make_host(resource_usage={
+            "memory_total_gb": 16, "memory_used_gb": 16,
+            "cpu_count": 8, "cpu_percent": 50,
+        })
+        host.is_local = False
+        result = score_agent(host)
+        # Only CPU contributes: 0.3 * 0.5 = 0.15
+        assert result.score == pytest.approx(0.15)
+
+    def test_controller_reserve_subtracted_for_local(self):
+        """Local agent has controller reserve subtracted from usable memory."""
+        self._set_placement_settings(placement_controller_reserve_mb=8192)
+        # 32 GB total, 8 GB used. Remote usable=32GB, local usable=32-8=24GB
+        usage = {
+            "memory_total_gb": 32, "memory_used_gb": 8,
+            "cpu_count": 8, "cpu_percent": 0,
+        }
+        remote = _make_host(id="remote", resource_usage=usage)
+        remote.is_local = False
+
+        local = _make_host(id="local", resource_usage=usage)
+        local.is_local = True
+
+        # Remote: mem_avail = 32*1024 - 8*1024 = 24576, ratio = 24576/32768 = 0.75
+        # Local: usable = 32768-8192 = 24576, avail = 24576-8192 = 16384, ratio = 16384/24576 ≈ 0.667
+        # Plus local penalty. So local should be distinctly lower.
+        assert score_agent(local).score < score_agent(remote).score
+
+
+# ---------------------------------------------------------------------------
+# 9. TestDistributeNodesByScore
+# ---------------------------------------------------------------------------
+
+
+class TestDistributeNodesByScore:
+    """Tests for distribute_nodes_by_score() proportional distribution."""
+
+    def test_equal_scores_equal_split(self):
+        """Two agents with equal scores get equal node counts."""
+        scores = {
+            "a1": AgentScore(score=0.5),
+            "a2": AgentScore(score=0.5),
+        }
+        result = distribute_nodes_by_score(["n1", "n2", "n3", "n4"], scores)
+        counts = {}
+        for agent_id in result.values():
+            counts[agent_id] = counts.get(agent_id, 0) + 1
+        assert counts["a1"] == 2
+        assert counts["a2"] == 2
+
+    def test_two_to_one_ratio(self):
+        """Scores in 2:1 ratio produce ~67:33 split."""
+        scores = {
+            "a1": AgentScore(score=0.8),
+            "a2": AgentScore(score=0.4),
+        }
+        result = distribute_nodes_by_score(
+            ["n1", "n2", "n3", "n4", "n5", "n6"], scores
+        )
+        counts = {}
+        for agent_id in result.values():
+            counts[agent_id] = counts.get(agent_id, 0) + 1
+        assert counts["a1"] == 4
+        assert counts["a2"] == 2
+
+    def test_single_node_goes_to_highest(self):
+        """Single node is assigned to the highest-scoring agent."""
+        scores = {
+            "a1": AgentScore(score=0.3),
+            "a2": AgentScore(score=0.9),
+        }
+        result = distribute_nodes_by_score(["n1"], scores)
+        assert result["n1"] == "a2"
+
+    def test_empty_inputs(self):
+        """Empty node list or empty scores returns empty dict."""
+        scores = {"a1": AgentScore(score=0.5)}
+        assert distribute_nodes_by_score([], scores) == {}
+        assert distribute_nodes_by_score(["n1"], {}) == {}
+
+    def test_all_zero_scores(self):
+        """All zero scores returns empty dict (no valid candidates)."""
+        scores = {
+            "a1": AgentScore(score=0.0),
+            "a2": AgentScore(score=0.0),
+        }
+        result = distribute_nodes_by_score(["n1", "n2"], scores)
+        assert result == {}
+
+    def test_three_agents_unequal(self):
+        """Three agents with varied scores get proportional allocation."""
+        scores = {
+            "a1": AgentScore(score=0.6),
+            "a2": AgentScore(score=0.3),
+            "a3": AgentScore(score=0.1),
+        }
+        result = distribute_nodes_by_score(
+            [f"n{i}" for i in range(10)], scores
+        )
+        counts = {}
+        for agent_id in result.values():
+            counts[agent_id] = counts.get(agent_id, 0) + 1
+        # 0.6/1.0 = 60% of 10 = 6, 0.3/1.0 = 30% of 10 = 3, 0.1/1.0 = 10% of 10 = 1
+        assert counts["a1"] == 6
+        assert counts["a2"] == 3
+        assert counts["a3"] == 1
+
+    def test_all_nodes_assigned(self):
+        """Every node gets an assignment."""
+        scores = {
+            "a1": AgentScore(score=0.7),
+            "a2": AgentScore(score=0.3),
+        }
+        nodes = [f"n{i}" for i in range(5)]
+        result = distribute_nodes_by_score(nodes, scores)
+        assert set(result.keys()) == set(nodes)
