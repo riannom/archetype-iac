@@ -1415,10 +1415,19 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
     from app.errors import categorize_httpx_error
 
     logger = logging.getLogger(__name__)
-    logger.info(f"Starting sync job {job_id}: {image_id} -> {host.name}")
+
+    # Capture host ID before session closes — re-fetch inside our own session
+    host_id = host.id
 
     with get_session() as session:
         try:
+            host = session.get(models.Host, host_id)
+            if not host:
+                logger.warning(f"Host {host_id} not found for sync job {job_id}")
+                return
+
+            logger.info(f"Starting sync job {job_id}: {image_id} -> {host.name}")
+
             # Get fresh job record
             job = session.get(models.ImageSyncJob, job_id)
             if not job:
