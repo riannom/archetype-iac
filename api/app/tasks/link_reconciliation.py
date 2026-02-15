@@ -435,7 +435,9 @@ async def _repair_same_host_vlan(
     )
 
     if result.get("success"):
-        new_vlan = result.get("vlan_tag")
+        # vlan_tag is nested inside the "link" sub-object from agent response
+        link_data = result.get("link", {})
+        new_vlan = link_data.get("vlan_tag") if isinstance(link_data, dict) else None
         link.vlan_tag = new_vlan
         link.source_vlan_tag = new_vlan
         link.target_vlan_tag = new_vlan
