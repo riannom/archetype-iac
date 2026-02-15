@@ -156,6 +156,15 @@ from agent.schemas import (
     # Interface provisioning
     InterfaceProvisionRequest,
     InterfaceProvisionResponse,
+    # Declare-state convergence
+    DeclareOverlayStateRequest,
+    DeclareOverlayStateResponse,
+    DeclaredTunnelResult,
+    DeclarePortStateRequest,
+    DeclarePortStateResponse,
+    DeclaredPortResult,
+    PortInfo,
+    PortStateResponse,
 )
 from agent.version import __version__, get_commit
 from agent.updater import (
@@ -2906,7 +2915,7 @@ async def overlay_bridge_ports():
 
 
 @app.post("/overlay/declare-state")
-async def declare_overlay_state(request: schemas.DeclareOverlayStateRequest):
+async def declare_overlay_state(request: DeclareOverlayStateRequest):
     """Converge overlay state to match API-declared desired state.
 
     Creates missing tunnels, updates drifted VLAN tags, removes orphans.
@@ -2918,9 +2927,9 @@ async def declare_overlay_state(request: schemas.DeclareOverlayStateRequest):
     tunnel_dicts = [t.model_dump() for t in request.tunnels]
     result = await overlay.declare_state(tunnel_dicts)
 
-    return schemas.DeclareOverlayStateResponse(
+    return DeclareOverlayStateResponse(
         results=[
-            schemas.DeclaredTunnelResult(**r)
+            DeclaredTunnelResult(**r)
             for r in result["results"]
         ],
         orphans_removed=result.get("orphans_removed", []),
@@ -2928,7 +2937,7 @@ async def declare_overlay_state(request: schemas.DeclareOverlayStateRequest):
 
 
 @app.get("/labs/{lab_id}/port-state")
-async def get_lab_port_state(lab_id: str) -> schemas.PortStateResponse:
+async def get_lab_port_state(lab_id: str) -> PortStateResponse:
     """Get OVS port state for all container interfaces in a lab.
 
     Returns port names, VLAN tags, and carrier state for bulk
@@ -2936,7 +2945,7 @@ async def get_lab_port_state(lab_id: str) -> schemas.PortStateResponse:
     (no traffic stats).
     """
     if not settings.enable_ovs_plugin:
-        return schemas.PortStateResponse(ports=[])
+        return PortStateResponse(ports=[])
 
     try:
         plugin = _get_docker_ovs_plugin()
@@ -2950,34 +2959,34 @@ async def get_lab_port_state(lab_id: str) -> schemas.PortStateResponse:
             match = re.match(r'archetype-[a-f0-9-]+-(.+)$', container)
             node_name = match.group(1) if match else container
 
-            ports.append(schemas.PortInfo(
+            ports.append(PortInfo(
                 node_name=node_name,
                 interface_name=p.get("interface", ""),
                 ovs_port_name=p.get("port_name", ""),
                 vlan_tag=p.get("vlan_tag", 0),
             ))
 
-        return schemas.PortStateResponse(ports=ports)
+        return PortStateResponse(ports=ports)
     except Exception as e:
         logger.error(f"Port state query failed for lab {lab_id}: {e}")
-        return schemas.PortStateResponse(ports=[])
+        return PortStateResponse(ports=[])
 
 
 @app.post("/ports/declare-state")
-async def declare_port_state(request: schemas.DeclarePortStateRequest) -> schemas.DeclarePortStateResponse:
+async def declare_port_state(request: DeclarePortStateRequest) -> DeclarePortStateResponse:
     """Converge same-host port state to match API-declared pairings.
 
     For each declared pairing, ensures both OVS ports have the
     declared VLAN tag. Creates L2 connectivity by VLAN matching.
     """
     if not settings.enable_ovs_plugin:
-        return schemas.DeclarePortStateResponse(results=[])
+        return DeclarePortStateResponse(results=[])
 
     try:
         plugin = _get_docker_ovs_plugin()
     except Exception as e:
         logger.error(f"Port declare-state failed: {e}")
-        return schemas.DeclarePortStateResponse(results=[])
+        return DeclarePortStateResponse(results=[])
 
     results = []
     for pairing in request.pairings:
@@ -3010,7 +3019,7 @@ async def declare_port_state(request: schemas.DeclarePortStateRequest) -> schema
 
             # Check if both match declared VLAN
             if tag_a == pairing.vlan_tag and tag_b == pairing.vlan_tag:
-                results.append(schemas.DeclaredPortResult(
+                results.append(DeclaredPortResult(
                     link_name=pairing.link_name,
                     lab_id=pairing.lab_id,
                     status="converged",
@@ -3035,7 +3044,7 @@ async def declare_port_state(request: schemas.DeclarePortStateRequest) -> schema
                         raise Exception(f"Failed to set VLAN on {pairing.port_b}: {err}")
                     updated = True
 
-                results.append(schemas.DeclaredPortResult(
+                results.append(DeclaredPortResult(
                     link_name=pairing.link_name,
                     lab_id=pairing.lab_id,
                     status="updated" if updated else "converged",
@@ -3043,7 +3052,7 @@ async def declare_port_state(request: schemas.DeclarePortStateRequest) -> schema
                 ))
 
         except Exception as e:
-            results.append(schemas.DeclaredPortResult(
+            results.append(DeclaredPortResult(
                 link_name=pairing.link_name,
                 lab_id=pairing.lab_id,
                 status="error",
@@ -3051,7 +3060,7 @@ async def declare_port_state(request: schemas.DeclarePortStateRequest) -> schema
             ))
             logger.error(f"Port declare-state error for {pairing.link_name}: {e}")
 
-    return schemas.DeclarePortStateResponse(results=results)
+    return DeclarePortStateResponse(results=results)
 
 
 @app.post("/overlay/reconcile-ports")
