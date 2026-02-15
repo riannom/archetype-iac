@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -5520,6 +5520,65 @@ async def check_node_ready(
 
     # No Docker provider, try libvirt
     return await _check_libvirt_readiness(lab_id, node_name, kind)
+
+
+@app.post("/labs/{lab_id}/nodes/{node_name}/run-post-boot")
+async def run_node_post_boot(lab_id: str, node_name: str) -> dict:
+    """Force re-run post-boot commands for a node.
+
+    Clears the idempotency guard and re-executes vendor post-boot commands
+    (e.g., cEOS iptables cleanup). Useful when cEOS re-adds DROP rules.
+    """
+    from agent.readiness import clear_post_boot_state
+
+    docker_provider = get_provider("docker")
+    if docker_provider is None:
+        raise HTTPException(status_code=400, detail="Docker provider not available")
+
+    container_name = docker_provider.get_container_name(lab_id, node_name)
+
+    try:
+        import docker as docker_lib
+        client = docker_lib.from_env()
+        container = client.containers.get(container_name)
+        kind = container.labels.get("archetype.node_kind", "")
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Container {node_name} not found")
+
+    # Clear idempotency guard and re-run
+    clear_post_boot_state(container_name)
+    success = await run_post_boot_commands(container_name, kind)
+
+    return {"success": success, "container": container_name, "kind": kind}
+
+
+@app.post("/labs/{lab_id}/nodes/{node_name}/exec")
+async def exec_in_node(lab_id: str, node_name: str, request: Request) -> dict:
+    """Execute a command inside a Docker container.
+
+    Body: {"cmd": "command to run"}
+    Returns: {"exit_code": int, "output": str}
+    """
+    body = await request.json()
+    cmd = body.get("cmd", "")
+    if not cmd:
+        raise HTTPException(status_code=400, detail="Missing 'cmd' field")
+
+    docker_provider = get_provider("docker")
+    if docker_provider is None:
+        raise HTTPException(status_code=400, detail="Docker provider not available")
+
+    container_name = docker_provider.get_container_name(lab_id, node_name)
+
+    try:
+        import docker as docker_lib
+        client = docker_lib.from_env()
+        container = client.containers.get(container_name)
+        exit_code, output = container.exec_run(["sh", "-c", cmd], demux=False)
+        output_str = output.decode("utf-8", errors="replace") if output else ""
+        return {"exit_code": exit_code, "output": output_str}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 async def _check_libvirt_readiness(
