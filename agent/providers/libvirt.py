@@ -171,6 +171,12 @@ class LibvirtProvider(Provider):
         "virtio", "e1000", "rtl8139", "i82551", "i82557b",
         "i82559er", "ne2k_pci", "pcnet",
     }
+    # VMware-specific drivers unsupported by QEMU - auto-substitute
+    NIC_DRIVER_SUBSTITUTIONS = {
+        "vmxnet3": "virtio",
+        "vmxnet2": "e1000",
+        "vmxnet": "e1000",
+    }
 
     def __init__(self):
         if not LIBVIRT_AVAILABLE:
@@ -952,6 +958,13 @@ class LibvirtProvider(Provider):
         if disk_driver not in self.VALID_DISK_DRIVERS:
             raise ValueError(f"Invalid disk driver: {disk_driver}")
         nic_driver = node_config.get("nic_driver", "virtio")
+        if nic_driver in self.NIC_DRIVER_SUBSTITUTIONS:
+            replacement = self.NIC_DRIVER_SUBSTITUTIONS[nic_driver]
+            logger.warning(
+                f"NIC driver '{nic_driver}' unsupported by QEMU, "
+                f"substituting '{replacement}' for node {name}"
+            )
+            nic_driver = replacement
         if nic_driver not in self.VALID_NIC_DRIVERS:
             raise ValueError(f"Invalid NIC driver: {nic_driver}")
         libvirt_driver = self._resolve_domain_driver(

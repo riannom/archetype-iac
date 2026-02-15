@@ -128,7 +128,7 @@ class Job(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     lab_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("labs.id"), nullable=True)
     user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
-    action: Mapped[str] = mapped_column(String(50))
+    action: Mapped[str] = mapped_column(String(200))
     # Status: queued, running, completed, failed, cancelled
     status: Mapped[str] = mapped_column(String(50), default="queued")
     # Agent executing this job

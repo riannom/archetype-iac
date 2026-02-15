@@ -2946,8 +2946,6 @@ async def declare_overlay_state(request: DeclareOverlayStateRequest):
     Creates missing tunnels, updates drifted VLAN tags, removes orphans.
     This is a strict superset of /overlay/reconcile-ports.
     """
-    from agent.network.overlay import get_overlay_manager
-
     overlay = get_overlay_manager()
     tunnel_dicts = [t.model_dump() for t in request.tunnels]
     result = await overlay.declare_state(tunnel_dicts)
@@ -6182,8 +6180,11 @@ async def receive_image(
                 )
 
             destination = Path(reference)
-            base = Path(settings.workspace_path).resolve()
-            if not destination.resolve().is_relative_to(base):
+            allowed_bases = [
+                Path(settings.workspace_path).resolve(),
+                Path("/var/lib/archetype/images").resolve(),
+            ]
+            if not any(destination.resolve().is_relative_to(b) for b in allowed_bases):
                 raise HTTPException(status_code=400, detail="Invalid destination path")
             destination.parent.mkdir(parents=True, exist_ok=True)
             temp_destination = destination.with_name(
