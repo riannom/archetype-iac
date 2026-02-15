@@ -2935,8 +2935,42 @@ async def overlay_bridge_ports():
         "total_ports": len(all_ports),
         "vxlan_ports": vxlan_ports,
         "container_ports_sample": other_ports[:10],
+        "container_ports_all": other_ports,
         "fdb_lines": fdb_raw.split("\n")[:40] if fdb_raw else [],
     }
+
+
+@app.get("/overlay/port-ifindex")
+async def overlay_port_ifindex():
+    """Get ifindex for all non-VXLAN ports on the OVS bridge.
+
+    Used to match container veth peers to OVS port names.
+    """
+    import asyncio
+
+    bridge = settings.ovs_bridge_name or "arch-ovs"
+
+    async def run_cmd(*args: str) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        return stdout.decode().strip()
+
+    ports_raw = await run_cmd("ovs-vsctl", "list-ports", bridge)
+    all_ports = ports_raw.split("\n") if ports_raw else []
+
+    results = []
+    for port_name in all_ports:
+        if not port_name or port_name.startswith(("vxlan-", "vtep")):
+            continue
+        tag = await run_cmd("ovs-vsctl", "get", "port", port_name, "tag")
+        ifindex = await run_cmd(
+            "ovs-vsctl", "get", "interface", port_name, "ifindex"
+        )
+        results.append({"name": port_name, "tag": tag, "ifindex": ifindex})
+
+    return {"ports": results}
 
 
 @app.post("/overlay/declare-state")
@@ -2976,10 +3010,17 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
 
         ports = []
         for p in ports_data:
-            container = p.get("container", "")
-            # Extract node name from container name
+            container = p.get("container") or ""
+            if not container:
+                continue  # Skip orphaned ports with no container
+
+            # Extract node name from container name (archetype-<uuid>-<node>)
+            # UUID is exactly 36 chars with dashes, but may be truncated
             import re
-            match = re.match(r'archetype-[a-f0-9-]+-(.+)$', container)
+            match = re.match(
+                r'archetype-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9-]+-(.+)$',
+                container,
+            )
             node_name = match.group(1) if match else container
 
             ports.append(PortInfo(
