@@ -206,6 +206,14 @@ class Settings(BaseSettings):
     cleanup_iso_import_job_retention_days: int = 30
     # Old AgentUpdateJob records older than this are deleted (days)
     cleanup_agent_update_job_retention_days: int = 30
+
+    # Agent update monitoring
+    # How long an agent update job can be active before it's considered stuck (seconds)
+    agent_update_timeout: int = 900  # 15 minutes
+
+    # Image integrity verification
+    # Run SHA256 checks every N reconciliation cycles (e.g., 6 × 5 min = ~30 min)
+    image_sha256_check_interval_cycles: int = 6
     # Enable orphaned lab workspace cleanup
     cleanup_orphaned_workspaces: bool = True
     # Enable orphaned QCOW2 image cleanup

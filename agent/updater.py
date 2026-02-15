@@ -222,10 +222,17 @@ async def report_progress(
         "error_message": error_message,
     }
 
-    try:
-        await client.post(callback_url, json=payload)
-    except Exception as e:
-        logger.warning(f"Failed to report progress: {e}")
+    for attempt in range(3):
+        try:
+            await client.post(callback_url, json=payload)
+            return
+        except Exception as e:
+            if attempt < 2:
+                delay = 2 ** (attempt + 1)  # 2s, 4s
+                logger.warning(f"Failed to report progress (attempt {attempt + 1}/3), retrying in {delay}s: {e}")
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"Failed to report progress after 3 attempts: {e}")
 
 
 # --- Update Logic ---

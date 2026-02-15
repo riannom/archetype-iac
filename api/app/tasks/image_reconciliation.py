@@ -126,11 +126,15 @@ async def reconcile_image_hosts() -> ImageReconciliationResult:
     return result
 
 
-async def verify_image_status_on_agents() -> ImageReconciliationResult:
+async def verify_image_status_on_agents(run_sha256_check: bool = False) -> ImageReconciliationResult:
     """Query agents to verify actual image status matches ImageHost records.
 
     This is a more expensive operation that contacts each agent to verify
     which images they actually have.
+
+    Args:
+        run_sha256_check: If True, verify SHA256 integrity for file-based images
+                         (qcow2/iol) using the agent's sidecar checksum files.
 
     Returns:
         ImageReconciliationResult with counts of status updates
@@ -163,6 +167,15 @@ async def verify_image_status_on_agents() -> ImageReconciliationResult:
                 for img in manifest.get("images", [])
                 if img.get("kind") == "iol"
             }
+
+            # Build reference -> sha256 map for integrity checks
+            file_image_sha256: dict[str, str | None] = {}
+            if run_sha256_check:
+                for img in manifest.get("images", []):
+                    if img.get("kind") in ("qcow2", "iol"):
+                        ref = img.get("reference", "")
+                        if ref:
+                            file_image_sha256[img.get("id")] = img.get("sha256")
 
             for host in online_hosts:
                 if not agent_client.is_agent_online(host):
@@ -217,9 +230,26 @@ async def verify_image_status_on_agents() -> ImageReconciliationResult:
                                     )
 
                         # qcow2 images: mark as synced if agent has libvirt provider
-                        # (qcow2 files are centrally stored, not synced to agents)
+                        # On SHA256 check cycles, verify file integrity via agent
                         elif ih.image_id in qcow2_images:
                             if "libvirt" in host_providers:
+                                # SHA256 verification for synced images
+                                if run_sha256_check and ih.status == "synced":
+                                    expected_sha = file_image_sha256.get(ih.image_id)
+                                    if expected_sha:
+                                        from app.tasks.image_sync import check_agent_has_image
+                                        ref = qcow2_images[ih.image_id]
+                                        intact = await check_agent_has_image(host, ref, expected_sha256=expected_sha)
+                                        if not intact:
+                                            ih.status = "failed"
+                                            ih.error_message = "SHA256 mismatch — image may be corrupted"
+                                            result.status_updates += 1
+                                            logger.warning(
+                                                f"SHA256 mismatch (qcow2): image={ih.image_id}, "
+                                                f"host={host.id} — marking failed"
+                                            )
+                                            continue
+
                                 if ih.status != "synced":
                                     ih.status = "synced"
                                     ih.synced_at = datetime.now(timezone.utc)
@@ -240,9 +270,26 @@ async def verify_image_status_on_agents() -> ImageReconciliationResult:
                                     )
 
                         # IOL images: mark as synced if agent has docker provider
-                        # (IOL runs in a container wrapper)
+                        # On SHA256 check cycles, verify file integrity via agent
                         elif ih.image_id in iol_images:
                             if "docker" in host_providers:
+                                # SHA256 verification for synced images
+                                if run_sha256_check and ih.status == "synced":
+                                    expected_sha = file_image_sha256.get(ih.image_id)
+                                    if expected_sha:
+                                        from app.tasks.image_sync import check_agent_has_image
+                                        ref = iol_images[ih.image_id]
+                                        intact = await check_agent_has_image(host, ref, expected_sha256=expected_sha)
+                                        if not intact:
+                                            ih.status = "failed"
+                                            ih.error_message = "SHA256 mismatch — image may be corrupted"
+                                            result.status_updates += 1
+                                            logger.warning(
+                                                f"SHA256 mismatch (IOL): image={ih.image_id}, "
+                                                f"host={host.id} — marking failed"
+                                            )
+                                            continue
+
                                 if ih.status != "synced":
                                     ih.status = "synced"
                                     ih.synced_at = datetime.now(timezone.utc)
@@ -301,19 +348,36 @@ async def image_reconciliation_monitor():
 
     Runs every image_reconciliation_interval seconds and ensures
     ImageHost records are consistent with manifest.json.
+
+    Every image_sha256_check_interval_cycles cycles, also runs SHA256
+    integrity verification for file-based images (qcow2/iol).
     """
     interval = getattr(settings, "image_reconciliation_interval", 300)  # 5 minutes default
-    logger.info(f"Image reconciliation monitor started (interval: {interval}s)")
+    sha256_interval = getattr(settings, "image_sha256_check_interval_cycles", 6)
+    logger.info(
+        f"Image reconciliation monitor started "
+        f"(interval: {interval}s, SHA256 check every {sha256_interval} cycles)"
+    )
 
+    cycle = 0
     while True:
         try:
             await asyncio.sleep(interval)
+            cycle += 1
+
             result = await reconcile_image_hosts()
             if result.orphaned_hosts_removed > 0 or result.missing_hosts_created > 0:
                 logger.info(
                     f"Image reconciliation: removed {result.orphaned_hosts_removed} orphans, "
                     f"created {result.missing_hosts_created} records"
                 )
+
+            # Run SHA256 verification on configured cycle interval
+            run_sha256 = (cycle % sha256_interval == 0)
+            status_result = await verify_image_status_on_agents(run_sha256_check=run_sha256)
+            if status_result.status_updates > 0:
+                logger.info(f"Image status verification: {status_result.status_updates} update(s)")
+
         except asyncio.CancelledError:
             logger.info("Image reconciliation monitor stopped")
             break

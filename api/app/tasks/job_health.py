@@ -606,11 +606,20 @@ async def check_stuck_image_sync_jobs():
                                 if host and not host_offline:
                                     agent_active = await _check_agent_active_transfers(host, job.id)
                                     if agent_active:
-                                        logger.info(
-                                            f"ImageSyncJob {job.id} exceeds timeout but agent "
-                                            f"reports active transfer — skipping"
-                                        )
-                                        continue
+                                        # Hard ceiling: force-fail even if agent claims active
+                                        hard_ceiling = timedelta(seconds=settings.image_sync_timeout * 2)
+                                        if (now - job.started_at.replace(tzinfo=timezone.utc)) > hard_ceiling:
+                                            logger.warning(
+                                                f"Force-failing ImageSyncJob {job.id} — exceeded "
+                                                f"hard ceiling ({settings.image_sync_timeout * 2}s) "
+                                                f"despite agent reporting active transfer"
+                                            )
+                                        else:
+                                            logger.info(
+                                                f"ImageSyncJob {job.id} exceeds timeout but agent "
+                                                f"reports active transfer — skipping"
+                                            )
+                                            continue
                                 is_stuck = True
                                 error_reason = f"Job timed out after {settings.image_sync_timeout}s in {job.status} state"
 
@@ -866,6 +875,68 @@ async def check_stuck_starting_nodes():
             logger.error(f"Error in stuck starting nodes check: {e}")
 
 
+async def check_stuck_agent_updates():
+    """Find and handle AgentUpdateJob records that are stuck.
+
+    Detects agent update jobs stuck in active states (pending, downloading,
+    installing, restarting) past the configured timeout, or assigned to
+    agents that have gone offline.
+    """
+    with get_session() as session:
+        try:
+            now = datetime.now(timezone.utc)
+            active_statuses = ["pending", "downloading", "installing", "restarting"]
+
+            stuck_jobs = (
+                session.query(models.AgentUpdateJob)
+                .filter(models.AgentUpdateJob.status.in_(active_statuses))
+                .all()
+            )
+
+            if not stuck_jobs:
+                return
+
+            timeout = timedelta(seconds=settings.agent_update_timeout)
+
+            for job in stuck_jobs:
+                try:
+                    # Check if target agent is offline
+                    host = session.get(models.Host, job.host_id)
+                    agent_offline = host and host.status != "online"
+
+                    # Determine reference timestamp (started_at if available, else created_at)
+                    ref_time = job.started_at or job.created_at
+                    if ref_time.tzinfo is None:
+                        ref_time = ref_time.replace(tzinfo=timezone.utc)
+                    is_timed_out = (now - ref_time) > timeout
+
+                    if agent_offline:
+                        reason = f"Agent {host.name if host else job.host_id} went offline during update"
+                    elif is_timed_out:
+                        age_min = (now - ref_time).total_seconds() / 60
+                        reason = f"Timed out after {age_min:.0f} minutes in '{job.status}' state"
+                    else:
+                        continue
+
+                    logger.warning(
+                        f"Detected stuck AgentUpdateJob {job.id}: status={job.status}, "
+                        f"host_id={job.host_id}, reason={reason}"
+                    )
+
+                    job.status = "failed"
+                    job.error_message = reason
+                    job.completed_at = now
+                    session.commit()
+
+                    logger.info(f"Marked stuck AgentUpdateJob {job.id} as failed: {reason}")
+
+                except Exception as e:
+                    logger.error(f"Error checking AgentUpdateJob {job.id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in agent update health check: {e}")
+
+
 async def job_health_monitor():
     """Background task to periodically check job health.
 
@@ -877,6 +948,7 @@ async def job_health_monitor():
     5. Checks for stuck deploy locks on agents
     6. Checks for nodes stuck in "stopping" state
     7. Checks for nodes stuck in "starting" state
+    8. Checks for stuck agent update jobs
     """
     logger.info(
         f"Job health monitor started "
@@ -896,6 +968,7 @@ async def job_health_monitor():
             await check_stuck_locks()
             await check_stuck_stopping_nodes()
             await check_stuck_starting_nodes()
+            await check_stuck_agent_updates()
 
         except asyncio.CancelledError:
             logger.info("Job health monitor stopped")
