@@ -27,6 +27,7 @@ from app.tasks.link_orchestration import create_same_host_link, create_cross_hos
 from app.services.interface_naming import normalize_interface
 from app.utils.link import links_needing_reconciliation_filter
 from app.utils.locks import get_link_state_by_id_for_update
+from app.agent_client import compute_vxlan_port_name
 
 logger = logging.getLogger(__name__)
 
@@ -756,12 +757,218 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
     return count
 
 
+async def detect_duplicate_tunnels(
+    session: Session,
+    host_to_agent: dict[str, models.Host],
+) -> int:
+    """Detect and resolve duplicate VxlanTunnel records for the same segment.
+
+    Duplicates arise when agent recovery rebuilds _link_tunnels with
+    placeholder link_ids, allowing new tunnel records for the same
+    (agent_pair, vni) to coexist with old ones.
+
+    Groups by canonical key (min(agent_a, agent_b), max(agent_a, agent_b), vni)
+    and keeps the one whose link_state is active, preferring newest by created_at.
+
+    Returns number of duplicate tunnels removed.
+    """
+    all_tunnels = (
+        session.query(models.VxlanTunnel)
+        .filter(models.VxlanTunnel.status != "cleanup")
+        .all()
+    )
+
+    # Group by canonical key: (sorted agent pair, vni)
+    from collections import defaultdict
+    groups: dict[tuple[str, str, int], list[models.VxlanTunnel]] = defaultdict(list)
+    for t in all_tunnels:
+        key = (min(t.agent_a_id, t.agent_b_id), max(t.agent_a_id, t.agent_b_id), t.vni)
+        groups[key].append(t)
+
+    removed = 0
+    teardown_tasks = []
+
+    for key, tunnels in groups.items():
+        if len(tunnels) <= 1:
+            continue
+
+        # Identify keeper: active LinkState, newest created_at
+        active_tunnels = []
+        inactive_tunnels = []
+        for t in tunnels:
+            if t.link_state_id:
+                ls = (
+                    session.query(models.LinkState)
+                    .filter(models.LinkState.id == t.link_state_id)
+                    .first()
+                )
+                if ls and ls.actual_state != "deleted":
+                    active_tunnels.append(t)
+                    continue
+            inactive_tunnels.append(t)
+
+        # Pick keeper from active tunnels (newest), or from all if none active
+        if active_tunnels:
+            active_tunnels.sort(key=lambda t: t.created_at, reverse=True)
+            keeper = active_tunnels[0]
+            duplicates = active_tunnels[1:] + inactive_tunnels
+        else:
+            tunnels.sort(key=lambda t: t.created_at, reverse=True)
+            keeper = tunnels[0]
+            duplicates = tunnels[1:]
+
+        for dup in duplicates:
+            logger.warning(
+                f"Removing duplicate tunnel {dup.id} for VNI {dup.vni} "
+                f"between {dup.agent_a_id}/{dup.agent_b_id} "
+                f"(keeping {keeper.id})"
+            )
+
+            # Attempt teardown on both agents
+            for agent_id in (dup.agent_a_id, dup.agent_b_id):
+                agent = host_to_agent.get(agent_id)
+                if not agent:
+                    continue
+                link_state = None
+                if dup.link_state_id:
+                    link_state = (
+                        session.query(models.LinkState)
+                        .filter(models.LinkState.id == dup.link_state_id)
+                        .first()
+                    )
+
+                async def _teardown(a=agent, ls=link_state, d=dup):
+                    try:
+                        await agent_client.detach_overlay_interface_on_agent(
+                            a,
+                            lab_id=d.lab_id,
+                            container_name=ls.source_node if ls else "",
+                            interface_name="",
+                            link_id=ls.link_name if ls else f"dup-{d.id}",
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to tear down duplicate tunnel on {a.name}: {e}")
+
+                teardown_tasks.append(_teardown())
+
+            session.delete(dup)
+            removed += 1
+
+    if teardown_tasks:
+        await asyncio.gather(*teardown_tasks, return_exceptions=True)
+
+    if removed > 0:
+        session.commit()
+        logger.info(f"Removed {removed} duplicate VxlanTunnel record(s)")
+
+    return removed
+
+
+async def reconcile_agent_vxlan_ports(
+    session: Session,
+    host_to_agent: dict[str, models.Host],
+    cycle_count: int,
+) -> dict[str, list[str]]:
+    """Tell each online agent which VXLAN ports should exist; agents remove the rest.
+
+    Runs every 5th cycle (~5 min at 60s intervals) to avoid excessive overhead.
+    Builds the valid port set from VxlanTunnel records and in-progress LinkStates.
+
+    Args:
+        session: Database session
+        host_to_agent: Map of agent_id to Host model
+        cycle_count: Current reconciliation cycle number
+
+    Returns:
+        Dict mapping agent_id to list of removed port names
+    """
+    if cycle_count % 5 != 0:
+        return {}
+
+    # All active/pending tunnels
+    tunnels = (
+        session.query(models.VxlanTunnel)
+        .filter(models.VxlanTunnel.status != "cleanup")
+        .all()
+    )
+
+    # In-progress cross-host links (creating/connecting) — protect their ports
+    in_progress_links = (
+        session.query(models.LinkState)
+        .filter(
+            models.LinkState.is_cross_host.is_(True),
+            models.LinkState.actual_state.in_(["creating", "connecting"]),
+        )
+        .all()
+    )
+
+    # Build {agent_id: set(port_names)} from tunnels + in-progress links
+    agent_ports: dict[str, set[str]] = {}
+    for t in tunnels:
+        if not t.link_state_id:
+            continue
+        # Look up link_name from LinkState for port name computation
+        ls = (
+            session.query(models.LinkState)
+            .filter(models.LinkState.id == t.link_state_id)
+            .first()
+        )
+        if not ls:
+            continue
+        port_name = compute_vxlan_port_name(ls.lab_id, ls.link_name)
+        agent_ports.setdefault(t.agent_a_id, set()).add(port_name)
+        agent_ports.setdefault(t.agent_b_id, set()).add(port_name)
+
+    for ls in in_progress_links:
+        port_name = compute_vxlan_port_name(ls.lab_id, ls.link_name)
+        if ls.source_host_id:
+            agent_ports.setdefault(ls.source_host_id, set()).add(port_name)
+        if ls.target_host_id:
+            agent_ports.setdefault(ls.target_host_id, set()).add(port_name)
+
+    # Call each online agent in parallel
+    results: dict[str, list[str]] = {}
+
+    async def _reconcile_agent(agent_id: str, valid_ports: set[str]):
+        agent = host_to_agent.get(agent_id)
+        if not agent:
+            return
+        try:
+            result = await agent_client.reconcile_vxlan_ports_on_agent(
+                agent,
+                valid_port_names=list(valid_ports),
+                confirm=True,
+            )
+            removed = result.get("removed_ports", [])
+            if removed:
+                logger.info(
+                    f"Agent {agent.name}: removed {len(removed)} stale VXLAN port(s): "
+                    f"{', '.join(removed)}"
+                )
+                results[agent_id] = removed
+        except Exception as e:
+            logger.error(f"VXLAN port reconciliation failed on agent {agent_id}: {e}")
+
+    # Include all online agents, even those without tunnels (empty whitelist cleans all)
+    agents_to_reconcile = set(agent_ports.keys()) & set(host_to_agent.keys())
+    tasks = [
+        _reconcile_agent(aid, agent_ports.get(aid, set()))
+        for aid in agents_to_reconcile
+    ]
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    return results
+
+
 async def link_reconciliation_monitor():
     """Background task that periodically reconciles link states.
 
     This runs as a long-lived task, checking link states at regular intervals.
     """
     logger.info("Link reconciliation monitor started")
+    cycle_count = 0
 
     while True:
         try:
@@ -770,8 +977,23 @@ async def link_reconciliation_monitor():
             if not RECONCILIATION_ENABLED:
                 continue
 
+            cycle_count += 1
+
             with get_session() as session:
                 try:
+                    # Build host_to_agent map once for the full cycle
+                    agents = (
+                        session.query(models.Host)
+                        .filter(models.Host.status == "online")
+                        .all()
+                    )
+                    host_to_agent = {a.id: a for a in agents}
+
+                    # Phase 2: Detect and remove duplicate tunnels first
+                    dups_removed = await detect_duplicate_tunnels(session, host_to_agent)
+                    if dups_removed > 0:
+                        logger.info(f"Removed {dups_removed} duplicate VxlanTunnel(s)")
+
                     results = await reconcile_link_states(session)
 
                     if results["checked"] > 0:
@@ -791,6 +1013,17 @@ async def link_reconciliation_monitor():
                     orphans_deleted = await cleanup_orphaned_tunnels(session)
                     if orphans_deleted > 0:
                         logger.info(f"Cleaned up {orphans_deleted} orphaned VxlanTunnel records")
+
+                    # Phase 1: API-driven VXLAN port reconciliation (every 5th cycle)
+                    port_results = await reconcile_agent_vxlan_ports(
+                        session, host_to_agent, cycle_count
+                    )
+                    if port_results:
+                        total_removed = sum(len(v) for v in port_results.values())
+                        logger.info(
+                            f"VXLAN port reconciliation: removed {total_removed} "
+                            f"stale port(s) across {len(port_results)} agent(s)"
+                        )
 
                 except Exception as e:
                     logger.error(f"Link reconciliation error: {e}")

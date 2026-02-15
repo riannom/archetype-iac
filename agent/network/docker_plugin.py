@@ -3275,6 +3275,57 @@ class DockerOVSPlugin:
     # Endpoint Repair (recreate missing veth pairs after restart)
     # =========================================================================
 
+    async def _cleanup_stale_ovs_ports(self, container_name: str) -> int:
+        """Remove OVS ports from a previous incarnation of a container.
+
+        After a container restart, old host-side veths linger as OVS ports.
+        This scans all OVS ports and removes those whose external_ids
+        reference this container but are not tracked by current endpoints.
+
+        Args:
+            container_name: Container name to match against
+
+        Returns:
+            Number of stale ports removed
+        """
+        bridge_name = settings.ovs_bridge_name
+        code, ports_raw, _ = await self._ovs_vsctl("list-ports", bridge_name)
+        if code != 0 or not ports_raw.strip():
+            return 0
+
+        # Build set of host veths currently tracked for this container
+        tracked_veths = {
+            ep.host_veth
+            for ep in self.endpoints.values()
+            if ep.container_name == container_name
+        }
+
+        removed = 0
+        for port in ports_raw.strip().split("\n"):
+            port = port.strip()
+            if not port or port in tracked_veths:
+                continue
+
+            # Check if port's external_ids reference our container
+            code, ext_ids, _ = await self._ovs_vsctl(
+                "get", "interface", port, "external_ids"
+            )
+            if code != 0:
+                continue
+
+            if container_name not in ext_ids:
+                continue
+
+            # Stale port from previous container incarnation
+            logger.warning(
+                f"Removing stale OVS port {port} for container {container_name}"
+            )
+            await self._ovs_vsctl("--if-exists", "del-port", bridge_name, port)
+            await self._run_cmd(["ip", "link", "delete", port])
+            removed += 1
+
+        return removed
+
     async def repair_endpoints(
         self,
         lab_id: str,
@@ -3302,6 +3353,9 @@ class DockerOVSPlugin:
     ) -> list[dict[str, Any]]:
         """Inner implementation of repair_endpoints, called under self._locked()."""
         results: list[dict[str, Any]] = []
+
+        # Pre-repair: remove stale OVS ports from previous container incarnation
+        await self._cleanup_stale_ovs_ports(container_name)
 
         # Collect stale endpoints for this container
         stale_eps: list[EndpointState] = []

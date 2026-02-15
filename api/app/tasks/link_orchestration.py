@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
@@ -735,6 +736,45 @@ async def create_cross_host_link(
         # Create VxlanTunnel record for tracking
         agent_ip_a = await agent_client.resolve_agent_ip(agent_a.address)
         agent_ip_b = await agent_client.resolve_agent_ip(agent_b.address)
+
+        # Guard: clean up duplicate tunnels with same VNI between same agent pair
+        existing_dup = (
+            session.query(models.VxlanTunnel)
+            .filter(
+                models.VxlanTunnel.vni == vni,
+                models.VxlanTunnel.status != "cleanup",
+                models.VxlanTunnel.link_state_id != link_state.id,
+                or_(
+                    and_(
+                        models.VxlanTunnel.agent_a_id == agent_a.id,
+                        models.VxlanTunnel.agent_b_id == agent_b.id,
+                    ),
+                    and_(
+                        models.VxlanTunnel.agent_a_id == agent_b.id,
+                        models.VxlanTunnel.agent_b_id == agent_a.id,
+                    ),
+                ),
+            )
+            .first()
+        )
+        if existing_dup:
+            logger.warning(
+                f"Duplicate tunnel detected: VNI={vni}, "
+                f"existing={existing_dup.id}, new link={link_state.id}"
+            )
+            # Tear down the stale duplicate
+            for dup_agent in (agent_a, agent_b):
+                try:
+                    await agent_client.detach_overlay_interface_on_agent(
+                        dup_agent,
+                        lab_id=existing_dup.lab_id,
+                        container_name="",
+                        interface_name="",
+                        link_id=f"dup-{existing_dup.id}",
+                    )
+                except Exception:
+                    pass
+            session.delete(existing_dup)
 
         # Check if tunnel record already exists for this link
         existing_tunnel = (

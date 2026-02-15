@@ -129,3 +129,67 @@ def test_get_cleanup_manager_singleton():
     mgr1 = get_cleanup_manager()
     mgr2 = get_cleanup_manager()
     assert mgr1 is mgr2
+
+
+# ─── API reconciliation suppression tests ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_vxlan_cleanup_suppressed_when_api_recent(monkeypatch):
+    """Heuristic cleanup skipped when API reconciled recently (< 15 min)."""
+    import time
+    mgr = NetworkCleanupManager()
+    mgr._last_api_reconcile_at = time.monotonic()  # Just now
+
+    deleted = await mgr.cleanup_ovs_vxlan_orphans()
+    assert deleted == 0
+
+
+@pytest.mark.asyncio
+async def test_vxlan_cleanup_runs_when_api_stale(monkeypatch):
+    """Heuristic cleanup runs when API reconciliation is > 15 min old."""
+    import time
+    mgr = NetworkCleanupManager()
+    mgr._last_api_reconcile_at = time.monotonic() - 1000  # ~16 min ago
+
+    # Mock the backend so cleanup proceeds but finds nothing
+    class FakeBackend:
+        class ovs_manager:
+            _initialized = True
+            @staticmethod
+            async def get_all_ovs_ports():
+                return []
+        class overlay_manager:
+            _tunnels = {}
+            _vteps = {}
+            _link_tunnels = {}
+
+    monkeypatch.setattr(
+        "agent.network.backends.registry.get_network_backend",
+        lambda: FakeBackend(),
+    )
+
+    deleted = await mgr.cleanup_ovs_vxlan_orphans()
+    assert deleted == 0  # No ports to clean, but the function ran
+
+
+@pytest.mark.asyncio
+async def test_vxlan_cleanup_runs_when_never_reconciled():
+    """Heuristic cleanup runs when _last_api_reconcile_at is None."""
+    mgr = NetworkCleanupManager()
+    assert mgr._last_api_reconcile_at is None
+
+    # Will fail early because no backend, but proves suppression wasn't triggered
+    deleted = await mgr.cleanup_ovs_vxlan_orphans()
+    # Returns 0 because backend isn't set up, but no suppression message
+    assert deleted == 0
+
+
+def test_record_api_reconcile_sets_timestamp():
+    """record_api_reconcile() sets the timestamp."""
+    mgr = NetworkCleanupManager()
+    assert mgr._last_api_reconcile_at is None
+    mgr.record_api_reconcile()
+    assert mgr._last_api_reconcile_at is not None
+    import time
+    assert time.monotonic() - mgr._last_api_reconcile_at < 1

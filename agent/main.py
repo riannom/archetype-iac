@@ -2981,6 +2981,15 @@ async def reconcile_overlay_ports(request: dict):
         else:
             logger.warning(f"Failed to remove VXLAN port {port_name}: {msg}")
 
+    # Record API reconciliation to suppress heuristic cleanup
+    if removed or valid_port_names:
+        try:
+            from agent.network.cleanup import get_cleanup_manager
+            cleanup_mgr = get_cleanup_manager()
+            cleanup_mgr.record_api_reconcile()
+        except Exception:
+            pass  # Non-critical
+
     return {"removed_ports": removed, "valid_count": len(valid_port_names)}
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -114,6 +115,7 @@ class NetworkCleanupManager:
         self._docker: docker.DockerClient | None = None
         self._cleanup_task: asyncio.Task | None = None
         self._running = False
+        self._last_api_reconcile_at: float | None = None
 
     @property
     def docker(self) -> docker.DockerClient:
@@ -493,6 +495,14 @@ class NetworkCleanupManager:
             result["errors"].append(str(e))
         return result
 
+    def record_api_reconcile(self) -> None:
+        """Record that the API just performed VXLAN port reconciliation.
+
+        Suppresses heuristic cleanup for 15 minutes since the API's
+        DB-driven approach is authoritative.
+        """
+        self._last_api_reconcile_at = time.monotonic()
+
     async def cleanup_ovs_vxlan_orphans(self) -> int:
         """Clean up orphaned VXLAN ports on the OVS bridge.
 
@@ -503,8 +513,22 @@ class NetworkCleanupManager:
         - Lab destroy fails partway through
         - Agent crashes during overlay teardown
 
+        Skipped when the API has recently performed DB-driven reconciliation
+        (within the last 15 minutes), since the API's whitelist approach is
+        more accurate than the agent's in-memory tracking.
+
         Returns number of orphaned VXLAN ports deleted.
         """
+        # Suppress when API reconciliation is active (within 15 min)
+        if self._last_api_reconcile_at is not None:
+            elapsed = time.monotonic() - self._last_api_reconcile_at
+            if elapsed < 900:  # 15 minutes
+                logger.debug(
+                    "Skipping heuristic cleanup, API reconciliation active "
+                    f"({int(elapsed)}s ago)"
+                )
+                return 0
+
         deleted = 0
         try:
             from agent.network.backends.registry import get_network_backend
