@@ -1941,6 +1941,7 @@ const StudioPage: React.FC = () => {
               runtimeStates={runtimeStates}
               nodeStates={nodeStates}
               deviceModels={deviceModels}
+              labId={activeLab?.id}
               agents={agents}
               showAgentIndicators={showAgentIndicators}
               onToggleAgentIndicators={handleToggleAgentIndicators}

@@ -354,6 +354,7 @@ Background tasks run periodically to reconcile state:
   - Workaround: `docker exec <container> iptables -D EOS_FORWARD -i eth1 -j DROP`
 - **IP routing disabled**: cEOS has `no ip routing` by default. Must enable via CLI: `configure terminal` → `ip routing` → `end`
 - **Interface naming**: Uses `INTFTYPE=eth` env var so Linux eth1 maps to EOS Ethernet1
+- **Carrier propagation errdisable cascade**: `ip link set carrier off/on` (used for link carrier propagation) triggers cEOS link-flap detection → errdisable → IFF_UP cleared → host-side veth carrier drops → monitor cascades back to peer → both sides errdisabled. Fix: post-boot commands disable link-flap errdisable detection. If stuck, restore carrier manually: `docker exec <container> ip link set ethN carrier on`
 
 ### Linux Bridge vs OVS
 - Linux bridge has issues forwarding unicast packets to VXLAN ports (broadcast works, unicast doesn't)
