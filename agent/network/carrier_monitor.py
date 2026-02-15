@@ -15,6 +15,14 @@ Loop prevention: When the API propagates carrier off to the peer via
 ``ip link set carrier off`` inside the remote container, only IFLA_CARRIER
 is changed (IFF_UP stays set), so the host-side veth stays up and OVS
 never reports it as a transition — no loop.
+
+IMPORTANT: This assumption breaks if the NOS errdisables the interface in
+response to carrier manipulation.  cEOS link-flap detection treats the
+external carrier change as a flap and errdisables the interface, clearing
+IFF_UP.  The host-side veth then sees carrier drop, the monitor fires a
+new transition, and the cascade propagates back — both sides errdisabled.
+Fix: cEOS post-boot commands disable link-flap errdisable detection
+(see ``vendors.py`` ceos config).
 """
 from __future__ import annotations
 

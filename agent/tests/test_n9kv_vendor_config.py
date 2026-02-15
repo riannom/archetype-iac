@@ -190,3 +190,41 @@ def test_domain_xml_machine_type_in_os_element():
     root = ET.fromstring(xml)
     type_elem = root.find(".//os/type")
     assert type_elem.get("machine") == "pc-i440fx-6.2"
+
+
+# ---------------------------------------------------------------------------
+# Config injection vendor config assertions
+# ---------------------------------------------------------------------------
+
+
+def test_n9kv_config_inject_method_is_bootflash():
+    """N9Kv should use bootflash config injection."""
+    config = VENDOR_CONFIGS["cisco_n9kv"]
+    assert config.config_inject_method == "bootflash"
+
+
+def test_n9kv_config_inject_path():
+    """N9Kv startup-config path on bootflash."""
+    config = VENDOR_CONFIGS["cisco_n9kv"]
+    assert config.config_inject_path == "/startup-config"
+
+
+def test_default_device_has_no_config_injection():
+    """Devices without explicit config_inject_method should default to 'none'."""
+    config = VENDOR_CONFIGS["cisco_iosv"]
+    assert config.config_inject_method == "none"
+
+
+def test_get_libvirt_config_propagates_config_inject_fields():
+    """Config injection fields must propagate through get_libvirt_config."""
+    lc = get_libvirt_config("cisco_n9kv")
+    assert lc.config_inject_method == "bootflash"
+    assert lc.config_inject_partition == 0
+    assert lc.config_inject_fs_type == "ext2"
+    assert lc.config_inject_path == "/startup-config"
+
+
+def test_get_libvirt_config_fallback_has_no_config_injection():
+    """Fallback config should have config_inject_method='none'."""
+    lc = get_libvirt_config("unknown_device_xyz_fallback")
+    assert lc.config_inject_method == "none"

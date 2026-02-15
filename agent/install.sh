@@ -419,21 +419,11 @@ if [ -f /etc/lvm/lvm.conf ]; then
     fi
 fi
 
-# Layer 2: Blacklist NBD kernel module
-if [ ! -f /etc/modprobe.d/blacklist-nbd.conf ]; then
-    echo "blacklist nbd" > /etc/modprobe.d/blacklist-nbd.conf
-    log_info "NBD kernel module blacklisted"
-else
-    log_info "NBD kernel module already blacklisted"
-fi
-
-# Unload NBD module if currently loaded (non-disruptive)
-if lsmod | grep -q '^nbd '; then
-    if rmmod nbd 2>/dev/null; then
-        log_info "Unloaded nbd kernel module"
-    else
-        log_warn "nbd module in use, will be blocked after reboot"
-    fi
+# NBD module: allow loading for bootflash config injection.
+# Safety relies on LVM global_filter (above) to prevent LVM auto-activation.
+if [ -f /etc/modprobe.d/blacklist-nbd.conf ]; then
+    rm -f /etc/modprobe.d/blacklist-nbd.conf
+    log_info "Removed NBD module blacklist (LVM global_filter provides safety)"
 fi
 
 # Install Docker
@@ -489,11 +479,11 @@ if [ "$INSTALL_LIBVIRT" = true ]; then
         case $OS in
             ubuntu|debian)
                 apt-get install -y -qq qemu-kvm libvirt-daemon-system libvirt-clients \
-                    libvirt-dev pkg-config gcc libc-dev qemu-utils
+                    libvirt-dev pkg-config gcc libc-dev qemu-utils genisoimage
                 ;;
             centos|rhel|rocky|almalinux|fedora)
                 dnf install -y qemu-kvm libvirt libvirt-client \
-                    libvirt-devel pkgconfig gcc qemu-img
+                    libvirt-devel pkgconfig gcc qemu-img genisoimage
                 ;;
             *)
                 log_warn "Please install libvirt manually for VM support"

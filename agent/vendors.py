@@ -153,6 +153,24 @@ class VendorConfig:
     config_extract_paging_disable: str = ""
 
     # ==========================================================================
+    # Configuration injection settings (used by LibvirtProvider)
+    # These settings control how startup configs are written into VM disks
+    # ==========================================================================
+
+    # Injection method: "none", "bootflash" (qemu-nbd mount+write), or "iso" (CD-ROM)
+    config_inject_method: str = "none"
+    # Partition number to mount (0 = auto-detect via blkid) — bootflash only
+    config_inject_partition: int = 0
+    # Expected filesystem type of the target partition — bootflash only
+    config_inject_fs_type: str = "ext2"
+    # Path within the mounted partition where startup-config is written — bootflash only
+    config_inject_path: str = "/startup-config"
+    # ISO 9660 volume label for config CD-ROM — iso only (e.g., "config-1" for IOS-XR CVAC)
+    config_inject_iso_volume_label: str = ""
+    # Filename inside the ISO — iso only (e.g., "iosxr_config.txt" for IOS-XR CVAC)
+    config_inject_iso_filename: str = ""
+
+    # ==========================================================================
     # Container runtime configuration (used by DockerProvider)
     # These settings control how containers are created and configured
     # ==========================================================================
@@ -294,6 +312,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "segment-routing", "netconf"],
+        # Config injection: IOS-XR CVAC reads config from CD-ROM with label "config-1"
+        config_inject_method="iso",
+        config_inject_iso_volume_label="config-1",
+        config_inject_iso_filename="iosxr_config.txt",
     ),
     "cisco_xrd": VendorConfig(
         kind="cisco_xrd",
@@ -677,12 +699,17 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "net.ipv6.conf.default.accept_dad": "0",
             "net.ipv6.conf.all.autoconf": "0",
         },
-        # Post-boot commands to fix cEOS iptables rules that block data plane traffic
-        # EOS adds DROP rules for eth1+ interfaces in the EOS_FORWARD chain
-        # We remove these to allow traffic forwarding on data plane interfaces
+        # Post-boot commands to fix cEOS iptables rules and errdisable issues
         post_boot_commands=[
-            # Remove DROP rules for eth1-eth12 (ignore errors if rule doesn't exist)
+            # Remove iptables DROP rules for data interfaces (eth1+)
+            # EOS adds these in the EOS_FORWARD chain which block forwarding
             "for i in $(seq 1 12); do iptables -D EOS_FORWARD -i eth$i -j DROP 2>/dev/null || true; done",
+            # Disable link-flap errdisable detection.  The carrier propagation
+            # mechanism uses `ip link set carrier off/on` which cEOS interprets
+            # as link flaps.  When errdisabled, EOS clears IFF_UP which breaks
+            # the carrier loop-prevention (host-side veth carrier drops, monitor
+            # sees a new transition, propagates back → both sides errdisabled).
+            "FastCli -p 15 -c 'configure\nno errdisable detect cause link-flap\nerrdisable recovery cause all\nerrdisable recovery interval 30\nend'",
         ],
     ),
     "nokia_srlinux": VendorConfig(
@@ -870,6 +897,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_password="admin",
         config_extract_timeout=60,
         config_extract_paging_disable="terminal length 0",
+        # Config injection: write startup-config to bootflash partition before boot
+        config_inject_method="bootflash",
+        config_inject_partition=0,  # auto-detect via blkid
+        config_inject_fs_type="ext2",
+        config_inject_path="/startup-config",
     ),
 
     # =========================================================================
@@ -1751,6 +1783,12 @@ class LibvirtRuntimeConfig:
     force_stop: bool = True  # Skip ACPI shutdown (most network VMs don't support it)
     reserved_nics: int = 0  # Dummy NICs after management, before data interfaces
     cpu_sockets: int = 0    # If >0, explicit SMP topology: sockets=N, cores=cpu/N
+    config_inject_method: str = "none"    # "none", "bootflash", or "iso"
+    config_inject_partition: int = 0      # 0 = auto-detect via blkid (bootflash only)
+    config_inject_fs_type: str = "ext2"   # Expected filesystem of bootflash
+    config_inject_path: str = "/startup-config"  # Path within mounted partition (bootflash only)
+    config_inject_iso_volume_label: str = ""  # ISO volume label (iso only)
+    config_inject_iso_filename: str = ""      # Filename inside ISO (iso only)
     source: str = "vendor"  # "vendor" for matched profile, "fallback" for generic defaults
 
 
@@ -1816,6 +1854,12 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
             force_stop=True,
             reserved_nics=0,
             cpu_sockets=0,
+            config_inject_method="none",
+            config_inject_partition=0,
+            config_inject_fs_type="ext2",
+            config_inject_path="/startup-config",
+            config_inject_iso_volume_label="",
+            config_inject_iso_filename="",
             source="fallback",
         )
 
@@ -1838,6 +1882,12 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         force_stop=config.force_stop,
         reserved_nics=config.reserved_nics,
         cpu_sockets=config.cpu_sockets,
+        config_inject_method=config.config_inject_method,
+        config_inject_partition=config.config_inject_partition,
+        config_inject_fs_type=config.config_inject_fs_type,
+        config_inject_path=config.config_inject_path,
+        config_inject_iso_volume_label=config.config_inject_iso_volume_label,
+        config_inject_iso_filename=config.config_inject_iso_filename,
         source="vendor",
     )
 

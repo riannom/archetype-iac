@@ -923,6 +923,7 @@ class LibvirtProvider(Provider):
         kind: str | None = None,
         include_management_interface: bool = False,
         management_network: str = "default",
+        config_iso_path: Path | None = None,
     ) -> str:
         """Generate libvirt domain XML for a VM.
 
@@ -984,6 +985,15 @@ class LibvirtProvider(Provider):
       <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
       <source file='{xml_escape(str(data_volume_path))}'/>
       <target dev='{dev_prefix}b' bus='{disk_driver}'/>
+    </disk>'''
+
+        if config_iso_path:
+            disks_xml += f'''
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='{xml_escape(str(config_iso_path))}'/>
+      <target dev='hdc' bus='ide'/>
+      <readonly/>
     </disk>'''
 
         # Build network interface elements
@@ -1789,7 +1799,7 @@ class LibvirtProvider(Provider):
         self._undefine_domain(domain, domain_name)
         logger.info(f"Undefined domain {domain_name}")
 
-        # Delete overlay disks
+        # Delete overlay disks and config ISO
         disks_dir = self._disks_dir(workspace)
         for suffix in ("", "-data"):
             disk_path = disks_dir / f"{node_name}{suffix}.qcow2"
@@ -1799,6 +1809,14 @@ class LibvirtProvider(Provider):
                     logger.info(f"Removed disk: {disk_path}")
                 except Exception as e:
                     logger.warning(f"Failed to remove disk {disk_path}: {e}")
+
+        iso_path = disks_dir / f"{node_name}-config.iso"
+        if iso_path.exists():
+            try:
+                iso_path.unlink()
+                logger.info(f"Removed config ISO: {iso_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove config ISO {iso_path}: {e}")
 
         # Clean up per-node VLAN allocations
         lab_allocs = self._vlan_allocations.get(lab_id, {})
@@ -1995,6 +2013,45 @@ class LibvirtProvider(Provider):
                     error=f"Failed to create overlay disk for {node_name}",
                 )
 
+            # Inject startup-config into bootflash if supported
+            if not startup_config:
+                config_file = workspace / "configs" / node_name / "startup-config"
+                if config_file.exists():
+                    startup_config = config_file.read_text()
+
+            if startup_config and libvirt_config.config_inject_method == "bootflash":
+                from agent.providers.bootflash_inject import inject_startup_config
+                inject_ok = await asyncio.to_thread(
+                    inject_startup_config,
+                    overlay_path,
+                    startup_config,
+                    partition=libvirt_config.config_inject_partition,
+                    fs_type=libvirt_config.config_inject_fs_type,
+                    config_path=libvirt_config.config_inject_path,
+                )
+                if inject_ok:
+                    logger.info("Injected startup config for %s (%d bytes)", node_name, len(startup_config))
+                else:
+                    logger.warning("Config injection failed for %s; VM will boot without config", node_name)
+
+            # Create config ISO for platforms that read config from CD-ROM (e.g., IOS-XR CVAC)
+            config_iso_path: Path | None = None
+            if startup_config and libvirt_config.config_inject_method == "iso":
+                from agent.providers.iso_inject import create_config_iso
+                config_iso_path = disks_dir / f"{node_name}-config.iso"
+                iso_ok = await asyncio.to_thread(
+                    create_config_iso,
+                    config_iso_path,
+                    startup_config,
+                    volume_label=libvirt_config.config_inject_iso_volume_label or "config",
+                    filename=libvirt_config.config_inject_iso_filename or "startup-config",
+                )
+                if iso_ok:
+                    logger.info("Created config ISO for %s (%d bytes)", node_name, len(startup_config))
+                else:
+                    logger.warning("Config ISO creation failed for %s; VM will boot without config", node_name)
+                    config_iso_path = None
+
             # Create data volume if needed
             data_volume_path = None
             data_volume_size = node_config.get("data_volume_gb")
@@ -2032,6 +2089,7 @@ class LibvirtProvider(Provider):
                 kind=kind,
                 include_management_interface=include_management_interface,
                 management_network="default",
+                config_iso_path=config_iso_path,
             )
 
             # Define but do NOT start
