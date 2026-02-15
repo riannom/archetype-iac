@@ -142,45 +142,23 @@ async def _cleanup_lab_placements(lab_id: str) -> CleanupResult:
 
 
 async def _cleanup_recovered_vxlan_ports(lab_id: str) -> CleanupResult:
-    """Remove recovered VXLAN ports that no longer match active tunnels."""
+    """Run overlay convergence to clean up stale VXLAN ports after lab changes."""
     result = CleanupResult(task_name="cleanup_recovered_vxlan_ports")
     with get_session() as session:
         try:
-            active_tunnels = (
-                session.query(models.VxlanTunnel)
-                .filter(models.VxlanTunnel.status == "active")
+            from app.tasks.link_reconciliation import run_overlay_convergence
+
+            agents = (
+                session.query(models.Host)
+                .filter(models.Host.status == "online")
                 .all()
             )
-
-            agent_valid_ports: dict[str, set[str]] = {}
-            for tunnel in active_tunnels:
-                link_state = session.get(models.LinkState, tunnel.link_state_id)
-                if not link_state:
-                    continue
-                port_name = agent_client.compute_vxlan_port_name(
-                    str(tunnel.lab_id), link_state.link_name
-                )
-                for aid in [tunnel.agent_a_id, tunnel.agent_b_id]:
-                    if aid:
-                        agent_valid_ports.setdefault(str(aid), set()).add(port_name)
-
-            all_agents = session.query(models.Host).all()
-            for agent in all_agents:
-                if not agent_client.is_agent_online(agent):
-                    continue
-                valid = list(agent_valid_ports.get(str(agent.id), set()))
-                try:
-                    reconcile = await agent_client.reconcile_vxlan_ports_on_agent(
-                        agent,
-                        valid,
-                        force=True,
-                        confirm=True,
-                        allow_empty=True,
-                    )
-                    removed = reconcile.get("removed_ports", [])
-                    result.deleted += len(removed)
-                except Exception as e:
-                    result.errors.append(f"{agent.name}: {e}")
+            host_to_agent = {a.id: a for a in agents}
+            convergence = await run_overlay_convergence(session, host_to_agent)
+            for agent_result in convergence.values():
+                if isinstance(agent_result, dict):
+                    result.deleted += len(agent_result.get("orphans_removed", []))
+            session.commit()
         except Exception as e:
             result.errors.append(str(e))
     return result

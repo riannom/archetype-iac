@@ -257,6 +257,32 @@ async def register_agent(
         if is_new_registration:
             asyncio.create_task(pull_images_on_registration(host_id))
 
+    # Trigger overlay convergence to restore cross-host links immediately
+    if host_id:
+        import logging
+        _logger = logging.getLogger(__name__)
+
+        async def _converge_agent():
+            try:
+                from app.db import get_session
+                from app.tasks.link_reconciliation import (
+                    run_overlay_convergence,
+                    refresh_interface_mappings,
+                    run_same_host_convergence,
+                )
+                with get_session() as sess:
+                    agent = sess.get(models.Host, host_id)
+                    if agent and agent.status == "online":
+                        host_map = {agent.id: agent}
+                        await run_overlay_convergence(sess, host_map)
+                        await refresh_interface_mappings(sess, host_map)
+                        await run_same_host_convergence(sess, host_map)
+                        sess.commit()
+            except Exception as e:
+                _logger.warning(f"Post-registration convergence for {host_id}: {e}")
+
+        asyncio.create_task(_converge_agent())
+
     return response
 
 
