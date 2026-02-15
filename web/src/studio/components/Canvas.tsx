@@ -15,6 +15,7 @@ interface CanvasProps {
   runtimeStates: Record<string, RuntimeStatus>;
   nodeStates?: Record<string, NodeStateEntry>;
   deviceModels: DeviceModel[];
+  labId?: string;
   agents?: { id: string; name: string }[];
   showAgentIndicators?: boolean;
   onToggleAgentIndicators?: () => void;
@@ -52,8 +53,22 @@ interface ContextMenu {
   type: 'node' | 'link';
 }
 
+function readStoredViewport(labId?: string): { zoom: number; x: number; y: number } {
+  if (!labId) return { zoom: 1, x: 0, y: 0 };
+  try {
+    const stored = localStorage.getItem(`archetype_canvas_viewport_${labId}`);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (typeof parsed.zoom === 'number' && typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+        return parsed;
+      }
+    }
+  } catch { /* ignore */ }
+  return { zoom: 1, x: 0, y: 0 };
+}
+
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
+  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -66,12 +81,48 @@ const Canvas: React.FC<CanvasProps> = ({
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
 
-  const [zoom, setZoom] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(() => readStoredViewport(labId).zoom);
+  const [offset, setOffset] = useState(() => {
+    const vp = readStoredViewport(labId);
+    return { x: vp.x, y: vp.y };
+  });
   const [isPanning, setIsPanning] = useState(false);
   const [resizing, setResizing] = useState<ResizeState | null>(null);
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
   const didPanRef = useRef(false);
+
+  // Track latest viewport for unmount save
+  const viewportRef = useRef({ zoom, x: offset.x, y: offset.y });
+  useEffect(() => {
+    viewportRef.current = { zoom, x: offset.x, y: offset.y };
+  }, [zoom, offset]);
+
+  // Save viewport on unmount
+  useEffect(() => {
+    return () => {
+      if (!labId) return;
+      try {
+        localStorage.setItem(
+          `archetype_canvas_viewport_${labId}`,
+          JSON.stringify(viewportRef.current)
+        );
+      } catch { /* ignore */ }
+    };
+  }, [labId]);
+
+  // Debounced save viewport to localStorage
+  useEffect(() => {
+    if (!labId) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          `archetype_canvas_viewport_${labId}`,
+          JSON.stringify({ zoom, x: offset.x, y: offset.y })
+        );
+      } catch { /* localStorage full or unavailable */ }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [labId, zoom, offset]);
 
   // Elapsed timer: re-render every second when any node is in a transitional state
   const hasTransitionalNodes = useMemo(() => {
