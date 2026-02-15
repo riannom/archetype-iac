@@ -333,13 +333,14 @@ class DockerProvider(Provider):
         return f"{CONTAINER_PREFIX}-{safe_lab_id}"
 
     def _lab_network_prefix(self, lab_id: str) -> str:
-        """Get network name prefix for a lab (sanitized)."""
-        return re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
+        """Get network name prefix for a lab (sanitized, full ID)."""
+        return re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)
 
     def _legacy_lab_network_prefixes(self, lab_id: str) -> tuple[str, str]:
-        """Get legacy and current network prefixes for a lab."""
-        safe_prefix = self._lab_network_prefix(lab_id)
-        return safe_prefix, lab_id
+        """Get current and legacy (truncated) network prefixes for a lab."""
+        current_prefix = self._lab_network_prefix(lab_id)
+        legacy_prefix = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
+        return current_prefix, legacy_prefix
 
     # =========================================================================
     # VLAN Persistence (matches LibvirtProvider pattern for feature parity)
@@ -2573,22 +2574,21 @@ username admin privilege 15 role network-admin nopassword
         return True
 
     async def _prune_legacy_lab_networks(self, lab_id: str) -> int:
-        """Remove unused legacy lab networks that don't match current naming/labels.
+        """Remove legacy lab networks that don't match current naming/labels.
 
-        This is a best-effort migration to clean up networks created with raw lab_id
-        prefixes before we standardized naming and labels. Only removes networks
-        that have no attached containers.
+        Disconnects any attached containers before removing the network.
+        This cleans up networks created with truncated lab_id prefixes.
         """
         removed = 0
-        safe_prefix, legacy_prefix = self._legacy_lab_network_prefixes(lab_id)
-        safe_prefix = f"{safe_prefix}-"
+        current_prefix, legacy_prefix = self._legacy_lab_network_prefixes(lab_id)
+        current_prefix = f"{current_prefix}-"
         legacy_prefix = f"{legacy_prefix}-"
 
         try:
             all_networks = await asyncio.to_thread(self.docker.networks.list)
             for net in all_networks:
                 name = net.name or ""
-                if name.startswith(safe_prefix):
+                if name.startswith(current_prefix):
                     continue
                 if not name.startswith(legacy_prefix):
                     continue
@@ -2598,10 +2598,14 @@ username admin privilege 15 role network-admin nopassword
                     # Already labeled correctly, skip
                     continue
 
+                # Disconnect any attached containers before removing
                 containers = net.attrs.get("Containers") or {}
-                if containers:
-                    # Network in use, skip migration
-                    continue
+                for cid in containers:
+                    try:
+                        await asyncio.to_thread(net.disconnect, cid, force=True)
+                        logger.debug(f"Disconnected {cid[:12]} from legacy network {name}")
+                    except Exception:
+                        pass
 
                 try:
                     await asyncio.to_thread(net.remove)

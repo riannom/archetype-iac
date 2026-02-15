@@ -895,7 +895,15 @@ class DockerOVSPlugin:
                             network_name = network.name
                         except NotFound:
                             network_name = f"{lab_id}-{network_state.interface_name}"
-                            network = client.networks.get(network_name)
+                            try:
+                                network = client.networks.get(network_name)
+                            except NotFound:
+                                continue
+
+                        # Skip unlabeled legacy networks to avoid duplicate attachments
+                        labels = (network.attrs.get("Labels") or {})
+                        if not labels.get("archetype.lab_id"):
+                            continue
 
                         if network_name in attached:
                             continue
