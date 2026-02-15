@@ -53,6 +53,7 @@ export interface DeviceModel {
   portNaming?: string;
   portStartIndex?: number;
   maxPorts?: number;
+  managementInterface?: string;
   requiresImage?: boolean;
   supportedImageKinds?: string[];
   documentationUrl?: string;

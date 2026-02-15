@@ -41,6 +41,7 @@ from agent.vendors import (
     get_console_credentials,
     get_console_method,
     get_libvirt_config,
+    get_vendor_config,
 )
 from agent.network.ovs_vlan_tags import used_vlan_tags_on_bridge_from_ovs_outputs
 
@@ -2366,18 +2367,16 @@ class LibvirtProvider(Provider):
             return None
 
     def _node_uses_dedicated_mgmt_interface(self, kind: str | None) -> bool:
-        """Return True when VM should have a dedicated management interface.
+        """Return True when VM has a dedicated management interface.
 
-        Needed when console_method is SSH, or when config_extract_method is SSH
-        (e.g., IOS-XRv uses TCP serial for console but SSH for config extraction).
+        Only devices with an explicit management_interface in their vendor config
+        get a virbr0 management NIC. Devices without one use all NICs for data.
         """
         if not kind:
             return False
         try:
-            if get_console_method(kind) == "ssh":
-                return True
-            extract_settings = get_config_extraction_settings(kind)
-            return extract_settings.method == "ssh"
+            config = get_vendor_config(kind)
+            return config is not None and config.management_interface is not None
         except Exception:
             return False
 

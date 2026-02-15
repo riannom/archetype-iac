@@ -128,14 +128,16 @@ function buildPatternFromModel(model: DeviceModel): InterfacePattern {
     ? portNaming
     : `${portNaming}{index}`;
 
-  // Determine management interface based on device type
-  let managementInterface = 'eth0';
-  if (model.kind === 'ceos' || model.id === 'ceos') {
-    managementInterface = 'Management0';
-  } else if (model.kind === 'nokia_srlinux' || model.id === 'nokia_srlinux' || model.id === 'srl') {
-    managementInterface = 'mgmt0';
-  } else if (model.kind === 'cisco_xrd' || model.id === 'cisco_xrd' || model.id === 'xrd') {
-    managementInterface = 'MgmtEth0/RP0/CPU0/0';
+  // Determine management interface — prefer API-provided field, fall back for compat
+  let managementInterface = model.managementInterface || 'eth0';
+  if (!model.managementInterface) {
+    if (model.kind === 'ceos' || model.id === 'ceos') {
+      managementInterface = 'Management0';
+    } else if (model.kind === 'nokia_srlinux' || model.id === 'nokia_srlinux' || model.id === 'srl') {
+      managementInterface = 'mgmt0';
+    } else if (model.kind === 'cisco_xrd' || model.id === 'cisco_xrd' || model.id === 'xrd') {
+      managementInterface = 'MgmtEth0/RP0/CPU0/0';
+    }
   }
 
   return {

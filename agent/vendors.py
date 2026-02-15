@@ -82,6 +82,7 @@ class VendorConfig:
     port_naming: str = "eth"
     port_start_index: int = 0
     max_ports: int = 8
+    management_interface: Optional[str] = None  # NOS-level management interface name (e.g., "mgmt0")
     # Note: provision_interfaces is deprecated. OVS-based networking handles
     # interface provisioning automatically for all device types.
 
@@ -281,6 +282,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="GigabitEthernet0/0/0/{index}",
         port_start_index=0,
         max_ports=8,
+        management_interface="MgmtEth0/RP0/CPU0/0",
         # VM settings per CML reference platform (iosxrv9000 node definition)
         memory=20480,  # 20GB — CML minimum 10GB, recommended 20GB
         cpu=4,
@@ -334,6 +336,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="GigabitEthernet0/0/0/{index}",
         port_start_index=0,
         max_ports=8,
+        management_interface="MgmtEth0/RP0/CPU0/0",
         requires_image=True,
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/cisco8000/xrd/",
         license_required=True,
@@ -431,9 +434,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Would you like to enter the initial configuration dialog?",
         readiness_timeout=300,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
     "iol-xe": VendorConfig(
         kind="iol-xe",
@@ -462,9 +462,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=60,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
     "iol-l2": VendorConfig(
         kind="iol-l2",
@@ -493,9 +490,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=60,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
     "cisco_csr1000v": VendorConfig(
         kind="cisco_csr1000v",
@@ -524,9 +518,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started|[\w.-]+[>#]",
         readiness_timeout=300,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
         # Config extraction via serial console
         config_extract_method="serial",
         config_extract_command="show running-config",
@@ -656,6 +647,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=[],
         is_active=True,
         notes="cEOS requires 'Cli' command for EOS prompt. User must import image.",
+        management_interface="Management0",
         port_naming="Ethernet",
         port_start_index=1,
         max_ports=12,
@@ -728,6 +720,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         versions=[],
         is_active=True,
         notes="SR Linux uses sr_cli for its native CLI.",
+        management_interface="mgmt0",
         port_naming="e1-",
         port_start_index=1,
         max_ports=12,
@@ -872,6 +865,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="Ethernet1/",
         port_start_index=1,
         max_ports=12,
+        management_interface="mgmt0",
         memory=12288,  # 12GB required (CML minimum 10GB)
         cpu=2,
         nic_driver="e1000",  # NX-OS lacks virtio drivers; e1000 required
@@ -1205,9 +1199,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=250,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
         # Config extraction via serial console
         config_extract_method="serial",
         config_extract_command="show running-config",
@@ -1247,9 +1238,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
     "cat-sdwan-manager": VendorConfig(
         kind="cat-sdwan-manager",
@@ -1279,9 +1267,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=600,  # vManage takes longer to boot
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
     "cat-sdwan-validator": VendorConfig(
         kind="cat-sdwan-validator",
@@ -1310,9 +1295,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
     "cat-sdwan-vedge": VendorConfig(
         kind="cat-sdwan-vedge",
@@ -1341,9 +1323,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
 
     # =========================================================================
@@ -1366,6 +1345,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="GigabitEthernet0/",
         port_start_index=0,
         max_ports=10,
+        management_interface="Management0/0",
         memory=8192,  # 8GB required
         cpu=4,
         requires_image=True,
@@ -1408,9 +1388,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=600,  # FMC takes longer to boot
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
 
     # =========================================================================
@@ -1448,9 +1425,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=300,
-        console_method="ssh",
-        console_user="admin",
-        console_password="admin",
     ),
     "cat9000v-q200": VendorConfig(
         kind="cisco_cat9kv",
@@ -1469,6 +1443,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="GigabitEthernet1/0/{index}",
         port_start_index=1,
         max_ports=24,
+        management_interface="GigabitEthernet0/0",
         memory=18432,
         cpu=4,
         machine_type="pc-i440fx-6.2",
@@ -1510,6 +1485,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="GigabitEthernet1/0/{index}",
         port_start_index=1,
         max_ports=24,
+        management_interface="GigabitEthernet0/0",
         memory=18432,
         cpu=4,
         machine_type="pc-i440fx-6.2",
@@ -2036,6 +2012,7 @@ def get_vendors_for_ui() -> list[dict]:
             "portNaming": config.port_naming,
             "portStartIndex": config.port_start_index,
             "maxPorts": config.max_ports,
+            "managementInterface": config.management_interface,
             # Resource requirements
             "memory": config.memory,
             "cpu": config.cpu,

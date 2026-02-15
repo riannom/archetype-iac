@@ -34,6 +34,7 @@ interface CustomDevicePayload {
   maxPorts?: number;
   portNaming?: string;
   portStartIndex?: number;
+  managementInterface?: string;
   requiresImage?: boolean;
   supportedImageKinds?: string[];
   licenseRequired?: boolean;
