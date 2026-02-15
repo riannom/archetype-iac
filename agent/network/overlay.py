@@ -46,7 +46,7 @@ VXLAN_PORT = 4789
 
 # VLAN tag range for overlay isolation (within OVS)
 # Use a subset to avoid conflicts with other OVS users
-OVERLAY_VLAN_BASE = 3000
+OVERLAY_VLAN_BASE = 2050
 OVERLAY_VLAN_MAX = 4000
 
 

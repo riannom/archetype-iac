@@ -73,7 +73,7 @@ CONTAINER_PREFIX = "archetype"
 
 # VLAN range for container interfaces (same as OVS plugin)
 VLAN_RANGE_START = 100
-VLAN_RANGE_END = 4000
+VLAN_RANGE_END = 2049
 
 # Interface wait script for cEOS (adapted from containerlab)
 #

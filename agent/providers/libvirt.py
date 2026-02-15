@@ -152,8 +152,8 @@ class LibvirtProvider(Provider):
     """
 
     # VLAN range for VM interfaces (separate from Docker's 100-2999 range)
-    VLAN_RANGE_START = 2000
-    VLAN_RANGE_END = 2999
+    VLAN_RANGE_START = 100
+    VLAN_RANGE_END = 2049
     ALLOWED_DOMAIN_DRIVERS = {"kvm", "qemu"}
 
     # Whitelisted values for domain XML generation

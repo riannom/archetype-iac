@@ -244,74 +244,73 @@ async def _repair_cross_host_vlan(
     link: models.LinkState,
     host_to_agent: dict[str, models.Host],
 ) -> bool:
-    """Repair cross-host link by updating VXLAN tunnel port tags.
+    """Repair cross-host link by pushing DB-stored VLAN tags to reality.
 
-    After a container restart, the container port gets a new VLAN tag.
-    The VXLAN tunnel port still has the old tag. Fix by updating the
-    tunnel port to match the container's current tag.
+    DB is the source of truth. After a container restart the container
+    port gets a new random VLAN tag. Fix by pushing the DB tag to BOTH
+    the container OVS port AND the VXLAN tunnel port.
     """
     source_agent = host_to_agent.get(link.source_host_id)
     target_agent = host_to_agent.get(link.target_host_id)
     if not source_agent or not target_agent:
         return False
 
-    source_iface = normalize_interface(link.source_interface) if link.source_interface else ""
-    target_iface = normalize_interface(link.target_interface) if link.target_interface else ""
     vxlan_port = agent_client.compute_vxlan_port_name(link.lab_id, link.link_name)
 
     repaired = True
-    for side, agent, node, iface, tag_attr in [
-        ("source", source_agent, link.source_node, source_iface, "source_vlan_tag"),
-        ("target", target_agent, link.target_node, target_iface, "target_vlan_tag"),
+    for side, agent, node, iface, db_vlan in [
+        ("source", source_agent, link.source_node, link.source_interface, link.source_vlan_tag),
+        ("target", target_agent, link.target_node, link.target_interface, link.target_vlan_tag),
     ]:
-        # Read the container port's current VLAN (authoritative after restart)
-        endpoint_vlan = await agent_client.get_interface_vlan_from_agent(
-            agent, link.lab_id, node, iface, read_from_ovs=True,
-        )
-        if endpoint_vlan is None:
-            logger.warning(f"Cannot read {side} endpoint VLAN for {link.link_name}")
+        if not db_vlan:
+            logger.warning(f"No DB VLAN tag for {side} of {link.link_name}")
             repaired = False
             continue
 
-        # Check if the VXLAN tunnel port has the right tag
-        status = await agent_client.get_overlay_status_from_agent(agent)
-        if status.get("error"):
-            repaired = False
-            continue
+        # Discover container's OVS port name via port-state (fresh, not IM)
+        iface_norm = normalize_interface(iface) if iface else ""
+        ports = await agent_client.get_lab_port_state(agent, link.lab_id)
+        container_port = None
+        if ports:
+            for p in ports:
+                if p.get("node_name") == node and p.get("interface_name") == iface_norm:
+                    container_port = p.get("ovs_port_name")
+                    break
 
-        matching_tunnel = next(
-            (
-                t for t in status.get("link_tunnels", [])
-                if t.get("link_id") == link.link_name
-                or t.get("interface_name") == vxlan_port
-            ),
-            None,
-        )
-        if not matching_tunnel:
-            # Tunnel port missing entirely — can't do lightweight repair
-            repaired = False
-            continue
-
-        tunnel_vlan = matching_tunnel.get("local_vlan")
-        try:
-            tunnel_vlan_int = int(tunnel_vlan) if tunnel_vlan is not None else None
-        except (TypeError, ValueError):
-            tunnel_vlan_int = None
-
-        if tunnel_vlan_int != endpoint_vlan:
-            # Update the VXLAN port's VLAN tag to match the container
-            ok = await agent_client.set_port_vlan_on_agent(agent, vxlan_port, endpoint_vlan)
+        # Push DB tag to container port
+        if container_port:
+            ok = await agent_client.set_port_vlan_on_agent(agent, container_port, db_vlan)
             if ok:
-                setattr(link, tag_attr, endpoint_vlan)
                 logger.info(
-                    f"Cross-host VLAN repair on {agent.name} for {link.link_name}: "
-                    f"tunnel {vxlan_port} tag {tunnel_vlan_int} -> {endpoint_vlan}"
+                    f"Cross-host VLAN repair ({side}): container port "
+                    f"{container_port} -> tag={db_vlan}"
                 )
             else:
+                logger.error(
+                    f"Failed to set container port {container_port} "
+                    f"to tag={db_vlan} on {agent.name}"
+                )
                 repaired = False
         else:
-            # Tag already correct, just update DB
-            setattr(link, tag_attr, endpoint_vlan)
+            logger.warning(
+                f"Cannot find container port for {node}:{iface_norm} "
+                f"on {agent.name} for {link.link_name}"
+            )
+            repaired = False
+
+        # Push DB tag to VXLAN tunnel port
+        ok = await agent_client.set_port_vlan_on_agent(agent, vxlan_port, db_vlan)
+        if ok:
+            logger.info(
+                f"Cross-host VLAN repair ({side}): tunnel port "
+                f"{vxlan_port} -> tag={db_vlan}"
+            )
+        else:
+            logger.error(
+                f"Failed to set tunnel port {vxlan_port} "
+                f"to tag={db_vlan} on {agent.name}"
+            )
+            repaired = False
 
     return repaired
 

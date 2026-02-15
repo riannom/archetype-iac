@@ -73,8 +73,14 @@ STATE_PERSISTENCE_FILE = "docker_ovs_plugin_state.json"
 
 # OVS configuration
 OVS_BRIDGE_PREFIX = "ovs-"
+
+# Isolated range: unlinked container ports (ephemeral, plugin-assigned)
 VLAN_RANGE_START = 100
-VLAN_RANGE_END = 4000
+VLAN_RANGE_END = 2049
+
+# Linked range: linked ports (DB-stored, convergence-managed)
+LINKED_VLAN_START = 2050
+LINKED_VLAN_END = 4000
 
 
 @dataclass
@@ -163,6 +169,8 @@ class DockerOVSPlugin:
         self._pending_endpoint_reconnects: list[tuple[str, str, str]] = []
         self._allocated_vlans: set[int] = set()
         self._global_next_vlan = VLAN_RANGE_START
+        self._allocated_linked_vlans: set[int] = set()
+        self._global_next_linked_vlan = LINKED_VLAN_START
 
         # State persistence
         workspace = Path(settings.workspace_path)
@@ -403,6 +411,36 @@ class DockerOVSPlugin:
         """Release a VLAN tag back to the pool."""
         self._allocated_vlans.discard(vlan_tag)
 
+    async def _allocate_linked_vlan(self, lab_bridge: LabBridge) -> int:
+        """Allocate next available VLAN tag from the linked range (2050-4000).
+
+        Used for linked ports (hot_connect, attach-overlay) where the tag
+        is stored in the DB and managed by convergence.
+        """
+        max_attempts = LINKED_VLAN_END - LINKED_VLAN_START + 1
+        vlan = self._global_next_linked_vlan
+        used_on_bridge = await self._get_used_vlan_tags_on_bridge(settings.ovs_bridge_name)
+        used_vlans = set(self._allocated_linked_vlans) | used_on_bridge
+
+        for _ in range(max_attempts):
+            if vlan not in used_vlans:
+                self._allocated_linked_vlans.add(vlan)
+                vlan_next = vlan + 1
+                if vlan_next > LINKED_VLAN_END:
+                    vlan_next = LINKED_VLAN_START
+                self._global_next_linked_vlan = vlan_next
+                return vlan
+
+            vlan += 1
+            if vlan > LINKED_VLAN_END:
+                vlan = LINKED_VLAN_START
+
+        raise RuntimeError("No available VLAN tags in linked range")
+
+    def _release_linked_vlan(self, vlan_tag: int) -> None:
+        """Release a linked VLAN tag back to the pool."""
+        self._allocated_linked_vlans.discard(vlan_tag)
+
     def _touch_lab(self, lab_id: str) -> None:
         """Update last_activity timestamp for TTL tracking."""
         if lab_id in self.lab_bridges:
@@ -419,6 +457,7 @@ class DockerOVSPlugin:
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "next_mgmt_subnet_index": self._next_mgmt_subnet_index,
             "global_next_vlan": self._global_next_vlan,
+            "global_next_linked_vlan": self._global_next_linked_vlan,
             "lab_bridges": {
                 lab_id: {
                     "lab_id": bridge.lab_id,
@@ -472,6 +511,7 @@ class DockerOVSPlugin:
 
         self._next_mgmt_subnet_index = data.get("next_mgmt_subnet_index", 1)
         self._global_next_vlan = data.get("global_next_vlan", VLAN_RANGE_START)
+        self._global_next_linked_vlan = data.get("global_next_linked_vlan", LINKED_VLAN_START)
 
         # Load lab bridges
         for lab_id, bridge_data in data.get("lab_bridges", {}).items():
@@ -2805,17 +2845,31 @@ class DockerOVSPlugin:
                 )
                 return None
 
-            # Use VLAN from endpoint A
-            shared_vlan = ep_a.vlan_tag
+            # Allocate from linked range (DB-managed, convergence-safe)
+            shared_vlan = await self._allocate_linked_vlan(lab_bridge)
 
-            # Update endpoint B to same VLAN
+            # Set BOTH ports to the new linked-range tag
+            code, _, stderr = await self._ovs_vsctl(
+                "set", "port", ep_a.host_veth, f"tag={shared_vlan}"
+            )
+            if code != 0:
+                logger.error(f"Failed to set VLAN on port A: {stderr}")
+                self._release_linked_vlan(shared_vlan)
+                return None
+
             code, _, stderr = await self._ovs_vsctl(
                 "set", "port", ep_b.host_veth, f"tag={shared_vlan}"
             )
             if code != 0:
-                logger.error(f"Failed to set VLAN: {stderr}")
+                logger.error(f"Failed to set VLAN on port B: {stderr}")
+                self._release_linked_vlan(shared_vlan)
                 return None
 
+            # Release old isolated-range tags from both endpoints
+            self._release_vlan(ep_a.vlan_tag)
+            self._release_vlan(ep_b.vlan_tag)
+
+            ep_a.vlan_tag = shared_vlan
             ep_b.vlan_tag = shared_vlan
 
             # Update activity timestamp

@@ -3245,7 +3245,7 @@ async def attach_overlay_interface(
         )
 
     try:
-        # Step 1: Discover the node's current VLAN (works for both Docker and libvirt)
+        # Step 1: Discover the node's current OVS port
         port_info = await _resolve_ovs_port(
             request.lab_id, request.container_name, request.interface_name
         )
@@ -3257,7 +3257,23 @@ async def attach_overlay_interface(
                     f"{request.container_name}:{request.interface_name}"
                 ),
             )
-        local_vlan = port_info.vlan_tag
+
+        # Step 2: Allocate a linked-range VLAN for the container port + VXLAN tunnel
+        plugin = _get_docker_ovs_plugin()
+        if plugin:
+            lab_bridge = await plugin._ensure_bridge(request.lab_id)
+            local_vlan = await plugin._allocate_linked_vlan(lab_bridge)
+            # Set the container port to the new linked VLAN
+            await plugin._ovs_vsctl(
+                "set", "port", port_info.port_name, f"tag={local_vlan}"
+            )
+            # Release old isolated-range tag
+            if port_info.vlan_tag > 0:
+                plugin._release_vlan(port_info.vlan_tag)
+        else:
+            # Fallback: use the container's current tag (no plugin available)
+            local_vlan = port_info.vlan_tag
+
         if local_vlan <= 0:
             return AttachOverlayInterfaceResponse(
                 success=False,
@@ -3267,7 +3283,7 @@ async def attach_overlay_interface(
                 ),
             )
 
-        # Step 2: Create per-link access-mode VXLAN port
+        # Step 3: Create per-link access-mode VXLAN port
         backend = get_network_backend()
         tunnel = await backend.overlay_create_link_tunnel(
             lab_id=request.lab_id,
@@ -4134,7 +4150,7 @@ async def _ovs_allocate_unique_vlan(port_name: str) -> int | None:
     """
     import random
     # Use a random VLAN in high range to avoid collisions
-    new_vlan = random.randint(3500, 4090)
+    new_vlan = random.randint(100, 2049)
     if await _ovs_set_port_vlan(port_name, new_vlan):
         return new_vlan
     return None

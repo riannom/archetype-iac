@@ -348,26 +348,34 @@ async def refresh_interface_mappings(
 
     result = {"updated": 0, "created": 0}
 
-    # Find all labs with active same-host links that need verification
-    same_host_links = (
+    # Find all labs with active links that need verification
+    # Include both same-host and cross-host links so InterfaceMapping
+    # stays fresh for cross-host port convergence.
+    active_links = (
         session.query(models.LinkState)
         .filter(
-            models.LinkState.is_cross_host.is_(False),
             models.LinkState.desired_state == "up",
             models.LinkState.actual_state.in_(["up", "creating", "connecting"]),
         )
         .all()
     )
 
-    if not same_host_links:
+    if not active_links:
         return result
 
-    # Group by (host_id, lab_id) to minimize agent calls
+    # Group by (host_id, lab_id) to minimize agent calls.
+    # For cross-host links, add entries for BOTH source and target hosts.
     host_lab_pairs: dict[tuple[str, str], list[models.LinkState]] = defaultdict(list)
-    for ls in same_host_links:
-        host_id = ls.source_host_id or ls.target_host_id
-        if host_id and host_id in host_to_agent:
-            host_lab_pairs[(host_id, ls.lab_id)].append(ls)
+    for ls in active_links:
+        if ls.is_cross_host:
+            if ls.source_host_id and ls.source_host_id in host_to_agent:
+                host_lab_pairs[(ls.source_host_id, ls.lab_id)].append(ls)
+            if ls.target_host_id and ls.target_host_id in host_to_agent:
+                host_lab_pairs[(ls.target_host_id, ls.lab_id)].append(ls)
+        else:
+            host_id = ls.source_host_id or ls.target_host_id
+            if host_id and host_id in host_to_agent:
+                host_lab_pairs[(host_id, ls.lab_id)].append(ls)
 
     now = datetime.now(timezone.utc)
 
@@ -586,6 +594,125 @@ async def run_same_host_convergence(
     return all_results
 
 
+async def run_cross_host_port_convergence(
+    session: Session,
+    host_to_agent: dict[str, models.Host],
+) -> dict[str, Any]:
+    """Push DB-stored VLAN tags to container ports on cross-host links.
+
+    After a container restart, the Docker OVS plugin assigns a new random
+    VLAN tag to the container port. Overlay convergence already pushes DB
+    tags to VXLAN tunnel ports, but nobody pushes DB tags to container ports.
+    This function closes that gap.
+
+    Uses InterfaceMapping to look up OVS port names, then calls
+    set_port_vlan_on_agent for any container port whose current VLAN
+    doesn't match the DB-stored tag.
+
+    Args:
+        session: Database session
+        host_to_agent: Map of agent_id to Host model
+
+    Returns:
+        Dict with 'updated' and 'errors' counts
+    """
+    result: dict[str, int] = {"updated": 0, "errors": 0}
+
+    # Query cross-host links that should be up
+    cross_host_links = (
+        session.query(models.LinkState)
+        .filter(
+            models.LinkState.is_cross_host.is_(True),
+            models.LinkState.desired_state == "up",
+            models.LinkState.actual_state == "up",
+        )
+        .all()
+    )
+
+    if not cross_host_links:
+        return result
+
+    # Collect corrections grouped by agent: agent_id -> [(port_name, db_vlan)]
+    agent_corrections: dict[str, list[tuple[str, int]]] = defaultdict(list)
+
+    for ls in cross_host_links:
+        # Process both endpoints
+        for side in ("source", "target"):
+            if side == "source":
+                host_id = ls.source_host_id
+                node_name = ls.source_node
+                iface = ls.source_interface
+                db_vlan = ls.source_vlan_tag
+            else:
+                host_id = ls.target_host_id
+                node_name = ls.target_node
+                iface = ls.target_interface
+                db_vlan = ls.target_vlan_tag
+
+            if not host_id or host_id not in host_to_agent or not db_vlan:
+                continue
+
+            # Find node ID for InterfaceMapping lookup
+            node = (
+                session.query(models.Node)
+                .filter(
+                    models.Node.lab_id == ls.lab_id,
+                    models.Node.display_name == node_name,
+                )
+                .first()
+            )
+            if not node:
+                continue
+
+            mapping = (
+                session.query(models.InterfaceMapping)
+                .filter(
+                    models.InterfaceMapping.lab_id == ls.lab_id,
+                    models.InterfaceMapping.node_id == node.id,
+                    models.InterfaceMapping.linux_interface == iface,
+                )
+                .first()
+            )
+            if not mapping or not mapping.ovs_port:
+                continue
+
+            # Compare current tag vs DB truth
+            if mapping.vlan_tag != db_vlan:
+                agent_corrections[host_id].append((mapping.ovs_port, db_vlan))
+
+    if not agent_corrections:
+        return result
+
+    # Apply corrections in parallel across agents
+    async def _apply_corrections(agent_id: str, corrections: list[tuple[str, int]]):
+        agent = host_to_agent.get(agent_id)
+        if not agent:
+            return
+        for port_name, vlan_tag in corrections:
+            try:
+                ok = await agent_client.set_port_vlan_on_agent(agent, port_name, vlan_tag)
+                if ok:
+                    result["updated"] += 1
+                else:
+                    result["errors"] += 1
+            except Exception as e:
+                logger.error(
+                    f"Cross-host port convergence failed for {port_name} "
+                    f"on agent {agent_id}: {e}"
+                )
+                result["errors"] += 1
+
+    tasks = [
+        _apply_corrections(aid, corrections)
+        for aid, corrections in agent_corrections.items()
+        if aid in host_to_agent
+    ]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    return result
+
+
 async def link_reconciliation_monitor():
     """Background task that periodically reconciles link states.
 
@@ -670,6 +797,18 @@ async def link_reconciliation_monitor():
                                 f"InterfaceMapping refresh: "
                                 f"updated={mapping_result['updated']}, "
                                 f"created={mapping_result['created']}"
+                            )
+
+                        # Cross-host container port convergence
+                        # (push DB tags to container ports after restart)
+                        xhost_result = await run_cross_host_port_convergence(
+                            session, host_to_agent
+                        )
+                        if xhost_result["updated"] or xhost_result["errors"]:
+                            logger.info(
+                                f"Cross-host port convergence: "
+                                f"updated={xhost_result['updated']}, "
+                                f"errors={xhost_result['errors']}"
                             )
 
                         # Same-host port convergence
