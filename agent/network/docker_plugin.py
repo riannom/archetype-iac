@@ -894,6 +894,13 @@ class DockerOVSPlugin:
 
                 for container in containers:
                     attached = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+                    # Build set of already-attached network IDs to prevent duplicates
+                    attached_network_ids = set()
+                    for net_info in attached.values():
+                        nid = net_info.get("NetworkID", "")
+                        if nid:
+                            attached_network_ids.add(nid)
+
                     for network_state in networks:
                         network = None
                         try:
@@ -911,7 +918,10 @@ class DockerOVSPlugin:
                         if not labels.get("archetype.lab_id"):
                             continue
 
+                        # Check by both name AND network ID to catch dual-naming
                         if network_name in attached:
+                            continue
+                        if network.id in attached_network_ids:
                             continue
 
                         try:

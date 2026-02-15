@@ -1740,6 +1740,15 @@ username admin privilege 15 role network-admin nopassword
                         f"Failed to rename {actual_name} -> {intended_name}: {stderr.decode()}"
                     )
                     return
+
+                # Delete the stale duplicate we just renamed to _old_*
+                await asyncio.create_subprocess_exec(
+                    "nsenter", "-t", str(pid), "-n",
+                    "ip", "link", "delete", temp_name,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                logger.info(f"Deleted stale duplicate {temp_name} in {container_name}")
             else:
                 result["errors"].append(
                     f"Failed to rename {actual_name} -> {intended_name}: {error_msg}"
@@ -2593,11 +2602,8 @@ username admin privilege 15 role network-admin nopassword
                 if not name.startswith(legacy_prefix):
                     continue
 
-                labels = (net.attrs.get("Labels") or {})
-                if labels.get(LABEL_LAB_ID) == lab_id:
-                    # Already labeled correctly, skip
-                    continue
-
+                # Legacy-named networks should be removed even if labeled —
+                # the current-format network is the canonical one.
                 # Disconnect any attached containers before removing
                 containers = net.attrs.get("Containers") or {}
                 for cid in containers:
