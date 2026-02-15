@@ -118,7 +118,7 @@ async def test_verify_cross_host_link_missing_tunnel(test_db, sample_lab, multip
         test_db, link_state, {host_a.id: host_a, host_b.id: host_b}
     )
     assert not ok
-    assert error and "tunnel not found" in error
+    assert error and "TUNNEL_MISSING" in error
 
 
 @pytest.mark.asyncio
@@ -177,7 +177,7 @@ async def test_verify_cross_host_link_local_vlan_mismatch_fails(
         test_db, link_state, {host_a.id: host_a, host_b.id: host_b}
     )
     assert not ok
-    assert error and "local VLAN mismatch" in error
+    assert error and "VLAN_MISMATCH" in error
 
 
 @pytest.mark.asyncio

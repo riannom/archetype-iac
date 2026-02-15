@@ -341,6 +341,9 @@ class LinkState(Base):
     is_cross_host: Mapped[bool] = mapped_column(default=False)
     vni: Mapped[int | None] = mapped_column(nullable=True)  # VXLAN Network Identifier
     vlan_tag: Mapped[int | None] = mapped_column(nullable=True)  # Shared VLAN tag for this link
+    # Per-side VLAN tags (local OVS tags on each agent)
+    source_vlan_tag: Mapped[int | None] = mapped_column(nullable=True)
+    target_vlan_tag: Mapped[int | None] = mapped_column(nullable=True)
     source_host_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("hosts.id"), nullable=True)
     target_host_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("hosts.id"), nullable=True)
 

@@ -2827,6 +2827,24 @@ async def delete_bridge_port(port_name: str):
     }
 
 
+@app.put("/overlay/ports/{port_name}/vlan")
+async def set_overlay_port_vlan(port_name: str, request: dict):
+    """Set the VLAN tag on an OVS port.
+
+    Used by the controller to repair VLAN drift without full link recreation.
+    """
+    if not _validate_port_name(port_name):
+        return {"success": False, "error": "Invalid port name"}
+
+    vlan_tag = request.get("vlan_tag")
+    if vlan_tag is None or not isinstance(vlan_tag, int):
+        return {"success": False, "error": "vlan_tag (integer) is required"}
+
+    if await _ovs_set_port_vlan(port_name, vlan_tag):
+        return {"success": True, "port_name": port_name, "vlan_tag": vlan_tag}
+    return {"success": False, "error": f"Failed to set VLAN {vlan_tag} on port {port_name}"}
+
+
 @app.get("/overlay/bridge-ports")
 async def overlay_bridge_ports():
     """Debug: query actual OVS bridge for VXLAN ports and their config."""

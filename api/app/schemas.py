@@ -415,6 +415,8 @@ class LinkStateOut(BaseModel):
     desired_state: str  # "up" or "down"
     actual_state: str  # "up", "down", "unknown", "error"
     error_message: str | None = None
+    source_vlan_tag: int | None = None
+    target_vlan_tag: int | None = None
     source_oper_state: str = "down"
     target_oper_state: str = "down"
     source_oper_reason: str | None = None

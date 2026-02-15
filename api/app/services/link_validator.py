@@ -7,6 +7,11 @@ Key operations:
 - verify_link_connected: Check if a link is actually working
 - verify_same_host_link: Verify VLAN tags match for same-host link
 - verify_cross_host_link: Verify per-link VXLAN tunnels exist on both agents
+
+Error messages use prefixes to indicate the type of failure:
+- VLAN_MISMATCH: Tags drifted but ports exist (lightweight repair possible)
+- TUNNEL_MISSING: VXLAN tunnel port doesn't exist (full recreation needed)
+- PORT_UNREACHABLE: Agent or port not accessible
 """
 from __future__ import annotations
 
@@ -19,6 +24,16 @@ from app.services import interface_mapping as mapping_service
 from app.services.interface_naming import normalize_interface
 
 logger = logging.getLogger(__name__)
+
+# Error type prefixes for structured error identification
+VLAN_MISMATCH = "VLAN_MISMATCH"
+TUNNEL_MISSING = "TUNNEL_MISSING"
+PORT_UNREACHABLE = "PORT_UNREACHABLE"
+
+
+def is_vlan_mismatch(error: str | None) -> bool:
+    """Check if an error message indicates a VLAN mismatch (repairable)."""
+    return error is not None and error.startswith(VLAN_MISMATCH)
 
 
 async def verify_link_connected(
@@ -93,12 +108,21 @@ async def verify_same_host_link(
         return False, f"Could not read VLAN tag for {link_state.target_node}:{link_state.target_interface}"
 
     if source_vlan != target_vlan:
-        return False, f"VLAN mismatch: {link_state.source_node}:{link_state.source_interface}={source_vlan}, {link_state.target_node}:{link_state.target_interface}={target_vlan}"
+        return False, (
+            f"{VLAN_MISMATCH}: {link_state.source_node}:{link_state.source_interface}={source_vlan}, "
+            f"{link_state.target_node}:{link_state.target_interface}={target_vlan}"
+        )
 
     # Update link_state with verified VLAN tag
     if link_state.vlan_tag != source_vlan:
         logger.debug(f"Updating link VLAN tag from {link_state.vlan_tag} to {source_vlan}")
         link_state.vlan_tag = source_vlan
+
+    # Backfill per-side tags if not yet stored
+    if link_state.source_vlan_tag is None or link_state.source_vlan_tag != source_vlan:
+        link_state.source_vlan_tag = source_vlan
+    if link_state.target_vlan_tag is None or link_state.target_vlan_tag != target_vlan:
+        link_state.target_vlan_tag = target_vlan
 
     return True, None
 
@@ -172,7 +196,7 @@ async def verify_cross_host_link(
                 return False, f"Overlay status unavailable on {agent.name}: {status['error']}"
             link_tunnels = status.get("link_tunnels", [])
             if not link_tunnels:
-                return False, f"Per-link VXLAN tunnel not found on {agent.name} for link {link_name}"
+                return False, f"{TUNNEL_MISSING}: on {agent.name} for link {link_name}"
             # Accept recovered tunnels that still have placeholder link_id but correct port name
             expected_port = agent_client.compute_vxlan_port_name(link_state.lab_id, link_name)
             matching_tunnel = next(
@@ -183,7 +207,7 @@ async def verify_cross_host_link(
                 None,
             )
             if not matching_tunnel:
-                return False, f"Per-link VXLAN tunnel not found on {agent.name} for link {link_name}"
+                return False, f"{TUNNEL_MISSING}: on {agent.name} for link {link_name}"
 
             # Ensure each side's local VLAN on the tunnel matches the endpoint's
             # current access VLAN. Recovered tunnels can exist with stale local_vlan
@@ -196,11 +220,17 @@ async def verify_cross_host_link(
             if tunnel_vlan_int is not None and tunnel_vlan_int != expected_vlan:
                 return (
                     False,
-                    f"VXLAN local VLAN mismatch on {agent.name}: "
+                    f"{VLAN_MISMATCH}: VXLAN on {agent.name}: "
                     f"tunnel={tunnel_vlan_int}, endpoint={expected_vlan}",
                 )
         except Exception as e:
             return False, f"Could not check overlay status on {agent.name}: {e}"
+
+    # Backfill per-side tags if not yet stored
+    if link_state.source_vlan_tag is None or link_state.source_vlan_tag != source_vlan:
+        link_state.source_vlan_tag = source_vlan
+    if link_state.target_vlan_tag is None or link_state.target_vlan_tag != target_vlan:
+        link_state.target_vlan_tag = target_vlan
 
     return True, None
 

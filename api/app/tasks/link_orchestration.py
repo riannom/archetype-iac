@@ -605,9 +605,11 @@ async def create_same_host_link(
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
 
-        # Store the reported VLAN tag
+        # Store the reported VLAN tag (same for both sides on same-host links)
         reported_vlan = result.get("vlan_tag")
         link_state.vlan_tag = reported_vlan
+        link_state.source_vlan_tag = reported_vlan
+        link_state.target_vlan_tag = reported_vlan
 
         # Verify the link is actually connected (VLAN tags match)
         if verify:
@@ -708,9 +710,12 @@ async def create_cross_host_link(
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
 
-        # Store VNI (per-link VNI model)
+        # Store VNI and per-side VLAN tags
         vni = result.get("vni", 0)
         link_state.vni = vni
+        local_vlans = result.get("local_vlans", {})
+        link_state.source_vlan_tag = local_vlans.get("a")
+        link_state.target_vlan_tag = local_vlans.get("b")
 
         # Verify the link is actually connected
         if verify:

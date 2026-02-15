@@ -22,7 +22,7 @@ from app import agent_client, models
 from app.config import settings
 from app.db import get_session
 from app.services.link_operational_state import recompute_link_oper_state
-from app.services.link_validator import verify_link_connected
+from app.services.link_validator import verify_link_connected, is_vlan_mismatch
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
 from app.services.interface_naming import normalize_interface
 from app.utils.link import links_needing_reconciliation_filter
@@ -181,7 +181,18 @@ async def reconcile_link_states(session: Session) -> dict:
                     results["skipped"] += 1
                     continue
 
-                # Attempt repair
+                # Try lightweight VLAN repair first if it's a VLAN mismatch
+                if is_vlan_mismatch(error):
+                    vlan_repaired = await attempt_vlan_repair(session, link, host_to_agent)
+                    if vlan_repaired:
+                        # Re-verify after repair
+                        is_valid2, _ = await verify_link_connected(session, link, host_to_agent)
+                        if is_valid2:
+                            results["repaired"] += 1
+                            logger.info(f"Link {link.link_name} VLAN repair succeeded")
+                            continue
+
+                # Fall through to full link repair
                 repaired = await attempt_link_repair(session, link, host_to_agent)
                 if repaired:
                     results["repaired"] += 1
@@ -274,6 +285,7 @@ async def attempt_partial_recovery(
             if result.get("success"):
                 source_ok = True
                 link.source_vxlan_attached = True
+                link.source_vlan_tag = result.get("local_vlan")
                 logger.info(f"Re-attached source side of {link.link_name}")
             else:
                 logger.error(f"Failed to re-attach source: {result.get('error')}")
@@ -297,6 +309,7 @@ async def attempt_partial_recovery(
             if result.get("success"):
                 target_ok = True
                 link.target_vxlan_attached = True
+                link.target_vlan_tag = result.get("local_vlan")
                 logger.info(f"Re-attached target side of {link.link_name}")
             else:
                 logger.error(f"Failed to re-attach target: {result.get('error')}")
@@ -319,6 +332,194 @@ async def attempt_partial_recovery(
         )
         _sync_oper_state(session, link)
         return False
+
+
+async def attempt_vlan_repair(
+    session: Session,
+    link: models.LinkState,
+    host_to_agent: dict[str, models.Host],
+) -> bool:
+    """Lightweight repair: fix VLAN tag drift without full link recreation.
+
+    For same-host links: re-set both ports to the DB-stored vlan_tag.
+    For cross-host links: update the VXLAN tunnel port tag to match
+    the container's current VLAN (which changed after container restart).
+
+    Args:
+        session: Database session
+        link: The link with VLAN mismatch
+        host_to_agent: Map of host_id to Host objects
+
+    Returns:
+        True if repair succeeded, False otherwise
+    """
+    link = get_link_state_by_id_for_update(session, link.id)
+    if not link:
+        return False
+
+    try:
+        if not link.is_cross_host:
+            return await _repair_same_host_vlan(session, link, host_to_agent)
+        else:
+            return await _repair_cross_host_vlan(session, link, host_to_agent)
+    except Exception as e:
+        logger.error(f"VLAN repair failed for {link.link_name}: {e}")
+        return False
+
+
+async def _repair_same_host_vlan(
+    session: Session,
+    link: models.LinkState,
+    host_to_agent: dict[str, models.Host],
+) -> bool:
+    """Repair same-host link by re-matching VLAN tags.
+
+    After a container restart, one side gets a new VLAN tag while the other
+    keeps the old one. Fix by reading both current tags and setting the
+    drifted port to match the other.
+    """
+    agent = host_to_agent.get(link.source_host_id)
+    if not agent:
+        return False
+
+    source_iface = normalize_interface(link.source_interface) if link.source_interface else ""
+    target_iface = normalize_interface(link.target_interface) if link.target_interface else ""
+
+    # Read current VLAN tags from OVS (ground truth)
+    source_vlan = await agent_client.get_interface_vlan_from_agent(
+        agent, link.lab_id, link.source_node, source_iface, read_from_ovs=True,
+    )
+    target_vlan = await agent_client.get_interface_vlan_from_agent(
+        agent, link.lab_id, link.target_node, target_iface, read_from_ovs=True,
+    )
+
+    if source_vlan is None or target_vlan is None:
+        return False
+
+    if source_vlan == target_vlan:
+        # Already matching — update DB and return success
+        link.vlan_tag = source_vlan
+        link.source_vlan_tag = source_vlan
+        link.target_vlan_tag = source_vlan
+        return True
+
+    # Determine which side drifted by comparing to DB-stored tag
+    db_tag = link.vlan_tag
+    if db_tag is not None and source_vlan == db_tag:
+        # Target drifted — set target to match source
+        fix_node, fix_iface, fix_to = link.target_node, target_iface, source_vlan
+    elif db_tag is not None and target_vlan == db_tag:
+        # Source drifted — set source to match target
+        fix_node, fix_iface, fix_to = link.source_node, source_iface, target_vlan
+    else:
+        # Both drifted or no DB tag — pick source as canonical, set target to match
+        fix_node, fix_iface, fix_to = link.target_node, target_iface, source_vlan
+
+    # Get the OVS port name for the drifted interface
+    port_info = await agent_client.get_interface_vlan_from_agent(
+        agent, link.lab_id, fix_node, fix_iface, read_from_ovs=False,
+    )
+    # We need the port name, not just the VLAN. Use the agent's port resolution.
+    # The set_port_vlan endpoint works on port names — we need to resolve
+    # container:interface -> OVS port name. Use the hot_connect approach instead:
+    # just re-call create_link_on_agent which is idempotent.
+    # Actually, for same-host links the simplest fix is to re-call hot_connect
+    # which will re-match the VLAN tags. This is already lightweight.
+    result = await agent_client.create_link_on_agent(
+        agent,
+        lab_id=link.lab_id,
+        source_node=link.source_node,
+        source_interface=source_iface,
+        target_node=link.target_node,
+        target_interface=target_iface,
+    )
+
+    if result.get("success"):
+        new_vlan = result.get("vlan_tag")
+        link.vlan_tag = new_vlan
+        link.source_vlan_tag = new_vlan
+        link.target_vlan_tag = new_vlan
+        logger.info(f"Same-host VLAN repair succeeded for {link.link_name}: tag={new_vlan}")
+        return True
+
+    return False
+
+
+async def _repair_cross_host_vlan(
+    session: Session,
+    link: models.LinkState,
+    host_to_agent: dict[str, models.Host],
+) -> bool:
+    """Repair cross-host link by updating VXLAN tunnel port tags.
+
+    After a container restart, the container port gets a new VLAN tag.
+    The VXLAN tunnel port still has the old tag. Fix by updating the
+    tunnel port to match the container's current tag.
+    """
+    source_agent = host_to_agent.get(link.source_host_id)
+    target_agent = host_to_agent.get(link.target_host_id)
+    if not source_agent or not target_agent:
+        return False
+
+    source_iface = normalize_interface(link.source_interface) if link.source_interface else ""
+    target_iface = normalize_interface(link.target_interface) if link.target_interface else ""
+    vxlan_port = agent_client.compute_vxlan_port_name(link.lab_id, link.link_name)
+
+    repaired = True
+    for side, agent, node, iface, tag_attr in [
+        ("source", source_agent, link.source_node, source_iface, "source_vlan_tag"),
+        ("target", target_agent, link.target_node, target_iface, "target_vlan_tag"),
+    ]:
+        # Read the container port's current VLAN (authoritative after restart)
+        endpoint_vlan = await agent_client.get_interface_vlan_from_agent(
+            agent, link.lab_id, node, iface, read_from_ovs=True,
+        )
+        if endpoint_vlan is None:
+            logger.warning(f"Cannot read {side} endpoint VLAN for {link.link_name}")
+            repaired = False
+            continue
+
+        # Check if the VXLAN tunnel port has the right tag
+        status = await agent_client.get_overlay_status_from_agent(agent)
+        if status.get("error"):
+            repaired = False
+            continue
+
+        matching_tunnel = next(
+            (
+                t for t in status.get("link_tunnels", [])
+                if t.get("link_id") == link.link_name
+                or t.get("interface_name") == vxlan_port
+            ),
+            None,
+        )
+        if not matching_tunnel:
+            # Tunnel port missing entirely — can't do lightweight repair
+            repaired = False
+            continue
+
+        tunnel_vlan = matching_tunnel.get("local_vlan")
+        try:
+            tunnel_vlan_int = int(tunnel_vlan) if tunnel_vlan is not None else None
+        except (TypeError, ValueError):
+            tunnel_vlan_int = None
+
+        if tunnel_vlan_int != endpoint_vlan:
+            # Update the VXLAN port's VLAN tag to match the container
+            ok = await agent_client.set_port_vlan_on_agent(agent, vxlan_port, endpoint_vlan)
+            if ok:
+                setattr(link, tag_attr, endpoint_vlan)
+                logger.info(
+                    f"Cross-host VLAN repair on {agent.name} for {link.link_name}: "
+                    f"tunnel {vxlan_port} tag {tunnel_vlan_int} -> {endpoint_vlan}"
+                )
+            else:
+                repaired = False
+        else:
+            # Tag already correct, just update DB
+            setattr(link, tag_attr, endpoint_vlan)
+
+    return repaired
 
 
 async def attempt_link_repair(
@@ -678,7 +879,16 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
             else:
                 logger.warning(f"Link {link.link_name} verification failed: {error}")
 
-                # Attempt repair
+                # Try lightweight VLAN repair first if it's a VLAN mismatch
+                if is_vlan_mismatch(error):
+                    vlan_repaired = await attempt_vlan_repair(session, link, host_to_agent)
+                    if vlan_repaired:
+                        is_valid2, _ = await verify_link_connected(session, link, host_to_agent)
+                        if is_valid2:
+                            results["repaired"] += 1
+                            continue
+
+                # Fall through to full link repair
                 repaired = await attempt_link_repair(session, link, host_to_agent)
                 if repaired:
                     results["repaired"] += 1

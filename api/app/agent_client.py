@@ -2821,6 +2821,36 @@ async def get_interface_vlan_from_agent(
         return None
 
 
+async def set_port_vlan_on_agent(
+    agent: models.Host,
+    port_name: str,
+    vlan_tag: int,
+) -> bool:
+    """Set the VLAN tag on an OVS port via the agent.
+
+    Args:
+        agent: The agent managing the port
+        port_name: OVS port name (e.g., VXLAN port or container veth)
+        vlan_tag: VLAN tag to set
+
+    Returns:
+        True if successful, False otherwise
+    """
+    url = f"{get_agent_url(agent)}/overlay/ports/{port_name}/vlan"
+    try:
+        result = await _agent_request(
+            "PUT",
+            url,
+            json_body={"vlan_tag": vlan_tag},
+            timeout=10.0,
+            max_retries=0,
+        )
+        return result.get("success", False)
+    except Exception as e:
+        logger.warning(f"Set port VLAN failed on {agent.name}: {e}")
+        return False
+
+
 async def repair_endpoints_on_agent(
     agent: models.Host,
     lab_id: str,
