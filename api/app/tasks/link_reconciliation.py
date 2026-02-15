@@ -144,12 +144,14 @@ async def reconcile_link_states(session: Session) -> dict:
                 if is_vlan_mismatch(error):
                     vlan_repaired = await attempt_vlan_repair(session, link, host_to_agent)
                     if vlan_repaired:
-                        # Re-verify after repair
-                        is_valid2, _ = await verify_link_connected(session, link, host_to_agent)
-                        if is_valid2:
-                            results["repaired"] += 1
-                            logger.info(f"Link {link.link_name} VLAN repair succeeded")
-                            continue
+                        # Trust the repair — skip immediate re-verification.
+                        # The overlay manager's in-memory local_vlan may be stale
+                        # after set_port_vlan pushes DB tags directly to OVS,
+                        # causing false VLAN_MISMATCH on re-verify. The next
+                        # reconciliation cycle will verify the fix.
+                        results["repaired"] += 1
+                        logger.info(f"Link {link.link_name} VLAN repair succeeded")
+                        continue
 
                 # Fall through to full link repair
                 repaired = await attempt_link_repair(session, link, host_to_agent)

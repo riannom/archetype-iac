@@ -4129,6 +4129,68 @@ def _interface_name_to_index(interface_name: str, port_start_index: int = 0) -> 
     return max(0, number - 1)
 
 
+async def _resolve_ovs_port_via_ifindex(
+    container_name: str,
+    interface_name: str,
+) -> tuple[str, int] | None:
+    """Find the correct OVS port for a container interface using ifindex matching.
+
+    The Docker OVS plugin can swap veth-to-interface mappings after restart.
+    This function uses kernel ifindex to find the correct host-side veth for
+    a given container interface, then reads its OVS VLAN tag.
+
+    Returns:
+        (port_name, vlan_tag) tuple, or None if not found.
+    """
+    import docker as docker_lib
+
+    try:
+        client = docker_lib.from_env()
+        container = client.containers.get(container_name)
+    except Exception:
+        return None
+
+    # Read iflink (peer ifindex on host) for the requested interface
+    try:
+        exit_code, output = container.exec_run(
+            ["cat", f"/sys/class/net/{interface_name}/iflink"],
+            demux=False,
+        )
+        if exit_code != 0:
+            return None
+        peer_ifindex = int(output.decode().strip())
+    except Exception:
+        return None
+
+    # Find the OVS port with this ifindex
+    bridge = settings.ovs_bridge_name or "arch-ovs"
+    proc = await asyncio.create_subprocess_exec(
+        "ovs-vsctl", "list-ports", bridge,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return None
+
+    for port_name in stdout.decode().strip().split("\n"):
+        port_name = port_name.strip()
+        if not port_name or not port_name.startswith("vh"):
+            continue
+        proc2 = await asyncio.create_subprocess_exec(
+            "ovs-vsctl", "get", "interface", port_name, "ifindex",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        idx_out, _ = await proc2.communicate()
+        try:
+            if int(idx_out.decode().strip()) == peer_ifindex:
+                vlan_tag = await _ovs_get_port_vlan(port_name)
+                return (port_name, vlan_tag or 0)
+        except (ValueError, TypeError):
+            continue
+
+    return None
+
+
 async def _resolve_ovs_port(
     lab_id: str,
     node_name: str,
@@ -4154,23 +4216,32 @@ async def _resolve_ovs_port(
             libvirt_kind = None
     is_libvirt_node = libvirt_kind is not None
 
-    # --- Try Docker first (fast, in-memory lookup), except for libvirt VMs ---
+    # --- Try Docker first, using ifindex verification to prevent port swap bugs ---
     docker_provider = get_provider("docker")
     if docker_provider is not None and not is_libvirt_node:
         try:
             container_name = docker_provider.get_container_name(lab_id, node_name)
+            # Use ifindex matching for reliable port identification.
+            # The Docker OVS plugin's _discover_endpoint() can swap veth-to-interface
+            # mappings after agent restart, so we verify via kernel ifindex.
+            resolved = await _resolve_ovs_port_via_ifindex(
+                container_name, interface_name
+            )
+            if resolved:
+                return OVSPortInfo(
+                    port_name=resolved[0],
+                    vlan_tag=resolved[1],
+                    provider="docker",
+                )
+            # Ifindex lookup failed (container not running?), fall back to plugin
             plugin = _get_docker_ovs_plugin()
-            # Always try discovery first so stale in-memory endpoint mappings are
-            # refreshed after container/interface reattachments.
             ep = await plugin._discover_endpoint(lab_id, container_name, interface_name)
             if not ep:
-                # Fall back to in-memory lookup if discovery cannot find the endpoint.
                 for endpoint in plugin.endpoints.values():
                     if endpoint.container_name == container_name and endpoint.interface_name == interface_name:
                         ep = endpoint
                         break
             if ep:
-                # Validate the port actually exists on OVS
                 if not await plugin._validate_endpoint_exists(ep):
                     logger.warning(
                         f"Endpoint for {container_name}:{interface_name} stale "
@@ -5255,8 +5326,22 @@ async def get_interface_vlan(
             except Exception:
                 is_libvirt_node = False
 
-        # Try Docker provider first (fast path), except for libvirt nodes.
         docker_provider = get_provider("docker")
+
+        # When read_from_ovs is requested (verification), use ifindex-based
+        # resolution to avoid the Docker plugin's port swap bug. The plugin
+        # can return the wrong host_veth after container restart.
+        if read_from_ovs and docker_provider is not None and not is_libvirt_node:
+            container_name = docker_provider.get_container_name(lab_id, node)
+            resolved = await _resolve_ovs_port_via_ifindex(container_name, interface)
+            if resolved:
+                return PortVlanResponse(
+                    container=container_name,
+                    interface=interface,
+                    vlan_tag=resolved[1],
+                )
+
+        # Fast path: Docker plugin in-memory lookup (non-verification reads).
         if docker_provider is not None and not is_libvirt_node:
             container_name = docker_provider.get_container_name(lab_id, node)
             vlan_tag = await plugin.get_endpoint_vlan(
