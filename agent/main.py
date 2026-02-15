@@ -2997,38 +2997,106 @@ async def declare_overlay_state(request: DeclareOverlayStateRequest):
 async def get_lab_port_state(lab_id: str) -> PortStateResponse:
     """Get OVS port state for all container interfaces in a lab.
 
-    Returns port names, VLAN tags, and carrier state for bulk
-    InterfaceMapping refresh. Lighter than /ovs-plugin/labs/{lab_id}/ports
-    (no traffic stats).
+    Uses ifindex matching to verify correct veth-to-interface mapping,
+    bypassing stale Docker plugin state that can have swapped mappings
+    after agent restarts. Reads actual VLAN tags from OVS.
     """
-    if not settings.enable_ovs_plugin:
-        return PortStateResponse(ports=[])
+    import asyncio
+    import re
 
     try:
-        plugin = _get_docker_ovs_plugin()
-        ports_data = await plugin.get_lab_ports(lab_id)
+        docker_provider = get_provider("docker")
+        if docker_provider is None:
+            return PortStateResponse(ports=[])
 
+        # Step 1: Get all running containers for this lab
+        import docker as docker_lib
+        client = docker_lib.from_env()
+        containers = client.containers.list(
+            filters={"label": f"archetype.lab_id={lab_id}"},
+        )
+        if not containers:
+            return PortStateResponse(ports=[])
+
+        # Step 2: Build ifindex -> ovs_port_name map from OVS
+        bridge = settings.ovs_bridge_name or "arch-ovs"
+        proc = await asyncio.create_subprocess_exec(
+            "ovs-vsctl", "list-ports", bridge,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        ovs_ports = [
+            p.strip() for p in stdout.decode().strip().split("\n")
+            if p.strip() and p.strip().startswith("vh")
+        ]
+
+        ifindex_to_port: dict[int, tuple[str, int]] = {}  # ifindex -> (name, tag)
+        for port_name in ovs_ports:
+            proc = await asyncio.create_subprocess_exec(
+                "ovs-vsctl", "get", "interface", port_name, "ifindex",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            idx_out, _ = await proc.communicate()
+            proc2 = await asyncio.create_subprocess_exec(
+                "ovs-vsctl", "get", "port", port_name, "tag",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            tag_out, _ = await proc2.communicate()
+            try:
+                ifidx = int(idx_out.decode().strip())
+                tag_str = tag_out.decode().strip()
+                tag = int(tag_str) if tag_str and tag_str != "[]" else 0
+                ifindex_to_port[ifidx] = (port_name, tag)
+            except (ValueError, TypeError):
+                continue
+
+        # Step 3: For each container, read interface iflinks and match
         ports = []
-        for p in ports_data:
-            container = p.get("container") or ""
-            if not container:
-                continue  # Skip orphaned ports with no container
-
-            # Extract node name from container name (archetype-<uuid>-<node>)
-            # UUID is exactly 36 chars with dashes, but may be truncated
-            import re
+        for container in containers:
+            # Extract node name
+            cname = container.name or ""
             match = re.match(
                 r'archetype-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9-]+-(.+)$',
-                container,
+                cname,
             )
-            node_name = match.group(1) if match else container
+            node_name = match.group(1) if match else cname
 
-            ports.append(PortInfo(
-                node_name=node_name,
-                interface_name=p.get("interface", ""),
-                ovs_port_name=p.get("port_name", ""),
-                vlan_tag=p.get("vlan_tag", 0),
-            ))
+            # Get all ethN interfaces and their peer iflinks
+            try:
+                exit_code, output = container.exec_run(
+                    ["sh", "-c",
+                     "for iface in /sys/class/net/eth*; do "
+                     "name=$(basename $iface); "
+                     "iflink=$(cat $iface/iflink 2>/dev/null); "
+                     "echo $name:$iflink; done"],
+                    demux=False,
+                )
+                if exit_code != 0:
+                    continue
+                iface_output = output.decode("utf-8", errors="replace")
+            except Exception:
+                continue
+
+            for line in iface_output.strip().split("\n"):
+                if ":" not in line:
+                    continue
+                iface_name, peer_idx_str = line.strip().split(":", 1)
+                if iface_name == "eth0":
+                    continue  # Skip management interface
+                try:
+                    peer_ifindex = int(peer_idx_str.strip())
+                except (ValueError, TypeError):
+                    continue
+
+                port_info = ifindex_to_port.get(peer_ifindex)
+                if port_info:
+                    ovs_port_name, vlan_tag = port_info
+                    ports.append(PortInfo(
+                        node_name=node_name,
+                        interface_name=iface_name,
+                        ovs_port_name=ovs_port_name,
+                        vlan_tag=vlan_tag,
+                    ))
 
         return PortStateResponse(ports=ports)
     except Exception as e:
