@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1640,6 +1641,28 @@ class OverlayManager:
                         )
                     else:
                         status = "converged"
+
+                    # Enforce MTU on existing port
+                    if mtu > 0:
+                        try:
+                            rc, stdout, _ = await self._run_cmd(
+                                ["ip", "link", "show", port_name],
+                            )
+                            if rc == 0:
+                                mtu_match = re.search(r"mtu (\d+)", stdout)
+                                current_mtu = int(mtu_match.group(1)) if mtu_match else 0
+                                if current_mtu != mtu:
+                                    await self._run_cmd(
+                                        ["ip", "link", "set", port_name, "mtu", str(mtu)]
+                                    )
+                                    if status == "converged":
+                                        status = "updated"
+                                    logger.info(
+                                        f"Declare-state: updated {port_name} MTU "
+                                        f"{current_mtu} -> {mtu}"
+                                    )
+                        except Exception as e:
+                            logger.warning(f"MTU enforcement failed for {port_name}: {e}")
 
                     # Update in-memory tracking with real link_id
                     self._link_tunnels[link_id] = LinkTunnel(

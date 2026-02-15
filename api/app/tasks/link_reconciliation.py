@@ -188,6 +188,11 @@ async def run_overlay_convergence(
     Returns:
         Dict with per-agent results
     """
+    # Read overlay MTU from DB (source of truth)
+    from app.routers.infrastructure import get_or_create_settings
+    infra = get_or_create_settings(session)
+    overlay_mtu = infra.overlay_mtu or 0
+
     # Single joined query: active tunnels with desired_state="up"
     tunnels = (
         session.query(models.VxlanTunnel)
@@ -218,7 +223,7 @@ async def run_overlay_convergence(
             "remote_ip": tunnel.agent_b_ip,
             "expected_vlan": ls.source_vlan_tag or 0,
             "port_name": port_name,
-            "mtu": 0,
+            "mtu": overlay_mtu,
         })
 
         # Side B (target)
@@ -230,7 +235,7 @@ async def run_overlay_convergence(
             "remote_ip": tunnel.agent_a_ip,
             "expected_vlan": ls.target_vlan_tag or 0,
             "port_name": port_name,
-            "mtu": 0,
+            "mtu": overlay_mtu,
         })
 
     # Also protect in-progress cross-host links (creating/connecting)
@@ -257,7 +262,7 @@ async def run_overlay_convergence(
                         "remote_ip": "",
                         "expected_vlan": 0,
                         "port_name": port_name,
-                        "mtu": 0,
+                        "mtu": overlay_mtu,
                     })
 
     # Call each online agent in parallel

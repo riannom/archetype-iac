@@ -704,6 +704,12 @@ class DockerOVSPlugin:
 
         for endpoint_id in stale_endpoint_ids:
             ep = self.endpoints.pop(endpoint_id)
+            # Delete the actual OVS port (may already be gone)
+            if ep.host_veth:
+                try:
+                    await self._delete_port(self._bridge_name, ep.host_veth)
+                except Exception:
+                    pass  # Port already removed
             self._release_vlan(ep.vlan_tag)
             logger.info(
                 "cleanup_stale_state: removed stale endpoint %s (container=%s, iface=%s, vlan=%d)",
