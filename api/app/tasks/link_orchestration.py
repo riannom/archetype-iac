@@ -18,6 +18,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
+from app.agent_client import compute_vxlan_port_name
 from app.services.link_operational_state import recompute_link_oper_state
 from app.services.link_manager import LinkManager
 from app.services.link_validator import verify_link_connected, update_interface_mappings
@@ -516,11 +517,14 @@ async def create_external_network_links(
                             agent_b_id=remote_agent.id,
                             agent_b_ip=remote_ip,
                             status="active",
+                            port_name=compute_vxlan_port_name(lab_id, link_state.link_name),
                         )
                         session.add(tunnel)
                     else:
                         existing_tunnel.vni = vni
                         existing_tunnel.status = "active"
+                        if not existing_tunnel.port_name:
+                            existing_tunnel.port_name = compute_vxlan_port_name(lab_id, link_state.link_name)
 
                     success_count += 1
                     log_parts.append(
@@ -708,7 +712,10 @@ async def create_cross_host_link(
 
         if not result.get("success"):
             link_state.actual_state = "error"
-            link_state.error_message = result.get("error", "Link tunnel setup failed")
+            error_msg = result.get("error", "Link tunnel setup failed")
+            if result.get("partial_state"):
+                error_msg = f"PARTIAL_STATE: {error_msg}"
+            link_state.error_message = error_msg
             _sync_oper_state(session, link_state)
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
@@ -793,11 +800,14 @@ async def create_cross_host_link(
                 agent_b_id=agent_b.id,
                 agent_b_ip=agent_ip_b,
                 status="active",
+                port_name=compute_vxlan_port_name(lab_id, link_state.link_name),
             )
             session.add(tunnel)
         else:
             existing_tunnel.vni = vni
             existing_tunnel.status = "active"
+            if not existing_tunnel.port_name:
+                existing_tunnel.port_name = compute_vxlan_port_name(lab_id, link_state.link_name)
 
         # Only now mark as "up" and set attachment flags
         link_state.actual_state = "up"

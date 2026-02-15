@@ -1150,3 +1150,83 @@ class TransportConfigResponse(BaseModel):
     transport_ip: str | None = None  # IP/CIDR
     desired_mtu: int = 9000
     data_plane_interface: str | None = None  # For dedicated mode
+
+
+# --- Overlay convergence (declare-state) ---
+
+
+class DeclaredTunnel(BaseModel):
+    """API -> Agent: Desired state for a single VXLAN tunnel port."""
+    link_id: str          # link_state.link_name
+    lab_id: str
+    vni: int
+    local_ip: str
+    remote_ip: str
+    expected_vlan: int    # Per-side VLAN tag from LinkState
+    port_name: str        # Deterministic OVS port name (vxlan-<hash>)
+    mtu: int = 0
+
+
+class DeclareOverlayStateRequest(BaseModel):
+    """API -> Agent: Full desired overlay state."""
+    tunnels: list[DeclaredTunnel]
+
+
+class DeclaredTunnelResult(BaseModel):
+    """Agent -> API: Result for a single declared tunnel."""
+    link_id: str
+    lab_id: str
+    status: str           # "converged" | "created" | "updated" | "error"
+    actual_vlan: int | None = None
+    error: str | None = None
+
+
+class DeclareOverlayStateResponse(BaseModel):
+    """Agent -> API: Results of overlay convergence."""
+    results: list[DeclaredTunnelResult]
+    orphans_removed: list[str] = []
+
+
+# --- Same-host port convergence (declare-state) ---
+
+
+class DeclaredPortPairing(BaseModel):
+    """API -> Agent: Desired state for a same-host link."""
+    link_name: str
+    lab_id: str
+    port_a: str           # OVS port name for source
+    port_b: str           # OVS port name for target
+    vlan_tag: int         # Shared VLAN tag
+
+
+class DeclarePortStateRequest(BaseModel):
+    """API -> Agent: Full desired same-host port state."""
+    pairings: list[DeclaredPortPairing]
+
+
+class DeclaredPortResult(BaseModel):
+    """Agent -> API: Result for a single port pairing."""
+    link_name: str
+    lab_id: str
+    status: str           # "converged" | "updated" | "error"
+    actual_vlan: int | None = None
+    error: str | None = None
+
+
+class DeclarePortStateResponse(BaseModel):
+    """Agent -> API: Results of same-host port convergence."""
+    results: list[DeclaredPortResult]
+
+
+class PortInfo(BaseModel):
+    """Agent -> API: OVS port state for a single container interface."""
+    node_name: str
+    interface_name: str
+    ovs_port_name: str
+    vlan_tag: int
+    carrier: str = "unknown"
+
+
+class PortStateResponse(BaseModel):
+    """Agent -> API: All OVS port state for a lab."""
+    ports: list[PortInfo]

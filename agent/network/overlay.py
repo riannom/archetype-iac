@@ -220,7 +220,6 @@ class OverlayManager:
         self._bridges: dict[str, OverlayBridge] = {}  # key -> bridge (legacy)
         self._vteps: dict[str, Vtep] = {}  # remote_ip -> VTEP (legacy trunk model)
         self._link_tunnels: dict[str, LinkTunnel] = {}  # link_id -> per-link VXLAN port
-        self._vni_allocator = VniAllocator()
         self._ovs_initialized = False
         self._bridge_name = settings.ovs_bridge_name  # Default: "arch-ovs"
         self._mtu_cache: dict[str, int] = {}  # remote_ip -> discovered path MTU
@@ -476,8 +475,8 @@ class OverlayManager:
         combined = f"{sorted_ips[0]}:{sorted_ips[1]}"
         hash_val = int(hashlib.md5(combined.encode()).hexdigest()[:8], 16)
         # Map to VNI range (avoid first 1000 reserved)
-        vni_range = self._vni_allocator._max - self._vni_allocator._base
-        return self._vni_allocator._base + (hash_val % vni_range)
+        vni_range = settings.vxlan_vni_max - settings.vxlan_vni_base
+        return settings.vxlan_vni_base + (hash_val % vni_range)
 
     async def ensure_vtep(
         self,
@@ -597,9 +596,9 @@ class OverlayManager:
             logger.info(f"Tunnel already exists: {key}")
             return self._tunnels[key]
 
-        # Allocate VNI if not provided
+        # VNI must be provided by the API (deterministic hash)
         if vni is None:
-            vni = self._vni_allocator.allocate(lab_id, link_id)
+            raise ValueError("VNI must be provided by the API controller")
 
         # Use overlay_mtu directly — with df=unset, outer fragmentation is transparent
         tenant_mtu = settings.overlay_mtu if settings.overlay_mtu > 0 else 1500
@@ -659,9 +658,6 @@ class OverlayManager:
         try:
             # Delete OVS port and Linux VXLAN device
             await self._delete_vxlan_device(tunnel.interface_name, self._bridge_name)
-
-            # Release VNI
-            self._vni_allocator.release(tunnel.lab_id, tunnel.link_id)
 
             # Remove from tracking
             if tunnel.key in self._tunnels:
@@ -1481,42 +1477,36 @@ class OverlayManager:
             except Exception as e:
                 result["errors"].append(f"LinkTunnel {lt.interface_name}: {e}")
 
-        # Release all VNI allocations for this lab
-        result["vnis_released"] = self._vni_allocator.release_lab(lab_id)
-
-        # Prune any recovered allocations that no longer exist
-        try:
-            result["vnis_recovered_pruned"] = await self._vni_allocator.prune_recovered_from_system(
-                self._bridge_name
-            )
-        except Exception as e:
-            result["errors"].append(f"VNI prune: {e}")
-
         logger.info(f"Lab {lab_id} overlay cleanup: {result}")
         return result
 
-    async def recover_allocations(self) -> int:
-        """Recover VNI allocations from system state on startup.
-
-        Returns:
-            Number of VNIs recovered
-        """
-        return await self._vni_allocator.recover_from_system()
-
     async def recover_link_tunnels(self) -> int:
-        """Recover link tunnel tracking from OVS/Linux state on startup.
+        """Recover link tunnel tracking from local cache or OVS state on startup.
 
-        After agent restart, _link_tunnels is empty but VXLAN ports may still
-        exist on OVS. Without recovery, the periodic cleanup treats them as
-        orphans and deletes them, breaking cross-host links.
-
-        Scans for vxlan-* ports on OVS, reads VNI/remote/local from the Linux
-        device, and rebuilds _link_tunnels entries so they're protected from
-        orphan cleanup.
+        Tries local declared-state cache first (provides real link IDs).
+        Falls back to OVS port scan if no cache (placeholder link IDs).
 
         Returns:
             Number of link tunnels recovered
         """
+        # Try cache-based recovery first (has real link_ids)
+        cached = await self.load_declared_state_cache()
+        if cached:
+            try:
+                result = await self.declare_state(cached)
+                cache_recovered = sum(
+                    1 for r in result["results"]
+                    if r["status"] in ("converged", "created", "updated")
+                )
+                if cache_recovered > 0:
+                    logger.info(
+                        f"Recovered {cache_recovered} link tunnel(s) from declared-state cache"
+                    )
+                    return cache_recovered
+            except Exception as e:
+                logger.warning(f"Cache-based recovery failed, falling back to OVS scan: {e}")
+
+        # Fallback: scan OVS ports (placeholder link_ids)
         recovered = 0
         try:
             code, stdout, _ = await self._ovs_vsctl(
@@ -1583,6 +1573,276 @@ class OverlayManager:
         """Get all bridges for a lab."""
         return [b for b in self._bridges.values() if b.lab_id == lab_id]
 
+    async def declare_state(
+        self,
+        tunnels: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Converge overlay state to match API-declared desired state.
+
+        For each declared tunnel:
+        - Port exists with correct VNI + VLAN -> "converged"
+        - Port exists with wrong VLAN -> update tag -> "updated"
+        - Port missing -> create -> "created"
+        - Failure -> "error"
+
+        For declared labs, any vxlan-* port not in the declared set is
+        deleted as an orphan (scoped to declared labs only).
+
+        Args:
+            tunnels: List of declared tunnel dicts with keys:
+                link_id, lab_id, vni, local_ip, remote_ip,
+                expected_vlan, port_name, mtu
+
+        Returns:
+            Dict with "results" list and "orphans_removed" list
+        """
+        await self._ensure_ovs_bridge()
+
+        results = []
+        orphans_removed = []
+        declared_labs = set()
+        declared_port_names = set()
+
+        # Batch read all OVS port state
+        ovs_ports = await self._batch_read_ovs_ports()
+
+        for t in tunnels:
+            link_id = t["link_id"]
+            lab_id = t["lab_id"]
+            vni = t["vni"]
+            local_ip = t["local_ip"]
+            remote_ip = t["remote_ip"]
+            expected_vlan = t["expected_vlan"]
+            port_name = t["port_name"]
+            mtu = t.get("mtu", 0)
+
+            declared_labs.add(lab_id)
+            declared_port_names.add(port_name)
+
+            try:
+                port_info = ovs_ports.get(port_name)
+
+                if port_info:
+                    # Port exists — check if it needs updating
+                    current_tag = port_info.get("tag", 0)
+                    if current_tag == expected_vlan and expected_vlan > 0:
+                        # Already converged
+                        status = "converged"
+                    elif expected_vlan > 0:
+                        # Update VLAN tag
+                        await self._ovs_vsctl(
+                            "set", "port", port_name, f"tag={expected_vlan}"
+                        )
+                        status = "updated"
+                        logger.info(
+                            f"Declare-state: updated {port_name} tag "
+                            f"{current_tag} -> {expected_vlan}"
+                        )
+                    else:
+                        status = "converged"
+
+                    # Update in-memory tracking with real link_id
+                    self._link_tunnels[link_id] = LinkTunnel(
+                        link_id=link_id,
+                        vni=vni,
+                        local_ip=local_ip,
+                        remote_ip=remote_ip,
+                        local_vlan=expected_vlan,
+                        interface_name=port_name,
+                        lab_id=lab_id,
+                        tenant_mtu=mtu if mtu > 0 else settings.overlay_mtu,
+                    )
+
+                    results.append({
+                        "link_id": link_id,
+                        "lab_id": lab_id,
+                        "status": status,
+                        "actual_vlan": expected_vlan if status != "converged" else current_tag,
+                    })
+                else:
+                    # Port missing — create it
+                    tenant_mtu = mtu if mtu > 0 else (
+                        settings.overlay_mtu if settings.overlay_mtu > 0 else 1500
+                    )
+
+                    # Clean up any leftover Linux interface
+                    if await self._ip_link_exists(port_name):
+                        await self._run_cmd(["ip", "link", "delete", port_name])
+
+                    await self._create_vxlan_device(
+                        name=port_name,
+                        vni=vni,
+                        local_ip=local_ip,
+                        remote_ip=remote_ip,
+                        bridge=self._bridge_name,
+                        vlan_tag=expected_vlan if expected_vlan > 0 else None,
+                        tenant_mtu=tenant_mtu,
+                    )
+
+                    self._link_tunnels[link_id] = LinkTunnel(
+                        link_id=link_id,
+                        vni=vni,
+                        local_ip=local_ip,
+                        remote_ip=remote_ip,
+                        local_vlan=expected_vlan,
+                        interface_name=port_name,
+                        lab_id=lab_id,
+                        tenant_mtu=tenant_mtu,
+                    )
+
+                    results.append({
+                        "link_id": link_id,
+                        "lab_id": lab_id,
+                        "status": "created",
+                        "actual_vlan": expected_vlan,
+                    })
+                    logger.info(
+                        f"Declare-state: created {port_name} "
+                        f"(VNI {vni}, VLAN {expected_vlan}) to {remote_ip}"
+                    )
+
+            except Exception as e:
+                results.append({
+                    "link_id": link_id,
+                    "lab_id": lab_id,
+                    "status": "error",
+                    "error": str(e),
+                })
+                logger.error(f"Declare-state error for {port_name}: {e}")
+
+        # Orphan cleanup: for declared labs only, delete vxlan-* ports
+        # not in the declared set
+        if declared_labs:
+            for port_name, port_info in ovs_ports.items():
+                if port_name in declared_port_names:
+                    continue
+                if not port_name.startswith("vxlan-"):
+                    continue
+                # Check if this port belongs to any declared lab via _link_tunnels
+                belongs_to_declared_lab = False
+                for lt in self._link_tunnels.values():
+                    if lt.interface_name == port_name and lt.lab_id in declared_labs:
+                        belongs_to_declared_lab = True
+                        break
+                # Only remove if we can confirm it belongs to a declared lab,
+                # or if no tracking exists (recovered placeholder)
+                lt_for_port = next(
+                    (lt for lt in self._link_tunnels.values()
+                     if lt.interface_name == port_name),
+                    None,
+                )
+                if lt_for_port and lt_for_port.lab_id not in declared_labs:
+                    continue  # Skip ports from non-declared labs
+
+                try:
+                    await self._delete_vxlan_device(port_name, self._bridge_name)
+                    orphans_removed.append(port_name)
+                    # Remove from tracking
+                    keys_to_remove = [
+                        k for k, v in self._link_tunnels.items()
+                        if v.interface_name == port_name
+                    ]
+                    for k in keys_to_remove:
+                        del self._link_tunnels[k]
+                    logger.info(f"Declare-state: removed orphan {port_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove orphan {port_name}: {e}")
+
+        # Write local cache
+        await self._write_declared_state_cache(tunnels)
+
+        return {"results": results, "orphans_removed": orphans_removed}
+
+    async def _batch_read_ovs_ports(self) -> dict[str, dict[str, Any]]:
+        """Read all OVS port state in a single call.
+
+        Returns:
+            Dict mapping port_name -> {tag, type, options}
+        """
+        result = {}
+        code, stdout, _ = await self._ovs_vsctl("list-ports", self._bridge_name)
+        if code != 0:
+            return result
+
+        port_names = [p.strip() for p in stdout.strip().split("\n") if p.strip()]
+
+        for port_name in port_names:
+            if not port_name.startswith("vxlan"):
+                continue
+
+            info: dict[str, Any] = {"name": port_name}
+
+            # Read tag
+            code, tag_out, _ = await self._ovs_vsctl("get", "port", port_name, "tag")
+            if code == 0:
+                tag_str = tag_out.strip()
+                if tag_str and tag_str != "[]":
+                    try:
+                        info["tag"] = int(tag_str)
+                    except ValueError:
+                        info["tag"] = 0
+                else:
+                    info["tag"] = 0
+            else:
+                info["tag"] = 0
+
+            # Read interface type
+            code, type_out, _ = await self._ovs_vsctl("get", "interface", port_name, "type")
+            if code == 0:
+                info["type"] = type_out.strip().strip('"')
+
+            result[port_name] = info
+
+        return result
+
+    async def _write_declared_state_cache(self, tunnels: list[dict[str, Any]]) -> None:
+        """Write declared state to local cache for API-less recovery."""
+        try:
+            from datetime import datetime, timezone
+
+            cache_path = Path(settings.workspace_path) / "declared_overlay_state.json"
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+            cache_data = {
+                "declared_at": datetime.now(timezone.utc).isoformat(),
+                "tunnels": tunnels,
+            }
+
+            tmp_path = cache_path.with_suffix(".tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(cache_data, f, indent=2)
+            tmp_path.rename(cache_path)
+        except Exception as e:
+            logger.warning(f"Failed to write declared state cache: {e}")
+
+    async def load_declared_state_cache(self) -> list[dict[str, Any]] | None:
+        """Load declared state from local cache for recovery.
+
+        Returns:
+            List of tunnel dicts if cache exists and is valid, None otherwise
+        """
+        try:
+            cache_path = Path(settings.workspace_path) / "declared_overlay_state.json"
+            if not cache_path.exists():
+                return None
+
+            with open(cache_path, "r") as f:
+                cache_data = json.load(f)
+
+            tunnels = cache_data.get("tunnels")
+            if not tunnels:
+                return None
+
+            declared_at = cache_data.get("declared_at", "")
+            logger.info(
+                f"Loaded declared state cache with {len(tunnels)} tunnels "
+                f"(declared at {declared_at})"
+            )
+            return tunnels
+        except Exception as e:
+            logger.warning(f"Failed to load declared state cache: {e}")
+            return None
+
     def get_tunnel_status(self) -> dict[str, Any]:
         """Get status of all tunnels for debugging/monitoring."""
         return {
@@ -1645,305 +1905,3 @@ class OverlayManager:
         }
 
 
-class VniAllocator:
-    """Allocates unique VNIs for VXLAN tunnels.
-
-    Allocations are persisted to disk to survive agent restarts.
-    On startup, the allocator recovers state from:
-    1. Persisted allocation file (if exists)
-    2. Scanning existing VXLAN interfaces on the system
-    """
-
-    def __init__(
-        self,
-        base: int | None = None,
-        max_vni: int | None = None,
-        persistence_path: Path | None = None,
-    ):
-        self._base = base if base is not None else settings.vxlan_vni_base
-        self._max = max_vni if max_vni is not None else settings.vxlan_vni_max
-        self._allocated: dict[str, int] = {}  # key -> vni
-        self._next_vni = self._base
-
-        # Persistence file path
-        if persistence_path is None:
-            workspace = Path(settings.workspace_path)
-            workspace.mkdir(parents=True, exist_ok=True)
-            persistence_path = workspace / "vni_allocations.json"
-        self._persistence_path = persistence_path
-
-        # Load persisted state on init
-        self._load_from_disk()
-
-    def _load_from_disk(self) -> None:
-        """Load allocations from persistence file."""
-        if not self._persistence_path.exists():
-            return
-
-        try:
-            with open(self._persistence_path, "r") as f:
-                data = json.load(f)
-
-            self._allocated = data.get("allocations", {})
-            self._next_vni = data.get("next_vni", self._base)
-
-            # Validate loaded VNIs are in range
-            valid_allocations = {}
-            for key, vni in self._allocated.items():
-                if self._base <= vni <= self._max:
-                    valid_allocations[key] = vni
-                else:
-                    logger.warning(f"Ignoring out-of-range VNI allocation: {key}={vni}")
-
-            self._allocated = valid_allocations
-            logger.info(f"Loaded {len(self._allocated)} VNI allocations from disk")
-
-        except Exception as e:
-            logger.warning(f"Failed to load VNI allocations from disk: {e}")
-            self._allocated = {}
-
-    def _save_to_disk(self) -> None:
-        """Save allocations to persistence file."""
-        try:
-            data = {
-                "allocations": self._allocated,
-                "next_vni": self._next_vni,
-            }
-            # Write atomically via temp file
-            tmp_path = self._persistence_path.with_suffix(".tmp")
-            with open(tmp_path, "w") as f:
-                json.dump(data, f, indent=2)
-            tmp_path.rename(self._persistence_path)
-
-        except Exception as e:
-            logger.warning(f"Failed to save VNI allocations to disk: {e}")
-
-    async def recover_from_system(self) -> int:
-        """Scan existing VXLAN interfaces/ports and recover allocations.
-
-        This should be called on agent startup to detect VNIs in use
-        that may not be in the persisted file (e.g., after crash).
-
-        Returns:
-            Number of VNIs recovered from system state
-        """
-        recovered = 0
-        used_vnis = set(self._allocated.values())
-
-        try:
-            # Check OVS VXLAN ports first
-            proc = await asyncio.create_subprocess_exec(
-                "ovs-vsctl", "list-ports", settings.ovs_bridge_name,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-
-            if proc.returncode == 0 and stdout:
-                ports = stdout.decode().strip().split("\n")
-                for port in ports:
-                    if port.startswith("vxlan"):
-                        try:
-                            vni = int(port[5:])  # Extract VNI from name
-                            if self._base <= vni <= self._max and vni not in used_vnis:
-                                placeholder_key = f"_recovered:{port}"
-                                self._allocated[placeholder_key] = vni
-                                used_vnis.add(vni)
-                                recovered += 1
-                                logger.info(f"Recovered VNI {vni} from OVS port {port}")
-                        except ValueError:
-                            # Non-numeric VXLAN port (e.g., vxlan-<hash>) - read VNI from device
-                            try:
-                                proc_info = await asyncio.create_subprocess_exec(
-                                    "ip", "-d", "link", "show", port,
-                                    stdout=asyncio.subprocess.PIPE,
-                                    stderr=asyncio.subprocess.PIPE,
-                                )
-                                info_out, _ = await proc_info.communicate()
-                                if proc_info.returncode != 0:
-                                    continue
-                                parts = info_out.decode().split()
-                                vni = 0
-                                for i, part in enumerate(parts):
-                                    if part == "id" and i + 1 < len(parts):
-                                        try:
-                                            vni = int(parts[i + 1])
-                                        except ValueError:
-                                            vni = 0
-                                        break
-                                if vni and self._base <= vni <= self._max and vni not in used_vnis:
-                                    placeholder_key = f"_recovered:{port}"
-                                    self._allocated[placeholder_key] = vni
-                                    used_vnis.add(vni)
-                                    recovered += 1
-                                    logger.info(f"Recovered VNI {vni} from OVS port {port}")
-                            except Exception:
-                                continue
-
-            # Also check Linux VXLAN interfaces (legacy)
-            proc = await asyncio.create_subprocess_exec(
-                "ip", "-j", "link", "show", "type", "vxlan",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-
-            if proc.returncode == 0 and stdout:
-                interfaces = json.loads(stdout.decode()) if stdout else []
-
-                for iface in interfaces:
-                    name = iface.get("ifname", "")
-                    if name.startswith("vxlan"):
-                        try:
-                            vni = int(name[5:])
-                            if self._base <= vni <= self._max and vni not in used_vnis:
-                                placeholder_key = f"_recovered:{name}"
-                                self._allocated[placeholder_key] = vni
-                                used_vnis.add(vni)
-                                recovered += 1
-                                logger.info(f"Recovered VNI {vni} from Linux interface {name}")
-                        except ValueError:
-                            continue
-
-            if recovered > 0:
-                self._save_to_disk()
-                logger.info(f"Recovered {recovered} VNIs from system state")
-
-        except Exception as e:
-            logger.warning(f"Failed to recover VNIs from system: {e}")
-
-        return recovered
-
-    async def prune_recovered_from_system(self, bridge_name: str) -> int:
-        """Remove recovered allocations that no longer exist on the system.
-
-        Returns number of recovered entries removed.
-        """
-        removed = 0
-        existing_names: set[str] = set()
-
-        try:
-            # OVS ports (includes vxlan-<hash> access ports)
-            proc = await asyncio.create_subprocess_exec(
-                "ovs-vsctl", "list-ports", bridge_name,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            if proc.returncode == 0 and stdout:
-                existing_names.update(
-                    p.strip() for p in stdout.decode().split("\n") if p.strip()
-                )
-
-            # Linux VXLAN interfaces (legacy vxlan<id>)
-            proc = await asyncio.create_subprocess_exec(
-                "ip", "-j", "link", "show", "type", "vxlan",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            if proc.returncode == 0 and stdout:
-                interfaces = json.loads(stdout.decode()) if stdout else []
-                for iface in interfaces:
-                    name = iface.get("ifname", "")
-                    if name:
-                        existing_names.add(name)
-
-            keys_to_remove = [
-                k for k in self._allocated.keys()
-                if k.startswith("_recovered:") and k.split(":", 1)[1] not in existing_names
-            ]
-            for key in keys_to_remove:
-                del self._allocated[key]
-                removed += 1
-
-            if removed > 0:
-                self._save_to_disk()
-                logger.info(f"Pruned {removed} recovered VNI allocations")
-
-        except Exception as e:
-            logger.warning(f"Failed to prune recovered VNI allocations: {e}")
-
-        return removed
-
-    def allocate(self, lab_id: str, link_id: str) -> int:
-        """Allocate a VNI for a link.
-
-        Args:
-            lab_id: Lab identifier
-            link_id: Link identifier
-
-        Returns:
-            Allocated VNI
-
-        Raises:
-            RuntimeError: If no VNIs available
-        """
-        key = f"{lab_id}:{link_id}"
-
-        # Return existing allocation if present
-        if key in self._allocated:
-            return self._allocated[key]
-
-        # Find next available VNI
-        attempts = 0
-        while self._next_vni in self._allocated.values():
-            self._next_vni += 1
-            if self._next_vni > self._max:
-                self._next_vni = self._base
-            attempts += 1
-            if attempts > (self._max - self._base):
-                raise RuntimeError("No VNIs available")
-
-        vni = self._next_vni
-        self._allocated[key] = vni
-        self._next_vni += 1
-
-        if self._next_vni > self._max:
-            self._next_vni = self._base
-
-        # Persist allocation
-        self._save_to_disk()
-
-        return vni
-
-    def release(self, lab_id: str, link_id: str) -> None:
-        """Release a VNI allocation."""
-        key = f"{lab_id}:{link_id}"
-        if key in self._allocated:
-            del self._allocated[key]
-            self._save_to_disk()
-
-    def release_lab(self, lab_id: str) -> int:
-        """Release all VNI allocations for a lab.
-
-        Args:
-            lab_id: Lab identifier
-
-        Returns:
-            Number of allocations released
-        """
-        prefix = f"{lab_id}:"
-        keys_to_remove = [k for k in self._allocated if k.startswith(prefix)]
-
-        for key in keys_to_remove:
-            del self._allocated[key]
-
-        if keys_to_remove:
-            self._save_to_disk()
-            logger.info(f"Released {len(keys_to_remove)} VNI allocations for lab {lab_id}")
-
-        return len(keys_to_remove)
-
-    def get_vni(self, lab_id: str, link_id: str) -> int | None:
-        """Get VNI for a link, or None if not allocated."""
-        return self._allocated.get(f"{lab_id}:{link_id}")
-
-    def get_stats(self) -> dict[str, Any]:
-        """Get allocator statistics for monitoring."""
-        return {
-            "total_allocated": len(self._allocated),
-            "vni_range": f"{self._base}-{self._max}",
-            "next_vni": self._next_vni,
-            "persistence_path": str(self._persistence_path),
-        }

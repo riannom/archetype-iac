@@ -99,9 +99,6 @@ def _install_ovs_backend_dependencies(monkeypatch) -> None:
     overlay_mod = types.ModuleType("agent.network.overlay")
 
     class OverlayManager:
-        async def recover_allocations(self):
-            return 1
-
         async def recover_link_tunnels(self):
             return 0
 

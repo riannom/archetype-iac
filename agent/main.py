@@ -2905,6 +2905,163 @@ async def overlay_bridge_ports():
     }
 
 
+@app.post("/overlay/declare-state")
+async def declare_overlay_state(request: schemas.DeclareOverlayStateRequest):
+    """Converge overlay state to match API-declared desired state.
+
+    Creates missing tunnels, updates drifted VLAN tags, removes orphans.
+    This is a strict superset of /overlay/reconcile-ports.
+    """
+    from agent.network.overlay import get_overlay_manager
+
+    overlay = get_overlay_manager()
+    tunnel_dicts = [t.model_dump() for t in request.tunnels]
+    result = await overlay.declare_state(tunnel_dicts)
+
+    # Record API reconciliation to suppress heuristic cleanup
+    try:
+        from agent.network.cleanup import get_cleanup_manager
+        cleanup_mgr = get_cleanup_manager()
+        cleanup_mgr.record_api_reconcile()
+    except Exception:
+        pass
+
+    return schemas.DeclareOverlayStateResponse(
+        results=[
+            schemas.DeclaredTunnelResult(**r)
+            for r in result["results"]
+        ],
+        orphans_removed=result.get("orphans_removed", []),
+    )
+
+
+@app.get("/labs/{lab_id}/port-state")
+async def get_lab_port_state(lab_id: str) -> schemas.PortStateResponse:
+    """Get OVS port state for all container interfaces in a lab.
+
+    Returns port names, VLAN tags, and carrier state for bulk
+    InterfaceMapping refresh. Lighter than /ovs-plugin/labs/{lab_id}/ports
+    (no traffic stats).
+    """
+    if not settings.enable_ovs_plugin:
+        return schemas.PortStateResponse(ports=[])
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+        ports_data = await plugin.get_lab_ports(lab_id)
+
+        ports = []
+        for p in ports_data:
+            container = p.get("container", "")
+            # Extract node name from container name
+            import re
+            match = re.match(r'archetype-[a-f0-9-]+-(.+)$', container)
+            node_name = match.group(1) if match else container
+
+            ports.append(schemas.PortInfo(
+                node_name=node_name,
+                interface_name=p.get("interface", ""),
+                ovs_port_name=p.get("port_name", ""),
+                vlan_tag=p.get("vlan_tag", 0),
+            ))
+
+        return schemas.PortStateResponse(ports=ports)
+    except Exception as e:
+        logger.error(f"Port state query failed for lab {lab_id}: {e}")
+        return schemas.PortStateResponse(ports=[])
+
+
+@app.post("/ports/declare-state")
+async def declare_port_state(request: schemas.DeclarePortStateRequest) -> schemas.DeclarePortStateResponse:
+    """Converge same-host port state to match API-declared pairings.
+
+    For each declared pairing, ensures both OVS ports have the
+    declared VLAN tag. Creates L2 connectivity by VLAN matching.
+    """
+    if not settings.enable_ovs_plugin:
+        return schemas.DeclarePortStateResponse(results=[])
+
+    try:
+        plugin = _get_docker_ovs_plugin()
+    except Exception as e:
+        logger.error(f"Port declare-state failed: {e}")
+        return schemas.DeclarePortStateResponse(results=[])
+
+    results = []
+    for pairing in request.pairings:
+        try:
+            # Check current VLAN tags on both ports
+            tag_a = None
+            tag_b = None
+
+            code_a, out_a, _ = await plugin._ovs_vsctl(
+                "get", "port", pairing.port_a, "tag"
+            )
+            if code_a == 0:
+                tag_str = out_a.strip()
+                if tag_str and tag_str != "[]":
+                    try:
+                        tag_a = int(tag_str)
+                    except ValueError:
+                        pass
+
+            code_b, out_b, _ = await plugin._ovs_vsctl(
+                "get", "port", pairing.port_b, "tag"
+            )
+            if code_b == 0:
+                tag_str = out_b.strip()
+                if tag_str and tag_str != "[]":
+                    try:
+                        tag_b = int(tag_str)
+                    except ValueError:
+                        pass
+
+            # Check if both match declared VLAN
+            if tag_a == pairing.vlan_tag and tag_b == pairing.vlan_tag:
+                results.append(schemas.DeclaredPortResult(
+                    link_name=pairing.link_name,
+                    lab_id=pairing.lab_id,
+                    status="converged",
+                    actual_vlan=pairing.vlan_tag,
+                ))
+            else:
+                # Update mismatched ports
+                updated = False
+                if tag_a != pairing.vlan_tag:
+                    code, _, err = await plugin._ovs_vsctl(
+                        "set", "port", pairing.port_a, f"tag={pairing.vlan_tag}"
+                    )
+                    if code != 0:
+                        raise Exception(f"Failed to set VLAN on {pairing.port_a}: {err}")
+                    updated = True
+
+                if tag_b != pairing.vlan_tag:
+                    code, _, err = await plugin._ovs_vsctl(
+                        "set", "port", pairing.port_b, f"tag={pairing.vlan_tag}"
+                    )
+                    if code != 0:
+                        raise Exception(f"Failed to set VLAN on {pairing.port_b}: {err}")
+                    updated = True
+
+                results.append(schemas.DeclaredPortResult(
+                    link_name=pairing.link_name,
+                    lab_id=pairing.lab_id,
+                    status="updated" if updated else "converged",
+                    actual_vlan=pairing.vlan_tag,
+                ))
+
+        except Exception as e:
+            results.append(schemas.DeclaredPortResult(
+                link_name=pairing.link_name,
+                lab_id=pairing.lab_id,
+                status="error",
+                error=str(e),
+            ))
+            logger.error(f"Port declare-state error for {pairing.link_name}: {e}")
+
+    return schemas.DeclarePortStateResponse(results=results)
+
+
 @app.post("/overlay/reconcile-ports")
 async def reconcile_overlay_ports(request: dict):
     """Remove stale VXLAN ports not in the valid set.

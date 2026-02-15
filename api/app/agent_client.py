@@ -1190,6 +1190,115 @@ async def reconcile_vxlan_ports_on_agent(
         return {"removed_ports": [], "errors": [str(e)]}
 
 
+async def declare_overlay_state_on_agent(
+    agent: models.Host,
+    tunnels: list[dict],
+) -> dict:
+    """Declare full desired overlay state on an agent.
+
+    The agent converges to match: creates missing, updates drifted,
+    removes orphans. This is a superset of reconcile_vxlan_ports_on_agent.
+
+    Args:
+        agent: The agent to converge
+        tunnels: List of declared tunnel dicts with keys:
+            link_id, lab_id, vni, local_ip, remote_ip,
+            expected_vlan, port_name, mtu
+
+    Returns:
+        Dict with 'results' list and 'orphans_removed' list.
+        Falls back to whitelist reconciliation if agent returns 404.
+    """
+    url = f"{get_agent_url(agent)}/overlay/declare-state"
+
+    try:
+        result = await _agent_request(
+            "POST",
+            url,
+            json_body={"tunnels": tunnels},
+            timeout=VTEP_OPERATION_TIMEOUT,
+            max_retries=0,
+        )
+        return result
+    except Exception as e:
+        error_msg = str(e)
+        # 404 means agent is old version — fall back to whitelist approach
+        if "404" in error_msg or "Not Found" in error_msg:
+            logger.warning(
+                f"Agent {agent.name} does not support declare-state (404), "
+                f"falling back to whitelist reconciliation"
+            )
+            valid_ports = [t["port_name"] for t in tunnels]
+            return await reconcile_vxlan_ports_on_agent(
+                agent,
+                valid_port_names=valid_ports,
+                confirm=True,
+            )
+        logger.error(f"Failed to declare overlay state on agent {agent.id}: {e}")
+        return {"results": [], "orphans_removed": [], "error": error_msg}
+
+
+async def get_lab_port_state(
+    agent: models.Host,
+    lab_id: str,
+) -> list[dict]:
+    """Get OVS port state for a lab from an agent.
+
+    Returns lightweight port info (port name, VLAN tag, carrier)
+    for bulk InterfaceMapping refresh.
+
+    Args:
+        agent: The agent to query
+        lab_id: Lab identifier
+
+    Returns:
+        List of port info dicts
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/port-state"
+    try:
+        data = await _agent_request(
+            "GET",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
+        return data.get("ports", [])
+    except Exception as e:
+        logger.warning(f"Get lab port state failed on {agent.name}: {e}")
+        return []
+
+
+async def declare_port_state_on_agent(
+    agent: models.Host,
+    pairings: list[dict],
+) -> dict:
+    """Declare same-host port state on an agent.
+
+    The agent converges port VLAN tags to match declared pairings.
+
+    Args:
+        agent: The agent to converge
+        pairings: List of port pairing dicts with keys:
+            link_name, lab_id, port_a, port_b, vlan_tag
+
+    Returns:
+        Dict with 'results' list
+    """
+    url = f"{get_agent_url(agent)}/ports/declare-state"
+    try:
+        result = await _agent_request(
+            "POST",
+            url,
+            json_body={"pairings": pairings},
+            timeout=VTEP_OPERATION_TIMEOUT,
+            max_retries=0,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Failed to declare port state on agent {agent.id}: {e}")
+        return {"results": [], "error": str(e)}
+
+
 async def cleanup_lab_orphans(
     agent: models.Host,
     lab_id: str,
@@ -1592,6 +1701,19 @@ async def setup_cross_host_link_v2(
                 logger.info(f"Rolled back partial attachments for {link_id}")
             except Exception as e:
                 logger.warning(f"Rollback failed for {link_id}: {e}")
+                # Track which agents still have partial state for reconciliation
+                agents_with_state = []
+                if attach_a_result.get("success"):
+                    agents_with_state.append(agent_a.id)
+                if attach_b_result.get("success"):
+                    agents_with_state.append(agent_b.id)
+                return {
+                    "success": False,
+                    "error": f"Per-link tunnel creation failed: {error_msg}",
+                    "vni": vni,
+                    "partial_state": True,
+                    "agents_with_state": agents_with_state,
+                }
 
         return {
             "success": False,

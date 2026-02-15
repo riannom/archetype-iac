@@ -17,6 +17,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
+from app.agent_client import compute_vxlan_port_name
 from app.services.link_operational_state import recompute_link_oper_state
 from app.utils.link import lookup_endpoint_hosts
 
@@ -211,6 +212,7 @@ class LinkManager:
                 agent_b_id=agent_b.id,
                 agent_b_ip=agent_ip_b,
                 status="active",
+                port_name=compute_vxlan_port_name(lab_id, link_state.link_name),
             )
             self.session.add(tunnel)
 

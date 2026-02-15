@@ -5,7 +5,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -408,9 +408,14 @@ class VxlanTunnel(Base):
     status: Mapped[str] = mapped_column(String(50), default="pending")
     # Error message if status is 'failed'
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Deterministic OVS port name (vxlan-<hash>)
+    port_name: Mapped[str | None] = mapped_column(String, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationship for joinedload in convergence queries
+    link_state = relationship("LinkState", foreign_keys=[link_state_id], lazy="select")
 
 
 class ConfigSnapshot(Base):
@@ -824,6 +829,7 @@ class InterfaceMapping(Base):
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AgentLink(Base):
