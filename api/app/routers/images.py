@@ -20,6 +20,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import db, models
@@ -1341,15 +1342,34 @@ async def push_image_to_hosts(
     # Create sync jobs
     job_ids = []
     for host in hosts:
-        # Check if already syncing
-        existing_job = database.query(models.ImageSyncJob).filter(
-            models.ImageSyncJob.image_id == image_id,
-            models.ImageSyncJob.host_id == host.id,
-            models.ImageSyncJob.status.in_(["pending", "transferring", "loading"])
-        ).first()
+        # Atomic dedup: SELECT FOR UPDATE prevents concurrent requests from
+        # creating duplicate jobs for the same image+host combination
+        existing_job = (
+            database.query(models.ImageSyncJob)
+            .filter(
+                models.ImageSyncJob.image_id == image_id,
+                models.ImageSyncJob.host_id == host.id,
+                models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]),
+            )
+            .with_for_update(skip_locked=True)
+            .first()
+        )
 
         if existing_job:
             job_ids.append(existing_job.id)
+            continue
+
+        # Enforce image_sync_max_concurrent: skip this host if it already
+        # has too many active sync jobs
+        active_count = (
+            database.query(func.count(models.ImageSyncJob.id))
+            .filter(
+                models.ImageSyncJob.host_id == host.id,
+                models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]),
+            )
+            .scalar()
+        )
+        if active_count >= settings.image_sync_max_concurrent:
             continue
 
         # Create new job
@@ -1440,6 +1460,7 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
             agent_url = f"http://{host.address}/images/receive"
             from app.agent_client import _get_agent_auth_headers
             _auth_headers = _get_agent_auth_headers()
+            _docker_tmp_path = None
             async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout), headers=_auth_headers) as client:
                 if image_kind == "docker":
                     # Get image size from Docker
@@ -1456,27 +1477,50 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                     except Exception as e:
                         logger.warning(f"Could not get image size for {reference}: {e}")
 
-                    # Build archive via docker save
-                    proc = await asyncio.create_subprocess_exec(
-                        "docker", "save", reference,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, stderr = await proc.communicate()
-                    if proc.returncode != 0:
-                        error_msg = stderr.decode() if stderr else "docker save failed"
-                        raise ValueError(error_msg)
+                    # Stream docker save to temp file to avoid loading
+                    # the entire image into memory
+                    import tempfile as _tempfile
+                    tmp_fd, _docker_tmp_path = _tempfile.mkstemp(suffix=".tar")
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "docker", "save", reference,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        saved_bytes = 0
+                        chunk_size = settings.image_sync_chunk_size
+                        with os.fdopen(tmp_fd, "wb") as tmp_out:
+                            while True:
+                                chunk = await proc.stdout.read(chunk_size)
+                                if not chunk:
+                                    break
+                                tmp_out.write(chunk)
+                                saved_bytes += len(chunk)
+                        # Wait for process to finish (stdout already consumed)
+                        _, stderr = await proc.communicate()
+                        if proc.returncode != 0:
+                            error_msg = stderr.decode() if stderr else "docker save failed"
+                            raise ValueError(error_msg)
+                    except BaseException:
+                        # Clean up on any error during docker save
+                        try:
+                            os.unlink(_docker_tmp_path)
+                        except OSError:
+                            pass
+                        _docker_tmp_path = None
+                        raise
 
                     # Update progress while upload begins
-                    job.bytes_transferred = len(stdout)
+                    job.bytes_transferred = saved_bytes
                     job.progress_percent = 50
                     session.commit()
 
-                    files = {"file": ("image.tar", stdout, "application/x-tar")}
+                    tmp_file_obj = open(_docker_tmp_path, "rb")
+                    files = {"file": ("image.tar", tmp_file_obj, "application/x-tar")}
                     params = {
                         "image_id": image_id,
                         "reference": reference,
-                        "total_bytes": str(len(stdout)),
+                        "total_bytes": str(saved_bytes),
                         "job_id": job_id,
                     }
                 elif is_file_based:
@@ -1527,8 +1571,17 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                     )
                     raise ValueError(structured_error.to_error_message()) from e
                 finally:
-                    # Close source file descriptor opened for file-based sync.
-                    if image_kind != "docker" and is_file_based:
+                    # Close file descriptors and clean up temp files
+                    if image_kind == "docker" and _docker_tmp_path:
+                        try:
+                            tmp_file_obj.close()
+                        except Exception:
+                            pass
+                        try:
+                            os.unlink(_docker_tmp_path)
+                        except OSError:
+                            pass
+                    elif is_file_based:
                         file_tuple = files.get("file")
                         if file_tuple and hasattr(file_tuple[1], "close"):
                             file_tuple[1].close()

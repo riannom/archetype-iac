@@ -526,6 +526,31 @@ async def check_jobs_on_offline_agents():
             logger.error(f"Error checking jobs on offline agents: {e}")
 
 
+async def _check_agent_active_transfers(host: models.Host, job_id: str) -> bool:
+    """Query the agent to check if a transfer is genuinely active.
+
+    Returns True if the agent reports the job as active (still transferring),
+    False if the agent doesn't know about it or the endpoint is unavailable.
+    """
+    import httpx
+
+    try:
+        url = f"http://{host.address}/images/active-transfers"
+        auth_headers = agent_client._get_agent_auth_headers()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0), headers=auth_headers) as client:
+            response = await client.get(url)
+            if response.status_code == 404:
+                # Old agent without this endpoint — fall through to timeout logic
+                return False
+            response.raise_for_status()
+            data = response.json()
+            active_jobs = data.get("active_jobs", {})
+            return job_id in active_jobs
+    except Exception as e:
+        logger.debug(f"Could not query active transfers on {host.name}: {e}")
+        return False
+
+
 async def check_stuck_image_sync_jobs():
     """Find and handle ImageSyncJobs that are stuck.
 
@@ -533,6 +558,9 @@ async def check_stuck_image_sync_jobs():
     1. Jobs in 'pending' state older than image_sync_job_pending_timeout (2 min)
     2. Jobs in 'transferring' or 'loading' state past image_sync_timeout (10 min)
     3. Jobs assigned to hosts that have gone offline
+
+    Before marking a transferring/loading job as stuck, queries the agent's
+    active-transfers endpoint to verify the transfer isn't still in progress.
 
     Stuck jobs are marked as failed with detailed error messages.
     """
@@ -574,6 +602,15 @@ async def check_stuck_image_sync_jobs():
                         if job.started_at:
                             timeout_cutoff = now - timedelta(seconds=settings.image_sync_timeout)
                             if job.started_at.replace(tzinfo=timezone.utc) < timeout_cutoff:
+                                # Before marking as stuck, check if agent reports active transfer
+                                if host and not host_offline:
+                                    agent_active = await _check_agent_active_transfers(host, job.id)
+                                    if agent_active:
+                                        logger.info(
+                                            f"ImageSyncJob {job.id} exceeds timeout but agent "
+                                            f"reports active transfer — skipping"
+                                        )
+                                        continue
                                 is_stuck = True
                                 error_reason = f"Job timed out after {settings.image_sync_timeout}s in {job.status} state"
 

@@ -597,6 +597,7 @@ class ImagePullProgress(BaseModel):
     bytes_transferred: int = 0
     total_bytes: int = 0
     error: str | None = None
+    started_at: float | None = None
 
 
 # --- Agent Updates ---
