@@ -30,6 +30,7 @@ import { useNotifications } from '../contexts/NotificationContext';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
 import { downloadBlob } from '../utils/download';
 import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
+import { getImageDeviceIds, isInstantiableImageKind } from '../utils/deviceModels';
 import './studio.css';
 import 'xterm/css/xterm.css';
 
@@ -50,6 +51,12 @@ interface NodeReadinessHint {
 type RuntimeStatus = NodeRuntimeStatus;
 
 const DEFAULT_ICON = 'fa-microchip';
+const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
+  'cat9000v-uadp': ['cisco_cat9kv'],
+  'cat9000v-q200': ['cisco_cat9kv'],
+  'cat9000v_uadp': ['cisco_cat9kv'],
+  'cat9000v_q200': ['cisco_cat9kv'],
+};
 
 /**
  * Generate a container name from a display name.
@@ -1069,7 +1076,42 @@ const StudioPage: React.FC = () => {
     }
   };
 
+  const hasInstantiableImageForModel = useCallback((model: DeviceModel): boolean => {
+    const supportedKinds = model.supportedImageKinds
+      ?.map((kind) => (kind || '').toLowerCase())
+      .filter((kind) => isInstantiableImageKind(kind));
+    const allowedKinds = new Set((supportedKinds && supportedKinds.length > 0) ? supportedKinds : ['docker', 'qcow2']);
+
+    const modelId = (model.id || '').toLowerCase();
+    const modelKind = (model.kind || '').toLowerCase();
+    const aliases = IMAGE_COMPAT_ALIASES[modelId] || [];
+
+    return imageLibrary.some((img) => {
+      if (!isInstantiableImageKind(img.kind)) {
+        return false;
+      }
+      const imageKind = (img.kind || '').toLowerCase();
+      if (!allowedKinds.has(imageKind)) {
+        return false;
+      }
+
+      const deviceIds = getImageDeviceIds(img).map((id) => id.toLowerCase());
+      if (deviceIds.includes(modelId)) return true;
+      if (modelKind && deviceIds.includes(modelKind)) return true;
+      return aliases.some((alias) => deviceIds.includes(alias));
+    });
+  }, [imageLibrary]);
+
   const handleAddDevice = (model: DeviceModel, x?: number, y?: number) => {
+    if (model.requiresImage && !hasInstantiableImageForModel(model)) {
+      addNotification(
+        'warning',
+        'No runnable image assigned',
+        `${model.name} has no associated Docker or qcow2 image and cannot be instantiated.`,
+      );
+      return;
+    }
+
     const id = Math.random().toString(36).slice(2, 9);
     const displayName = `${model.id.toUpperCase()}-${nodes.length + 1}`;
     const newNode: DeviceNode = {

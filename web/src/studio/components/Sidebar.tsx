@@ -3,7 +3,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { DeviceModel, AnnotationType, ImageLibraryEntry } from '../types';
 import SidebarFilters, { ImageStatus } from './SidebarFilters';
 import { useNotifications } from '../../contexts/NotificationContext';
-import { getImageDeviceIds } from '../../utils/deviceModels';
+import { getImageDeviceIds, isInstantiableImageKind } from '../../utils/deviceModels';
 
 interface SidebarProps {
   categories: { name: string; models?: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
@@ -108,13 +108,17 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
 
   // Build device image status map (uses compatible_devices for shared images)
   const deviceImageStatus = useMemo(() => {
-    const statusMap = new Map<string, { hasImage: boolean; hasDefault: boolean }>();
+    const statusMap = new Map<string, { imageKinds: Set<string>; defaultKinds: Set<string> }>();
     imageLibrary.forEach((img) => {
+      if (!isInstantiableImageKind(img.kind)) {
+        return;
+      }
+      const imageKind = (img.kind || '').toLowerCase();
       getImageDeviceIds(img).forEach((devId) => {
-        const existing = statusMap.get(devId) || { hasImage: false, hasDefault: false };
-        existing.hasImage = true;
+        const existing = statusMap.get(devId) || { imageKinds: new Set<string>(), defaultKinds: new Set<string>() };
+        existing.imageKinds.add(imageKind);
         if (img.is_default) {
-          existing.hasDefault = true;
+          existing.defaultKinds.add(imageKind);
         }
         statusMap.set(devId, existing);
       });
@@ -122,21 +126,48 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     return statusMap;
   }, [imageLibrary]);
 
+  const getAllowedKindsForDevice = useCallback((device: DeviceModel): Set<string> => {
+    const supportedKinds = device.supportedImageKinds
+      ?.map((kind) => kind.toLowerCase())
+      .filter((kind) => isInstantiableImageKind(kind));
+    if (supportedKinds && supportedKinds.length > 0) {
+      return new Set(supportedKinds);
+    }
+    return new Set(['docker', 'qcow2']);
+  }, []);
+
+  const resolveStatusFromEntry = useCallback(
+    (entry: { imageKinds: Set<string>; defaultKinds: Set<string> } | undefined, allowedKinds: Set<string>) => {
+      if (!entry) return undefined;
+
+      const hasDefault = Array.from(allowedKinds).some((kind) => entry.defaultKinds.has(kind));
+      if (hasDefault) return { hasImage: true, hasDefault: true };
+
+      const hasImage = Array.from(allowedKinds).some((kind) => entry.imageKinds.has(kind));
+      if (hasImage) return { hasImage: true, hasDefault: false };
+
+      return undefined;
+    },
+    []
+  );
+
   const getDeviceImageStatus = useCallback((device: DeviceModel) => {
-    const byId = deviceImageStatus.get(device.id);
+    const allowedKinds = getAllowedKindsForDevice(device);
+
+    const byId = resolveStatusFromEntry(deviceImageStatus.get(device.id), allowedKinds);
     if (byId) return byId;
     if (device.kind) {
-      const byKind = deviceImageStatus.get(device.kind);
+      const byKind = resolveStatusFromEntry(deviceImageStatus.get(device.kind), allowedKinds);
       if (byKind) return byKind;
     }
 
     const aliases = IMAGE_COMPAT_ALIASES[(device.id || '').toLowerCase()] || [];
     for (const alias of aliases) {
-      const byAlias = deviceImageStatus.get(alias);
+      const byAlias = resolveStatusFromEntry(deviceImageStatus.get(alias), allowedKinds);
       if (byAlias) return byAlias;
     }
     return undefined;
-  }, [deviceImageStatus]);
+  }, [deviceImageStatus, getAllowedKindsForDevice, resolveStatusFromEntry]);
 
   // Filter devices based on search and filters
   const filterDevice = (device: DeviceModel): boolean => {

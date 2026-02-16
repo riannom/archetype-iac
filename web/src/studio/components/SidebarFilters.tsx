@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import FilterChip from './FilterChip';
 import { DeviceModel, ImageLibraryEntry } from '../types';
-import { getImageDeviceIds } from '../../utils/deviceModels';
+import { getImageDeviceIds, isInstantiableImageKind } from '../../utils/deviceModels';
 
 export type ImageStatus = 'all' | 'has_image' | 'has_default' | 'no_image';
 
@@ -63,26 +63,37 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   // Count devices by image status
   const statusCounts = useMemo(() => {
     const counts = { has_image: 0, has_default: 0, no_image: 0 };
-    const deviceImageMap = new Map<string, { hasImage: boolean; hasDefault: boolean }>();
+    const deviceImageMap = new Map<string, { imageKinds: Set<string>; defaultKinds: Set<string> }>();
 
     // Build a map of device_id to image info (uses compatible_devices for shared images)
     imageLibrary.forEach((img) => {
+      if (!isInstantiableImageKind(img.kind)) {
+        return;
+      }
+      const imageKind = (img.kind || '').toLowerCase();
       getImageDeviceIds(img).forEach((devId) => {
-        const existing = deviceImageMap.get(devId) || { hasImage: false, hasDefault: false };
-        existing.hasImage = true;
+        const existing = deviceImageMap.get(devId) || { imageKinds: new Set<string>(), defaultKinds: new Set<string>() };
+        existing.imageKinds.add(imageKind);
         if (img.is_default) {
-          existing.hasDefault = true;
+          existing.defaultKinds.add(imageKind);
         }
         deviceImageMap.set(devId, existing);
       });
     });
 
     devices.forEach((device) => {
+      const supportedKinds = device.supportedImageKinds
+        ?.map((kind) => kind.toLowerCase())
+        .filter((kind) => isInstantiableImageKind(kind));
+      const allowedKinds = new Set((supportedKinds && supportedKinds.length > 0) ? supportedKinds : ['docker', 'qcow2']);
       const info = deviceImageMap.get(device.id);
-      if (info?.hasDefault) {
+      const hasDefault = info ? Array.from(allowedKinds).some((kind) => info.defaultKinds.has(kind)) : false;
+      const hasImage = info ? Array.from(allowedKinds).some((kind) => info.imageKinds.has(kind)) : false;
+
+      if (hasDefault) {
         counts.has_default++;
         counts.has_image++;
-      } else if (info?.hasImage) {
+      } else if (hasImage) {
         counts.has_image++;
       } else {
         counts.no_image++;

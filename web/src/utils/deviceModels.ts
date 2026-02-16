@@ -8,6 +8,16 @@
 import { DeviceModel, ImageLibraryEntry } from '../studio/types';
 import { DeviceCategory } from '../studio/constants';
 
+const INSTANTIABLE_IMAGE_KINDS = new Set(['docker', 'qcow2']);
+
+function normalizeImageKind(kind?: string | null): string {
+  return (kind || '').toLowerCase();
+}
+
+export function isInstantiableImageKind(kind?: string | null): boolean {
+  return INSTANTIABLE_IMAGE_KINDS.has(normalizeImageKind(kind));
+}
+
 /**
  * Get all device IDs an image is compatible with.
  * Uses compatible_devices when available, falls back to device_id.
@@ -52,6 +62,9 @@ export function buildDeviceModels(
   const versionsByDevice = new Map<string, Set<string>>();
   const imageDeviceIds = new Set<string>();
   images.forEach((image) => {
+    if (!isInstantiableImageKind(image.kind)) {
+      return;
+    }
     getImageDeviceIds(image).forEach((devId) => {
       imageDeviceIds.add(devId);
       const versions = versionsByDevice.get(devId) || new Set<string>();

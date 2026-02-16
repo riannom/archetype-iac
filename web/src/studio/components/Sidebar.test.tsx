@@ -263,6 +263,31 @@ describe("Sidebar", () => {
   });
 
   describe("Device filtering", () => {
+    it("does not treat non-instantiable image kinds as sidebar-eligible images", () => {
+      const categories = [{ name: "Network Devices", models: [mockDeviceModels[0]] }];
+      const images = [
+        {
+          id: "img-iol",
+          device_id: "ceos",
+          kind: "iol",
+          reference: "i86bi-linux-l3.bin",
+          is_default: true,
+        },
+      ];
+
+      render(
+        <Sidebar
+          categories={categories}
+          imageLibrary={images}
+          onAddDevice={mockOnAddDevice}
+          onAddAnnotation={mockOnAddAnnotation}
+        />
+      );
+
+      // Default filter is has_image; ceos should be hidden because iol is non-instantiable.
+      expect(screen.queryByText("Arista cEOS")).not.toBeInTheDocument();
+    });
+
     it("matches image status by device kind when image is keyed by canonical kind", () => {
       const cat9kModel: DeviceModel = {
         id: "cat9000v-uadp",
@@ -434,7 +459,7 @@ describe("Sidebar", () => {
       const imageLibrary = [
         {
           id: "img-1",
-          kind: "ceos",
+          kind: "docker",
           reference: "ceos:4.28.0F",
           device_id: "ceos",
           is_default: true,
@@ -459,7 +484,7 @@ describe("Sidebar", () => {
       const imageLibrary = [
         {
           id: "img-1",
-          kind: "ceos",
+          kind: "docker",
           reference: "ceos:4.28.0F",
           device_id: "ceos",
           is_default: false,
