@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     console_input_timeout: float = 0.01  # 10ms input check interval
 
     # Container operations
-    container_stop_timeout: int = 10
+    container_stop_timeout: int = 3
 
     # Docker client timeout (seconds) - covers container create, network ops, etc.
     # This needs to be long enough for slow operations like image layer extraction

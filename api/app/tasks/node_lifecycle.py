@@ -43,8 +43,13 @@ logger = logging.getLogger(__name__)
 
 
 # Seconds between cEOS container starts to avoid boot race conditions.
-# cEOS CPU-bound init takes ~1-2s; 2s spacing is sufficient.
-CEOS_STAGGER_SECONDS = 2
+# cEOS CPU-bound init takes ~0.5-1s; 0.5s spacing prevents kernel socket
+# contention while keeping total stagger time minimal.
+CEOS_STAGGER_SECONDS = 0.5
+
+# In-job retry constants for transient agent failures.
+DEPLOY_RETRY_ATTEMPTS = 2
+DEPLOY_RETRY_BACKOFF_SECONDS = 5
 
 
 def _is_ceos_kind(kind: str) -> bool:
@@ -328,6 +333,14 @@ class NodeLifecycleManager:
                 ):
                     await self._stop_nodes(grouped_nodes)
 
+        # Phase: Active readiness polling for newly deployed/started nodes
+        deployed_and_started = [
+            ns.node_name for ns in self.node_states
+            if ns.actual_state == NodeActualState.RUNNING.value and not ns.is_ready
+        ]
+        if deployed_and_started:
+            await self._wait_for_readiness(deployed_and_started)
+
         # Phase: Post-operation cleanup (cross-host links)
         async with AsyncTimedOperation(
             histogram=nlm_phase_duration,
@@ -387,6 +400,50 @@ class NodeLifecycleManager:
             .all()
         )
         self.all_lab_states = {ns.node_name: ns for ns in all_states}
+
+        # Batch-load latest ConfigSnapshots per node (Phase 1.2)
+        from sqlalchemy import func, and_
+
+        subq = (
+            self.session.query(
+                models.ConfigSnapshot.node_name,
+                func.max(models.ConfigSnapshot.created_at).label("latest_at"),
+            )
+            .filter(models.ConfigSnapshot.lab_id == self.lab.id)
+            .group_by(models.ConfigSnapshot.node_name)
+            .subquery()
+        )
+        latest_snapshots = (
+            self.session.query(models.ConfigSnapshot)
+            .join(subq, and_(
+                models.ConfigSnapshot.node_name == subq.c.node_name,
+                models.ConfigSnapshot.created_at == subq.c.latest_at,
+            ))
+            .filter(models.ConfigSnapshot.lab_id == self.lab.id)
+            .all()
+        )
+        self.latest_snapshots_map = {s.node_name: s for s in latest_snapshots}
+
+        # Also batch-load explicit snapshots referenced by nodes
+        explicit_snapshot_ids = {
+            n.active_config_snapshot_id for n in all_db_nodes
+            if n.active_config_snapshot_id
+        }
+        if explicit_snapshot_ids:
+            explicit = (
+                self.session.query(models.ConfigSnapshot)
+                .filter(models.ConfigSnapshot.id.in_(explicit_snapshot_ids))
+                .all()
+            )
+            self.explicit_snapshots_map = {s.id: s for s in explicit}
+        else:
+            self.explicit_snapshots_map = {}
+
+        # Cache image manifest for SHA256 lookups (Phase 1.4)
+        try:
+            self._manifest = load_manifest()
+        except Exception:
+            self._manifest = None
 
         # Fix node_name placeholders from lazy initialization
         for ns in self.node_states:
@@ -539,6 +596,15 @@ class NodeLifecycleManager:
                         f"{host_agent.name} is offline"
                     )
                 else:
+                    # Verify agent is actually reachable (not just heartbeat-fresh)
+                    try:
+                        await agent_client.ping_agent(host_agent)
+                    except AgentUnavailableError:
+                        explicit_placement_failures.append(
+                            f"{ns.node_name}: assigned host "
+                            f"{host_agent.name} is unreachable"
+                        )
+                        continue
                     all_node_agents[ns.node_name] = db_node.host_id
                     logger.info(
                         "Placement decision",
@@ -584,8 +650,16 @@ class NodeLifecycleManager:
             for ns in auto_placed_nodes:
                 placement = self.placements_map.get(ns.node_name)
                 if placement:
-                    all_node_agents[ns.node_name] = placement.host_id
-                    sticky_nodes.append(ns.node_name)
+                    if placement.status == "failed":
+                        # Skip failed placement, treat as new for re-scoring
+                        new_nodes.append(ns)
+                        logger.info(
+                            f"Skipping failed placement for {ns.node_name} "
+                            f"on agent {placement.host_id}"
+                        )
+                    else:
+                        all_node_agents[ns.node_name] = placement.host_id
+                        sticky_nodes.append(ns.node_name)
                 else:
                     new_nodes.append(ns)
 
@@ -604,6 +678,18 @@ class NodeLifecycleManager:
 
                 # Find all online agents with the required provider
                 candidates = await self._get_candidate_agents()
+                # Verify candidate agents are actually reachable
+                reachable_candidates = []
+                for cand in candidates:
+                    try:
+                        await agent_client.ping_agent(cand)
+                        reachable_candidates.append(cand)
+                    except AgentUnavailableError:
+                        logger.warning(
+                            f"Agent {cand.name} heartbeat fresh but unreachable, "
+                            f"skipping for placement"
+                        )
+                candidates = reachable_candidates
                 if candidates:
                     agent_scores = {}
                     for agent in candidates:
@@ -1172,6 +1258,7 @@ class NodeLifecycleManager:
         for ns in nodes_to_start_or_deploy:
             if ns.node_name in syncing_nodes:
                 ns.actual_state = NodeActualState.STARTING.value
+                ns.starting_started_at = datetime.now(timezone.utc)
                 ns.error_message = None
                 self._broadcast_state(
                     ns,
@@ -1435,8 +1522,7 @@ class NodeLifecycleManager:
             )
             for ns in nodes_need_deploy:
                 if ns.actual_state not in ("running", "stopped"):
-                    ns.actual_state = NodeActualState.PENDING.value
-                ns.error_message = error_msg
+                    self._handle_transient_failure(ns, error_msg)
             self.session.commit()
             logger.warning(
                 f"Deploy in sync job {self.job.id} failed due to agent "
@@ -1692,8 +1778,7 @@ class NodeLifecycleManager:
                 "Nodes will be retried by reconciliation."
             )
             for ns in nodes_need_start:
-                ns.starting_started_at = None
-                ns.error_message = error_msg
+                self._handle_transient_failure(ns, error_msg)
             logger.warning(
                 f"Redeploy in sync job {self.job.id} failed due to agent "
                 f"unavailability: {e}"
@@ -1753,16 +1838,12 @@ class NodeLifecycleManager:
                 version=db_node.version,
             )
 
-            # Look up image SHA256 from manifest for integrity verification
+            # Look up image SHA256 from cached manifest for integrity verification
             image_sha256 = None
-            if node_provider == "libvirt":
-                try:
-                    manifest = load_manifest()
-                    img_entry = find_image_by_reference(manifest, image)
-                    if img_entry:
-                        image_sha256 = img_entry.get("sha256")
-                except Exception:
-                    pass  # Non-critical: integrity check is best-effort
+            if node_provider == "libvirt" and self._manifest:
+                img_entry = find_image_by_reference(self._manifest, image)
+                if img_entry:
+                    image_sha256 = img_entry.get("sha256")
 
             # Create container/VM
             create_result = await agent_client.create_node_on_agent(
@@ -1850,9 +1931,7 @@ class NodeLifecycleManager:
                 return None
 
         except AgentUnavailableError as e:
-            ns.actual_state = NodeActualState.PENDING.value
-            ns.error_message = f"Agent unreachable: {e.message}"
-            self.log_parts.append(f"  {ns.node_name}: FAILED (transient) - {e.message}")
+            self._handle_transient_failure(ns, f"Agent unreachable: {e.message}")
             return None
         except Exception as e:
             ns.actual_state = NodeActualState.ERROR.value
@@ -1861,26 +1940,40 @@ class NodeLifecycleManager:
             logger.exception(f"Deploy node {ns.node_name} failed: {e}")
             return None
 
-    async def _deploy_nodes_per_node(self, nodes_need_deploy: list[models.NodeState]):
-        """Deploy nodes via per-node container creation and start.
+    async def _create_and_start_nodes(
+        self,
+        nodes: list[models.NodeState],
+        phase_label: str,
+    ) -> list[str]:
+        """Deploy or start nodes via per-node create+start.
 
-        Creates and starts each container individually, then connects
-        same-host links. Non-cEOS nodes deploy in parallel;
-        cEOS nodes deploy sequentially with stagger delay.
+        Non-cEOS nodes deploy in parallel; cEOS nodes deploy
+        sequentially with stagger delay. Returns list of deployed node names.
         """
         from app.tasks.jobs import (
             _update_node_placements,
             _capture_node_ips,
         )
 
-        self.log_parts.append("=== Phase 1: Deploy (per-node) ===")
+        self.log_parts.append(phase_label)
 
-        deployed_names = []
+        # Re-read desired_state to catch changes since job was queued
+        for ns in nodes:
+            self.session.refresh(ns)
+        nodes = [
+            ns for ns in nodes
+            if ns.desired_state == NodeDesiredState.RUNNING.value
+        ]
+        if not nodes:
+            self.log_parts.append("  All nodes' desired_state changed, nothing to deploy")
+            return []
+
+        deployed_names: list[str] = []
 
         # Split into cEOS (needs stagger) and non-cEOS (can deploy in parallel)
         ceos_nodes = []
         non_ceos_nodes = []
-        for ns in nodes_need_deploy:
+        for ns in nodes:
             db_node = self.db_nodes_map.get(ns.node_name)
             kind = (db_node.device or "linux") if db_node else "linux"
             if _is_ceos_kind(kind):
@@ -1888,10 +1981,10 @@ class NodeLifecycleManager:
             else:
                 non_ceos_nodes.append(ns)
 
-        # Deploy all non-cEOS nodes in parallel
+        # Deploy all non-cEOS nodes in parallel (with retry)
         if non_ceos_nodes:
             self.log_parts.append(f"  Deploying {len(non_ceos_nodes)} non-cEOS node(s) in parallel")
-            tasks = [self._deploy_single_node(ns) for ns in non_ceos_nodes]
+            tasks = [self._deploy_single_node_with_retry(ns) for ns in non_ceos_nodes]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for ns, result in zip(non_ceos_nodes, results):
                 if isinstance(result, Exception):
@@ -1899,17 +1992,23 @@ class NodeLifecycleManager:
                 elif result:
                     deployed_names.append(result)
 
-        # Deploy cEOS nodes sequentially with stagger
+            # Connect links between already-deployed nodes (don't wait for cEOS)
+            if deployed_names:
+                await self._connect_same_host_links(set(deployed_names))
+
+        # Deploy cEOS nodes sequentially with stagger (with retry)
         ceos_started = False
         for ns in ceos_nodes:
             if ceos_started:
-                logger.info(f"Waiting {CEOS_STAGGER_SECONDS}s before starting {ns.node_name} (cEOS stagger)")
+                # Use stagger time to connect any new links
                 await asyncio.sleep(CEOS_STAGGER_SECONDS)
 
-            name = await self._deploy_single_node(ns)
+            name = await self._deploy_single_node_with_retry(ns)
             if name:
                 deployed_names.append(name)
                 ceos_started = True
+                # Connect any newly-eligible links after each cEOS node
+                await self._connect_same_host_links(set(deployed_names))
 
         self.session.commit()
 
@@ -1922,6 +2021,45 @@ class NodeLifecycleManager:
             await _capture_node_ips(self.session, self.lab.id, self.agent)
             # Connect same-host links
             await self._connect_same_host_links(set(deployed_names))
+
+        return deployed_names
+
+    async def _deploy_single_node_with_retry(self, ns: models.NodeState) -> str | None:
+        """Deploy a single node with retry on transient failures."""
+        for attempt in range(1, DEPLOY_RETRY_ATTEMPTS + 1):
+            result = await self._deploy_single_node(ns)
+            if result is not None:
+                return result
+
+            # Check if failure was transient (pending state = transient)
+            if ns.actual_state != NodeActualState.PENDING.value:
+                # Non-transient failure (error state) — don't retry
+                return None
+
+            if attempt < DEPLOY_RETRY_ATTEMPTS:
+                logger.info(
+                    f"Retrying deploy of {ns.node_name} "
+                    f"(attempt {attempt + 1}/{DEPLOY_RETRY_ATTEMPTS}) "
+                    f"after {DEPLOY_RETRY_BACKOFF_SECONDS}s backoff"
+                )
+                self.log_parts.append(
+                    f"  {ns.node_name}: retrying in {DEPLOY_RETRY_BACKOFF_SECONDS}s "
+                    f"(attempt {attempt + 1}/{DEPLOY_RETRY_ATTEMPTS})"
+                )
+                await asyncio.sleep(DEPLOY_RETRY_BACKOFF_SECONDS)
+
+        # All retries exhausted
+        if ns.actual_state == NodeActualState.PENDING.value:
+            self._handle_transient_failure(
+                ns, ns.error_message or "Agent unreachable after retries"
+            )
+        return None
+
+    async def _deploy_nodes_per_node(self, nodes_need_deploy: list[models.NodeState]):
+        """Deploy nodes via per-node container creation and start."""
+        await self._create_and_start_nodes(
+            nodes_need_deploy, "=== Phase 1: Deploy (per-node) ==="
+        )
 
     async def _start_single_node(self, ns: models.NodeState) -> str | None:
         """Start a single node and update its state.
@@ -2004,9 +2142,7 @@ class NodeLifecycleManager:
                 return None
 
         except AgentUnavailableError as e:
-            ns.starting_started_at = None
-            ns.error_message = f"Agent unreachable: {e.message}"
-            self.log_parts.append(f"  {ns.node_name}: FAILED (transient) - {e.message}")
+            self._handle_transient_failure(ns, f"Agent unreachable: {e.message}")
             return None
         except Exception as e:
             ns.actual_state = NodeActualState.ERROR.value
@@ -2017,75 +2153,12 @@ class NodeLifecycleManager:
             return None
 
     async def _start_nodes_per_node(self, nodes_need_start: list[models.NodeState]):
-        """Start stopped nodes via fresh container/VM creation.
-
-        Unified lifecycle: stop removes the container, so start always creates
-        a fresh instance from the image with saved startup config. Non-cEOS
-        nodes deploy in parallel; cEOS nodes deploy sequentially with stagger.
-        """
-        from app.tasks.jobs import _capture_node_ips, _update_node_placements
-
+        """Start stopped nodes via fresh container/VM creation."""
         self.log_parts.append("")
-        self.log_parts.append("=== Phase 2: Start Nodes (per-node, fresh create) ===")
-
-        # Re-read desired_state to catch changes since job was queued
-        # (e.g. user clicked Stop All while deploy was in progress)
-        for ns in nodes_need_start:
-            self.session.refresh(ns)
-        nodes_need_start = [
-            ns for ns in nodes_need_start
-            if ns.desired_state == NodeDesiredState.RUNNING.value
-        ]
-        if not nodes_need_start:
-            self.log_parts.append("  All nodes' desired_state changed, nothing to start")
-            return
-
-        started_names = []
-
-        # Split into cEOS (needs stagger) and non-cEOS (can deploy in parallel)
-        ceos_nodes = []
-        non_ceos_nodes = []
-        for ns in nodes_need_start:
-            db_node = self.db_nodes_map.get(ns.node_name)
-            kind = db_node.device if db_node else "linux"
-            if _is_ceos_kind(kind):
-                ceos_nodes.append(ns)
-            else:
-                non_ceos_nodes.append(ns)
-
-        # Deploy all non-cEOS nodes in parallel (fresh create + start)
-        if non_ceos_nodes:
-            self.log_parts.append(f"  Deploying {len(non_ceos_nodes)} non-cEOS node(s) in parallel")
-            tasks = [self._deploy_single_node(ns) for ns in non_ceos_nodes]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for ns, result in zip(non_ceos_nodes, results):
-                if isinstance(result, Exception):
-                    logger.exception(f"Parallel deploy of {ns.node_name} raised: {result}")
-                elif result:
-                    started_names.append(result)
-
-        # Deploy cEOS nodes sequentially with stagger
-        ceos_started = False
-        for ns in ceos_nodes:
-            if ceos_started:
-                logger.info(f"Waiting {CEOS_STAGGER_SECONDS}s before deploying {ns.node_name} (cEOS stagger)")
-                await asyncio.sleep(CEOS_STAGGER_SECONDS)
-
-            name = await self._deploy_single_node(ns)
-            if name:
-                started_names.append(name)
-                ceos_started = True
-
-        self.session.commit()
-
-        if started_names:
-            # Update placements for freshly created containers
-            await _update_node_placements(
-                self.session, self.lab.id, self.agent.id, started_names
-            )
-            await _capture_node_ips(self.session, self.lab.id, self.agent)
-            # Reconnect same-host links
-            await self._connect_same_host_links(set(started_names))
+        await self._create_and_start_nodes(
+            nodes_need_start,
+            "=== Phase 2: Start Nodes (per-node, fresh create) ===",
+        )
 
     def _get_interface_count(self, node_name: str) -> int:
         """Get interface count for a node from topology service."""
@@ -2094,29 +2167,22 @@ class NodeLifecycleManager:
         return max(count, 4)  # Minimum 4 interfaces for flexibility
 
     def _get_startup_config(self, node_name: str, db_node: models.Node) -> str | None:
-        """Get startup config for a node from config snapshots.
+        """Get startup config for a node from batch-loaded config snapshots.
 
         Priority: active snapshot > latest snapshot.
+        Uses cached maps from _load_and_validate() to avoid N+1 queries.
         """
         try:
             # Use active config snapshot if set
             if db_node.active_config_snapshot_id:
-                snapshot = self.session.get(
-                    models.ConfigSnapshot, db_node.active_config_snapshot_id
+                snapshot = self.explicit_snapshots_map.get(
+                    db_node.active_config_snapshot_id
                 )
                 if snapshot:
                     return snapshot.content
 
             # Fall back to latest snapshot
-            snapshot = (
-                self.session.query(models.ConfigSnapshot)
-                .filter(
-                    models.ConfigSnapshot.lab_id == self.lab.id,
-                    models.ConfigSnapshot.node_name == node_name,
-                )
-                .order_by(models.ConfigSnapshot.created_at.desc())
-                .first()
-            )
+            snapshot = self.latest_snapshots_map.get(node_name)
             if snapshot:
                 return snapshot.content
         except Exception:
@@ -2255,12 +2321,27 @@ class NodeLifecycleManager:
                 )
                 entry[1].append(ns.node_name)
 
-            # Call agents concurrently
+            # Call agents concurrently with timeout
+            EXTRACTION_TIMEOUT = 15  # seconds
             tasks = [
                 agent_client.extract_configs_on_agent(a, self.lab.id)
                 for a, _ in agent_node_map.values()
             ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=EXTRACTION_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Config extraction timed out after {EXTRACTION_TIMEOUT}s "
+                    f"for lab {self.lab.id}"
+                )
+                self.log_parts.append(
+                    f"    Auto-extract timed out after {EXTRACTION_TIMEOUT}s "
+                    f"(proceeding with stop)"
+                )
+                return
 
             # Collect configs (filter to only nodes being stopped)
             stop_node_names = {ns.node_name for ns in running_nodes}
@@ -2679,6 +2760,87 @@ class NodeLifecycleManager:
             error_count=error_count,
             log=self.log_parts,
         )
+
+    # Readiness polling constants
+    READINESS_POLL_INTERVAL = 5  # seconds
+    READINESS_POLL_MAX_DURATION = 120  # seconds
+
+    async def _wait_for_readiness(self, deployed_names: list[str]) -> None:
+        """Actively poll readiness for newly deployed nodes.
+
+        Polls every READINESS_POLL_INTERVAL seconds until all nodes report
+        ready or READINESS_POLL_MAX_DURATION is reached. Remaining unready
+        nodes are left for reconciliation to handle.
+        """
+        if not deployed_names:
+            return
+
+        # Get nodes that need readiness checking
+        unready_nodes = [
+            ns for ns in self.node_states
+            if ns.node_name in deployed_names
+            and ns.actual_state == NodeActualState.RUNNING.value
+            and not ns.is_ready
+        ]
+
+        if not unready_nodes:
+            return
+
+        self.log_parts.append(f"  Waiting for {len(unready_nodes)} node(s) to become ready...")
+        start_time = asyncio.get_event_loop().time()
+
+        while unready_nodes:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= self.READINESS_POLL_MAX_DURATION:
+                remaining = [ns.node_name for ns in unready_nodes]
+                self.log_parts.append(
+                    f"  Readiness timeout ({self.READINESS_POLL_MAX_DURATION}s): "
+                    f"{len(remaining)} node(s) still not ready: {', '.join(remaining)}"
+                )
+                break
+
+            await asyncio.sleep(self.READINESS_POLL_INTERVAL)
+
+            still_unready = []
+            for ns in unready_nodes:
+                try:
+                    # Resolve device kind and provider for readiness check
+                    db_node = self.db_nodes_map.get(ns.node_name)
+                    kind = (db_node.device if db_node else None)
+                    image = resolve_node_image(
+                        db_node.device, kind, db_node.image, db_node.version
+                    ) if db_node else None
+                    provider_type = get_image_provider(image) if image else None
+
+                    result = await agent_client.check_node_readiness(
+                        self.agent, self.lab.id, ns.node_name,
+                        kind=kind, provider_type=provider_type,
+                    )
+                    if result.get("is_ready"):
+                        ns.is_ready = True
+                        self._broadcast_state(ns, name_suffix="ready")
+                        self.log_parts.append(f"  {ns.node_name}: ready ({int(elapsed)}s)")
+                    else:
+                        still_unready.append(ns)
+                except Exception as e:
+                    logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
+                    still_unready.append(ns)
+
+            unready_nodes = still_unready
+
+        self.session.commit()
+
+    def _handle_transient_failure(self, ns: models.NodeState, error: str) -> None:
+        """Consistently handle transient agent failures (AgentUnavailableError).
+
+        Sets node to pending state, clears transitional timestamps,
+        records error message.
+        """
+        ns.actual_state = NodeActualState.PENDING.value
+        ns.starting_started_at = None
+        ns.stopping_started_at = None
+        ns.error_message = error
+        self.log_parts.append(f"  {ns.node_name}: FAILED (transient) - {error}")
 
     # ------------------------------------------------------------------ #
     #  Shared helpers                                                       #

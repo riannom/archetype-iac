@@ -297,6 +297,15 @@ async def enforce_node_state(
     actual = node_state.actual_state
     now = datetime.now(timezone.utc)
 
+    # Skip nodes with active image sync — sync callback handles re-deploy
+    if node_state.image_sync_status in ("syncing", "checking"):
+        logger.debug(
+            f"Node {node_name} in lab {lab_id} has active image sync "
+            f"({node_state.image_sync_status}), skipping enforcement"
+        )
+        record_enforcement_action("skipped")
+        return False
+
     # Determine what action is needed using state machine
     action = NodeStateMachine.get_enforcement_action(
         NodeActualState(actual) if actual in [s.value for s in NodeActualState] else NodeActualState.ERROR,
@@ -506,6 +515,15 @@ async def _is_enforceable(
     node_name = node_state.node_name
     lab_id = node_state.lab_id
     now = datetime.now(timezone.utc)
+
+    # Skip nodes with active image sync — sync callback handles re-deploy
+    if node_state.image_sync_status in ("syncing", "checking"):
+        logger.debug(
+            f"Node {node_name} in lab {lab_id} has active image sync "
+            f"({node_state.image_sync_status}), skipping enforcement"
+        )
+        record_enforcement_action("skipped")
+        return False
 
     # Determine what action is needed using state machine
     action = NodeStateMachine.get_enforcement_action(

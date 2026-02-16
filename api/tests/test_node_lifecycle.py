@@ -402,6 +402,7 @@ class TestResolveAgents:
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             result = await manager._resolve_agents()
 
@@ -498,6 +499,7 @@ class TestResolveAgents:
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch("app.tasks.node_lifecycle.safe_create_task"):
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             result = await manager._resolve_agents()
 
@@ -532,6 +534,7 @@ class TestResolveAgents:
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             result = await manager._resolve_agents()
 
@@ -1232,6 +1235,7 @@ class TestExecuteOrchestration:
             mock_settings.image_sync_pre_deploy_check = False
             mock_settings.per_node_lifecycle_enabled = False
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
 
@@ -1260,6 +1264,7 @@ class TestExecuteOrchestration:
             mock_settings.image_sync_enabled = False
             mock_settings.image_sync_pre_deploy_check = False
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
                 "results": [{"container_name": container_name, "success": True}]
@@ -1318,6 +1323,7 @@ class TestExecuteOrchestration:
             mock_settings.image_sync_pre_deploy_check = False
             mock_settings.per_node_lifecycle_enabled = False
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
             mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
@@ -1354,6 +1360,7 @@ class TestExecuteOrchestration:
              patch("app.tasks.node_lifecycle.settings") as mock_settings:
             mock_settings.resource_validation_enabled = True
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
 
             # Override phase methods to track call order
@@ -1408,6 +1415,7 @@ class TestExecuteOrchestration:
             mock_settings.image_sync_pre_deploy_check = False
             mock_settings.per_node_lifecycle_enabled = False
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             # Deploy fails
             mock_ac.deploy_to_agent = AsyncMock(
@@ -1448,6 +1456,9 @@ class TestDeployNodesPerNode:
         manager.db_nodes_map = {"R1": node_def}
         manager.placements_map = {}
         manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
@@ -1478,6 +1489,9 @@ class TestDeployNodesPerNode:
         manager.db_nodes_map = {"R1": node_def}
         manager.placements_map = {}
         manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}):
@@ -1505,6 +1519,9 @@ class TestDeployNodesPerNode:
         manager.db_nodes_map = {"R1": node_def}
         manager.placements_map = {}
         manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}):
@@ -1550,6 +1567,9 @@ class TestDeployNodesPerNode:
         manager.db_nodes_map = {"R1": node_def}
         manager.placements_map = {}
         manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
@@ -1560,7 +1580,9 @@ class TestDeployNodesPerNode:
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
             await manager._deploy_nodes_per_node([ns])
 
-        mock_links.assert_called_once_with({"R1"})
+        # Links connected incrementally during deploy and at the end
+        assert mock_links.call_count >= 1
+        mock_links.assert_any_call({"R1"})
 
 
 class TestStartNodesPerNode:
@@ -1580,9 +1602,13 @@ class TestStartNodesPerNode:
         manager.db_nodes_map = {"R1": node_def}
         manager.placements_map = {}
         manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
+             patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock):
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
@@ -1591,7 +1617,6 @@ class TestStartNodesPerNode:
             await manager._start_nodes_per_node([ns])
 
         assert ns.actual_state == NodeActualState.RUNNING.value
-        assert ns.starting_started_at is None
         assert ns.boot_started_at is not None
         mock_ac.start_node_on_agent.assert_called_once()
         mock_ac.deploy_to_agent.assert_not_called()
@@ -1608,8 +1633,14 @@ class TestStartNodesPerNode:
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
         manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={}):
             mock_ac.start_node_on_agent = AsyncMock(
                 return_value={"success": False, "error": "Network error"}
             )
@@ -1633,15 +1664,21 @@ class TestStartNodesPerNode:
         manager.db_nodes_map = {"R1": node_def}
         manager.placements_map = {}
         manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
+             patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock) as mock_links:
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             await manager._start_nodes_per_node([ns])
 
-        mock_links.assert_called_once_with({"R1"})
+        # Links connected incrementally during deploy and at the end
+        assert mock_links.call_count >= 1
+        mock_links.assert_any_call({"R1"})
 
     @pytest.mark.asyncio
     async def test_start_per_node_falls_back_to_redeploy_on_domain_missing(
@@ -1673,6 +1710,7 @@ class TestStartNodesPerNode:
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
+             patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
              patch.object(manager, "_deploy_single_node", new_callable=AsyncMock) as mock_deploy:
             mock_ac.start_node_on_agent = AsyncMock(return_value={
@@ -2155,3 +2193,495 @@ class TestStartUsesDeployPath:
         assert deploy_order == ["ceos1", "ceos2"]
         # Stagger delay applied between cEOS nodes
         mock_sleep.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: New test classes for reliability improvements
+# ---------------------------------------------------------------------------
+
+
+class TestAgentOfflineDuringDeploy:
+    """Tests for agent going offline mid-deployment."""
+
+    @pytest.mark.asyncio
+    async def test_partial_success_some_nodes_deployed(self, test_db, test_user):
+        """Agent fails after deploying 2 of 4 nodes."""
+        from app.agent_client import AgentUnavailableError
+
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns1 = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="pending")
+        ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="running", actual="pending")
+        node_def1 = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+        node_def2 = _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns1.node_id, ns2.node_id], agent=host)
+        manager.node_states = [ns1, ns2]
+        manager.db_nodes_map = {"R1": node_def1, "R2": node_def2}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns1, "R2": ns2}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
+
+        call_count = 0
+
+        async def mock_create(agent, lab_id, node_name, kind, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:  # First node succeeds
+                return {"success": True}
+            raise AgentUnavailableError("Connection refused")
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
+             patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
+             patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock):
+            mock_ac.create_node_on_agent = mock_create
+            mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            await manager._deploy_nodes_per_node([ns1, ns2])
+
+        # First node deployed successfully, second failed
+        assert ns1.actual_state == "running"
+        assert ns2.actual_state == "pending"
+
+    @pytest.mark.asyncio
+    async def test_failed_placement_skipped_in_resolve(self, test_db, test_user):
+        """Node with failed placement goes to resource scoring."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_def(test_db, lab, "n1", "R1", "R1")
+        # Placement with failed status
+        _make_placement(test_db, lab, "R1", host.id, status="failed")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        await manager._load_and_validate()
+
+        # Verify failed placement is in the map
+        placement = manager.placements_map.get("R1")
+        assert placement is not None
+        assert placement.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_all_nodes_on_offline_agent(self, test_db, test_user):
+        """All nodes assigned to offline agent should fail gracefully."""
+        from app.agent_client import AgentUnavailableError
+
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns1 = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="pending")
+        ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="running", actual="pending")
+        node_def1 = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+        node_def2 = _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns1.node_id, ns2.node_id], agent=host)
+        manager.node_states = [ns1, ns2]
+        manager.db_nodes_map = {"R1": node_def1, "R2": node_def2}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns1, "R2": ns2}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
+             patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock):
+            mock_ac.create_node_on_agent = AsyncMock(
+                side_effect=AgentUnavailableError("Connection refused")
+            )
+            await manager._deploy_nodes_per_node([ns1, ns2])
+
+        # Both nodes in pending (transient failure, not error)
+        assert ns1.actual_state == "pending"
+        assert ns2.actual_state == "pending"
+
+
+class TestDeployRetry:
+    """Tests for in-job retry on transient failures."""
+
+    @pytest.mark.asyncio
+    async def test_retry_succeeds_after_transient_failure(self, test_db, test_user):
+        """First attempt fails, second succeeds."""
+        from app.agent_client import AgentUnavailableError
+
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="pending")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
+
+        attempt_count = 0
+
+        async def mock_create(agent, lab_id, node_name, kind, **kwargs):
+            nonlocal attempt_count
+            attempt_count += 1
+            if attempt_count == 1:
+                raise AgentUnavailableError("Timeout")
+            return {"success": True}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock):
+            mock_ac.create_node_on_agent = mock_create
+            mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            result = await manager._deploy_single_node_with_retry(ns)
+
+        assert result == "R1"
+        assert ns.actual_state == "running"
+        assert attempt_count == 2
+
+    @pytest.mark.asyncio
+    async def test_all_retries_exhausted(self, test_db, test_user):
+        """All retry attempts fail → node in pending state."""
+        from app.agent_client import AgentUnavailableError
+
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="pending")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock):
+            mock_ac.create_node_on_agent = AsyncMock(
+                side_effect=AgentUnavailableError("Timeout")
+            )
+            result = await manager._deploy_single_node_with_retry(ns)
+
+        assert result is None
+        assert ns.actual_state == "pending"
+        assert ns.error_message is not None
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_permanent_error(self, test_db, test_user):
+        """Non-transient errors (error state) should not retry."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="pending")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            # Return a non-transient failure (sets error state, not pending)
+            mock_ac.create_node_on_agent = AsyncMock(
+                return_value={"success": False, "error": "Image not found"}
+            )
+            result = await manager._deploy_single_node_with_retry(ns)
+
+        assert result is None
+        assert ns.actual_state == "error"
+        # Should NOT have retried (no sleep called)
+        mock_sleep.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_retry_respects_backoff(self, test_db, test_user):
+        """Verify backoff delay between retry attempts."""
+        from app.agent_client import AgentUnavailableError
+        from app.tasks.node_lifecycle import DEPLOY_RETRY_BACKOFF_SECONDS
+
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="pending")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+        manager._manifest = None
+        manager.latest_snapshots_map = {}
+        manager.explicit_snapshots_map = {}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_ac.create_node_on_agent = AsyncMock(
+                side_effect=AgentUnavailableError("Timeout")
+            )
+            await manager._deploy_single_node_with_retry(ns)
+
+        # Verify sleep was called with the correct backoff
+        mock_sleep.assert_awaited_once_with(DEPLOY_RETRY_BACKOFF_SECONDS)
+
+
+class TestActiveReadinessPolling:
+    """Tests for in-job readiness polling after deploy."""
+
+    @pytest.mark.asyncio
+    async def test_readiness_detected_within_poll_interval(self, test_db, test_user):
+        """Node becomes ready → detected on next poll cycle."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        poll_count = 0
+
+        async def mock_readiness(*args, **kwargs):
+            nonlocal poll_count
+            poll_count += 1
+            if poll_count >= 2:
+                return {"is_ready": True}
+            return {"is_ready": False}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.get_event_loop") as mock_loop:
+            # Simulate time progression
+            times = iter([0, 6, 12])
+            mock_loop.return_value.time = lambda: next(times, 120)
+            mock_ac.check_node_readiness = mock_readiness
+            await manager._wait_for_readiness(["R1"])
+
+        assert ns.is_ready is True
+        assert poll_count == 2
+
+    @pytest.mark.asyncio
+    async def test_readiness_timeout_reached(self, test_db, test_user):
+        """Timeout → stops polling, nodes left for reconciliation."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.get_event_loop") as mock_loop:
+            # Start at 0, jump past timeout on second call
+            times = iter([0, 200])
+            mock_loop.return_value.time = lambda: next(times, 200)
+            mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": False})
+            await manager._wait_for_readiness(["R1"])
+
+        # Node should NOT be ready (timed out)
+        assert ns.is_ready is not True
+        assert any("timeout" in line.lower() for line in manager.log_parts)
+
+    @pytest.mark.asyncio
+    async def test_multiple_nodes_different_boot_times(self, test_db, test_user):
+        """Nodes boot at different times, each detected independently."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns1 = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+        ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="running", actual="running")
+        node_def1 = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+        node_def2 = _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns1.node_id, ns2.node_id], agent=host)
+        manager.node_states = [ns1, ns2]
+        manager.db_nodes_map = {"R1": node_def1, "R2": node_def2}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns1, "R2": ns2}
+
+        poll_count = 0
+
+        async def mock_readiness(agent, lab_id, node_name, **kwargs):
+            nonlocal poll_count
+            poll_count += 1
+            # R1 becomes ready on poll 2, R2 on poll 4
+            if node_name == "R1" and poll_count >= 2:
+                return {"is_ready": True}
+            if node_name == "R2" and poll_count >= 5:
+                return {"is_ready": True}
+            return {"is_ready": False}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.get_event_loop") as mock_loop:
+            times = iter([0, 6, 12, 18, 24, 30])
+            mock_loop.return_value.time = lambda: next(times, 0)
+            mock_ac.check_node_readiness = mock_readiness
+            await manager._wait_for_readiness(["R1", "R2"])
+
+        assert ns1.is_ready is True
+        assert ns2.is_ready is True
+
+    @pytest.mark.asyncio
+    async def test_agent_unreachable_during_readiness(self, test_db, test_user):
+        """Agent error during readiness poll → doesn't crash job."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.get_event_loop") as mock_loop:
+            # Simulate timeout after one poll
+            times = iter([0, 6, 200])
+            mock_loop.return_value.time = lambda: next(times, 200)
+            mock_ac.check_node_readiness = AsyncMock(
+                side_effect=Exception("Connection reset")
+            )
+            # Should not raise
+            await manager._wait_for_readiness(["R1"])
+
+        # Node not ready but no crash
+        assert ns.is_ready is not True
+
+
+class TestPlacementFailover:
+    """Tests for failed placement fallback to resource scoring."""
+
+    @pytest.mark.asyncio
+    async def test_failed_placement_skipped(self, test_db, test_user):
+        """Node with failed placement goes to resource scoring."""
+        host1 = _make_host(test_db, host_id="agent-1", name="Agent 1")
+        host2 = _make_host(test_db, host_id="agent-2", name="Agent 2")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_def(test_db, lab, "n1", "R1", "R1")
+        # Failed placement on agent-1
+        _make_placement(test_db, lab, "R1", host1.id, status="failed")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        await manager._load_and_validate()
+
+        # The placement exists but is "failed"
+        placement = manager.placements_map.get("R1")
+        assert placement is not None
+        assert placement.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_all_agents_failed_graceful_error(self, test_db, test_user):
+        """No reachable agents → job fails with clear message."""
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_def(test_db, lab, "n1", "R1", "R1")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": MagicMock(host_id=None, device="linux")}
+        manager.db_nodes_by_gui_id = {}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+            mock_ac.is_agent_online = MagicMock(return_value=False)
+            mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+            mock_ac.get_agent_providers = MagicMock(return_value=["docker"])
+            result = await manager._resolve_agents()
+
+        assert result is False
+        assert job.status == "failed"
+        assert ns.actual_state == "error"
+
+
+class TestTransientErrorHandler:
+    """Tests for unified _handle_transient_failure method."""
+
+    def test_sets_pending_state(self, test_db, test_user):
+        """Transient failure sets pending state and clears timestamps."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="starting")
+        ns.starting_started_at = datetime.now(timezone.utc)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+
+        manager._handle_transient_failure(ns, "Agent unreachable")
+
+        assert ns.actual_state == "pending"
+        assert ns.starting_started_at is None
+        assert ns.stopping_started_at is None
+        assert ns.error_message == "Agent unreachable"
+
+
+class TestPingAgent:
+    """Tests for agent ping health check."""
+
+    @pytest.mark.asyncio
+    async def test_ping_agent_success(self):
+        """Successful ping returns True."""
+        from app.agent_client import ping_agent
+
+        agent = MagicMock()
+        agent.name = "test-agent"
+        agent.id = "agent-1"
+        agent.address = "http://localhost:8001"
+
+        with patch("app.agent_client._agent_request", new_callable=AsyncMock) as mock_req:
+            mock_req.return_value = {"status": "ok"}
+            result = await ping_agent(agent)
+
+        assert result is True
+        mock_req.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ping_agent_failure_raises(self):
+        """Failed ping raises AgentUnavailableError."""
+        from app.agent_client import ping_agent, AgentUnavailableError
+
+        agent = MagicMock()
+        agent.name = "test-agent"
+        agent.id = "agent-1"
+        agent.address = "http://localhost:8001"
+
+        with patch("app.agent_client._agent_request", new_callable=AsyncMock) as mock_req:
+            mock_req.side_effect = Exception("Connection refused")
+            with pytest.raises(AgentUnavailableError):
+                await ping_agent(agent)

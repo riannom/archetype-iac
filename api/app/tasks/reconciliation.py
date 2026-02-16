@@ -913,6 +913,16 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 error_count += 1
                 continue
 
+            # Skip nodes with active image sync — the async sync callback will
+            # re-trigger deployment when sync completes
+            if ns.image_sync_status in ("syncing", "checking"):
+                logger.debug(
+                    f"Skipping reconciliation for {ns.node_name}: "
+                    f"image sync in progress ({ns.image_sync_status})"
+                )
+                running_count += 1
+                continue
+
             # Skip nodes with active transitional operations
             # The job will handle state updates - reconciliation should not interfere
             #

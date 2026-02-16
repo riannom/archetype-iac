@@ -1098,6 +1098,25 @@ def is_agent_online(agent: models.Host) -> bool:
     return heartbeat >= _agent_online_cutoff()
 
 
+async def ping_agent(agent: models.Host, timeout: float = 5.0) -> bool:
+    """Verify agent is reachable via HTTP health check.
+
+    Goes beyond heartbeat freshness — actually makes an HTTP call to
+    confirm the agent is responsive right now.
+
+    Raises AgentUnavailableError if unreachable.
+    """
+    url = f"{get_agent_url(agent)}/health"
+    try:
+        await _agent_request("GET", url, timeout=timeout, max_retries=0)
+        return True
+    except Exception as e:
+        raise AgentUnavailableError(
+            f"Agent {agent.name or agent.id} unreachable: {e}",
+            agent_id=agent.id,
+        ) from e
+
+
 # --- Reconciliation Functions ---
 
 async def discover_labs_on_agent(agent: models.Host) -> dict:

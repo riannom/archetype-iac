@@ -858,6 +858,13 @@ async def check_stuck_starting_nodes():
                 # No active job - recover these nodes
                 # Set them to "stopped" as a safe fallback (user can retry)
                 for ns in nodes:
+                    # Don't recover nodes with active image sync
+                    if ns.image_sync_status in ("syncing", "checking"):
+                        logger.debug(
+                            f"Skipping stuck starting recovery for {ns.node_name}: "
+                            f"image sync in progress ({ns.image_sync_status})"
+                        )
+                        continue
                     duration = (now - ns.starting_started_at).total_seconds() if ns.starting_started_at else 0
                     logger.info(
                         f"Recovering node {ns.node_name} in lab {lab_id} from stuck 'starting' state "
@@ -937,6 +944,112 @@ async def check_stuck_agent_updates():
             logger.error(f"Error in agent update health check: {e}")
 
 
+async def check_orphaned_image_sync_status():
+    """Clear stale image_sync_status on NodeState records with no active sync job.
+
+    When image sync callbacks fail to execute (e.g., API crash during transfer),
+    NodeState records can be left with image_sync_status="syncing" or "checking"
+    even though no ImageSyncJob is still active. This leaves nodes stuck showing
+    a blue "syncing" indicator in the UI forever.
+
+    This function finds such orphans and clears their status so reconciliation
+    and enforcement can resume normal operation.
+    """
+    from app.services.broadcaster import broadcast_node_state_change
+
+    with get_session() as session:
+        try:
+            # Find all NodeState records with active image sync status
+            stuck_nodes = (
+                session.query(models.NodeState)
+                .filter(models.NodeState.image_sync_status.in_(["syncing", "checking"]))
+                .all()
+            )
+
+            if not stuck_nodes:
+                return
+
+            for ns in stuck_nodes:
+                # Look up the node's image to check for active sync jobs
+                node_def = (
+                    session.query(models.Node)
+                    .filter(
+                        models.Node.lab_id == ns.lab_id,
+                        models.Node.container_name == ns.node_name,
+                    )
+                    .first()
+                )
+                if not node_def or not node_def.image:
+                    # Can't determine image — clear status to unblock
+                    logger.warning(
+                        f"Clearing orphaned image_sync_status for {ns.node_name} "
+                        f"in lab {ns.lab_id}: no node definition or image found"
+                    )
+                    ns.image_sync_status = None
+                    ns.image_sync_message = None
+                    session.commit()
+                    continue
+
+                # Find the host this node is placed on
+                placement = (
+                    session.query(models.NodePlacement)
+                    .filter(
+                        models.NodePlacement.lab_id == ns.lab_id,
+                        models.NodePlacement.node_name == ns.node_name,
+                    )
+                    .first()
+                )
+                if not placement:
+                    logger.warning(
+                        f"Clearing orphaned image_sync_status for {ns.node_name} "
+                        f"in lab {ns.lab_id}: no placement found"
+                    )
+                    ns.image_sync_status = None
+                    ns.image_sync_message = None
+                    session.commit()
+                    continue
+
+                # Check if any active ImageSyncJob exists for this image+host
+                active_sync = (
+                    session.query(models.ImageSyncJob)
+                    .filter(
+                        models.ImageSyncJob.image_id == node_def.image,
+                        models.ImageSyncJob.host_id == placement.host_id,
+                        models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]),
+                    )
+                    .first()
+                )
+
+                if active_sync:
+                    # Sync job still running — leave status alone
+                    continue
+
+                logger.warning(
+                    f"Clearing orphaned image_sync_status='{ns.image_sync_status}' for "
+                    f"{ns.node_name} in lab {ns.lab_id}: no active ImageSyncJob found"
+                )
+                old_status = ns.image_sync_status
+                ns.image_sync_status = None
+                ns.image_sync_message = None
+                session.commit()
+
+                # Broadcast so UI clears the blue indicator
+                await broadcast_node_state_change(
+                    lab_id=ns.lab_id,
+                    node_id=ns.id,
+                    node_name=ns.node_name,
+                    desired_state=ns.desired_state,
+                    actual_state=ns.actual_state,
+                    is_ready=ns.is_ready,
+                    error_message=ns.error_message,
+                    image_sync_status=None,
+                    image_sync_message=None,
+                )
+
+        except Exception as e:
+            logger.error(f"Error in orphaned image sync status check: {e}")
+
+
 async def job_health_monitor():
     """Background task to periodically check job health.
 
@@ -949,6 +1062,7 @@ async def job_health_monitor():
     6. Checks for nodes stuck in "stopping" state
     7. Checks for nodes stuck in "starting" state
     8. Checks for stuck agent update jobs
+    9. Checks for orphaned image_sync_status on node states
     """
     logger.info(
         f"Job health monitor started "
@@ -969,6 +1083,7 @@ async def job_health_monitor():
             await check_stuck_stopping_nodes()
             await check_stuck_starting_nodes()
             await check_stuck_agent_updates()
+            await check_orphaned_image_sync_status()
 
         except asyncio.CancelledError:
             logger.info("Job health monitor stopped")
