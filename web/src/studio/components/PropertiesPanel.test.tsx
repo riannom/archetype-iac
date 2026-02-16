@@ -297,10 +297,10 @@ describe("PropertiesPanel", () => {
         expect(screen.getByText("running")).toBeInTheDocument();
       });
 
-      it("shows Deploy button when node is stopped and no nodes are running", () => {
+      it("shows Start button when node is stopped and no nodes are running", () => {
         render(<PropertiesPanel {...defaultProps} />);
 
-        expect(screen.getByText("DEPLOY")).toBeInTheDocument();
+        expect(screen.getByText("START")).toBeInTheDocument();
       });
 
       it("shows Start button when node is stopped and other nodes are running", () => {
@@ -340,12 +340,12 @@ describe("PropertiesPanel", () => {
         expect(screen.getByText("RELOAD")).toBeInTheDocument();
       });
 
-      it("calls onUpdateStatus when Deploy is clicked", async () => {
+      it("calls onUpdateStatus when Start is clicked", async () => {
         const user = userEvent.setup();
 
         render(<PropertiesPanel {...defaultProps} />);
 
-        await user.click(screen.getByText("DEPLOY"));
+        await user.click(screen.getByText("START"));
 
         expect(mockOnUpdateStatus).toHaveBeenCalledWith("node-1", "booting");
       });

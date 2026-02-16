@@ -105,13 +105,25 @@ describe("RuntimeControl", () => {
     expect(screen.getByText("alpine:latest")).toBeInTheDocument();
   });
 
-  it("shows Deploy Lab button when lab is not deployed", () => {
+  it("shows Start All button when no nodes are running", () => {
     render(<RuntimeControl {...defaultProps} />);
 
-    // Look for the header Deploy Lab button by its title attribute
-    const deployButton = screen.getByTitle("Deploy all nodes in the topology");
-    expect(deployButton).toBeInTheDocument();
-    expect(deployButton).toHaveTextContent("Deploy Lab");
+    const startAllButton = screen.getByTitle("Start all nodes");
+    expect(startAllButton).toBeInTheDocument();
+    expect(startAllButton).toHaveTextContent("Start All");
+  });
+
+  it("hides Stop All when no nodes are running", () => {
+    const runtimeStates: Record<string, RuntimeStatus> = {
+      "node-1": "stopped",
+      "node-2": "stopped",
+    };
+
+    render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
+
+    expect(
+      screen.queryByRole("button", { name: /stop all/i })
+    ).not.toBeInTheDocument();
   });
 
   it("shows Start All and Stop All buttons when lab is deployed with mixed states", () => {
@@ -220,12 +232,12 @@ describe("RuntimeControl", () => {
   });
 
   describe("Bulk actions", () => {
-    it("calls studioRequest with correct params on Deploy Lab", async () => {
+    it("calls studioRequest with correct params on Start All", async () => {
       const user = userEvent.setup();
 
       render(<RuntimeControl {...defaultProps} />);
 
-      await user.click(screen.getByTitle("Deploy all nodes in the topology"));
+      await user.click(screen.getByTitle("Start all nodes"));
 
       expect(mockStudioRequest).toHaveBeenCalledWith(
         "/labs/test-lab-123/nodes/desired-state",
@@ -241,7 +253,7 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} />);
 
-      await user.click(screen.getByTitle("Deploy all nodes in the topology"));
+      await user.click(screen.getByTitle("Start all nodes"));
 
       // The component calls onRefreshStates via setTimeout after the action completes
       // Just verify the desired-state endpoint was called (sync is auto-triggered by backend)
@@ -253,12 +265,12 @@ describe("RuntimeControl", () => {
       );
     });
 
-    it("optimistically updates UI to booting state on deploy", async () => {
+    it("optimistically updates UI to booting state on Start All", async () => {
       const user = userEvent.setup();
 
       render(<RuntimeControl {...defaultProps} />);
 
-      await user.click(screen.getByTitle("Deploy all nodes in the topology"));
+      await user.click(screen.getByTitle("Start all nodes"));
 
       expect(mockOnSetRuntimeStatus).toHaveBeenCalledWith("node-1", "booting");
       expect(mockOnSetRuntimeStatus).toHaveBeenCalledWith("node-2", "booting");
@@ -356,8 +368,8 @@ describe("RuntimeControl", () => {
 
       render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
 
-      // Each stopped node should have a play/rocket button
-      const playButtons = document.querySelectorAll(".fa-play, .fa-rocket");
+      // Each stopped node should have a play button
+      const playButtons = document.querySelectorAll(".fa-play");
       expect(playButtons.length).toBeGreaterThan(0);
     });
 

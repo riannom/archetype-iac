@@ -64,9 +64,6 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     return status === 'running';
   });
 
-  // Check if lab is deployed (any node has ever been started)
-  const isLabDeployed = hasRunningNodes;
-
   const handleBulkAction = useCallback(async (action: 'running' | 'stopped') => {
     if (!labId || nodes.length === 0) return;
     if (isOperationPending()) return; // Block if any op pending
@@ -152,48 +149,38 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
             <p className="text-stone-500 dark:text-stone-400 text-sm mt-1">Live operational state and lifecycle management for your topology.</p>
           </div>
           <div className="flex gap-3">
-            {!isLabDeployed ? (
+            {!allNodesRunning && (
               <button
                 onClick={() => handleBulkAction('running')}
                 disabled={isOperationPending()}
                 className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
-                title="Deploy all nodes in the topology"
+                title="Start all nodes"
               >
-                <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-rocket'} mr-2`}></i>
-                {pendingOps.has('bulk') ? 'Deploying...' : 'Deploy Lab'}
+                <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-play'} mr-2`}></i>
+                {pendingOps.has('bulk') ? 'Starting...' : 'Start All'}
               </button>
-            ) : (
-              <>
-                {!allNodesRunning && (
-                  <button
-                    onClick={() => handleBulkAction('running')}
-                    disabled={isOperationPending()}
-                    className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
-                    title="Start all stopped nodes"
-                  >
-                    <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-play'} mr-2`}></i>
-                    {pendingOps.has('bulk') ? 'Starting...' : 'Start All'}
-                  </button>
-                )}
-                <button
-                  onClick={handleStopAll}
-                  disabled={isOperationPending()}
-                  className="px-4 py-2 glass-control disabled:opacity-50 disabled:cursor-not-allowed text-stone-700 dark:text-white rounded-lg border text-xs font-bold transition-all"
-                  title="Stop all running nodes"
-                >
-                  <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-stop'} mr-2`}></i>
-                  {pendingOps.has('bulk') ? 'Stopping...' : 'Stop All'}
-                </button>
-                <button
-                  onClick={handleExtractConfigs}
-                  disabled={isExtracting || !hasRunningNodes}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-blue-900/20"
-                  title="Extract configs from all running nodes"
-                >
-                  <i className={`fa-solid ${isExtracting ? 'fa-spinner fa-spin' : 'fa-download'} mr-2`}></i>
-                  {isExtracting ? 'Extracting...' : 'Extract Configs'}
-                </button>
-              </>
+            )}
+            {hasRunningNodes && (
+              <button
+                onClick={handleStopAll}
+                disabled={isOperationPending()}
+                className="px-4 py-2 glass-control disabled:opacity-50 disabled:cursor-not-allowed text-stone-700 dark:text-white rounded-lg border text-xs font-bold transition-all"
+                title="Stop all running nodes"
+              >
+                <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-stop'} mr-2`}></i>
+                {pendingOps.has('bulk') ? 'Stopping...' : 'Stop All'}
+              </button>
+            )}
+            {hasRunningNodes && (
+              <button
+                onClick={handleExtractConfigs}
+                disabled={isExtracting}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-blue-900/20"
+                title="Extract configs from all running nodes"
+              >
+                <i className={`fa-solid ${isExtracting ? 'fa-spinner fa-spin' : 'fa-download'} mr-2`}></i>
+                {isExtracting ? 'Extracting...' : 'Extract Configs'}
+              </button>
             )}
           </div>
         </header>
@@ -305,9 +292,9 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                                 onClick={() => onUpdateStatus(node.id, 'booting')}
                                 disabled={isOperationPending(node.id)}
                                 className="p-2 text-green-500 hover:bg-green-500/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
-                                title={isLabDeployed ? "Start this node" : "Deploy lab (starts all nodes)"}
+                                title="Start this node"
                               >
-                                <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : (isLabDeployed ? 'fa-play' : 'fa-rocket')}`}></i>
+                                <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-play'}`}></i>
                               </button>
                             ) : (
                               <>

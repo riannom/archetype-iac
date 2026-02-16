@@ -909,10 +909,6 @@ const Canvas: React.FC<CanvasProps> = ({
               return null;
             }
             const nodeStatus = runtimeStates[contextMenu.id] || 'stopped';
-            const hasRunningNodes = nodes.some(n => {
-              const s = runtimeStates[n.id];
-              return s === 'running' || s === 'booting';
-            });
             const isNodeRunning = nodeStatus === 'running' || nodeStatus === 'booting';
             return (
               <>
@@ -924,7 +920,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 </button>
                 {!isNodeRunning && (
                   <button onClick={() => handleAction('start')} className="w-full flex items-center gap-3 px-4 py-2 text-xs text-green-600 dark:text-green-400 hover:bg-green-600 hover:text-white transition-colors">
-                    <i className={`fa-solid ${hasRunningNodes ? 'fa-play' : 'fa-rocket'} w-4`}></i> {hasRunningNodes ? 'Start Node' : 'Deploy Lab'}
+                    <i className="fa-solid fa-play w-4"></i> Start Node
                   </button>
                 )}
                 {isNodeRunning && (

@@ -1218,7 +1218,7 @@ describe("Canvas", () => {
       });
     });
 
-    it("shows Deploy Lab option when no nodes are running", async () => {
+    it("shows Start Node option when no nodes are running", async () => {
       const node = createDeviceNode({ id: "node-1", name: "UndeployedNode" });
 
       renderWithTheme(<Canvas {...defaultProps} nodes={[node]} />);
@@ -1229,7 +1229,7 @@ describe("Canvas", () => {
       fireEvent.contextMenu(nodeElement);
 
       await waitFor(() => {
-        expect(screen.getByText("Deploy Lab")).toBeInTheDocument();
+        expect(screen.getByText("Start Node")).toBeInTheDocument();
       });
     });
 
