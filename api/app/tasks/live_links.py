@@ -51,6 +51,7 @@ async def create_link_if_ready(
     link_state: models.LinkState,
     host_to_agent: dict[str, models.Host],
     log_parts: list[str] | None = None,
+    skip_locked: bool = False,
 ) -> bool:
     """Create link if both endpoint nodes are running.
 
@@ -67,6 +68,7 @@ async def create_link_if_ready(
         link_state: The LinkState record to potentially connect
         host_to_agent: Map of host_id to Host objects for available agents
         log_parts: Optional list to append log messages to
+        skip_locked: If True, silently skip rows locked by other transactions
 
     Returns:
         True if link was created successfully, False otherwise
@@ -76,9 +78,12 @@ async def create_link_if_ready(
 
     # Re-query with row-level lock to prevent concurrent modifications
     link_name = link_state.link_name
-    link_state = get_link_state_for_update(session, lab_id, link_name)
+    link_state = get_link_state_for_update(session, lab_id, link_name, skip_locked=skip_locked)
     if not link_state:
-        log_parts.append(f"  {link_name}: FAILED - link state not found")
+        if skip_locked:
+            logger.debug(f"Link {link_name} skipped (row locked by another transaction)")
+        else:
+            log_parts.append(f"  {link_name}: FAILED - link state not found")
         return False
 
     # Check NodeState.actual_state for both endpoints

@@ -217,7 +217,7 @@ async def _auto_connect_pending_links(
     node_set = set(node_names)
     for ls in pending_links:
         if ls.source_node in node_set or ls.target_node in node_set:
-            await create_link_if_ready(database, lab_id, ls, host_to_agent)
+            await create_link_if_ready(database, lab_id, ls, host_to_agent, skip_locked=True)
 
 
 async def _auto_reattach_overlay_endpoints(

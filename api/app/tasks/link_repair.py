@@ -44,9 +44,9 @@ async def attempt_partial_recovery(
         True if recovery succeeded, False otherwise
     """
     # Re-query with row-level lock to prevent concurrent modifications
-    link = get_link_state_by_id_for_update(session, link.id)
+    link = get_link_state_by_id_for_update(session, link.id, skip_locked=True)
     if not link:
-        logger.warning("Link not found for recovery (may have been deleted)")
+        logger.debug("Link skipped for recovery (locked or deleted)")
         return False
 
     if not link.is_cross_host:
@@ -165,8 +165,9 @@ async def attempt_vlan_repair(
     Returns:
         True if repair succeeded, False otherwise
     """
-    link = get_link_state_by_id_for_update(session, link.id)
+    link = get_link_state_by_id_for_update(session, link.id, skip_locked=True)
     if not link:
+        logger.debug("Link skipped for VLAN repair (locked or deleted)")
         return False
 
     try:
@@ -335,9 +336,9 @@ async def attempt_link_repair(
     log_parts: list[str] = []
 
     # Re-query with row-level lock to prevent concurrent modifications
-    link = get_link_state_by_id_for_update(session, link.id)
+    link = get_link_state_by_id_for_update(session, link.id, skip_locked=True)
     if not link:
-        logger.warning("Link not found for repair (may have been deleted)")
+        logger.debug("Link skipped for repair (locked or deleted)")
         return False
 
     try:

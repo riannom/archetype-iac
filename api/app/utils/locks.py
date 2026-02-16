@@ -132,15 +132,27 @@ def _get_for_update(
     session: "Session",
     model: type[ModelT],
     *filters,
+    skip_locked: bool = False,
 ) -> ModelT | None:
-    """Helper for row-level locking with SELECT ... FOR UPDATE."""
-    return session.query(model).filter(*filters).with_for_update().first()
+    """Helper for row-level locking with SELECT ... FOR UPDATE.
+
+    Args:
+        skip_locked: If True, use SKIP LOCKED to silently skip rows
+            locked by other transactions instead of blocking.
+    """
+    return (
+        session.query(model)
+        .filter(*filters)
+        .with_for_update(skip_locked=skip_locked)
+        .first()
+    )
 
 
 def get_link_state_for_update(
     session: "Session",
     lab_id: str,
     link_name: str,
+    skip_locked: bool = False,
 ) -> "models.LinkState | None":
     """Get LinkState with row-level lock to prevent concurrent modifications.
 
@@ -154,9 +166,10 @@ def get_link_state_for_update(
         session: Database session (must be in a transaction)
         lab_id: Lab identifier
         link_name: Link name to lock
+        skip_locked: If True, silently skip rows locked by other transactions
 
     Returns:
-        LinkState record with exclusive lock, or None if not found
+        LinkState record with exclusive lock, or None if not found/skipped
     """
     from app import models
 
@@ -165,21 +178,24 @@ def get_link_state_for_update(
         models.LinkState,
         models.LinkState.lab_id == lab_id,
         models.LinkState.link_name == link_name,
+        skip_locked=skip_locked,
     )
 
 
 def get_link_state_by_id_for_update(
     session: "Session",
     link_state_id: str,
+    skip_locked: bool = False,
 ) -> "models.LinkState | None":
     """Get LinkState by ID with row-level lock.
 
     Args:
         session: Database session (must be in a transaction)
         link_state_id: LinkState record ID
+        skip_locked: If True, silently skip rows locked by other transactions
 
     Returns:
-        LinkState record with exclusive lock, or None if not found
+        LinkState record with exclusive lock, or None if not found/skipped
     """
     from app import models
 
@@ -187,6 +203,7 @@ def get_link_state_by_id_for_update(
         session,
         models.LinkState,
         models.LinkState.id == link_state_id,
+        skip_locked=skip_locked,
     )
 
 

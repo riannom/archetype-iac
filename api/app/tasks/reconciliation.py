@@ -1362,7 +1362,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     for ls in links_to_connect:
                         logger.info(f"Auto-connecting pending link {ls.link_name}")
                         try:
-                            await create_link_if_ready(session, lab_id, ls, host_to_agent)
+                            await create_link_if_ready(session, lab_id, ls, host_to_agent, skip_locked=True)
                         except Exception as e:
                             logger.error(f"Failed to auto-connect link {ls.link_name}: {e}")
                             ls.actual_state = LinkActualState.ERROR.value
