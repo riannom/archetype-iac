@@ -30,10 +30,12 @@ from app.image_store import (
     create_image_entry,
     delete_image_entry,
     detect_device_from_filename,
+    detect_iol_device_type,
     detect_qcow2_device_type,
     ensure_image_store,
     find_image_by_id,
     image_matches_device,
+    iol_path,
     load_manifest,
     qcow2_path,
     save_manifest,
@@ -882,6 +884,91 @@ def upload_qcow2(
             result["build_job_id"] = job.id
             result["build_status"] = "queued"
             result["message"] = f"Building Docker image for {vrnetlab_device_id or device_id}"
+
+    return result
+
+
+@router.post("/iol")
+def upload_iol(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict[str, str]:
+    """Upload an IOL binary and automatically build a Docker image.
+
+    IOL (IOS on Linux) binaries are raw Linux ELF executables. This endpoint
+    saves the binary and triggers an async Docker image build that wraps it
+    with IOUYAP, screen, and boot orchestration.
+
+    Requires admin access.
+    """
+    from app.services.resource_monitor import ResourceMonitor, PressureLevel
+    if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
+        raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+
+    # Detect device type from filename
+    device_id = detect_iol_device_type(file.filename)
+    if not device_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not detect IOL device type from filename. "
+                   "Expected filename containing 'l3-' (for iol-xe) or 'l2-' (for iol-l2)."
+        )
+
+    # Check for duplicate
+    manifest = load_manifest()
+    potential_id = f"iol:{Path(file.filename).name}"
+    if find_image_by_id(manifest, potential_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"IOL image '{file.filename}' already exists in the library"
+        )
+
+    # Save the binary
+    destination = iol_path(Path(file.filename).name)
+    try:
+        with destination.open("wb") as handle:
+            shutil.copyfileobj(file.file, handle)
+    finally:
+        file.file.close()
+
+    file_size = destination.stat().st_size if destination.exists() else None
+
+    # Extract version from filename
+    _, version = detect_device_from_filename(destination.name)
+
+    # Register the raw IOL binary in manifest
+    image_id = f"iol:{destination.name}"
+    entry = create_image_entry(
+        image_id=image_id,
+        kind="iol",
+        reference=str(destination),
+        filename=destination.name,
+        device_id=device_id,
+        version=version,
+        size_bytes=file_size,
+    )
+    manifest["images"].append(entry)
+    save_manifest(manifest)
+
+    result = {"path": str(destination), "filename": destination.name, "device_id": device_id}
+
+    # Trigger async Docker image build
+    from app.tasks.iol_build import build_iol_image
+    job = queue.enqueue(
+        build_iol_image,
+        iol_path=str(destination),
+        device_id=device_id,
+        version=version,
+        iol_image_id=image_id,
+        job_timeout=600,  # 10 minutes
+        result_ttl=3600, failure_ttl=86400,
+    )
+    result["build_job_id"] = job.id
+    result["build_status"] = "queued"
+    result["message"] = f"Building Docker image for {device_id}"
 
     return result
 

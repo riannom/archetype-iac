@@ -1082,9 +1082,10 @@ async def _import_single_image(
             logger.info(f"IOL file {image.disk_image_filename} already exists, reusing")
             _update_image_progress(session_id, image_id, "extracting", 90)
 
-        # Create manifest entry - use image.id to allow multiple images sharing same file
+        # Create manifest entry for raw IOL source (excluded from find_image_reference)
+        iol_manifest_id = f"iol:{image.id}"
         entry = create_image_entry(
-            image_id=f"iol:{image.id}",
+            image_id=iol_manifest_id,
             kind="iol",
             reference=str(dest_path),
             filename=image.disk_image_filename,
@@ -1099,6 +1100,22 @@ async def _import_single_image(
             provisioning_driver=node_def.provisioning_driver if node_def else None,
             provisioning_media_type=node_def.provisioning_media_type if node_def else None,
         )
+
+        # Enqueue background Docker image build
+        _update_image_progress(session_id, image_id, "building", 92)
+        from app.jobs import queue
+        from app.tasks.iol_build import build_iol_image
+
+        build_job = queue.enqueue(
+            build_iol_image,
+            iol_path=str(dest_path),
+            device_id=device_id,
+            version=image.version,
+            iol_image_id=iol_manifest_id,
+            job_timeout=600,
+            result_ttl=3600, failure_ttl=86400,
+        )
+        logger.info(f"Enqueued IOL Docker build job {build_job.id} for {image.disk_image_filename}")
 
     else:
         raise ValueError(f"Unsupported image type: {image.image_type}")

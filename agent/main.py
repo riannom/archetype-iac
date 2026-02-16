@@ -1994,7 +1994,11 @@ async def extract_node_config(
                     extraction_settings = get_config_extraction_settings(kind)
                     cmd = extraction_settings.command
                     config_content = None
-                    if cmd:
+                    if extraction_settings.method == "nvram":
+                        config_content = await docker_provider._extract_config_via_nvram(
+                            container_name, workspace
+                        )
+                    elif cmd:
                         if extraction_settings.method == "ssh":
                             config_content = await docker_provider._extract_config_via_ssh(
                                 container, kind, cmd, node_name

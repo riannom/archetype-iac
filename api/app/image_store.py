@@ -63,6 +63,23 @@ QCOW2_DEVICE_PATTERNS: dict[str, tuple[str, str]] = {
 }
 
 
+def detect_iol_device_type(filename: str) -> str | None:
+    """Detect IOL device type from filename.
+
+    Args:
+        filename: The IOL filename (e.g., "i86bi-linux-l3-adventerprisek9-15.6.1T.bin")
+
+    Returns:
+        Device ID ("iol-xe" or "iol-l2") or None if not recognized as IOL.
+    """
+    name = filename.lower()
+    if "l2-" in name or "ioll2" in name or "iol_l2" in name:
+        return "iol-l2"
+    if "l3-" in name or "iol" in name:
+        return "iol-xe"
+    return None
+
+
 def detect_qcow2_device_type(filename: str) -> tuple[str | None, str | None]:
     """Detect device type and vrnetlab path from qcow2 filename.
 
@@ -161,6 +178,10 @@ def ensure_image_store() -> Path:
 
 
 def qcow2_path(filename: str) -> Path:
+    return ensure_image_store() / filename
+
+
+def iol_path(filename: str) -> Path:
     return ensure_image_store() / filename
 
 
@@ -558,6 +579,12 @@ def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
         "viosl2": "iosvl2",
         "iosvl2": "iosvl2",
         "iosxr": "iosxr",
+        "ioll2": "iol-l2",
+        "iol_l2": "iol-l2",
+        "l2-adventerprise": "iol-l2",
+        "l2-ipbasek9": "iol-l2",
+        "l3-adventerprise": "iol-xe",
+        "iol": "iol-xe",
     }
     for keyword, device_id in keyword_map.items():
         if keyword in name:
@@ -822,7 +849,8 @@ def delete_device_override(device_id: str) -> bool:
 def find_image_reference(device_id: str, version: str | None = None) -> str | None:
     """Look up the image reference for a device type and version.
 
-    Supports Docker, qcow2, and IOL images.
+    Supports Docker and qcow2 images. Raw IOL binaries (kind="iol") are
+    excluded — they must be built into Docker images first.
 
     Args:
         device_id: Device type (e.g., 'eos', 'ceos', 'iosv', 'cisco_iosv')
@@ -835,7 +863,7 @@ def find_image_reference(device_id: str, version: str | None = None) -> str | No
     images = manifest.get("images", [])
 
     # Supported image kinds
-    supported_kinds = ("docker", "qcow2", "iol")
+    supported_kinds = ("docker", "qcow2")
 
     # First try exact version match
     if version:
@@ -879,10 +907,6 @@ def get_image_provider(image_reference: str | None) -> str:
     # File-based images that need libvirt/QEMU
     if image_reference.endswith((".qcow2", ".img")):
         return "libvirt"
-
-    # IOL images run in a Docker container wrapper
-    if image_reference.endswith(".iol"):
-        return "docker"
 
     # Default to docker for Docker image tags
     return "docker"

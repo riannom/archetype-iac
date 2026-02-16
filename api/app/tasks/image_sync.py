@@ -26,15 +26,13 @@ logger = logging.getLogger(__name__)
 
 def _is_file_reference(reference: str) -> bool:
     """Return True when reference points to a host filesystem image."""
-    return reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
+    return reference.startswith("/") or reference.endswith((".qcow2", ".img"))
 
 
 def _required_provider_for_reference(reference: str) -> str | None:
     """Return required provider for a file-based image reference."""
     if reference.endswith((".qcow2", ".img")):
         return "libvirt"
-    if reference.endswith(".iol"):
-        return "docker"
     return None
 
 
