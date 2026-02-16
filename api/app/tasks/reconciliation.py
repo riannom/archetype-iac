@@ -682,6 +682,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
         if links_created > 0:
             logger.info(f"Created {links_created} link state(s) for lab {lab_id}")
     except Exception as e:
+        session.rollback()
         logger.debug(f"Failed to ensure link states for lab {lab_id}: {e}")
 
     # Normalize link interface names for existing labs
@@ -691,6 +692,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
         if normalized > 0:
             logger.info(f"Normalized {normalized} link record(s) for lab {lab_id}")
     except Exception as e:
+        session.rollback()
         logger.debug(f"Failed to normalize link interfaces for lab {lab_id}: {e}")
 
     # Backfill node_definition_id for placements (gradual migration)
@@ -700,6 +702,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
             logger.info(f"Backfilled node_definition_id for {backfilled} placement(s) in lab {lab_id}")
             session.commit()
     except Exception as e:
+        session.rollback()
         logger.debug(f"Failed to backfill placement node IDs for lab {lab_id}: {e}")
 
     # Get ALL agents that have nodes for this lab (multi-host support)
@@ -1454,8 +1457,7 @@ async def reconcile_managed_interfaces():
     """
     from app import agent_client
 
-    session = db.SessionLocal()
-    try:
+    with get_session() as session:
         interfaces = session.query(models.AgentManagedInterface).all()
         if not interfaces:
             return
@@ -1495,6 +1497,5 @@ async def reconcile_managed_interfaces():
 
                 session.commit()
             except Exception as e:
+                session.rollback()
                 logger.warning(f"Failed to reconcile interfaces for host {host_id}: {e}")
-    finally:
-        session.close()

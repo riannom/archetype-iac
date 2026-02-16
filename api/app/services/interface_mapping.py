@@ -217,6 +217,7 @@ async def populate_all_agents(
             result["errors"] += agent_result["errors"]
             result["agents_queried"] += 1
         except Exception as e:
+            database.rollback()
             logger.error(f"Failed to populate mappings from agent {agent.name}: {e}")
             result["errors"] += 1
 

@@ -1137,6 +1137,7 @@ async def run_multihost_deploy(
         except Exception as e:
             logger.exception(f"Job {job_id} failed with unexpected error: {e}")
             try:
+                session.rollback()
                 job = session.get(models.Job, job_id)
                 lab = session.get(models.Lab, lab_id)
                 if job:
@@ -1309,6 +1310,7 @@ async def run_multihost_destroy(
         except Exception as e:
             logger.exception(f"Job {job_id} failed with unexpected error: {e}")
             try:
+                session.rollback()
                 job = session.get(models.Job, job_id)
                 if job:
                     job.status = JobStatus.FAILED.value
@@ -1362,6 +1364,7 @@ async def run_node_reconcile(
         except Exception as e:
             logger.exception(f"Job {job_id} failed with unexpected error: {e}")
             try:
+                session.rollback()
                 job = session.get(models.Job, job_id)
                 if job:
                     job.status = JobStatus.FAILED.value

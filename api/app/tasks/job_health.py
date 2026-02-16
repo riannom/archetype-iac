@@ -654,9 +654,11 @@ async def check_stuck_image_sync_jobs():
                         logger.info(f"Marked stuck ImageSyncJob {job.id} as failed: {error_reason}")
 
                 except Exception as e:
+                    session.rollback()
                     logger.error(f"Error checking ImageSyncJob {job.id}: {e}")
 
         except Exception as e:
+            session.rollback()
             logger.error(f"Error in ImageSyncJob health check: {e}")
 
 
@@ -797,6 +799,7 @@ async def check_stuck_stopping_nodes():
                 session.commit()
 
         except Exception as e:
+            session.rollback()
             logger.error(f"Error in stuck stopping nodes check: {e}")
 
 
@@ -879,6 +882,7 @@ async def check_stuck_starting_nodes():
                 session.commit()
 
         except Exception as e:
+            session.rollback()
             logger.error(f"Error in stuck starting nodes check: {e}")
 
 
@@ -938,9 +942,11 @@ async def check_stuck_agent_updates():
                     logger.info(f"Marked stuck AgentUpdateJob {job.id} as failed: {reason}")
 
                 except Exception as e:
+                    session.rollback()
                     logger.error(f"Error checking AgentUpdateJob {job.id}: {e}")
 
         except Exception as e:
+            session.rollback()
             logger.error(f"Error in agent update health check: {e}")
 
 
@@ -1047,6 +1053,7 @@ async def check_orphaned_image_sync_status():
                 )
 
         except Exception as e:
+            session.rollback()
             logger.error(f"Error in orphaned image sync status check: {e}")
 
 

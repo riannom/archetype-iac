@@ -166,6 +166,7 @@ async def reconcile_link_states(session: Session) -> dict:
                     logger.error(f"Link {link.link_name} repair failed")
 
         except Exception as e:
+            session.rollback()
             logger.error(f"Error reconciling link {link.link_name}: {e}")
             results["errors"] += 1
 
