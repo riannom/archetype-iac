@@ -6,7 +6,6 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -271,7 +270,7 @@ async def test_same_host_convergence_sends_pairings(test_db, sample_lab, sample_
         "declare_port_state_on_agent",
         side_effect=_capture,
     ):
-        result = await link_reconciliation.run_same_host_convergence(
+        await link_reconciliation.run_same_host_convergence(
             test_db, host_to_agent
         )
 
@@ -399,3 +398,4 @@ async def test_same_host_skips_zero_vlan(test_db, sample_lab, sample_host):
         )
 
     mock_declare.assert_not_called()
+    assert result == {}

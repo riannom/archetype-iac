@@ -2588,7 +2588,7 @@ class TestPlacementFailover:
     async def test_failed_placement_skipped(self, test_db, test_user):
         """Node with failed placement goes to resource scoring."""
         host1 = _make_host(test_db, host_id="agent-1", name="Agent 1")
-        host2 = _make_host(test_db, host_id="agent-2", name="Agent 2")
+        _make_host(test_db, host_id="agent-2", name="Agent 2")
         lab = _make_lab(test_db, test_user)
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")

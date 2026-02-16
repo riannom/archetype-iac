@@ -105,5 +105,13 @@ async def close_publisher() -> None:
     """Close the publisher Redis connection."""
     global _publisher_redis
     if _publisher_redis is not None:
-        await _publisher_redis.close()
-        _publisher_redis = None
+        try:
+            # `close()` is deprecated in redis-py asyncio client.
+            await _publisher_redis.aclose()
+        except RuntimeError as exc:
+            # TestClient teardown can hit this when the event loop is already
+            # shutting down. Swallow to keep shutdown idempotent.
+            if "Event loop is closed" not in str(exc):
+                raise
+        finally:
+            _publisher_redis = None

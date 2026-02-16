@@ -66,12 +66,17 @@ def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
         "local_auth_enabled": settings.local_auth_enabled,
         "workspace": settings.workspace,
         "iso_upload_dir": settings.iso_upload_dir,
+        "agent_secret": settings.agent_secret,
     }
 
     # Use object.__setattr__ to bypass pydantic model validation/interception
     # which can fail silently after many monkeypatch cycles in the full suite
     object.__setattr__(settings, "jwt_secret", "test-jwt-secret-key-for-testing")
     object.__setattr__(settings, "local_auth_enabled", True)
+    # Most API tests call agent-facing routes without agent auth headers.
+    # Disable agent secret by default for test-client runs unless a test
+    # explicitly monkeypatches settings.agent_secret.
+    object.__setattr__(settings, "agent_secret", "")
     object.__setattr__(settings, "workspace", str(tmp_path / "workspace"))
     object.__setattr__(settings, "iso_upload_dir", str(tmp_path / "uploads"))
 
@@ -164,6 +169,13 @@ def auth_headers(test_user: models.User, monkeypatch) -> dict[str, str]:
 def ws_token(test_user: models.User) -> str:
     """Create a JWT token string for WebSocket authentication."""
     return create_access_token(test_user.id)
+
+
+@pytest.fixture(scope="function")
+def agent_auth_headers(monkeypatch) -> dict[str, str]:
+    """Create bearer auth headers for agent-facing endpoints."""
+    monkeypatch.setattr(settings, "agent_secret", "test-agent-secret")
+    return {"Authorization": "Bearer test-agent-secret"}
 
 
 @pytest.fixture(scope="function")

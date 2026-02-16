@@ -7,7 +7,7 @@ import app.routers.agents as agents_router  # noqa: F401
 from app import models
 
 
-def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch) -> None:
+def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch, agent_auth_headers) -> None:
     monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
 
     # Use naive datetime string (no timezone suffix) to avoid SQLite
@@ -25,19 +25,19 @@ def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch) -
         }
     }
 
-    resp = test_client.post("/agents/register", json=payload)
+    resp = test_client.post("/agents/register", json=payload, headers=agent_auth_headers)
     assert resp.status_code == 200
 
     # Re-register same agent ID with same started_at (no restart detection)
     payload["agent"]["version"] = "1.0.1"
-    resp = test_client.post("/agents/register", json=payload)
+    resp = test_client.post("/agents/register", json=payload, headers=agent_auth_headers)
     assert resp.status_code == 200
 
     host = test_db.get(models.Host, "agent-1")
     assert host.version == "1.0.1"
 
 
-def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypatch) -> None:
+def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypatch, agent_auth_headers) -> None:
     monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
 
     # Use naive datetime strings (no timezone suffix) to avoid SQLite
@@ -54,7 +54,7 @@ def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypat
             "is_local": False,
         }
     }
-    resp = test_client.post("/agents/register", json=initial_payload)
+    resp = test_client.post("/agents/register", json=initial_payload, headers=agent_auth_headers)
     assert resp.status_code == 200
 
     # Create lab and running job associated with this agent
@@ -91,7 +91,7 @@ def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypat
         }
     }
 
-    resp = test_client.post("/agents/register", json=restart_payload)
+    resp = test_client.post("/agents/register", json=restart_payload, headers=agent_auth_headers)
     assert resp.status_code == 200
 
     test_db.refresh(job)
@@ -100,7 +100,7 @@ def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypat
     assert lab.state == "error"
 
 
-def test_heartbeat_and_list_get_delete(test_client, test_db, auth_headers, admin_auth_headers) -> None:
+def test_heartbeat_and_list_get_delete(test_client, test_db, auth_headers, admin_auth_headers, agent_auth_headers) -> None:
     host = models.Host(
         id="agent-3",
         name="Agent Three",
@@ -115,6 +115,7 @@ def test_heartbeat_and_list_get_delete(test_client, test_db, auth_headers, admin
     hb = test_client.post(
         "/agents/agent-3/heartbeat",
         json={"agent_id": "agent-3", "status": "online", "resource_usage": {"cpu_percent": 1}},
+        headers=agent_auth_headers,
     )
     assert hb.status_code == 200
 

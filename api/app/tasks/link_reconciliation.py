@@ -27,7 +27,11 @@ from app.db import get_session
 from app.services.link_operational_state import recompute_link_oper_state
 from app.services.link_validator import verify_link_connected, is_vlan_mismatch
 from app.utils.link import links_needing_reconciliation_filter
-from app.agent_client import compute_vxlan_port_name, declare_overlay_state_on_agent
+from app.agent_client import (
+    compute_vxlan_port_name,
+    declare_overlay_state_on_agent,
+    declare_port_state_on_agent,
+)
 
 # Re-export from extracted modules for backwards compatibility
 from app.tasks.link_repair import (
@@ -457,6 +461,11 @@ async def refresh_interface_mappings(
             session.rollback()
             logger.error(f"InterfaceMapping refresh failed for agent {host_id}, lab {lab_id}: {e}")
 
+    # Ensure newly added mappings are visible to subsequent queries in the same
+    # SQLAlchemy session even when autoflush is disabled (as in tests).
+    if result["created"] or result["updated"]:
+        session.flush()
+
     return result
 
 
@@ -476,8 +485,6 @@ async def run_same_host_convergence(
     Returns:
         Dict with per-agent results
     """
-    from app.agent_client import declare_port_state_on_agent
-
     # Query same-host links that should be up
     same_host_links = (
         session.query(models.LinkState)

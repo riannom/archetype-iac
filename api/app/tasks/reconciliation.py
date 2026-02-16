@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import redis
 
-from app import agent_client, db, models
+from app import agent_client, models
 from app.config import settings
 from app.metrics import nlm_phase_duration, record_reconciliation_cycle, record_node_state_transition
 from app.db import get_redis, get_session

@@ -21,7 +21,7 @@ from app import models
 class TestAgentRegistration:
     """Tests for agent registration endpoint."""
 
-    def test_register_new_agent(self, test_client: TestClient, test_db: Session):
+    def test_register_new_agent(self, test_client: TestClient, test_db: Session, agent_auth_headers: dict):
         """New agent registration creates host record."""
         response = test_client.post(
             "/agents/register",
@@ -37,7 +37,8 @@ class TestAgentRegistration:
                     },
                     "version": "1.0.0"
                 }
-            }
+            },
+            headers=agent_auth_headers,
         )
 
         assert response.status_code == 200
@@ -51,7 +52,7 @@ class TestAgentRegistration:
         assert host.name == "Test Agent"
         assert host.status == "online"
 
-    def test_reregister_existing_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_reregister_existing_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host, agent_auth_headers: dict):
         """Re-registering existing agent updates record."""
         response = test_client.post(
             "/agents/register",
@@ -65,7 +66,8 @@ class TestAgentRegistration:
                     },
                     "version": "2.0.0"
                 }
-            }
+            },
+            headers=agent_auth_headers,
         )
 
         assert response.status_code == 200
@@ -77,7 +79,7 @@ class TestAgentRegistration:
         assert sample_host.name == "Updated Agent Name"
         assert sample_host.version == "2.0.0"
 
-    def test_register_agent_with_same_name(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_register_agent_with_same_name(self, test_client: TestClient, test_db: Session, sample_host: models.Host, agent_auth_headers: dict):
         """Registering with same name updates existing record (new ID)."""
         response = test_client.post(
             "/agents/register",
@@ -89,7 +91,8 @@ class TestAgentRegistration:
                     "capabilities": {"providers": ["docker"]},
                     "version": "1.0.0"
                 }
-            }
+            },
+            headers=agent_auth_headers,
         )
 
         assert response.status_code == 200
@@ -102,7 +105,7 @@ class TestAgentRegistration:
 class TestAgentHeartbeat:
     """Tests for agent heartbeat endpoint."""
 
-    def test_heartbeat_updates_status(self, test_client: TestClient, test_db: Session, sample_host: models.Host):
+    def test_heartbeat_updates_status(self, test_client: TestClient, test_db: Session, sample_host: models.Host, agent_auth_headers: dict):
         """Heartbeat updates host status and resource usage."""
         response = test_client.post(
             f"/agents/{sample_host.id}/heartbeat",
@@ -115,7 +118,8 @@ class TestAgentHeartbeat:
                     "memory_percent": 60.2,
                     "disk_percent": 30.0
                 }
-            }
+            },
+            headers=agent_auth_headers,
         )
 
         assert response.status_code == 200
@@ -127,14 +131,15 @@ class TestAgentHeartbeat:
         usage = json.loads(sample_host.resource_usage)
         assert usage["cpu_percent"] == 45.5
 
-    def test_heartbeat_unregistered_agent(self, test_client: TestClient):
+    def test_heartbeat_unregistered_agent(self, test_client: TestClient, agent_auth_headers: dict):
         """Heartbeat from unregistered agent returns 404."""
         response = test_client.post(
             "/agents/nonexistent-agent/heartbeat",
             json={
                 "agent_id": "nonexistent-agent",
                 "status": "online",
-            }
+            },
+            headers=agent_auth_headers,
         )
 
         assert response.status_code == 404

@@ -1034,7 +1034,6 @@ async def check_orphaned_image_sync_status():
                     f"Clearing orphaned image_sync_status='{ns.image_sync_status}' for "
                     f"{ns.node_name} in lab {ns.lab_id}: no active ImageSyncJob found"
                 )
-                old_status = ns.image_sync_status
                 ns.image_sync_status = None
                 ns.image_sync_message = None
                 session.commit()

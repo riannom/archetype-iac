@@ -355,7 +355,7 @@ class TestUpdateStatusEndpoints:
 class TestUpdateCompletion:
     """Tests for _check_update_completion on re-registration."""
 
-    def test_version_match_completes_job(self, test_client: TestClient, test_db: Session):
+    def test_version_match_completes_job(self, test_client: TestClient, test_db: Session, agent_auth_headers: dict):
         """Re-registration with matching version marks job completed."""
         # Create host with active update job
         host = models.Host(
@@ -397,6 +397,7 @@ class TestUpdateCompletion:
                     "deployment_mode": "systemd",
                 },
             },
+            headers=agent_auth_headers,
         )
         assert response.status_code == 200
 
@@ -405,7 +406,7 @@ class TestUpdateCompletion:
         assert job.status == "completed"
         assert job.progress_percent == 100
 
-    def test_commit_sha_match_completes_job(self, test_client: TestClient, test_db: Session):
+    def test_commit_sha_match_completes_job(self, test_client: TestClient, test_db: Session, agent_auth_headers: dict):
         """Re-registration with commit SHA matching to_version prefix marks job completed."""
         host = models.Host(
             id="sha-completion-1",
@@ -447,6 +448,7 @@ class TestUpdateCompletion:
                     "deployment_mode": "systemd",
                 },
             },
+            headers=agent_auth_headers,
         )
         assert response.status_code == 200
 
@@ -454,7 +456,7 @@ class TestUpdateCompletion:
         assert job.status == "completed"
 
     @patch("app.routers.agents._check_update_completion", _sqlite_safe_check_update_completion)
-    def test_version_mismatch_stays_active(self, test_client: TestClient, test_db: Session):
+    def test_version_mismatch_stays_active(self, test_client: TestClient, test_db: Session, agent_auth_headers: dict):
         """Re-registration with wrong version doesn't complete job (unless timed out)."""
         object.__setattr__(settings, "image_sync_enabled", False)
         try:
@@ -498,6 +500,7 @@ class TestUpdateCompletion:
                         "deployment_mode": "systemd",
                     },
                 },
+                headers=agent_auth_headers,
             )
             assert response.status_code == 200
 
@@ -508,7 +511,7 @@ class TestUpdateCompletion:
             object.__setattr__(settings, "image_sync_enabled", True)
 
     @patch("app.routers.agents._check_update_completion", _sqlite_safe_check_update_completion)
-    def test_timeout_marks_failed(self, test_client: TestClient, test_db: Session):
+    def test_timeout_marks_failed(self, test_client: TestClient, test_db: Session, agent_auth_headers: dict):
         """Re-registration after timeout with wrong version marks job failed."""
         object.__setattr__(settings, "image_sync_enabled", False)
         try:
@@ -552,6 +555,7 @@ class TestUpdateCompletion:
                         "deployment_mode": "systemd",
                     },
                 },
+                headers=agent_auth_headers,
             )
             assert response.status_code == 200
 
@@ -567,7 +571,7 @@ class TestUpdateCompletion:
 class TestGitShaRegistration:
     """Tests for git_sha being stored on registration."""
 
-    def test_new_registration_stores_git_sha(self, test_client: TestClient, test_db: Session):
+    def test_new_registration_stores_git_sha(self, test_client: TestClient, test_db: Session, agent_auth_headers: dict):
         """New agent registration stores git_sha from commit field."""
         response = test_client.post(
             "/agents/register",
@@ -582,6 +586,7 @@ class TestGitShaRegistration:
                     "deployment_mode": "systemd",
                 },
             },
+            headers=agent_auth_headers,
         )
 
         assert response.status_code == 200
@@ -590,7 +595,7 @@ class TestGitShaRegistration:
         assert host.git_sha == "deadbeef12345678"
         assert host.deployment_mode == "systemd"
 
-    def test_reregistration_updates_git_sha(self, test_client: TestClient, test_db: Session, online_host):
+    def test_reregistration_updates_git_sha(self, test_client: TestClient, test_db: Session, online_host, agent_auth_headers: dict):
         """Re-registration updates git_sha."""
         old_sha = online_host.git_sha
 
@@ -607,6 +612,7 @@ class TestGitShaRegistration:
                     "deployment_mode": "systemd",
                 },
             },
+            headers=agent_auth_headers,
         )
 
         assert response.status_code == 200
