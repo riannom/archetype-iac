@@ -99,14 +99,18 @@ async def populate_from_agent(
     )
     node_by_container = {n.container_name: n for n in nodes}
 
+    # Deduplicate ports by (container, interface) — agent may return
+    # duplicate entries for the same interface with different OVS ports
+    deduped_ports: dict[tuple[str, str], dict] = {}
     for port in ports:
         container_name = port.get("container")
         linux_interface = port.get("interface")
-
         if not container_name or not linux_interface:
             result["skipped"] += 1
             continue
+        deduped_ports[(container_name, linux_interface)] = port
 
+    for (container_name, linux_interface), port in deduped_ports.items():
         # Strip container name prefix (archetype-{lab_id}-{node_name})
         # The prefix format uses first 20 chars of lab_id (what fits in container naming limits)
         # Use regex to extract node name more reliably

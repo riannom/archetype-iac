@@ -410,7 +410,9 @@ async def refresh_interface_mappings(
                     node_by_name[n.container_name] = n
 
             # Update InterfaceMapping records
-            for p in ports:
+            # Use port_lookup.values() (deduplicated by node+interface)
+            # rather than raw ports list which may contain duplicates
+            for p in port_lookup.values():
                 node_name = p.get("node_name", "")
                 iface = p.get("interface_name", "")
                 ovs_port = p.get("ovs_port_name", "")
@@ -451,6 +453,7 @@ async def refresh_interface_mappings(
                     result["created"] += 1
 
         except Exception as e:
+            session.rollback()
             logger.error(f"InterfaceMapping refresh failed for agent {host_id}, lab {lab_id}: {e}")
 
     return result
