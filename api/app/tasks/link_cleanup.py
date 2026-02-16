@@ -22,6 +22,29 @@ from app.services.interface_naming import normalize_interface
 logger = logging.getLogger(__name__)
 
 
+async def _detach_overlay_endpoint(
+    agent: models.Host,
+    lab_id: str,
+    node: str,
+    iface: str | None,
+    link_id: str,
+) -> tuple[bool, str | None]:
+    """Detach one overlay endpoint and return (success, error)."""
+    try:
+        result = await agent_client.detach_overlay_interface_on_agent(
+            agent,
+            lab_id=lab_id,
+            container_name=node,
+            interface_name=normalize_interface(iface) if iface else "",
+            link_id=link_id,
+        )
+        if isinstance(result, dict) and not result.get("success", False):
+            return False, result.get("error") or "detach failed"
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
 async def _cleanup_deleted_links(
     session: Session,
     host_to_agent: dict[str, models.Host],
@@ -45,6 +68,7 @@ async def _cleanup_deleted_links(
         return 0
 
     removed = 0
+    changed = False
     for link_state in deleted_links:
         link_info = {
             "link_name": link_state.link_name,
@@ -58,12 +82,79 @@ async def _cleanup_deleted_links(
             "target_host_id": link_state.target_host_id,
             "vni": link_state.vni,
         }
+
+        required_agents: list[str] = []
+        if link_state.is_cross_host:
+            if link_state.source_host_id:
+                required_agents.append(link_state.source_host_id)
+            if link_state.target_host_id:
+                required_agents.append(link_state.target_host_id)
+        else:
+            host_id = link_state.source_host_id or link_state.target_host_id
+            if host_id:
+                required_agents.append(host_id)
+
+        offline_agents = [aid for aid in required_agents if aid not in host_to_agent]
+        if offline_agents:
+            msg = (
+                "Teardown deferred: required agent(s) offline: "
+                + ", ".join(offline_agents)
+            )
+            logger.info(
+                f"Deferring deleted link cleanup for {link_state.link_name}: {msg}"
+            )
+            session.query(models.VxlanTunnel).filter(
+                models.VxlanTunnel.link_state_id == link_state.id
+            ).update(
+                {
+                    "status": "cleanup",
+                    "error_message": msg,
+                },
+                synchronize_session=False,
+            )
+            changed = True
+            continue
+
+        teardown_ok = False
         try:
-            await teardown_link(session, link_state.lab_id, link_info, host_to_agent)
+            teardown_ok = await teardown_link(
+                session,
+                link_state.lab_id,
+                link_info,
+                host_to_agent,
+            )
         except Exception as e:
             logger.warning(
                 f"Failed to teardown deleted link {link_state.link_name}: {e}"
             )
+            session.query(models.VxlanTunnel).filter(
+                models.VxlanTunnel.link_state_id == link_state.id
+            ).update(
+                {
+                    "status": "cleanup",
+                    "error_message": f"Teardown failed: {e}",
+                },
+                synchronize_session=False,
+            )
+            changed = True
+            continue
+
+        if not teardown_ok:
+            logger.info(
+                f"Deferring deleted link cleanup for {link_state.link_name}: "
+                "teardown incomplete"
+            )
+            session.query(models.VxlanTunnel).filter(
+                models.VxlanTunnel.link_state_id == link_state.id
+            ).update(
+                {
+                    "status": "cleanup",
+                    "error_message": "Teardown failed or incomplete; will retry",
+                },
+                synchronize_session=False,
+            )
+            changed = True
+            continue
 
         # Always delete VXLAN tunnel records tied to this LinkState
         session.query(models.VxlanTunnel).filter(
@@ -72,8 +163,10 @@ async def _cleanup_deleted_links(
 
         session.delete(link_state)
         removed += 1
+        changed = True
 
-    session.commit()
+    if changed:
+        session.commit()
     return removed
 
 
@@ -97,7 +190,7 @@ async def cleanup_orphaned_link_states(session: Session) -> int:
     orphaned = (
         session.query(models.LinkState)
         .filter(
-            models.LinkState.link_definition_id is None,
+            models.LinkState.link_definition_id.is_(None),
             models.LinkState.actual_state != "up",
         )
         .all()
@@ -115,6 +208,7 @@ async def cleanup_orphaned_link_states(session: Session) -> int:
     host_to_agent = {a.id: a for a in agents}
 
     count = 0
+    changed = False
     for ls in orphaned:
         # Check for associated VxlanTunnel and tear down on agents
         tunnel = (
@@ -123,6 +217,7 @@ async def cleanup_orphaned_link_states(session: Session) -> int:
             .first()
         )
         if tunnel:
+            deferred_reasons: list[str] = []
             # Tear down VXLAN ports on both agents
             for agent_id, node, iface in [
                 (tunnel.agent_a_id, ls.source_node, ls.source_interface),
@@ -130,28 +225,41 @@ async def cleanup_orphaned_link_states(session: Session) -> int:
             ]:
                 agent = host_to_agent.get(agent_id)
                 if agent:
-                    try:
-                        await agent_client.detach_overlay_interface_on_agent(
-                            agent,
-                            lab_id=ls.lab_id,
-                            container_name=node,
-                            interface_name=normalize_interface(iface) if iface else "",
-                            link_id=ls.link_name,
-                        )
+                    ok, error = await _detach_overlay_endpoint(
+                        agent,
+                        ls.lab_id,
+                        node,
+                        iface,
+                        ls.link_name,
+                    )
+                    if ok:
                         logger.info(
                             f"Torn down VXLAN port for orphaned link {ls.link_name} "
                             f"on agent {agent.name}"
                         )
-                    except Exception as e:
+                    else:
                         logger.warning(
                             f"Failed to tear down VXLAN port for orphaned link "
-                            f"{ls.link_name} on agent {agent_id}: {e}"
+                            f"{ls.link_name} on agent {agent_id}: {error}"
+                        )
+                        deferred_reasons.append(
+                            f"{agent_id}: {error or 'detach failed'}"
                         )
                 else:
                     logger.debug(
                         f"Agent {agent_id} offline, skipping VXLAN teardown for "
                         f"orphaned link {ls.link_name}"
                     )
+                    deferred_reasons.append(f"{agent_id}: offline")
+
+            if deferred_reasons:
+                tunnel.status = "cleanup"
+                tunnel.error_message = (
+                    "Cleanup deferred; waiting for agents: "
+                    + "; ".join(deferred_reasons)
+                )
+                changed = True
+                continue
 
         logger.info(
             f"Deleting orphaned LinkState: {ls.link_name} "
@@ -159,8 +267,9 @@ async def cleanup_orphaned_link_states(session: Session) -> int:
         )
         session.delete(ls)
         count += 1
+        changed = True
 
-    if count > 0:
+    if changed:
         session.commit()
 
     return count
@@ -185,7 +294,7 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
         session.query(models.VxlanTunnel)
         .filter(
             or_(
-                models.VxlanTunnel.link_state_id is None,
+                models.VxlanTunnel.link_state_id.is_(None),
                 and_(
                     models.VxlanTunnel.status == "cleanup",
                     models.VxlanTunnel.updated_at < cutoff_time,
@@ -203,7 +312,8 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
     )
     host_to_agent = {a.id: a for a in agents}
 
-    count = len(orphaned)
+    count = 0
+    changed = False
     for tunnel in orphaned:
         link_state = None
         if tunnel.link_state_id is not None:
@@ -214,42 +324,58 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
             )
 
         if link_state:
+            deferred_reasons: list[str] = []
             for agent_id, node, iface in [
                 (tunnel.agent_a_id, link_state.source_node, link_state.source_interface),
                 (tunnel.agent_b_id, link_state.target_node, link_state.target_interface),
             ]:
                 agent = host_to_agent.get(agent_id)
                 if agent:
-                    try:
-                        await agent_client.detach_overlay_interface_on_agent(
-                            agent,
-                            lab_id=link_state.lab_id,
-                            container_name=node,
-                            interface_name=normalize_interface(iface) if iface else "",
-                            link_id=link_state.link_name,
-                        )
+                    ok, error = await _detach_overlay_endpoint(
+                        agent,
+                        link_state.lab_id,
+                        node,
+                        iface,
+                        link_state.link_name,
+                    )
+                    if ok:
                         logger.info(
                             f"Torn down VXLAN port for orphaned tunnel on agent {agent.name} "
                             f"(link {link_state.link_name})"
                         )
-                    except Exception as e:
+                    else:
                         logger.warning(
                             f"Failed to detach VXLAN port for orphaned tunnel on agent "
-                            f"{agent_id}: {e}"
+                            f"{agent_id}: {error}"
+                        )
+                        deferred_reasons.append(
+                            f"{agent_id}: {error or 'detach failed'}"
                         )
                 else:
                     logger.debug(
                         f"Agent {agent_id} offline, skipping VXLAN teardown "
                         f"for orphaned tunnel (link_state_id={tunnel.link_state_id})"
                     )
+                    deferred_reasons.append(f"{agent_id}: offline")
+
+            if deferred_reasons:
+                tunnel.status = "cleanup"
+                tunnel.error_message = (
+                    "Cleanup deferred; waiting for agents: "
+                    + "; ".join(deferred_reasons)
+                )
+                changed = True
+                continue
 
         logger.debug(
             f"Deleting orphaned tunnel: vni={tunnel.vni}, "
             f"link_state_id={tunnel.link_state_id}, status={tunnel.status}"
         )
         session.delete(tunnel)
+        count += 1
+        changed = True
 
-    if count > 0:
+    if changed:
         session.commit()
 
     return count

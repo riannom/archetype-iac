@@ -111,17 +111,37 @@ async def test_cooldown_helpers(monkeypatch) -> None:
 
 
 def test_has_active_job(test_db) -> None:
-    job = models.Job(
+    sync_node_job = models.Job(
         lab_id="lab1",
+        action="sync:node:node-1",
+        status=JobStatus.QUEUED.value,
+    )
+    sync_agent_job = models.Job(
+        lab_id="lab1",
+        action="sync:agent:agent-a:node-2,node-3",
+        status=JobStatus.RUNNING.value,
+    )
+    sync_batch_job = models.Job(
+        lab_id="lab1",
+        action="sync:batch:3",
+        status=JobStatus.RUNNING.value,
+    )
+    legacy_node_job = models.Job(
+        lab_id="lab2",
         action="node:stop:r1",
         status=JobStatus.QUEUED.value,
     )
-    test_db.add(job)
+    test_db.add_all([sync_node_job, sync_agent_job, sync_batch_job, legacy_node_job])
     test_db.commit()
 
     assert state_enforcement._has_active_job(test_db, "lab1")
-    assert state_enforcement._has_active_job(test_db, "lab1", "r1")
-    assert not state_enforcement._has_active_job(test_db, "lab1", "r2")
+    assert state_enforcement._has_active_job(test_db, "lab1", node_id="node-1")
+    assert state_enforcement._has_active_job(test_db, "lab1", node_id="node-2")
+    # Lab-wide sync batch blocks per-node enforcement in that lab.
+    assert state_enforcement._has_active_job(test_db, "lab1", node_id="node-999")
+    assert not state_enforcement._has_active_job(test_db, "missing-lab", node_id="node-1")
+    # Legacy node actions are still recognized.
+    assert state_enforcement._has_active_job(test_db, "lab2", node_name="r1")
 
 
 # ---------------------------------------------------------------------------

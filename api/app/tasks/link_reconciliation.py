@@ -26,6 +26,9 @@ from app import agent_client, models
 from app.db import get_session
 from app.services.link_operational_state import recompute_link_oper_state
 from app.services.link_validator import verify_link_connected, is_vlan_mismatch
+from app.services.link_reservations import reconcile_link_endpoint_reservations
+from app.services.link_reservations import get_link_endpoint_reservation_drift_counts
+from app.metrics import set_link_endpoint_reservation_metrics
 from app.utils.link import links_needing_reconciliation_filter
 from app.agent_client import (
     compute_vxlan_port_name,
@@ -51,10 +54,41 @@ logger = logging.getLogger(__name__)
 # Configuration
 RECONCILIATION_INTERVAL_SECONDS = 60
 RECONCILIATION_ENABLED = True
+RESERVATION_RECONCILE_INTERVAL_CYCLES = 5
 
 
 def _sync_oper_state(session: Session, link_state: models.LinkState) -> None:
     recompute_link_oper_state(session, link_state)
+
+
+def _resolve_node_by_endpoint_name(
+    session: Session,
+    lab_id: str,
+    endpoint_name: str,
+) -> models.Node | None:
+    """Resolve endpoint node by container_name first, then display_name."""
+    if not endpoint_name:
+        return None
+
+    node = (
+        session.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name == endpoint_name,
+        )
+        .first()
+    )
+    if node:
+        return node
+
+    return (
+        session.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.display_name == endpoint_name,
+        )
+        .first()
+    )
 
 
 async def reconcile_link_states(session: Session) -> dict:
@@ -508,22 +542,8 @@ async def run_same_host_convergence(
             continue
 
         # Get node definitions to find node IDs
-        source_node = (
-            session.query(models.Node)
-            .filter(
-                models.Node.lab_id == ls.lab_id,
-                models.Node.display_name == ls.source_node,
-            )
-            .first()
-        )
-        target_node = (
-            session.query(models.Node)
-            .filter(
-                models.Node.lab_id == ls.lab_id,
-                models.Node.display_name == ls.target_node,
-            )
-            .first()
-        )
+        source_node = _resolve_node_by_endpoint_name(session, ls.lab_id, ls.source_node)
+        target_node = _resolve_node_by_endpoint_name(session, ls.lab_id, ls.target_node)
 
         if not source_node or not target_node:
             continue
@@ -666,14 +686,7 @@ async def run_cross_host_port_convergence(
                 continue
 
             # Find node ID for InterfaceMapping lookup
-            node = (
-                session.query(models.Node)
-                .filter(
-                    models.Node.lab_id == ls.lab_id,
-                    models.Node.display_name == node_name,
-                )
-                .first()
-            )
+            node = _resolve_node_by_endpoint_name(session, ls.lab_id, node_name)
             if not node:
                 continue
 
@@ -778,8 +791,46 @@ async def link_reconciliation_monitor():
                     if orphans_deleted > 0:
                         logger.info(f"Cleaned up {orphans_deleted} orphaned VxlanTunnel records")
 
-                    # Convergence (every 5th cycle, ~5 min)
-                    if cycle_count % 5 == 0:
+                    # Update reservation health gauges every cycle (lightweight query).
+                    drift_counts = get_link_endpoint_reservation_drift_counts(session)
+                    set_link_endpoint_reservation_metrics(
+                        total=drift_counts["total"],
+                        missing=drift_counts["missing"],
+                        orphaned=drift_counts["orphaned"],
+                        conflicts=drift_counts["conflicts"],
+                    )
+
+                    # Convergence and reservation self-heal (every Nth cycle)
+                    if cycle_count % RESERVATION_RECONCILE_INTERVAL_CYCLES == 0:
+                        reservation_result = reconcile_link_endpoint_reservations(session)
+                        drift_counts_after = get_link_endpoint_reservation_drift_counts(session)
+                        set_link_endpoint_reservation_metrics(
+                            total=drift_counts_after["total"],
+                            missing=drift_counts_after["missing"],
+                            orphaned=drift_counts_after["orphaned"],
+                            conflicts=drift_counts_after["conflicts"],
+                        )
+                        if (
+                            reservation_result["orphans_removed"]
+                            or reservation_result["released"]
+                            or reservation_result["conflicts"]
+                            or drift_counts_after["missing"]
+                            or drift_counts_after["orphaned"]
+                            or drift_counts_after["conflicts"]
+                        ):
+                            logger.info(
+                                "Endpoint reservation reconcile: "
+                                f"checked={reservation_result['checked']}, "
+                                f"claimed={reservation_result['claimed']}, "
+                                f"released={reservation_result['released']}, "
+                                f"orphans_removed={reservation_result['orphans_removed']}, "
+                                f"conflicts={reservation_result['conflicts']}, "
+                                f"drift_missing={drift_counts_after['missing']}, "
+                                f"drift_orphaned={drift_counts_after['orphaned']}, "
+                                f"drift_conflicts={drift_counts_after['conflicts']}, "
+                                f"total={drift_counts_after['total']}"
+                            )
+
                         # Overlay (cross-host) convergence
                         convergence_results = await run_overlay_convergence(
                             session, host_to_agent

@@ -509,7 +509,8 @@ async def _cleanup_orphan_containers(
     """Clean up orphan containers on agents that no longer run this lab.
 
     When a deploy moves to a new agent, containers may be left behind on
-    the old agent. This function destroys those orphaned containers.
+    the old agent. This function removes only stale containers for the lab
+    while preserving any nodes that are still assigned to that host.
 
     Args:
         session: Database session
@@ -533,23 +534,44 @@ async def _cleanup_orphan_containers(
                 log_parts.append(f"Note: Skipped cleanup on offline agent {old_agent.name}")
                 continue
 
-            logger.info(f"Cleaning up orphan containers for lab {lab_id} on old agent {old_agent_id}")
+            # Keep any nodes still assigned to this old agent (partial migration).
+            keep_node_names = [
+                row[0]
+                for row in (
+                    session.query(models.NodePlacement.node_name)
+                    .filter(
+                        models.NodePlacement.lab_id == lab_id,
+                        models.NodePlacement.host_id == old_agent_id,
+                    )
+                    .all()
+                )
+            ]
+
+            logger.info(
+                f"Cleaning up orphan containers for lab {lab_id} on old agent "
+                f"{old_agent_id} (keeping {len(keep_node_names)} assigned node(s))"
+            )
             log_parts.append(f"Cleaning up orphans on old agent {old_agent.name}...")
 
-            result = await agent_client.destroy_lab_on_agent(old_agent, lab_id)
+            result = await agent_client.cleanup_lab_orphans(
+                old_agent,
+                lab_id,
+                keep_node_names,
+            )
+            errors = result.get("errors", [])
+            removed = result.get("removed_containers", [])
 
-            if result.get("status") == "completed":
-                log_parts.append(f"  Orphan cleanup succeeded on {old_agent.name}")
-                # Remove old placements for this agent
-                session.query(models.NodePlacement).filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.host_id == old_agent_id,
-                ).delete()
-                session.commit()
+            if errors:
+                error_msg = "; ".join(str(e) for e in errors)
+                log_parts.append(f"  Orphan cleanup failed on {old_agent.name}: {error_msg}")
+                logger.warning(f"Orphan cleanup failed on agent {old_agent_id}: {error_msg}")
+            elif removed:
+                log_parts.append(
+                    f"  Orphan cleanup removed {len(removed)} container(s) on "
+                    f"{old_agent.name}: {', '.join(removed)}"
+                )
             else:
-                error = result.get("error", "Unknown error")
-                log_parts.append(f"  Orphan cleanup failed on {old_agent.name}: {error}")
-                logger.warning(f"Orphan cleanup failed on agent {old_agent_id}: {error}")
+                log_parts.append(f"  Orphan cleanup: no stale containers found on {old_agent.name}")
 
     except Exception as e:
         logger.warning(f"Error during orphan cleanup for lab {lab_id}: {e}")
@@ -1416,7 +1438,7 @@ async def _create_cross_host_links_if_ready(
         session.query(models.LinkState)
         .filter(
             models.LinkState.lab_id == lab_id,
-            models.LinkState.source_host_id is None,
+            models.LinkState.source_host_id.is_(None),
         )
         .count()
     )

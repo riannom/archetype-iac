@@ -19,6 +19,7 @@ import logging
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import redis
 
@@ -27,6 +28,7 @@ from app.config import settings
 from app.metrics import nlm_phase_duration, record_reconciliation_cycle, record_node_state_transition
 from app.db import get_redis, get_session
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
+from app.services.link_validator import verify_link_connected
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
@@ -95,10 +97,12 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
     """
     lock_key = f"reconcile_lock:{lab_id}"
     r = get_redis()
+    lock_token = str(uuid4())
+    lock_acquired = False
 
     try:
         # Try to acquire lock with NX (only if not exists) and TTL
-        lock_acquired = r.set(lock_key, "1", nx=True, ex=timeout)
+        lock_acquired = bool(r.set(lock_key, lock_token, nx=True, ex=timeout))
         if not lock_acquired:
             logger.debug(f"Could not acquire reconciliation lock for lab {lab_id}")
             yield False
@@ -109,10 +113,18 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
         # On Redis error, proceed without lock (better than blocking reconciliation)
         yield True
     finally:
-        try:
-            r.delete(lock_key)
-        except redis.RedisError:
-            pass  # Lock will auto-expire via TTL
+        if lock_acquired:
+            try:
+                # Delete only if we still own the lock.
+                r.eval(
+                    "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                    "return redis.call('DEL', KEYS[1]) else return 0 end",
+                    1,
+                    lock_key,
+                    lock_token,
+                )
+            except redis.RedisError:
+                pass  # Lock will auto-expire via TTL
 
 
 
@@ -534,12 +546,6 @@ async def _check_readiness_for_nodes(session, nodes: list):
 
         try:
             lab_provider = get_lab_provider(lab)
-            agent = await agent_client.get_agent_for_lab(
-                session, lab, required_provider=lab_provider
-            )
-            if not agent:
-                logger.debug(f"No agent for lab {lab_id}, skipping readiness check")
-                continue
 
             # Look up device kinds for all nodes in this lab
             node_devices = {}
@@ -554,10 +560,55 @@ async def _check_readiness_for_nodes(session, nodes: list):
             for db_node in db_nodes:
                 node_devices[db_node.container_name] = db_node.device
 
+            node_names = [ns.node_name for ns in lab_nodes]
+            placements = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name.in_(node_names),
+                )
+                .all()
+            )
+            placement_by_node = {
+                p.node_name: p.host_id for p in placements if p.host_id
+            }
+
+            host_ids = {p.host_id for p in placements if p.host_id}
+            if lab.agent_id:
+                host_ids.add(lab.agent_id)
+
+            agents_by_id: dict[str, models.Host] = {}
+            for host_id in host_ids:
+                host = session.get(models.Host, host_id)
+                if host and agent_client.is_agent_online(host):
+                    agents_by_id[host_id] = host
+
+            if not agents_by_id:
+                logger.debug(
+                    f"No online agents for lab {lab_id}, skipping readiness check"
+                )
+                continue
+
             for ns in lab_nodes:
                 # Set boot_started_at if not already set
                 if not ns.boot_started_at:
                     ns.boot_started_at = datetime.now(timezone.utc)
+
+                host_id = placement_by_node.get(ns.node_name) or lab.agent_id
+                agent = agents_by_id.get(host_id) if host_id else None
+                if not agent:
+                    agent = await agent_client.get_agent_for_node(
+                        session,
+                        lab_id,
+                        ns.node_name,
+                        required_provider=lab_provider,
+                    )
+                if not agent:
+                    logger.debug(
+                        f"No reachable agent for {ns.node_name} in lab {lab_id}, "
+                        "skipping readiness check"
+                    )
+                    continue
 
                 try:
                     # Get the device kind and determine provider type for this node
@@ -746,7 +797,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
 
         if not agent_ids:
             logger.warning(f"No agent available to reconcile lab {lab_id}")
-            return
+            return 0
 
         # Query actual container status from ALL agents (in parallel)
         # Track both status and which agent has each container
@@ -1005,6 +1056,23 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     if not ns.is_ready:
                         # Poll agent for readiness status
                         try:
+                            readiness_agent_id = (
+                                container_agent_map.get(ns.node_name)
+                                or node_expected_agent.get(ns.node_name)
+                                or lab.agent_id
+                            )
+                            readiness_agent = (
+                                host_to_agent.get(readiness_agent_id)
+                                if readiness_agent_id
+                                else None
+                            )
+                            if not readiness_agent:
+                                logger.debug(
+                                    f"No reachable agent for readiness check of "
+                                    f"{ns.node_name} in lab {lab_id}"
+                                )
+                                continue
+
                             # Get device kind and determine provider type
                             device_kind = node_devices.get(ns.node_name)
                             node_image = node_images.get(ns.node_name)
@@ -1017,7 +1085,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                                     provider_type = "docker"
 
                             readiness = await agent_client.check_node_readiness(
-                                agent, lab_id, ns.node_name,
+                                readiness_agent, lab_id, ns.node_name,
                                 kind=device_kind,
                                 provider_type=provider_type,
                             )
@@ -1239,15 +1307,27 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     ls.actual_state = LinkActualState.DOWN.value
                     ls.error_message = "Carrier disabled on one or more endpoints"
                 elif ls.is_cross_host:
-                    # For cross-host links, verify VXLAN tunnel exists (D.4: dict lookup)
+                    # For cross-host links, a DB tunnel row alone is insufficient.
+                    # Require live dataplane validation before marking UP.
                     tunnel = tunnels_by_link_state_id.get(ls.id)
-                    if tunnel:
-                        ls.actual_state = LinkActualState.UP.value
-                        ls.error_message = None
-                    else:
+                    if not tunnel:
                         # No active tunnel - link is broken
                         ls.actual_state = LinkActualState.ERROR.value
                         ls.error_message = "VXLAN tunnel not active"
+                    else:
+                        source_agent = host_to_agent.get(ls.source_host_id) if ls.source_host_id else None
+                        target_agent = host_to_agent.get(ls.target_host_id) if ls.target_host_id else None
+                        if not source_agent or not target_agent:
+                            ls.actual_state = LinkActualState.UNKNOWN.value
+                            ls.error_message = "Endpoint agent unavailable for VXLAN validation"
+                        else:
+                            is_valid, error = await verify_link_connected(session, ls, host_to_agent)
+                            if is_valid:
+                                ls.actual_state = LinkActualState.UP.value
+                                ls.error_message = None
+                            else:
+                                ls.actual_state = LinkActualState.ERROR.value
+                                ls.error_message = error or "VXLAN dataplane verification failed"
                 else:
                     # Same-host link - assume up if both nodes are running and carrier on
                     # Full L2 verification would require querying OVS VLAN tags from agent

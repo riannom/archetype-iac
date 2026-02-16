@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Set
 
 import redis
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import models
@@ -187,20 +188,49 @@ async def clear_cooldowns_for_lab(lab_id: str, node_names: list[str]):
         logger.warning(f"Redis error clearing cooldowns for lab {lab_id}: {e}")
 
 
-def _has_active_job(session: Session, lab_id: str, node_name: str | None = None) -> bool:
+def _has_active_job(
+    session: Session,
+    lab_id: str,
+    node_name: str | None = None,
+    node_id: str | None = None,
+) -> bool:
     """Check if there's an active job for this lab/node."""
-    query = session.query(models.Job).filter(
-        models.Job.lab_id == lab_id,
-        models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-    )
+    if not node_name and not node_id:
+        return session.query(models.Job.id).filter(
+            models.Job.lab_id == lab_id,
+            models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+        ).first() is not None
 
-    if node_name:
-        # Check for node-specific jobs
-        query = query.filter(
-            models.Job.action.like(f"node:%:{node_name}")
+    active_actions = (
+        session.query(models.Job.action)
+        .filter(
+            models.Job.lab_id == lab_id,
+            models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
         )
+        .all()
+    )
+    for (action,) in active_actions:
+        if action.startswith("node:"):
+            parts = action.split(":", 2)
+            if len(parts) >= 3 and parts[2] == node_name:
+                return True
+        elif action.startswith("sync:node:"):
+            # New-style sync job keyed by node_id, but support legacy names too.
+            target = action.split(":", 2)[2]
+            if (node_name and target == node_name) or (node_id and target == node_id):
+                return True
+        elif action.startswith("sync:agent:"):
+            # sync:agent:<agent_id>:<node_id_csv>
+            parts = action.split(":", 3)
+            if len(parts) >= 4:
+                node_ids = [nid for nid in parts[3].split(",") if nid]
+                if (node_name and node_name in node_ids) or (node_id and node_id in node_ids):
+                    return True
+        elif action in ("sync", "sync:lab") or action.startswith("sync:batch:"):
+            # Lab-wide sync blocks per-node enforcement.
+            return True
 
-    return query.first() is not None
+    return False
 
 
 async def _get_agent_for_node(
@@ -367,19 +397,24 @@ async def enforce_node_state(
         return False
 
     # Check for active jobs
-    if _has_active_job(session, lab_id, node_name):
+    if _has_active_job(session, lab_id, node_name=node_name, node_id=node_state.node_id):
         logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
         record_enforcement_action("skipped")
         return False
 
-    # Check for lab-wide active jobs (deploy/destroy)
+    # Check for lab-wide active jobs (deploy/destroy/sync batch)
     lab_job = session.query(models.Job).filter(
         models.Job.lab_id == lab_id,
         models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-        models.Job.action.in_(["up", "down"]),
+        or_(
+            models.Job.action.in_(["up", "down"]),
+            models.Job.action == "sync",
+            models.Job.action == "sync:lab",
+            models.Job.action.like("sync:batch:%"),
+        ),
     ).first()
     if lab_job:
-        logger.debug(f"Lab {lab_id} has active deploy/destroy job, skipping enforcement")
+        logger.debug(f"Lab {lab_id} has active lab-wide job, skipping enforcement")
         record_enforcement_action("skipped")
         return False
 
@@ -492,7 +527,8 @@ async def enforce_node_state(
 async def _is_enforceable(
     session: Session,
     node_state: models.NodeState,
-    active_job_nodes: Set[tuple[str, str]] | None = None,
+    active_job_node_names: Set[tuple[str, str]] | None = None,
+    active_job_node_ids: Set[tuple[str, str]] | None = None,
 ) -> bool:
     """Check if a node passes all pre-filtering for enforcement.
 
@@ -504,8 +540,10 @@ async def _is_enforceable(
     Args:
         session: Database session
         node_state: The node state to check
-        active_job_nodes: Optional pre-loaded set of (lab_id, node_name) tuples
-            with active jobs. When provided, replaces per-node DB query (D.1).
+        active_job_node_names: Optional pre-loaded set of (lab_id, node_name)
+            tuples with active jobs. When provided, replaces per-node DB query.
+        active_job_node_ids: Optional pre-loaded set of (lab_id, node_id)
+            tuples with active jobs. When provided, replaces per-node DB query.
 
     Side effect: marks nodes as failed if max retries exhausted.
     Returns True if the node should be included in a batch enforcement job.
@@ -581,14 +619,29 @@ async def _is_enforceable(
         record_enforcement_action("skipped")
         return False
 
-    # D.1: Check for active per-node jobs using pre-loaded set or fallback to DB query
-    if active_job_nodes is not None:
-        if (lab_id, node_name) in active_job_nodes:
+    # D.1: Check for active per-node jobs using pre-loaded sets or fallback to DB query
+    if active_job_node_names is not None or active_job_node_ids is not None:
+        has_active_job = False
+        if active_job_node_names is not None and (lab_id, node_name) in active_job_node_names:
+            has_active_job = True
+        if (
+            not has_active_job
+            and active_job_node_ids is not None
+            and (lab_id, node_state.node_id) in active_job_node_ids
+        ):
+            has_active_job = True
+
+        if has_active_job:
             logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
             record_enforcement_action("skipped")
             return False
     else:
-        if _has_active_job(session, lab_id, node_name):
+        if _has_active_job(
+            session,
+            lab_id,
+            node_name=node_name,
+            node_id=node_state.node_id,
+        ):
             logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
             record_enforcement_action("skipped")
             return False
@@ -601,20 +654,25 @@ def _has_lab_wide_active_job(
     lab_id: str,
     labs_with_active_jobs: Set[str] | None = None,
 ) -> bool:
-    """Check if a lab has an active deploy/destroy job.
+    """Check if a lab has an active lab-wide job.
 
     Args:
         session: Database session
         lab_id: Lab identifier
         labs_with_active_jobs: Optional pre-loaded set of lab IDs with active
-            deploy/destroy jobs. When provided, replaces DB query (D.1).
+            lab-wide jobs. When provided, replaces DB query (D.1).
     """
     if labs_with_active_jobs is not None:
         return lab_id in labs_with_active_jobs
     return session.query(models.Job).filter(
         models.Job.lab_id == lab_id,
         models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-        models.Job.action.in_(["up", "down"]),
+        or_(
+            models.Job.action.in_(["up", "down"]),
+            models.Job.action == "sync",
+            models.Job.action == "sync:lab",
+            models.Job.action.like("sync:batch:%"),
+        ),
     ).first() is not None
 
 
@@ -755,45 +813,69 @@ async def enforce_lab_states():
 
             logger.debug(f"Found {len(mismatched_states)} nodes with state mismatches")
 
-            # D.1: Batch-load active jobs for all affected labs (replaces per-node LIKE queries)
+            # D.1: Batch-load active jobs for all affected labs (replaces per-node queries)
             lab_ids = {ns.lab_id for ns in mismatched_states}
+            node_id_to_name: Dict[str, str] = {
+                ns.node_id: ns.node_name
+                for ns in mismatched_states
+                if ns.node_id and ns.node_name
+            }
 
-            # Batch-load active node-level jobs
-            active_node_jobs = (
+            active_jobs = (
                 session.query(models.Job.lab_id, models.Job.action)
                 .filter(
                     models.Job.lab_id.in_(lab_ids),
                     models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-                    models.Job.action.like("node:%"),
                 )
                 .all()
             )
 
-            # Build lookup set: extract node_name from "node:{action}:{node_name}" pattern
-            active_job_nodes: Set[tuple[str, str]] = set()
-            for lab_id_j, action in active_node_jobs:
-                parts = action.split(":")
-                if len(parts) >= 3:
-                    active_job_nodes.add((lab_id_j, parts[2]))
+            active_job_node_names: Set[tuple[str, str]] = set()
+            active_job_node_ids: Set[tuple[str, str]] = set()
+            labs_with_active_jobs: Set[str] = set()
 
-            # Batch-load lab-wide jobs (deploy/destroy)
-            labs_with_active_jobs: Set[str] = {
-                j.lab_id for j in
-                session.query(models.Job.lab_id)
-                .filter(
-                    models.Job.lab_id.in_(lab_ids),
-                    models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
-                    models.Job.action.in_(["up", "down"]),
-                )
-                .all()
-            }
+            for lab_id_j, action in active_jobs:
+                if (
+                    action in ("up", "down", "sync", "sync:lab")
+                    or action.startswith("sync:batch:")
+                ):
+                    labs_with_active_jobs.add(lab_id_j)
+
+                if action.startswith("node:"):
+                    parts = action.split(":", 2)
+                    if len(parts) >= 3 and parts[2]:
+                        active_job_node_names.add((lab_id_j, parts[2]))
+                    continue
+
+                if action.startswith("sync:node:"):
+                    target_id = action.split(":", 2)[2]
+                    if target_id:
+                        active_job_node_ids.add((lab_id_j, target_id))
+                        target_name = node_id_to_name.get(target_id)
+                        if target_name:
+                            active_job_node_names.add((lab_id_j, target_name))
+                    continue
+
+                if action.startswith("sync:agent:"):
+                    parts = action.split(":", 3)
+                    if len(parts) >= 4:
+                        for target_id in [nid for nid in parts[3].split(",") if nid]:
+                            active_job_node_ids.add((lab_id_j, target_id))
+                            target_name = node_id_to_name.get(target_id)
+                            if target_name:
+                                active_job_node_names.add((lab_id_j, target_name))
 
             # Phase 1: Per-node filtering (skip checks, cooldown, backoff, active jobs)
             # Group passing nodes by lab_id
             enforceable_by_lab: Dict[str, list[models.NodeState]] = {}
             for node_state in mismatched_states:
                 try:
-                    if await _is_enforceable(session, node_state, active_job_nodes=active_job_nodes):
+                    if await _is_enforceable(
+                        session,
+                        node_state,
+                        active_job_node_names=active_job_node_names,
+                        active_job_node_ids=active_job_node_ids,
+                    ):
                         enforceable_by_lab.setdefault(node_state.lab_id, []).append(node_state)
                 except Exception as e:
                     logger.error(
@@ -851,9 +933,9 @@ async def enforce_lab_states():
                 if not lab:
                     continue
 
-                # Skip if lab has active deploy/destroy (D.1: use pre-loaded set)
+                # Skip if lab has active lab-wide job (D.1: use pre-loaded set)
                 if _has_lab_wide_active_job(session, lab_id, labs_with_active_jobs=labs_with_active_jobs):
-                    logger.debug(f"Lab {lab_id} has active deploy/destroy job, skipping batch enforcement")
+                    logger.debug(f"Lab {lab_id} has active lab-wide job, skipping batch enforcement")
                     continue
 
                 try:

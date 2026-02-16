@@ -51,6 +51,42 @@ def _make_same_host_link(
     return ls
 
 
+def _make_cross_host_link(
+    test_db,
+    lab_id: str,
+    link_name: str,
+    *,
+    source_host_id: str,
+    target_host_id: str,
+    source_node: str = "r1",
+    source_interface: str = "eth1",
+    target_node: str = "r2",
+    target_interface: str = "eth1",
+    source_vlan_tag: int = 100,
+    target_vlan_tag: int = 200,
+    desired_state: str = "up",
+    actual_state: str = "up",
+) -> models.LinkState:
+    ls = models.LinkState(
+        lab_id=lab_id,
+        link_name=link_name,
+        source_node=source_node,
+        source_interface=source_interface,
+        target_node=target_node,
+        target_interface=target_interface,
+        is_cross_host=True,
+        desired_state=desired_state,
+        actual_state=actual_state,
+        source_host_id=source_host_id,
+        target_host_id=target_host_id,
+        source_vlan_tag=source_vlan_tag,
+        target_vlan_tag=target_vlan_tag,
+    )
+    test_db.add(ls)
+    test_db.flush()
+    return ls
+
+
 def _make_node(
     test_db,
     lab_id: str,
@@ -283,6 +319,55 @@ async def test_same_host_convergence_sends_pairings(test_db, sample_lab, sample_
 
 
 @pytest.mark.asyncio
+async def test_same_host_convergence_resolves_container_name_endpoints(
+    test_db, sample_lab, sample_host
+):
+    """Endpoint names keyed by container_name still resolve Node records."""
+    node_r1 = _make_node(
+        test_db,
+        sample_lab.id,
+        "Router One",
+        host_id=sample_host.id,
+        container_name="r1",
+    )
+    node_r2 = _make_node(
+        test_db,
+        sample_lab.id,
+        "Router Two",
+        host_id=sample_host.id,
+        container_name="r2",
+    )
+
+    _make_interface_mapping(
+        test_db, sample_lab.id, node_r1.id, "eth1", "vh-r1eth1", vlan_tag=100,
+    )
+    _make_interface_mapping(
+        test_db, sample_lab.id, node_r2.id, "eth1", "vh-r2eth1", vlan_tag=100,
+    )
+    _make_same_host_link(
+        test_db,
+        sample_lab.id,
+        "r1:eth1-r2:eth1",
+        host_id=sample_host.id,
+        source_node="r1",
+        target_node="r2",
+        vlan_tag=100,
+    )
+    test_db.commit()
+
+    host_to_agent = {sample_host.id: sample_host}
+    with patch.object(
+        link_reconciliation,
+        "declare_port_state_on_agent",
+        new_callable=AsyncMock,
+        return_value={"results": [{"status": "converged"}]},
+    ) as mock_declare:
+        await link_reconciliation.run_same_host_convergence(test_db, host_to_agent)
+
+    mock_declare.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_same_host_convergence_skips_missing_mappings(test_db, sample_lab, sample_host):
     """Links without InterfaceMappings are skipped."""
     _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
@@ -399,3 +484,60 @@ async def test_same_host_skips_zero_vlan(test_db, sample_lab, sample_host):
 
     mock_declare.assert_not_called()
     assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_cross_host_convergence_resolves_container_name_endpoints(
+    test_db, sample_lab, multiple_hosts
+):
+    """Cross-host convergence resolves endpoint names by container_name."""
+    host_a, host_b = multiple_hosts[0], multiple_hosts[1]
+    node_r1 = _make_node(
+        test_db,
+        sample_lab.id,
+        "Router One",
+        host_id=host_a.id,
+        container_name="r1",
+    )
+    node_r2 = _make_node(
+        test_db,
+        sample_lab.id,
+        "Router Two",
+        host_id=host_b.id,
+        container_name="r2",
+    )
+
+    # Deliberately mismatch InterfaceMapping VLAN vs DB truth to trigger correction.
+    _make_interface_mapping(
+        test_db, sample_lab.id, node_r1.id, "eth1", "vh-r1eth1", vlan_tag=999,
+    )
+    _make_interface_mapping(
+        test_db, sample_lab.id, node_r2.id, "eth1", "vh-r2eth1", vlan_tag=998,
+    )
+    _make_cross_host_link(
+        test_db,
+        sample_lab.id,
+        "r1:eth1-r2:eth1",
+        source_host_id=host_a.id,
+        target_host_id=host_b.id,
+        source_node="r1",
+        target_node="r2",
+        source_vlan_tag=100,
+        target_vlan_tag=200,
+    )
+    test_db.commit()
+
+    host_to_agent = {host_a.id: host_a, host_b.id: host_b}
+
+    with patch.object(
+        link_reconciliation.agent_client,
+        "set_port_vlan_on_agent",
+        new_callable=AsyncMock,
+        return_value=True,
+    ) as mock_set_vlan:
+        result = await link_reconciliation.run_cross_host_port_convergence(
+            test_db, host_to_agent
+        )
+
+    assert result == {"updated": 2, "errors": 0}
+    assert mock_set_vlan.await_count == 2
