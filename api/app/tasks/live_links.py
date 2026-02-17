@@ -27,6 +27,10 @@ from app.tasks.link_orchestration import (
 )
 from app.services.link_operational_state import recompute_link_oper_state
 from app.services.interface_naming import normalize_interface
+from app.services.link_reservations import (
+    claim_link_endpoints,
+    release_link_endpoint_reservations,
+)
 from app.utils.locks import (
     link_ops_lock,
     get_link_state_for_update,
@@ -84,6 +88,24 @@ async def create_link_if_ready(
             logger.debug(f"Link {link_name} skipped (row locked by another transaction)")
         else:
             log_parts.append(f"  {link_name}: FAILED - link state not found")
+        return False
+
+    claimed, conflicts = claim_link_endpoints(session, link_state)
+    if not claimed:
+        link_state.actual_state = "error"
+        conflict_list = ", ".join(conflicts) if conflicts else "another link"
+        link_state.error_message = (
+            f"Endpoint already in use by desired-up link(s): {conflict_list}"
+        )
+        _sync_oper_state(session, link_state)
+        log_parts.append(
+            f"  {link_state.link_name}: FAILED - {link_state.error_message}"
+        )
+        logger.warning(
+            "Link %s rejected due to endpoint reservation conflict with %s",
+            link_state.link_name,
+            conflict_list,
+        )
         return False
 
     # Check NodeState.actual_state for both endpoints
@@ -490,6 +512,7 @@ async def process_link_changes(
                             .first()
                         )
                         if ls:
+                            release_link_endpoint_reservations(session, ls.id)
                             session.delete(ls)
 
                 # Process added links

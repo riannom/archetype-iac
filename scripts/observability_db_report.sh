@@ -107,6 +107,71 @@ ORDER BY 2 DESC;
 "
 
 echo
+echo "--- Failure triage playbook (${DAYS}d, dominant classes) ---"
+docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
+WITH classified AS (
+  SELECT
+    CASE
+      WHEN log_path ILIKE '%preflight connectivity check failed%' THEN 'preflight_connectivity_failed'
+      WHEN log_path ILIKE '%preflight image check failed%' THEN 'preflight_image_check_failed'
+      WHEN log_path ILIKE '%preflight image validation failed%' THEN 'preflight_image_validation_failed'
+      WHEN log_path ILIKE '%job timed out after maximum retries%' THEN 'timeout_retries_exhausted'
+      WHEN log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
+      WHEN log_path LIKE 'Job timed out after 1200s%' THEN 'timeout_1200s'
+      WHEN log_path ILIKE '%timed out after%' THEN 'timeout'
+      WHEN log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
+      WHEN log_path ILIKE '%completed with % error%' THEN 'partial_failure'
+      ELSE 'other'
+    END AS failure_class
+  FROM jobs
+  WHERE status='failed'
+    AND created_at > NOW() - INTERVAL '${DAYS} days'
+)
+SELECT
+  failure_class,
+  COUNT(*) AS failures,
+  CASE
+    WHEN failure_class='timeout_300s' THEN 'Check agent preflight reachability and queue pressure; review job timeouts before retry.'
+    WHEN failure_class='link_tunnel_creation_failed' THEN 'Inspect OVS/VXLAN drift (duplicate tunnels, stale ports) and reconcile overlays.'
+    WHEN failure_class='partial_failure' THEN 'Review per-host sub-errors and reconcile only failed hosts/endpoints.'
+    ELSE 'n/a'
+  END AS recommended_action
+FROM classified
+WHERE failure_class IN ('timeout_300s', 'link_tunnel_creation_failed', 'partial_failure')
+GROUP BY failure_class
+ORDER BY failures DESC, failure_class;
+"
+
+echo
+echo "--- Recent failure samples for dominant classes (${DAYS}d) ---"
+docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
+WITH classified AS (
+  SELECT
+    created_at,
+    action,
+    LEFT(COALESCE(log_path,'<empty>'), 220) AS sample,
+    CASE
+      WHEN log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
+      WHEN log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
+      WHEN log_path ILIKE '%completed with % error%' THEN 'partial_failure'
+      ELSE 'other'
+    END AS failure_class
+  FROM jobs
+  WHERE status='failed'
+    AND created_at > NOW() - INTERVAL '${DAYS} days'
+)
+SELECT
+  to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_utc,
+  failure_class,
+  split_part(action,':',1) AS action_root,
+  sample
+FROM classified
+WHERE failure_class IN ('timeout_300s', 'link_tunnel_creation_failed', 'partial_failure')
+ORDER BY created_at DESC
+LIMIT 25;
+"
+
+echo
 echo "--- Top unclassified failure signatures (${DAYS}d) ---"
 docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
 WITH classified AS (
@@ -144,4 +209,64 @@ WHERE class='other'
 GROUP BY msg
 ORDER BY count DESC
 LIMIT 12;
+"
+
+echo
+echo "--- Link endpoint reservation drift ---"
+docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
+WITH expected AS (
+  SELECT ls.id AS link_state_id, ls.lab_id, ls.source_node AS node_name,
+    CASE
+      WHEN ls.source_interface ~* '^(ethernet|eth)[0-9]+$'
+        THEN 'eth' || regexp_replace(lower(ls.source_interface), '^(ethernet|eth)', '')
+      ELSE lower(ls.source_interface)
+    END AS interface_name
+  FROM link_states ls
+  WHERE ls.desired_state = 'up'
+  UNION
+  SELECT ls.id AS link_state_id, ls.lab_id, ls.target_node AS node_name,
+    CASE
+      WHEN ls.target_interface ~* '^(ethernet|eth)[0-9]+$'
+        THEN 'eth' || regexp_replace(lower(ls.target_interface), '^(ethernet|eth)', '')
+      ELSE lower(ls.target_interface)
+    END AS interface_name
+  FROM link_states ls
+  WHERE ls.desired_state = 'up'
+),
+missing AS (
+  SELECT e.*
+  FROM expected e
+  LEFT JOIN link_endpoint_reservations r
+    ON r.link_state_id = e.link_state_id
+   AND r.lab_id = e.lab_id
+   AND r.node_name = e.node_name
+   AND r.interface_name = e.interface_name
+  WHERE r.id IS NULL
+),
+orphaned AS (
+  SELECT r.*
+  FROM link_endpoint_reservations r
+  LEFT JOIN link_states ls ON ls.id = r.link_state_id
+  WHERE ls.id IS NULL OR ls.desired_state != 'up'
+)
+SELECT 'missing_reservations' AS metric, COUNT(*) AS count FROM missing
+UNION ALL
+SELECT 'orphaned_reservations', COUNT(*) FROM orphaned
+UNION ALL
+SELECT 'total_reservations', COUNT(*) FROM link_endpoint_reservations;
+"
+
+echo
+echo "--- Endpoint reservation conflicts (should be zero) ---"
+docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
+SELECT
+  lab_id,
+  node_name,
+  interface_name,
+  COUNT(DISTINCT link_state_id) AS active_links
+FROM link_endpoint_reservations
+GROUP BY lab_id, node_name, interface_name
+HAVING COUNT(DISTINCT link_state_id) > 1
+ORDER BY active_links DESC, lab_id, node_name, interface_name
+LIMIT 20;
 "

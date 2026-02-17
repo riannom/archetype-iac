@@ -18,6 +18,58 @@ export function isInstantiableImageKind(kind?: string | null): boolean {
   return INSTANTIABLE_IMAGE_KINDS.has(normalizeImageKind(kind));
 }
 
+function normalizeKinds(kinds?: string[] | null): string[] {
+  return (kinds || []).map((kind) => normalizeImageKind(kind));
+}
+
+/**
+ * Return instantiable image kinds a device accepts.
+ *
+ * If supportedImageKinds is omitted, treat docker/qcow2 as default.
+ * If supportedImageKinds is explicitly provided but contains no instantiable kinds
+ * (for example ["iol"]), return an empty set.
+ */
+export function getAllowedInstantiableImageKinds(
+  model: Pick<DeviceModel, 'supportedImageKinds'>
+): Set<string> {
+  if (model.supportedImageKinds && model.supportedImageKinds.length > 0) {
+    return new Set(
+      normalizeKinds(model.supportedImageKinds).filter((kind) =>
+        isInstantiableImageKind(kind)
+      )
+    );
+  }
+  return new Set(['docker', 'qcow2']);
+}
+
+/**
+ * Whether a device should require a runnable (docker/qcow2) image before add.
+ *
+ * IOL devices are treated as requiring a runnable image even when requiresImage
+ * metadata is missing, because raw IOL binaries are never directly instantiable.
+ */
+export function requiresRunnableImage(
+  model: Pick<DeviceModel, 'id' | 'kind' | 'tags' | 'requiresImage' | 'supportedImageKinds'>
+): boolean {
+  if (Boolean(model.requiresImage)) {
+    return true;
+  }
+
+  const supportedKinds = normalizeKinds(model.supportedImageKinds);
+  if (supportedKinds.includes('iol')) {
+    return true;
+  }
+
+  const idToken = normalizeImageKind(model.id);
+  const kindToken = normalizeImageKind(model.kind);
+  const tagTokens = (model.tags || []).map((tag) => normalizeImageKind(tag));
+  return (
+    idToken.startsWith('iol') ||
+    kindToken.startsWith('iol') ||
+    tagTokens.includes('iol')
+  );
+}
+
 /**
  * Get all device IDs an image is compatible with.
  * Uses compatible_devices when available, falls back to device_id.

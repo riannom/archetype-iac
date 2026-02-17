@@ -128,6 +128,60 @@ def test_system_alerts(test_client, test_db) -> None:
     assert body["alerts"][0]["error_message"] == "boom"
 
 
+def test_system_link_reservations_health_requires_admin(
+    test_client,
+    auth_headers,
+) -> None:
+    resp = test_client.get("/system/link-reservations/health", headers=auth_headers)
+    assert resp.status_code == 403
+
+
+def test_system_link_reservations_health_snapshot(
+    test_client,
+    test_db,
+    sample_lab,
+    admin_auth_headers,
+) -> None:
+    link = models.LinkState(
+        lab_id=sample_lab.id,
+        link_name="r1:eth1-r2:eth1",
+        source_node="r1",
+        source_interface="Ethernet1",
+        target_node="r2",
+        target_interface="eth1",
+        desired_state="up",
+        actual_state="unknown",
+    )
+    test_db.add(link)
+    test_db.commit()
+
+    # Orphaned reservation row (no matching link state).
+    test_db.add(
+        models.LinkEndpointReservation(
+            lab_id=sample_lab.id,
+            link_state_id="orphan-link-state-id",
+            node_name="ghost",
+            interface_name="eth9",
+        )
+    )
+    test_db.commit()
+
+    resp = test_client.get(
+        "/system/link-reservations/health?sample_limit=5",
+        headers=admin_auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    counts = body["counts"]
+    assert counts["desired_up_links"] == 1
+    assert counts["expected_reservations"] == 2
+    assert counts["missing_reservations"] == 2
+    assert counts["orphaned_reservations"] >= 1
+    assert "samples" in body
+    assert len(body["samples"]["missing_reservations"]) == 2
+    assert body["samples"]["orphaned_reservations"][0]["node_name"] == "ghost"
+
+
 def test_system_compare_versions() -> None:
     assert system_router._compare_versions("1.2.0", "1.1.9") == 1
     assert system_router._compare_versions("1.0.0", "1.0.0") == 0

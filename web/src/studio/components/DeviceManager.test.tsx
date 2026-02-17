@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DeviceManager from "./DeviceManager";
 import { DeviceModel, DeviceType, ImageLibraryEntry } from "../types";
 import { DragProvider } from "../contexts/DragContext";
+import { apiRequest } from "../../api";
 
 // Mock FontAwesome
 vi.mock("@fortawesome/react-fontawesome", () => ({
@@ -15,6 +16,7 @@ vi.mock("../../api", () => ({
   API_BASE_URL: "http://localhost:8000",
   apiRequest: vi.fn(),
 }));
+const mockApiRequest = vi.mocked(apiRequest);
 
 const mockDeviceModels: DeviceModel[] = [
   {
@@ -78,11 +80,6 @@ const mockImageLibrary: ImageLibraryEntry[] = [
   },
 ];
 
-const mockImageCatalog = {
-  ceos: { clab: "ceos:4.28.0" },
-  srlinux: { clab: "ghcr.io/nokia/srlinux" },
-};
-
 // Wrapper with DragProvider
 const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <DragProvider onImageAssigned={() => {}}>
@@ -97,7 +94,6 @@ describe("DeviceManager", () => {
 
   const defaultProps = {
     deviceModels: mockDeviceModels,
-    imageCatalog: mockImageCatalog,
     imageLibrary: mockImageLibrary,
     onUploadImage: mockOnUploadImage,
     onUploadQcow2: mockOnUploadQcow2,
@@ -106,6 +102,11 @@ describe("DeviceManager", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockApiRequest.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("renders the device manager header", () => {
@@ -218,6 +219,243 @@ describe("DeviceManager", () => {
 
       // Should show docker and qcow2 badges
       expect(screen.getAllByText(/docker/i).length).toBeGreaterThan(0);
+    });
+
+    it("does not show IOL build panel in image management mode", () => {
+      const iolLibrary: ImageLibraryEntry[] = [
+        ...mockImageLibrary,
+        {
+          id: "iol:i86bi-linux-l3.bin",
+          kind: "iol",
+          reference: "/images/i86bi-linux-l3.bin",
+          filename: "i86bi-linux-l3.bin",
+          device_id: "iol-xe",
+          build_status: "failed",
+          build_error: "build failed",
+        },
+      ];
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} imageLibrary={iolLibrary} />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByRole("heading", { name: "Build Jobs" })).not.toBeInTheDocument();
+    });
+
+    it("shows IOL build panel when in build-jobs mode", () => {
+      const iolLibrary: ImageLibraryEntry[] = [
+        ...mockImageLibrary,
+        {
+          id: "iol:i86bi-linux-l3.bin",
+          kind: "iol",
+          reference: "/images/i86bi-linux-l3.bin",
+          filename: "i86bi-linux-l3.bin",
+          device_id: "iol-xe",
+          build_status: "failed",
+          build_error: "build failed",
+        },
+      ];
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} imageLibrary={iolLibrary} mode="build-jobs" />
+        </TestWrapper>
+      );
+
+      expect(screen.getByRole("heading", { name: "Build Jobs" })).toBeInTheDocument();
+      expect(screen.getByText("Current Jobs")).toBeInTheDocument();
+      expect(screen.getAllByText(/i86bi-linux-l3.bin/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/failed/i).length).toBeGreaterThan(0);
+    });
+
+    it("auto-refreshes IOL build status while builds are active", async () => {
+      vi.useFakeTimers();
+      const iolLibrary: ImageLibraryEntry[] = [
+        ...mockImageLibrary,
+        {
+          id: "iol:i86bi-linux-l3.bin",
+          kind: "iol",
+          reference: "/images/i86bi-linux-l3.bin",
+          filename: "i86bi-linux-l3.bin",
+          device_id: "iol-xe",
+          build_status: "queued",
+        },
+      ];
+
+      mockApiRequest.mockImplementation((path: string) => {
+        if (path.includes("/build-status")) {
+          return Promise.resolve({ status: "queued", build_status: "queued" });
+        }
+        return Promise.resolve({});
+      });
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} imageLibrary={iolLibrary} mode="build-jobs" />
+        </TestWrapper>
+      );
+
+      await Promise.resolve();
+      await Promise.resolve();
+      let statusCalls = mockApiRequest.mock.calls.filter(([path]) =>
+        String(path).includes("/build-status")
+      );
+      expect(statusCalls.length).toBeGreaterThanOrEqual(1);
+
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+      statusCalls = mockApiRequest.mock.calls.filter(([path]) =>
+        String(path).includes("/build-status")
+      );
+      expect(statusCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("keeps existing build state when build-status API returns transient HTML errors", async () => {
+      const iolLibrary: ImageLibraryEntry[] = [
+        ...mockImageLibrary,
+        {
+          id: "iol:i86bi-linux-l3.bin",
+          kind: "iol",
+          reference: "/images/i86bi-linux-l3.bin",
+          filename: "i86bi-linux-l3.bin",
+          device_id: "iol-xe",
+          build_status: "complete",
+        },
+      ];
+
+      mockApiRequest.mockImplementation((path: string) => {
+        if (path.includes("/build-status")) {
+          return Promise.reject(
+            new Error("<html><head><title>502 Bad Gateway</title></head><body>bad gateway</body></html>")
+          );
+        }
+        return Promise.resolve({});
+      });
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} imageLibrary={iolLibrary} mode="build-jobs" />
+        </TestWrapper>
+      );
+
+      expect(await screen.findByText("Ready")).toBeInTheDocument();
+      expect(screen.getByText("Build History")).toBeInTheDocument();
+      expect(
+        screen.getByText("No pending or failed jobs. Completed builds are listed in History below.")
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+      expect(screen.queryByText(/Bad Gateway/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Force" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Ignore" })).not.toBeInTheDocument();
+    });
+
+    it("allows users to ignore a failed IOL build", async () => {
+      const user = userEvent.setup();
+      const iolLibrary: ImageLibraryEntry[] = [
+        ...mockImageLibrary,
+        {
+          id: "iol:i86bi-linux-l3.bin",
+          kind: "iol",
+          reference: "/images/i86bi-linux-l3.bin",
+          filename: "i86bi-linux-l3.bin",
+          device_id: "iol-xe",
+          build_status: "failed",
+          build_error: "build failed",
+        },
+      ];
+
+      mockApiRequest.mockImplementation((path: string) => {
+        if (path.includes("/build-status")) {
+          return Promise.resolve({
+            status: "failed",
+            build_status: "failed",
+            build_error: "build failed",
+          });
+        }
+        if (path.includes("/ignore-build-failure")) {
+          return Promise.resolve({ build_status: "ignored" });
+        }
+        return Promise.resolve({});
+      });
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} imageLibrary={iolLibrary} mode="build-jobs" />
+        </TestWrapper>
+      );
+
+      await user.click(await screen.findByRole("button", { name: "Ignore" }));
+
+      await waitFor(() => {
+        expect(mockApiRequest).toHaveBeenCalledWith(
+          expect.stringContaining("/ignore-build-failure"),
+          expect.objectContaining({ method: "POST" })
+        );
+      });
+      expect(screen.getByText("IOL build failure ignored.")).toBeInTheDocument();
+    });
+
+    it("shows diagnostics modal for IOL build failures", async () => {
+      const user = userEvent.setup();
+      const iolLibrary: ImageLibraryEntry[] = [
+        ...mockImageLibrary,
+        {
+          id: "iol:i86bi-linux-l3.bin",
+          kind: "iol",
+          reference: "/images/i86bi-linux-l3.bin",
+          filename: "i86bi-linux-l3.bin",
+          device_id: "iol-xe",
+          build_status: "failed",
+          build_error: "build failed",
+          build_job_id: "rq-build-failed",
+        },
+      ];
+
+      mockApiRequest.mockImplementation((path: string) => {
+        if (path.includes("/build-status")) {
+          return Promise.resolve({
+            status: "failed",
+            build_status: "failed",
+            build_error: "build failed",
+            build_job_id: "rq-build-failed",
+          });
+        }
+        if (path.includes("/build-diagnostics")) {
+          return Promise.resolve({
+            image_id: "iol:i86bi-linux-l3.bin",
+            filename: "i86bi-linux-l3.bin",
+            status: "failed",
+            build_status: "failed",
+            build_error: "build failed",
+            build_job_id: "rq-build-failed",
+            queue_job: {
+              id: "rq-build-failed",
+              status: "failed",
+              error_log: "ValueError: invalid ELF header",
+            },
+            recommended_action: "Retry the build.",
+          });
+        }
+        return Promise.resolve({});
+      });
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} imageLibrary={iolLibrary} mode="build-jobs" />
+        </TestWrapper>
+      );
+
+      await user.click(await screen.findByRole("button", { name: "Details" }));
+
+      expect(await screen.findByText("IOL Build Diagnostics")).toBeInTheDocument();
+      expect(await screen.findByText(/invalid ELF header/i)).toBeInTheDocument();
+      expect(mockApiRequest).toHaveBeenCalledWith(
+        expect.stringContaining("/build-diagnostics")
+      );
     });
   });
 

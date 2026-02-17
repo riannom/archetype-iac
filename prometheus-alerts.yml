@@ -28,6 +28,8 @@ groups:
         expr: histogram_quantile(0.95, sum by (le) (rate(archetype_reconciliation_cycle_seconds_bucket{job=~"archetype-(api|worker)"}[5m])))
       - record: archetype:node_state_transition_rate:5m
         expr: sum(rate(archetype_node_state_transitions_total{job=~"archetype-(api|worker)"}[5m]))
+      - record: archetype:job_failure_reason_rate:5m
+        expr: sum by (reason) (rate(archetype_job_failures_total{job=~"archetype-(api|worker)"}[5m]))
 
   - name: archetype-jobs
     rules:
@@ -262,3 +264,57 @@ groups:
         annotations:
           summary: "High job queue depth"
           description: "{{ $value }} jobs are queued, indicating worker backpressure."
+
+  - name: archetype-network-health
+    rules:
+      - alert: LinkEndpointReservationDrift
+        expr: |
+          (
+            archetype_link_endpoint_reservation_missing{job=~"archetype-(api|scheduler)"} > 0
+          )
+          or
+          (
+            archetype_link_endpoint_reservation_orphaned{job=~"archetype-(api|scheduler)"} > 0
+          )
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Link endpoint reservation drift detected"
+          description: "Missing or orphaned endpoint reservations detected. Run reservation reconcile and inspect /system/link-reservations/health."
+
+      - alert: LinkEndpointReservationConflict
+        expr: archetype_link_endpoint_reservation_conflicts{job=~"archetype-(api|scheduler)"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Conflicting endpoint reservations detected"
+          description: "One or more endpoints are reserved by multiple desired-up links, violating 1:1 cable semantics."
+
+      - alert: Timeout300Spike
+        expr: archetype:job_failure_reason_rate:5m{reason="timeout_300s"} > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spike in 300s job timeouts"
+          description: "timeout_300s failures sustained for 10m. Check agent reachability, queue depth, and preflight coverage."
+
+      - alert: LinkTunnelCreationFailuresHigh
+        expr: archetype:job_failure_reason_rate:5m{reason="link_tunnel_creation_failed"} > 0.005
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VXLAN tunnel creation failures are elevated"
+          description: "link_tunnel_creation_failed failures sustained for 10m. Inspect duplicate VXLAN ports, stale OVS ports, and host tunnel reachability."
+
+      - alert: PartialFailureSpike
+        expr: archetype:job_failure_reason_rate:5m{reason="partial_failure"} > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Partial failure rate elevated"
+          description: "partial_failure events sustained for 10m. Review per-host job logs and validate multi-host convergence."

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 
 from app import models
 from app.state import JobStatus
@@ -616,3 +617,74 @@ class TestLinkStateRapidUpdates:
         final = test_db.query(models.LinkState).filter(models.LinkState.id == link.id).first()
         assert final is not None
         assert final.desired_state == "down"
+
+
+class TestLinkEndpointReservationConcurrency:
+    """Concurrent reservation attempts must allow only one winner per endpoint."""
+
+    def test_near_concurrent_claim_same_endpoint_allows_single_winner(
+        self,
+        test_engine,
+        sample_lab: models.Lab,
+    ) -> None:
+        from app.services.link_reservations import sync_link_endpoint_reservations
+
+        SessionLocal = sessionmaker(
+            bind=test_engine,
+            autoflush=False,
+            autocommit=False,
+        )
+
+        setup = SessionLocal()
+        try:
+            link_a = models.LinkState(
+                lab_id=sample_lab.id,
+                link_name="r1:eth1-r2:eth1",
+                source_node="r1",
+                source_interface="eth1",
+                target_node="r2",
+                target_interface="eth1",
+                desired_state="down",
+                actual_state="down",
+            )
+            link_b = models.LinkState(
+                lab_id=sample_lab.id,
+                link_name="r1:eth1-r3:eth1",
+                source_node="r1",
+                source_interface="eth1",
+                target_node="r3",
+                target_interface="eth1",
+                desired_state="down",
+                actual_state="down",
+            )
+            setup.add_all([link_a, link_b])
+            setup.commit()
+            link_a_id = link_a.id
+            link_b_id = link_b.id
+        finally:
+            setup.close()
+
+        # Simulate near-concurrent writers with two independent sessions:
+        # both load rows before either commits, then commit in sequence.
+        s1 = SessionLocal()
+        s2 = SessionLocal()
+        try:
+            link_a = s1.get(models.LinkState, link_a_id)
+            link_b = s2.get(models.LinkState, link_b_id)
+            assert link_a is not None
+            assert link_b is not None
+
+            link_a.desired_state = "up"
+            ok1, conflicts1 = sync_link_endpoint_reservations(s1, link_a)
+            assert ok1 is True
+            assert conflicts1 == []
+            s1.commit()
+
+            link_b.desired_state = "up"
+            ok2, conflicts2 = sync_link_endpoint_reservations(s2, link_b)
+            assert ok2 is False
+            assert isinstance(conflicts2, list)
+            s2.rollback()
+        finally:
+            s1.close()
+            s2.close()

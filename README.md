@@ -128,6 +128,26 @@ flowchart TB
 
 The API maintains lab state in Postgres and uses Redis for job coordination and eventing. Interface mappings include OVS port and bridge metadata so the API can validate and reconcile links with the agent’s reported OVS state.
 
+## Observability Operations
+
+Use the non-prod maintenance bundle to produce periodic canary, DB, and link-reservation drift logs:
+
+```bash
+./scripts/run_observability_maintenance_nonprod.sh
+```
+
+This writes timestamped artifacts under `reports/observability/`, including:
+
+- `canary_<timestamp>.log`
+- `db_report_<timestamp>.log`
+- `link_reservation_drift_<timestamp>.log`
+
+Nightly gate recommendation for hot-connect reliability:
+
+1. Require `RESULT=PASS` in the latest `link_reservation_drift_*.log`.
+2. Require `missing_reservations=0`, `orphaned_reservations=0`, and `conflicting_endpoints=0`.
+3. If gate fails, run link reservation health inspection via `GET /system/link-reservations/health` and triage before business-hours changes.
+
 ## Supported Vendors and Device Kinds
 
 The supported device catalog is served dynamically from the API (`/vendors`) and sourced from `agent/vendors.py`. Current vendor coverage includes:

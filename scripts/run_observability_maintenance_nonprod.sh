@@ -19,4 +19,10 @@ echo "[maintenance] running db report"
 "$ROOT_DIR/scripts/observability_db_report.sh" "${DB_REPORT_DAYS:-30}" \
   | tee "$REPORT_DIR/db_report_${STAMP}.log"
 
+echo "[maintenance] running link reservation drift self-check"
+if ! "$ROOT_DIR/scripts/link_reservation_drift_check.sh" \
+  | tee "$REPORT_DIR/link_reservation_drift_${STAMP}.log"; then
+  echo "[maintenance] drift self-check reported failures (see log)"
+fi
+
 echo "[maintenance] done"

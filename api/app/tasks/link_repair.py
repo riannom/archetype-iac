@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.services.interface_naming import normalize_interface
+from app.services.link_validator import verify_link_connected
 from app.services.link_operational_state import recompute_link_oper_state
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
 from app.utils.locks import get_link_state_by_id_for_update
@@ -79,6 +80,28 @@ async def attempt_partial_recovery(
 
     source_ok = link.source_vxlan_attached
     target_ok = link.target_vxlan_attached
+
+    # If both sides are marked attached, don't blindly trust stale flags.
+    # Validate dataplane health before declaring success to avoid false "up"
+    # transitions after restarts/crashes where attachment metadata persisted.
+    if source_ok and target_ok:
+        is_valid, error = await verify_link_connected(session, link, host_to_agent)
+        if is_valid:
+            link.actual_state = "up"
+            link.error_message = None
+            link.source_carrier_state = "on"
+            link.target_carrier_state = "on"
+            _sync_oper_state(session, link)
+            logger.info(f"Link {link.link_name} already attached and verified")
+            return True
+
+        link.error_message = (
+            f"Partial recovery validation failed: {error}"
+            if error
+            else "Partial recovery validation failed"
+        )
+        _sync_oper_state(session, link)
+        return False
 
     # Re-attach source side if needed
     if not source_ok:

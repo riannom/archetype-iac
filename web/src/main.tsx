@@ -9,14 +9,45 @@ import { ImageLibraryProvider } from "./contexts/ImageLibraryContext";
 import { DeviceCatalogProvider } from "./contexts/DeviceCatalogContext";
 import { ToastContainer } from "./components/ui/ToastContainer";
 
-const StudioConsolePage = React.lazy(() => import("./pages/StudioConsolePage"));
-const InfrastructurePage = React.lazy(() => import("./pages/InfrastructurePage"));
-const InterfaceManagerPage = React.lazy(() => import("./pages/InterfaceManagerPage"));
-const NodesPage = React.lazy(() => import("./pages/NodesPage"));
-const AdminSettingsPage = React.lazy(() => import("./pages/AdminSettingsPage"));
-const SupportBundlesPage = React.lazy(() => import("./pages/SupportBundlesPage"));
-const StudioPage = React.lazy(() => import("./studio/StudioPage"));
-const UserManagementPage = React.lazy(() => import("./pages/UserManagementPage"));
+const CHUNK_RELOAD_KEY = "archetype:chunk-reload-attempted";
+
+function lazyWithChunkRetry<T extends React.ComponentType<any>>(
+  importer: () => Promise<{ default: T }>
+) {
+  return React.lazy(async () => {
+    try {
+      const module = await importer();
+      sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+      return module;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isChunkLoadError =
+        /Failed to fetch dynamically imported module|Importing a module script failed|ChunkLoadError|Loading chunk/i.test(
+          message
+        );
+      if (isChunkLoadError) {
+        const alreadyRetried = sessionStorage.getItem(CHUNK_RELOAD_KEY) === "1";
+        if (!alreadyRetried) {
+          sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+          window.location.reload();
+          // Keep suspense fallback while the browser reloads.
+          return new Promise<never>(() => {});
+        }
+      }
+      sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+      throw error;
+    }
+  });
+}
+
+const StudioConsolePage = lazyWithChunkRetry(() => import("./pages/StudioConsolePage"));
+const InfrastructurePage = lazyWithChunkRetry(() => import("./pages/InfrastructurePage"));
+const InterfaceManagerPage = lazyWithChunkRetry(() => import("./pages/InterfaceManagerPage"));
+const NodesPage = lazyWithChunkRetry(() => import("./pages/NodesPage"));
+const AdminSettingsPage = lazyWithChunkRetry(() => import("./pages/AdminSettingsPage"));
+const SupportBundlesPage = lazyWithChunkRetry(() => import("./pages/SupportBundlesPage"));
+const StudioPage = lazyWithChunkRetry(() => import("./studio/StudioPage"));
+const UserManagementPage = lazyWithChunkRetry(() => import("./pages/UserManagementPage"));
 
 function RouteFallback() {
   return (
@@ -41,6 +72,7 @@ const router = createBrowserRouter([
   { path: "/nodes", element: withSuspense(<NodesPage />) },
   { path: "/nodes/devices", element: withSuspense(<NodesPage />) },
   { path: "/nodes/images", element: withSuspense(<NodesPage />) },
+  { path: "/nodes/build-jobs", element: withSuspense(<NodesPage />) },
   { path: "/nodes/sync", element: withSuspense(<NodesPage />) },
   { path: "/labs", element: <Navigate to="/" replace /> },
   { path: "/labs/:labId", element: <Navigate to="/" replace /> },

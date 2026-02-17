@@ -84,7 +84,6 @@ class DeprecationMiddleware(BaseHTTPMiddleware):
             "/images",
             "/agents",
             "/vendors",
-            "/devices",
             "/jobs",
             "/users",
             "/permissions",

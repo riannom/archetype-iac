@@ -27,6 +27,10 @@ KNOWN_METRICS = {
     "archetype_enforcement_pending",
     "archetype_labs_total",
     "archetype_labs_active",
+    "archetype_link_endpoint_reservations_total",
+    "archetype_link_endpoint_reservation_missing",
+    "archetype_link_endpoint_reservation_orphaned",
+    "archetype_link_endpoint_reservation_conflicts",
     # Agent metrics (agent/metrics.py)
     "archetype_agent_docker_api_seconds",
     "archetype_agent_ovs_operation_seconds",

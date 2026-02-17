@@ -5,6 +5,7 @@ import io
 import json
 import zipfile
 from unittest.mock import AsyncMock, patch
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -193,6 +194,7 @@ class TestLabsCRUD:
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "Updated Lab Name"
+
 
     def test_update_lab_forbidden(
         self,
@@ -827,3 +829,62 @@ class TestLayout:
         assert data["version"] == 1
         assert "r1" in data["nodes"]
         assert data["nodes"]["r1"]["x"] == 100
+
+
+class TestLinkEndpointReservationAPI:
+    """Tests DB-backed endpoint reservation behavior on link state APIs."""
+
+    def test_set_link_state_up_rejects_endpoint_conflict(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        auth_headers: dict,
+    ) -> None:
+        link_a = models.LinkState(
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-r2:eth1",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="r2",
+            target_interface="eth1",
+            desired_state="down",
+            actual_state="down",
+        )
+        link_b = models.LinkState(
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-r3:eth1",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="r3",
+            target_interface="eth1",
+            desired_state="down",
+            actual_state="down",
+        )
+        test_db.add_all([link_a, link_b])
+        test_db.commit()
+
+        link_a_path = quote(link_a.link_name, safe="")
+        link_b_path = quote(link_b.link_name, safe="")
+
+        up_a = test_client.put(
+            f"/labs/{sample_lab.id}/links/{link_a_path}/state",
+            json={"state": "up"},
+            headers=auth_headers,
+        )
+        assert up_a.status_code == 200
+
+        up_b = test_client.put(
+            f"/labs/{sample_lab.id}/links/{link_b_path}/state",
+            json={"state": "up"},
+            headers=auth_headers,
+        )
+        assert up_b.status_code == 409
+        detail = up_b.json().get("detail", {})
+        assert detail.get("code") == "link_endpoint_reserved"
+        assert detail.get("link", {}).get("link_name") == link_b.link_name
+        assert "r1:eth1-r2:eth1" in detail.get("conflicting_links", [])
+        assert any(
+            item.get("node_name") == "r1" and item.get("interface_name") == "eth1"
+            for item in detail.get("conflicting_endpoints", [])
+        )

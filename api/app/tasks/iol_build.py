@@ -37,6 +37,7 @@ def build_iol_image(
     device_id: str,
     version: str | None = None,
     iol_image_id: str | None = None,
+    force_rebuild: bool = False,
 ) -> dict:
     """Build a Docker image wrapping an IOL binary.
 
@@ -51,6 +52,7 @@ def build_iol_image(
         device_id: Device type ID ("iol-xe" or "iol-l2")
         version: Optional version string (extracted from filename if not provided)
         iol_image_id: Optional ID of the IOL image in the manifest to link
+        force_rebuild: When True, rebuild even if the Docker image tag exists
 
     Returns:
         Dict with build result:
@@ -84,19 +86,22 @@ def build_iol_image(
         _mark_iol_build_status(iol_image_id, "failed", error_msg)
         return {"success": False, "error": error_msg, "device_id": device_id}
 
-    # Idempotency: skip build if Docker image already exists
-    try:
-        result = subprocess.run(
-            ["docker", "image", "inspect", image_tag],
-            capture_output=True, timeout=10,
-        )
-        if result.returncode == 0:
-            logger.info(f"Docker image {image_tag} already exists, updating manifest")
-            _update_manifest_with_iol_image(iol_path, image_tag, device_id, version, iol_image_id)
-            _mark_iol_build_status(iol_image_id, "complete")
-            return {"success": True, "docker_image": image_tag, "device_id": device_id}
-    except Exception:
-        pass  # Image doesn't exist or docker not reachable, proceed with build
+    if not force_rebuild:
+        # Idempotency: skip build if Docker image already exists
+        try:
+            result = subprocess.run(
+                ["docker", "image", "inspect", image_tag],
+                capture_output=True, timeout=10,
+            )
+            if result.returncode == 0:
+                logger.info(f"Docker image {image_tag} already exists, updating manifest")
+                _update_manifest_with_iol_image(iol_path, image_tag, device_id, version, iol_image_id)
+                _mark_iol_build_status(iol_image_id, "complete")
+                return {"success": True, "docker_image": image_tag, "device_id": device_id}
+        except Exception:
+            pass  # Image doesn't exist or docker not reachable, proceed with build
+    else:
+        logger.info("force_rebuild=True, skipping existing-image check")
 
     # Mark build as in-progress
     _mark_iol_build_status(iol_image_id, "building")

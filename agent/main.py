@@ -4326,15 +4326,82 @@ async def _ovs_get_port_vlan(port_name: str) -> int | None:
         return None
 
 
+async def _ovs_list_used_vlans(bridge: str) -> set[int]:
+    """Return the set of VLAN tags currently used on an OVS bridge."""
+    used: set[int] = set()
+    proc = await asyncio.create_subprocess_exec(
+        "ovs-vsctl", "list-ports", bridge,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0 or not stdout:
+        return used
+
+    ports = [p.strip() for p in stdout.decode().splitlines() if p.strip()]
+    for p in ports:
+        tag = await _ovs_get_port_vlan(p)
+        if tag is not None:
+            used.add(tag)
+    return used
+
+
+def _pick_free_vlan(used: set[int], start: int, end: int) -> int | None:
+    """Pick the first free VLAN tag in [start, end]."""
+    for vlan in range(start, end + 1):
+        if vlan not in used:
+            return vlan
+    return None
+
+
+def _pick_isolation_vlan(used: set[int], bridge: str, port_name: str) -> int | None:
+    """Pick an isolation VLAN from ordered pools with fallback."""
+    vlan = _pick_free_vlan(used, 100, 2049)
+    if vlan is not None:
+        return vlan
+
+    logger.warning(
+        "Isolated VLAN range exhausted on %s while disconnecting %s; "
+        "falling back to linked range",
+        bridge,
+        port_name,
+    )
+    return _pick_free_vlan(used, 2050, 4000)
+
+
+async def _ovs_allocate_link_vlan(bridge: str) -> int | None:
+    """Allocate a fresh shared VLAN for an active link.
+
+    Prefers linked range 2050-4000 and falls back to isolated range 100-2049.
+    """
+    used = await _ovs_list_used_vlans(bridge)
+    vlan = _pick_free_vlan(used, 2050, 4000)
+    if vlan is not None:
+        return vlan
+
+    logger.warning(
+        "Linked VLAN range exhausted on %s while creating link; "
+        "falling back to isolated range",
+        bridge,
+    )
+    return _pick_free_vlan(used, 100, 2049)
+
+
 async def _ovs_allocate_unique_vlan(port_name: str) -> int | None:
     """Allocate a fresh unique VLAN for a port to isolate it.
 
-    Reads the current max VLAN from OVS and picks one above it,
-    staying in the 2-4094 range.
+    Uses deterministic ordered allocation with collision checks:
+    1. Prefer isolated range (100-2049)
+    2. Fall back to linked range (2050-4000) if isolated is exhausted
     """
-    import random
-    # Use a random VLAN in high range to avoid collisions
-    new_vlan = random.randint(100, 2049)
+    bridge = settings.ovs_bridge_name or "arch-ovs"
+
+    used = await _ovs_list_used_vlans(bridge)
+    new_vlan = _pick_isolation_vlan(used, bridge, port_name)
+    if new_vlan is None:
+        logger.error("No free VLAN available on %s for port %s", bridge, port_name)
+        return None
+
     if await _ovs_set_port_vlan(port_name, new_vlan):
         return new_vlan
     return None
@@ -4383,23 +4450,48 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
                 error=f"Cannot find OVS port for {link.target_node}:{link.target_interface}",
             )
 
-        # Use VLAN from source port; set target port to match
-        shared_vlan = port_a.vlan_tag
+        bridge = settings.ovs_bridge_name or "arch-ovs"
+        shared_vlan = await _ovs_allocate_link_vlan(bridge)
+        if shared_vlan is None:
+            return LinkCreateResponse(
+                success=False,
+                error="No free VLAN available for link creation",
+            )
+
+        old_vlan_a = port_a.vlan_tag
+        old_vlan_b = port_b.vlan_tag
+
+        if not await _ovs_set_port_vlan(port_a.port_name, shared_vlan):
+            return LinkCreateResponse(
+                success=False,
+                error=f"Failed to set VLAN on {port_a.port_name}",
+            )
 
         if not await _ovs_set_port_vlan(port_b.port_name, shared_vlan):
+            # Roll back source side on partial failure.
+            await _ovs_set_port_vlan(port_a.port_name, old_vlan_a)
             return LinkCreateResponse(
                 success=False,
                 error=f"Failed to set VLAN on {port_b.port_name}",
             )
 
-        # Update Docker plugin tracking if either endpoint is Docker
+        # Update Docker plugin tracking if either endpoint is Docker.
+        # Also release old tracked tags from either pool to avoid stale allocator state.
         plugin = _get_docker_ovs_plugin() if settings.enable_ovs_plugin else None
-        if plugin and port_b.provider == "docker":
-            for ep in plugin.endpoints.values():
-                if ep.host_veth == port_b.port_name:
-                    ep.vlan_tag = shared_vlan
-                    await plugin._mark_dirty_and_save()
-                    break
+        if plugin:
+            plugin_updated = False
+            for resolved_port, old_vlan in ((port_a, old_vlan_a), (port_b, old_vlan_b)):
+                if resolved_port.provider != "docker":
+                    continue
+                for ep in plugin.endpoints.values():
+                    if ep.host_veth == resolved_port.port_name:
+                        plugin._release_vlan(old_vlan)
+                        plugin._release_linked_vlan(old_vlan)
+                        ep.vlan_tag = shared_vlan
+                        plugin_updated = True
+                        break
+            if plugin_updated:
+                await plugin._mark_dirty_and_save()
 
         link_id = f"{link.source_node}:{link.source_interface}-{link.target_node}:{link.target_interface}"
 
@@ -4479,34 +4571,70 @@ async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
         port_a = await _resolve_ovs_port(lab_id, node_a, iface_a)
         port_b = await _resolve_ovs_port(lab_id, node_b, iface_b)
 
-        errors = []
+        bridge = settings.ovs_bridge_name or "arch-ovs"
+        used = await _ovs_list_used_vlans(bridge)
+        endpoint_plans: list[tuple[ResolvedOVSPort, str, str, int, int | None]] = []
+        errors: list[str] = []
 
-        # Disconnect each endpoint by giving it a unique VLAN
-        for port, node, iface in [(port_a, node_a, iface_a), (port_b, node_b, iface_b)]:
+        # Plan both endpoint VLAN moves first to keep disconnect transactional.
+        for port, node, iface in ((port_a, node_a, iface_a), (port_b, node_b, iface_b)):
             if not port:
                 logger.warning(f"Port not found for {node}:{iface}, skipping disconnect")
                 continue
 
-            if port.provider == "docker":
-                # Use Docker plugin for proper tracking state updates
-                plugin = _get_docker_ovs_plugin()
-                try:
-                    docker_provider = get_provider("docker")
-                    container_name = docker_provider.get_container_name(lab_id, node)
-                    result = await plugin.hot_disconnect(lab_id, container_name, iface)
-                    if result is not None:
-                        continue
-                except Exception:
-                    pass
-                # Fall through to direct OVS if plugin disconnect fails
-
-            # Direct OVS disconnect (for libvirt or Docker plugin fallback)
-            new_vlan = await _ovs_allocate_unique_vlan(port.port_name)
+            new_vlan = _pick_isolation_vlan(used, bridge, port.port_name)
             if new_vlan is None:
-                errors.append(f"Failed to disconnect {node}:{iface}")
+                errors.append(f"Failed to allocate VLAN for {node}:{iface}")
+                continue
+
+            used.add(new_vlan)
+            endpoint_plans.append((port, node, iface, new_vlan, port.vlan_tag))
 
         if errors:
             return LinkDeleteResponse(success=False, error="; ".join(errors))
+
+        # Apply VLAN changes; roll back all changed ports if any endpoint fails.
+        applied: list[tuple[str, int | None]] = []
+        for port, node, iface, new_vlan, old_vlan in endpoint_plans:
+            if not await _ovs_set_port_vlan(port.port_name, new_vlan):
+                rollback_errors: list[str] = []
+                for applied_port, previous_vlan in reversed(applied):
+                    if previous_vlan is None:
+                        continue
+                    if not await _ovs_set_port_vlan(applied_port, previous_vlan):
+                        rollback_errors.append(applied_port)
+                rollback_detail = ""
+                if rollback_errors:
+                    rollback_detail = (
+                        f" (rollback failed for ports: {', '.join(rollback_errors)})"
+                    )
+                return LinkDeleteResponse(
+                    success=False,
+                    error=f"Failed to disconnect {node}:{iface}{rollback_detail}",
+                )
+            applied.append((port.port_name, old_vlan))
+
+        # Update Docker plugin state for endpoints touched via direct OVS.
+        plugin = _get_docker_ovs_plugin() if settings.enable_ovs_plugin else None
+        if plugin:
+            plugin_updated = False
+            for port, _, _, new_vlan, old_vlan in endpoint_plans:
+                if port.provider != "docker":
+                    continue
+                for ep in plugin.endpoints.values():
+                    if ep.host_veth != port.port_name:
+                        continue
+                    plugin._release_vlan(old_vlan)
+                    plugin._release_linked_vlan(old_vlan)
+                    if 100 <= new_vlan <= 2049:
+                        plugin._allocated_vlans.add(new_vlan)
+                    elif 2050 <= new_vlan <= 4000:
+                        plugin._allocated_linked_vlans.add(new_vlan)
+                    ep.vlan_tag = new_vlan
+                    plugin_updated = True
+                    break
+            if plugin_updated:
+                await plugin._mark_dirty_and_save()
 
         return LinkDeleteResponse(success=True)
 

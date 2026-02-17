@@ -25,6 +25,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 WEB_PORT="8080"
 API_PORT="8000"
 UNINSTALL=false
+INSTALL_OBSERVABILITY_CRON=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -41,9 +42,27 @@ while [[ $# -gt 0 ]]; do
             UNINSTALL=true
             shift
             ;;
+        --install-observability-cron)
+            INSTALL_OBSERVABILITY_CRON=true
+            shift
+            ;;
         --branch)
             BRANCH_OVERRIDE="$2"
             shift 2
+            ;;
+        --help|-h)
+            echo "Archetype Controller Installer"
+            echo ""
+            echo "Usage:"
+            echo "  $0 [--web-port PORT] [--api-port PORT] [--branch BRANCH] [--install-observability-cron]"
+            echo ""
+            echo "Options:"
+            echo "  --web-port PORT                  Web UI port (default: 8080)"
+            echo "  --api-port PORT                  API port (default: 8000)"
+            echo "  --branch BRANCH                  Install specific branch/tag"
+            echo "  --install-observability-cron     Install host cron jobs for canary/report/drift checks"
+            echo "  --uninstall                       Remove controller installation"
+            exit 0
             ;;
         --version)
             CURRENT="none"
@@ -110,6 +129,9 @@ fi
 
 log_info "Detected OS: $OS"
 log_info "Installing Archetype Controller..."
+if [ "$INSTALL_OBSERVABILITY_CRON" = true ]; then
+    log_info "Observability cron auto-install: enabled"
+fi
 
 # Install system dependencies
 log_info "Installing system dependencies..."
@@ -250,6 +272,20 @@ else
     log_warn "API may still be starting. Check logs with: docker compose -f $INSTALL_DIR/docker-compose.gui.yml logs -f api"
 fi
 
+if [ "$INSTALL_OBSERVABILITY_CRON" = true ]; then
+    if [ -x "$INSTALL_DIR/scripts/install_observability_cron_nonprod.sh" ]; then
+        log_info "Installing observability cron entries (host user: $(whoami))..."
+        if (cd "$INSTALL_DIR" && ./scripts/install_observability_cron_nonprod.sh --apply); then
+            log_info "Observability cron entries installed"
+        else
+            log_warn "Failed to install observability cron entries automatically; run manually:"
+            log_warn "  cd $INSTALL_DIR && ./scripts/install_observability_cron_nonprod.sh --apply"
+        fi
+    else
+        log_warn "Observability cron installer not found at $INSTALL_DIR/scripts/install_observability_cron_nonprod.sh"
+    fi
+fi
+
 echo ""
 echo "=============================================="
 echo -e "${GREEN}Archetype Controller Installation Complete!${NC}"
@@ -264,6 +300,9 @@ echo -e "${CYAN}Observability:${NC}"
 echo "  Grafana:     http://$LOCAL_IP:3000"
 echo "  Prometheus:  http://$LOCAL_IP:9090"
 echo "  API Metrics: http://$LOCAL_IP:$API_PORT/metrics"
+if [ "$INSTALL_OBSERVABILITY_CRON" = true ]; then
+    echo "  Cron:        installed in host user crontab ($(whoami))"
+fi
 echo ""
 echo -e "${CYAN}Admin Credentials:${NC}"
 echo "  Email:       admin@localhost"

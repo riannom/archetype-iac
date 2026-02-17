@@ -198,6 +198,82 @@
         "overrides": []
       },
       "datasource": { "type": "prometheus", "uid": "prometheus" }
+    },
+    {
+      "id": 10,
+      "title": "Link Reservation Drift",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "expr": "archetype_link_endpoint_reservation_missing{job=~\"archetype-(api|scheduler)\"}",
+          "legendFormat": "Missing",
+          "refId": "A"
+        },
+        {
+          "expr": "archetype_link_endpoint_reservation_orphaned{job=~\"archetype-(api|scheduler)\"}",
+          "legendFormat": "Orphaned",
+          "refId": "B"
+        },
+        {
+          "expr": "archetype_link_endpoint_reservation_conflicts{job=~\"archetype-(api|scheduler)\"}",
+          "legendFormat": "Conflicts",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "datasource": { "type": "prometheus", "uid": "prometheus" }
+    },
+    {
+      "id": 11,
+      "title": "Reserved Endpoints Total",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "expr": "sum(archetype_link_endpoint_reservations_total{job=~\"archetype-(api|scheduler)\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1000 },
+              { "color": "red", "value": 5000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "datasource": { "type": "prometheus", "uid": "prometheus" }
+    },
+    {
+      "id": 12,
+      "title": "Dominant Failure Classes Rate (5m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(archetype_job_failures_total{job=~\"archetype-(api|worker)\",reason=~\"timeout_300s|link_tunnel_creation_failed|partial_failure\"}[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "datasource": { "type": "prometheus", "uid": "prometheus" }
     }
   ],
   "schemaVersion": 39,
@@ -208,5 +284,5 @@
   "timezone": "browser",
   "title": "Archetype: System Overview",
   "uid": "archetype-overview",
-  "version": 1
+  "version": 2
 }

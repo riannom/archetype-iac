@@ -36,9 +36,10 @@ vi.mock("../contexts/UserContext", () => ({
 }));
 
 // Mock useImageLibrary hook
+let mockImageLibraryData: unknown[] = [];
 vi.mock("../contexts/ImageLibraryContext", () => ({
   useImageLibrary: () => ({
-    imageLibrary: [],
+    imageLibrary: mockImageLibraryData,
     loading: false,
     error: null,
     refreshImageLibrary: vi.fn(),
@@ -50,7 +51,6 @@ vi.mock("../contexts/ImageLibraryContext", () => ({
 vi.mock("../contexts/DeviceCatalogContext", () => ({
   useDeviceCatalog: () => ({
     vendorCategories: [],
-    imageCatalog: {},
     deviceModels: [],
     deviceCategories: [],
     addCustomDevice: vi.fn(),
@@ -99,10 +99,10 @@ describe("NodesPage", () => {
     vi.clearAllMocks();
     localStorage.clear();
     resetFactories();
+    mockImageLibraryData = [];
     // Default mock responses for API calls
     mockApiRequest.mockImplementation((path: string) => {
       if (path === "/vendors") return Promise.resolve([]);
-      if (path === "/images") return Promise.resolve({ images: {} });
       if (path === "/images/library") return Promise.resolve({ images: [] });
       return Promise.resolve({});
     });
@@ -128,6 +128,7 @@ describe("NodesPage", () => {
       await waitFor(() => {
         expect(screen.getByText("Device Management")).toBeInTheDocument();
         expect(screen.getByText("Image Management")).toBeInTheDocument();
+        expect(screen.getByText("Build Jobs")).toBeInTheDocument();
         expect(screen.getByText("Sync Jobs")).toBeInTheDocument();
       });
     });
@@ -234,6 +235,82 @@ describe("NodesPage", () => {
     });
   });
 
+  describe("build jobs tab", () => {
+    it("shows build jobs title when on build-jobs tab", async () => {
+      renderNodesPage("/nodes/build-jobs");
+
+      await waitFor(() => {
+        const elements = screen.getAllByText("Build Jobs");
+        const heading = elements.find((el) => el.tagName === "H2");
+        expect(heading).toBeInTheDocument();
+        expect(
+          screen.getByText("Track and manage background IOL Docker image builds")
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("shows pending build count badge when IOL images are not built", async () => {
+      mockImageLibraryData = [
+        {
+          id: "iol:image-1",
+          kind: "iol",
+          reference: "/var/lib/archetype/images/iol/image-1.bin",
+        },
+        {
+          id: "iol:image-2",
+          kind: "iol",
+          reference: "/var/lib/archetype/images/iol/image-2.bin",
+        },
+        {
+          id: "docker:archetype/iol-xe:17.12.01",
+          kind: "docker",
+          reference: "archetype/iol-xe:17.12.01",
+          built_from: "iol:image-1",
+        },
+      ];
+
+      renderNodesPageWithBrowser();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("1 pending IOL builds")).toBeInTheDocument();
+      });
+    });
+
+    it("does not count IOL entries already marked complete", async () => {
+      mockImageLibraryData = [
+        {
+          id: "iol:image-complete",
+          kind: "iol",
+          reference: "/var/lib/archetype/images/iol/image-complete.bin",
+          build_status: "complete",
+        },
+      ];
+
+      renderNodesPageWithBrowser();
+
+      await waitFor(() => {
+        expect(screen.queryByLabelText(/pending IOL builds/i)).not.toBeInTheDocument();
+      });
+    });
+
+    it("does not count ignored IOL build entries", async () => {
+      mockImageLibraryData = [
+        {
+          id: "iol:image-ignored",
+          kind: "iol",
+          reference: "/var/lib/archetype/images/iol/image-ignored.bin",
+          build_status: "ignored",
+        },
+      ];
+
+      renderNodesPageWithBrowser();
+
+      await waitFor(() => {
+        expect(screen.queryByLabelText(/pending IOL builds/i)).not.toBeInTheDocument();
+      });
+    });
+  });
+
   describe("custom devices from DeviceCatalog", () => {
     it("renders with device catalog from context", async () => {
       // Custom devices are now loaded from the DeviceCatalog context (API-based)
@@ -279,6 +356,16 @@ describe("NodesPage", () => {
 
       await waitFor(() => {
         const tab = screen.getByText("Sync Jobs");
+        expect(tab).toHaveClass("text-sage-600");
+      });
+    });
+
+    it("shows build jobs tab for /nodes/build-jobs path", async () => {
+      renderNodesPage("/nodes/build-jobs");
+
+      await waitFor(() => {
+        const elements = screen.getAllByText("Build Jobs");
+        const tab = elements.find((el) => el.tagName === "BUTTON");
         expect(tab).toHaveClass("text-sage-600");
       });
     });

@@ -14,13 +14,6 @@ import { useImageLibrary } from './ImageLibraryContext';
 import { buildDeviceModels, enrichDeviceCategories } from '../utils/deviceModels';
 import { initializePatterns } from '../studio/utils/interfaceRegistry';
 
-interface ImageCatalogEntry {
-  clab?: string;
-  libvirt?: string;
-  virtualbox?: string;
-  caveats?: string[];
-}
-
 interface CustomDevicePayload {
   id: string;
   name: string;
@@ -45,7 +38,6 @@ interface CustomDevicePayload {
 export interface DeviceCatalogContextType {
   // Raw data from API
   vendorCategories: DeviceCategory[];
-  imageCatalog: Record<string, ImageCatalogEntry>;
 
   // Computed/enriched data
   deviceModels: DeviceModel[];
@@ -71,7 +63,6 @@ export function DeviceCatalogProvider({ children }: DeviceCatalogProviderProps) 
   const { imageLibrary, refreshImageLibrary } = useImageLibrary();
 
   const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
-  const [imageCatalog, setImageCatalog] = useState<Record<string, ImageCatalogEntry>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,10 +74,6 @@ export function DeviceCatalogProvider({ children }: DeviceCatalogProviderProps) 
       // Fetch vendor categories (includes custom devices)
       const vendorData = await apiRequest<DeviceCategory[]>('/vendors');
       setVendorCategories(vendorData || []);
-
-      // Fetch image catalog (static reference data)
-      const imageData = await apiRequest<{ images?: Record<string, ImageCatalogEntry> }>('/images');
-      setImageCatalog(imageData.images || {});
 
       // Also refresh image library to ensure consistency
       await refreshImageLibrary();
@@ -155,7 +142,6 @@ export function DeviceCatalogProvider({ children }: DeviceCatalogProviderProps) 
 
   const contextValue: DeviceCatalogContextType = useMemo(() => ({
     vendorCategories,
-    imageCatalog,
     deviceModels,
     deviceCategories,
     addCustomDevice,
@@ -165,7 +151,6 @@ export function DeviceCatalogProvider({ children }: DeviceCatalogProviderProps) 
     refresh: fetchData,
   }), [
     vendorCategories,
-    imageCatalog,
     deviceModels,
     deviceCategories,
     addCustomDevice,

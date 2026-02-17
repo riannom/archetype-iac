@@ -3,7 +3,12 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { DeviceModel, AnnotationType, ImageLibraryEntry } from '../types';
 import SidebarFilters, { ImageStatus } from './SidebarFilters';
 import { useNotifications } from '../../contexts/NotificationContext';
-import { getImageDeviceIds, isInstantiableImageKind } from '../../utils/deviceModels';
+import {
+  getAllowedInstantiableImageKinds,
+  getImageDeviceIds,
+  isInstantiableImageKind,
+  requiresRunnableImage,
+} from '../../utils/deviceModels';
 
 interface SidebarProps {
   categories: { name: string; models?: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
@@ -126,16 +131,6 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     return statusMap;
   }, [imageLibrary]);
 
-  const getAllowedKindsForDevice = useCallback((device: DeviceModel): Set<string> => {
-    const supportedKinds = device.supportedImageKinds
-      ?.map((kind) => kind.toLowerCase())
-      .filter((kind) => isInstantiableImageKind(kind));
-    if (supportedKinds && supportedKinds.length > 0) {
-      return new Set(supportedKinds);
-    }
-    return new Set(['docker', 'qcow2']);
-  }, []);
-
   const resolveStatusFromEntry = useCallback(
     (entry: { imageKinds: Set<string>; defaultKinds: Set<string> } | undefined, allowedKinds: Set<string>) => {
       if (!entry) return undefined;
@@ -152,7 +147,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
   );
 
   const getDeviceImageStatus = useCallback((device: DeviceModel) => {
-    const allowedKinds = getAllowedKindsForDevice(device);
+    const allowedKinds = getAllowedInstantiableImageKinds(device);
 
     const byId = resolveStatusFromEntry(deviceImageStatus.get(device.id), allowedKinds);
     if (byId) return byId;
@@ -167,7 +162,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
       if (byAlias) return byAlias;
     }
     return undefined;
-  }, [deviceImageStatus, getAllowedKindsForDevice, resolveStatusFromEntry]);
+  }, [deviceImageStatus, resolveStatusFromEntry]);
 
   // Filter devices based on search and filters
   const filterDevice = (device: DeviceModel): boolean => {
@@ -297,9 +292,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     setImageStatus('all');
   };
 
-  const getImageStatusIndicator = (deviceId: string) => {
-    const device = allDevices.find(d => d.id === deviceId);
-    const status = device ? getDeviceImageStatus(device) : deviceImageStatus.get(deviceId);
+  const getImageStatusIndicator = (status: { hasImage: boolean; hasDefault: boolean } | undefined) => {
     if (status?.hasDefault) {
       return (
         <span
@@ -324,33 +317,55 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     );
   };
 
-  const renderModel = (model: DeviceModel) => (
-    <div
-      key={model.id}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData('application/x-archetype-device', JSON.stringify(model));
-        e.dataTransfer.effectAllowed = 'copy';
-      }}
-      onClick={() => onAddDevice(model)}
-      className="group flex items-center p-2 bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 border border-transparent hover:border-stone-200 dark:hover:border-stone-700 rounded-lg cursor-grab active:cursor-grabbing transition-all"
-    >
-      <div className="w-8 h-8 rounded bg-white dark:bg-stone-800 flex items-center justify-center mr-3 group-hover:bg-sage-100 dark:group-hover:bg-stone-700 group-hover:text-sage-600 dark:group-hover:text-sage-400 transition-colors border border-stone-200 dark:border-stone-700 shadow-sm relative">
-        <i className={`fa-solid ${model.icon} text-xs`}></i>
-        {/* Image status indicator */}
-        <div className="absolute -top-0.5 -right-0.5">
-          {getImageStatusIndicator(model.id)}
+  const renderModel = (model: DeviceModel) => {
+    const status = getDeviceImageStatus(model);
+    const canInstantiate = !requiresRunnableImage(model) || Boolean(status?.hasImage);
+    return (
+      <div
+        key={model.id}
+        draggable={canInstantiate}
+        aria-disabled={!canInstantiate}
+        title={canInstantiate ? undefined : 'No runnable Docker/qcow2 image assigned'}
+        onDragStart={(e) => {
+          if (!canInstantiate) return;
+          e.dataTransfer.setData('application/x-archetype-device', JSON.stringify(model));
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
+        onClick={() => {
+          if (!canInstantiate) return;
+          onAddDevice(model);
+        }}
+        className={`group flex items-center p-2 border rounded-lg transition-all ${
+          canInstantiate
+            ? 'bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 border-transparent hover:border-stone-200 dark:hover:border-stone-700 cursor-grab active:cursor-grabbing'
+            : 'bg-stone-100/60 dark:bg-stone-900/40 border-stone-200 dark:border-stone-800 opacity-60 cursor-not-allowed'
+        }`}
+      >
+        <div className={`w-8 h-8 rounded flex items-center justify-center mr-3 transition-colors border shadow-sm relative ${
+          canInstantiate
+            ? 'bg-white dark:bg-stone-800 group-hover:bg-sage-100 dark:group-hover:bg-stone-700 group-hover:text-sage-600 dark:group-hover:text-sage-400 border-stone-200 dark:border-stone-700'
+            : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-500'
+        }`}>
+          <i className={`fa-solid ${model.icon} text-xs`}></i>
+          {/* Image status indicator */}
+          <div className="absolute -top-0.5 -right-0.5">
+            {getImageStatusIndicator(status)}
+          </div>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className={`text-[11px] font-semibold truncate ${
+            canInstantiate
+              ? 'text-stone-700 dark:text-stone-200 group-hover:text-stone-900 dark:group-hover:text-white'
+              : 'text-stone-500 dark:text-stone-500'
+          }`}>{model.name}</div>
+          <div className="text-[9px] text-stone-400 dark:text-stone-500 font-medium truncate italic">{model.versions[0]}</div>
+        </div>
+        <div className={`transition-opacity ${canInstantiate ? 'opacity-0 group-hover:opacity-100' : 'opacity-30'}`}>
+          <i className={`fa-solid fa-plus-circle text-xs ${canInstantiate ? 'text-sage-500' : 'text-stone-400 dark:text-stone-600'}`}></i>
         </div>
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-[11px] font-semibold text-stone-700 dark:text-stone-200 truncate group-hover:text-stone-900 dark:group-hover:text-white">{model.name}</div>
-        <div className="text-[9px] text-stone-400 dark:text-stone-500 font-medium truncate italic">{model.versions[0]}</div>
-      </div>
-      <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-        <i className="fa-solid fa-plus-circle text-xs text-sage-500"></i>
-      </div>
-    </div>
-  );
+    );
+  };
 
   const annotationTools: { type: AnnotationType, icon: string, label: string }[] = [
     { type: 'text', icon: 'fa-font', label: 'Label' },

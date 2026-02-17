@@ -419,6 +419,50 @@ class TestLinkStateModel:
         assert link.actual_state == "unknown"
 
 
+class TestLinkEndpointReservationModel:
+    """Tests for LinkEndpointReservation model."""
+
+    def test_endpoint_reservation_unique_per_endpoint(self, test_db: Session, sample_lab: models.Lab):
+        """Only one desired-up link may reserve a given endpoint."""
+        link_a = models.LinkState(
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-r2:eth1",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="r2",
+            target_interface="eth1",
+        )
+        link_b = models.LinkState(
+            lab_id=sample_lab.id,
+            link_name="r1:eth1-r3:eth1",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="r3",
+            target_interface="eth1",
+        )
+        test_db.add_all([link_a, link_b])
+        test_db.commit()
+
+        res_a = models.LinkEndpointReservation(
+            lab_id=sample_lab.id,
+            link_state_id=link_a.id,
+            node_name="r1",
+            interface_name="eth1",
+        )
+        test_db.add(res_a)
+        test_db.commit()
+
+        res_b = models.LinkEndpointReservation(
+            lab_id=sample_lab.id,
+            link_state_id=link_b.id,
+            node_name="r1",
+            interface_name="eth1",
+        )
+        test_db.add(res_b)
+        with pytest.raises(IntegrityError):
+            test_db.commit()
+
+
 class TestImageHostModel:
     """Tests for ImageHost model."""
 

@@ -11,6 +11,8 @@ set -e
 # Options:
 #   --controller           Install controller (uses Docker Compose)
 #   --agent                Install agent (uses systemd)
+#   --install-observability-cron
+#                          Install host cron jobs for canary/report/drift checks
 #   --name NAME            Agent name (default: hostname)
 #   --controller-url URL   Controller URL for remote agents
 #   --ip IP                Local IP for VXLAN networking (auto-detected)
@@ -47,6 +49,7 @@ INSTALL_LIBVIRT=true
 INSTALL_LIBVIRT_PYTHON=false
 UNINSTALL=false
 FRESH_INSTALL=false
+INSTALL_OBSERVABILITY_CRON=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -57,6 +60,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --agent)
             INSTALL_AGENT=true
+            shift
+            ;;
+        --install-observability-cron)
+            INSTALL_OBSERVABILITY_CRON=true
             shift
             ;;
         --name)
@@ -117,6 +124,8 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --controller         Install controller (Docker Compose)"
             echo "  --agent              Install standalone agent (systemd)"
+            echo "  --install-observability-cron"
+            echo "                       Install host cron jobs for observability maintenance"
             echo "  --name NAME          Agent name (default: hostname)"
             echo "  --controller-url URL Controller URL for remote agents"
             echo "  --ip IP              Local IP for VXLAN (auto-detected)"
@@ -297,6 +306,9 @@ echo "OS:              $OS"
 echo "Local IP:        $LOCAL_IP"
 if [ "$INSTALL_CONTROLLER" = true ]; then
     echo "Controller:      YES (at $INSTALL_DIR)"
+    if [ "$INSTALL_OBSERVABILITY_CRON" = true ]; then
+        echo "Obs cron:        YES (host crontab)"
+    fi
 fi
 if [ "$INSTALL_AGENT" = true ]; then
     echo "Agent:           YES (name: $AGENT_NAME)"
@@ -555,8 +567,8 @@ EOF
     # Wait for API
     log_info "Waiting for API to be ready..."
     for i in {1..60}; do
-        if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-            break
+    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+        break
         fi
         sleep 2
     done
@@ -576,6 +588,20 @@ EOF
         done
     else
         log_warn "Controller may still be starting. Check: docker compose -f docker-compose.gui.yml logs"
+    fi
+
+    if [ "$INSTALL_OBSERVABILITY_CRON" = true ]; then
+        if [ -x "$INSTALL_DIR/scripts/install_observability_cron_nonprod.sh" ]; then
+            log_info "Installing observability cron entries (host user: $(whoami))..."
+            if (cd "$INSTALL_DIR" && ./scripts/install_observability_cron_nonprod.sh --apply); then
+                log_info "Observability cron entries installed"
+            else
+                log_warn "Failed to install observability cron entries automatically; run manually:"
+                log_warn "  cd $INSTALL_DIR && ./scripts/install_observability_cron_nonprod.sh --apply"
+            fi
+        else
+            log_warn "Observability cron installer not found at $INSTALL_DIR/scripts/install_observability_cron_nonprod.sh"
+        fi
     fi
 fi
 
@@ -690,7 +716,10 @@ if [ "$INSTALL_CONTROLLER" = true ]; then
     echo -e "${GREEN}Observability:${NC}"
     echo "  Grafana:    http://$LOCAL_IP:3000"
     echo "  Prometheus: http://$LOCAL_IP:9090"
-    echo "  API metrics: http://$LOCAL_IP:8000/metrics"
+echo "  API metrics: http://$LOCAL_IP:8000/metrics"
+    if [ "$INSTALL_OBSERVABILITY_CRON" = true ]; then
+        echo "  Cron:        installed in host user crontab ($(whoami))"
+    fi
     echo ""
     echo "  Logs:       cd $INSTALL_DIR && docker compose -f docker-compose.gui.yml logs -f"
     echo "  Restart:    cd $INSTALL_DIR && docker compose -f docker-compose.gui.yml restart"

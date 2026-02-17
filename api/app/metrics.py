@@ -187,6 +187,26 @@ if PROMETHEUS_AVAILABLE:
         ["endpoint", "old_state", "new_state", "reason", "is_cross_host"],
     )
 
+    link_endpoint_reservations_total = Gauge(
+        "archetype_link_endpoint_reservations_total",
+        "Total link endpoint reservation rows",
+    )
+
+    link_endpoint_reservation_missing = Gauge(
+        "archetype_link_endpoint_reservation_missing",
+        "Expected desired-up endpoint reservations missing from DB",
+    )
+
+    link_endpoint_reservation_orphaned = Gauge(
+        "archetype_link_endpoint_reservation_orphaned",
+        "Reservation rows not tied to desired-up links",
+    )
+
+    link_endpoint_reservation_conflicts = Gauge(
+        "archetype_link_endpoint_reservation_conflicts",
+        "Endpoints reserved by more than one link",
+    )
+
     # --- Database Metrics ---
 
     db_connections_idle_in_transaction = Gauge(
@@ -296,6 +316,10 @@ else:
     labs_total = DummyMetric()
     labs_active = DummyMetric()
     link_oper_transitions = DummyMetric()
+    link_endpoint_reservations_total = DummyMetric()
+    link_endpoint_reservation_missing = DummyMetric()
+    link_endpoint_reservation_orphaned = DummyMetric()
+    link_endpoint_reservation_conflicts = DummyMetric()
     db_connections_idle_in_transaction = DummyMetric()
     db_connections_total = DummyMetric()
     job_queue_depth = DummyMetric()
@@ -765,6 +789,22 @@ def record_link_oper_transition(
         reason=reason_label,
         is_cross_host="true" if is_cross_host else "false",
     ).inc()
+
+
+def set_link_endpoint_reservation_metrics(
+    *,
+    total: int,
+    missing: int,
+    orphaned: int,
+    conflicts: int,
+) -> None:
+    """Set gauges for link endpoint reservation health."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    link_endpoint_reservations_total.set(total)
+    link_endpoint_reservation_missing.set(missing)
+    link_endpoint_reservation_orphaned.set(orphaned)
+    link_endpoint_reservation_conflicts.set(conflicts)
 
 
 def record_reconciliation_cycle(

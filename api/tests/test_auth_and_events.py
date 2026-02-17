@@ -6,13 +6,11 @@ import pytest
 from fastapi import HTTPException
 
 from app import models
-from app.auth import hash_password
 from app.dependencies import require_admin_role, require_operator_role, require_super_admin_role
 from app.enums import GlobalRole
 from app.events.cleanup_events import CLEANUP_CHANNEL, CleanupEvent, CleanupEventType
 from app.events import publisher as events_publisher
 from app.services.audit import AuditService
-from app.services.auth_providers import LocalAuthProvider, OIDCAuthProvider
 
 
 class FakeRedisAsync:
@@ -24,6 +22,9 @@ class FakeRedisAsync:
         self.published.append((channel, payload))
 
     async def close(self):
+        self.closed = True
+
+    async def aclose(self):
         self.closed = True
 
 
@@ -106,75 +107,3 @@ def test_dependencies_require_roles():
 
     with pytest.raises(HTTPException):
         require_admin_role(operator)
-
-
-def test_local_auth_provider_authenticates(test_db):
-    user = models.User(
-        username="testuser",
-        email="testuser@example.com",
-        hashed_password=hash_password("secret"),
-        is_active=True,
-    )
-    test_db.add(user)
-    test_db.commit()
-
-    provider = LocalAuthProvider()
-    assert provider.authenticate(test_db, "TestUser", "secret") is not None
-    assert provider.authenticate(test_db, "testuser@example.com", "secret") is not None
-    assert provider.authenticate(test_db, "testuser", "wrong") is None
-
-
-def test_local_auth_provider_inactive_user(test_db):
-    user = models.User(
-        username="inactive",
-        email="inactive@example.com",
-        hashed_password=hash_password("secret"),
-        is_active=False,
-    )
-    test_db.add(user)
-    test_db.commit()
-
-    provider = LocalAuthProvider()
-    assert provider.authenticate(test_db, "inactive", "secret") is None
-
-
-def test_oidc_auth_provider_creates_user(test_db, monkeypatch):
-    provider = OIDCAuthProvider()
-    user = provider.on_external_login(
-        test_db,
-        {"email": "new@example.com", "preferred_username": "NewUser"},
-    )
-
-    assert user.email == "new@example.com"
-    assert user.username == "newuser"
-
-
-def test_oidc_auth_provider_username_collision(test_db):
-    existing = models.User(
-        username="collide",
-        email="first@example.com",
-        hashed_password=hash_password("secret"),
-        is_active=True,
-    )
-    test_db.add(existing)
-    test_db.commit()
-
-    provider = OIDCAuthProvider()
-    user = provider.on_external_login(
-        test_db,
-        {"email": "second@example.com", "preferred_username": "collide"},
-    )
-
-    assert user.username.startswith("collide_")
-    assert user.email == "second@example.com"
-
-
-def test_oidc_auth_provider_invalid_username_fallback(test_db):
-    provider = OIDCAuthProvider()
-    user = provider.on_external_login(
-        test_db,
-        {"email": "bad@example.com", "preferred_username": "1bad"},
-    )
-
-    assert user.username.startswith("user_")
-

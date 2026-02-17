@@ -35,6 +35,10 @@ from app.utils.http import require_lab_owner, raise_not_found, raise_unavailable
 from app.utils.link import generate_link_name
 from app.services.interface_naming import normalize_interface
 from app.services.link_operational_state import recompute_link_oper_state
+from app.services.link_reservations import (
+    get_conflicting_link_details,
+    sync_link_endpoint_reservations,
+)
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map, teardown_link
 from app.tasks.link_reconciliation import reconcile_lab_links
 from app.services import interface_mapping as interface_mapping_service
@@ -2281,6 +2285,9 @@ def _upsert_link_states(
             mutated_states.append(existing_state)
 
     for state in mutated_states:
+        ok, conflicts = sync_link_endpoint_reservations(database, state)
+        if not ok:
+            _raise_link_endpoint_conflict(database, state, conflicts)
         _sync_link_oper_state(database, state)
 
     return created_count, updated_count, added_link_names, removed_link_info
@@ -2301,6 +2308,59 @@ def _ensure_link_states_exist(
         # Ignore the added/removed info - this is just for ensuring records exist
         _upsert_link_states(database, lab_id, graph)
         database.commit()
+
+
+def _link_endpoint_payload(state: models.LinkState) -> list[dict[str, str]]:
+    return [
+        {
+            "node_name": state.source_node,
+            "interface_name": normalize_interface(state.source_interface or ""),
+        },
+        {
+            "node_name": state.target_node,
+            "interface_name": normalize_interface(state.target_interface or ""),
+        },
+    ]
+
+
+def _raise_link_endpoint_conflict(
+    database: Session,
+    state: models.LinkState,
+    conflicts: list[str],
+) -> None:
+    endpoints = _link_endpoint_payload(state)
+    conflict_details = get_conflicting_link_details(
+        database,
+        state.lab_id,
+        state.id,
+        [(endpoint["node_name"], endpoint["interface_name"]) for endpoint in endpoints],
+    )
+    all_conflicting_links = sorted(
+        {
+            link
+            for detail in conflict_details
+            for link in detail.get("conflicting_links", [])
+            if isinstance(link, str)
+        }
+    )
+    if not all_conflicting_links:
+        all_conflicting_links = sorted(conflicts)
+
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "link_endpoint_reserved",
+            "message": "Endpoint already reserved by desired-up link(s).",
+            "link": {
+                "lab_id": state.lab_id,
+                "link_name": state.link_name,
+                "desired_state": state.desired_state,
+                "endpoints": endpoints,
+            },
+            "conflicting_links": all_conflicting_links,
+            "conflicting_endpoints": conflict_details,
+        },
+    )
 
 
 @router.get("/labs/{lab_id}/links/states")
@@ -2389,6 +2449,10 @@ def set_link_state(
         raise_not_found(f"Link '{link_name}' not found")
 
     state.desired_state = payload.state
+    ok, conflicts = sync_link_endpoint_reservations(database, state)
+    if not ok:
+        database.rollback()
+        _raise_link_endpoint_conflict(database, state, conflicts)
     _sync_link_oper_state(database, state)
     database.commit()
     database.refresh(state)
@@ -2417,6 +2481,10 @@ def set_all_links_desired_state(
     )
     for state in states:
         state.desired_state = payload.state
+        ok, conflicts = sync_link_endpoint_reservations(database, state)
+        if not ok:
+            database.rollback()
+            _raise_link_endpoint_conflict(database, state, conflicts)
         _sync_link_oper_state(database, state)
     database.commit()
 

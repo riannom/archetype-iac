@@ -777,6 +777,71 @@ class TestLinkOrchestrationReliability:
         assert tunnels[0].vni == 2222
 
     @pytest.mark.asyncio
+    async def test_create_cross_host_link_refreshes_existing_tunnel_endpoints_after_host_swap(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+    ):
+        from app.tasks.link_orchestration import create_cross_host_link
+
+        link_state = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R3:eth1",
+            source_node="archetype-test-r1",
+            source_interface="eth1",
+            target_node="archetype-test-r3",
+            target_interface="eth1",
+            source_host_id=multiple_hosts[0].id,
+            target_host_id=multiple_hosts[1].id,
+            actual_state="pending",
+            is_cross_host=True,
+        )
+        test_db.add(link_state)
+        test_db.flush()
+
+        tunnel = models.VxlanTunnel(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_state_id=link_state.id,
+            vni=1111,
+            vlan_tag=0,
+            agent_a_id=multiple_hosts[0].id,
+            agent_a_ip="10.0.0.1",
+            agent_b_id=multiple_hosts[1].id,
+            agent_b_ip="10.0.0.2",
+            status="active",
+        )
+        test_db.add(tunnel)
+        test_db.commit()
+
+        # Simulate a host move: same endpoints, opposite host ownership.
+        link_state.source_host_id = multiple_hosts[1].id
+        link_state.target_host_id = multiple_hosts[0].id
+        test_db.commit()
+
+        host_to_agent = {h.id: h for h in multiple_hosts}
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
+            mock_client.setup_cross_host_link_v2 = AsyncMock(
+                return_value={"success": True, "vni": 3333}
+            )
+            mock_client.resolve_agent_ip = AsyncMock(
+                side_effect=lambda addr: addr.split(":")[0]
+            )
+
+            assert await create_cross_host_link(
+                test_db, sample_lab.id, link_state, host_to_agent, []
+            )
+
+        test_db.flush()
+        test_db.refresh(tunnel)
+        assert tunnel.agent_a_id == multiple_hosts[1].id
+        assert tunnel.agent_b_id == multiple_hosts[0].id
+        assert tunnel.agent_a_ip == "agent2.local"
+        assert tunnel.agent_b_ip == "agent1.local"
+        assert tunnel.vni == 3333
+
+    @pytest.mark.asyncio
     async def test_create_external_network_links_missing_managed_interface(
         self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
     ):

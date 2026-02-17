@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -650,3 +651,394 @@ class TestSyncJobs:
         )
         assert response.status_code == 400
         assert "cannot cancel" in response.json()["detail"].lower()
+
+
+class TestIolBuildManagement:
+    """Tests for IOL build status and retry endpoints."""
+
+    def test_get_iol_build_status(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """IOL build status should report built Docker image when present."""
+        iol_file = tmp_path / "i86bi-linux-l3.bin"
+        iol_file.write_bytes(b"fake-iol")
+        manifest = {
+            "images": [
+                {
+                    "id": "iol:i86bi-linux-l3.bin",
+                    "kind": "iol",
+                    "reference": str(iol_file),
+                    "filename": iol_file.name,
+                    "device_id": "iol-xe",
+                    "build_status": "building",
+                    "build_job_id": "rq-job-1",
+                }
+            ]
+        }
+
+        class _QueueStub:
+            def fetch_job(self, _job_id):
+                return None
+
+        from app.routers import images as images_router
+        from app.tasks import iol_build as iol_build_task
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
+        )
+        monkeypatch.setattr(iol_build_task, "get_iol_build_status", lambda _image_id: {
+            "built": True,
+            "docker_image_id": "docker:archetype/iol-xe:15.9",
+            "docker_reference": "archetype/iol-xe:15.9",
+        })
+        monkeypatch.setattr(images_router, "queue", _QueueStub())
+
+        response = test_client.get(
+            "/images/library/iol%3Ai86bi-linux-l3.bin/build-status",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["built"] is True
+        assert payload["status"] == "complete"
+        assert payload["docker_reference"] == "archetype/iol-xe:15.9"
+
+    def test_get_iol_build_status_prefers_active_queue_state(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Queue state should override stale manifest status for active builds."""
+        iol_file = tmp_path / "i86bi-linux-l2.bin"
+        iol_file.write_bytes(b"fake-iol")
+        manifest = {
+            "images": [
+                {
+                    "id": "iol:i86bi-linux-l2.bin",
+                    "kind": "iol",
+                    "reference": str(iol_file),
+                    "filename": iol_file.name,
+                    "device_id": "iol-l2",
+                    "build_status": "failed",
+                    "build_error": "old failure",
+                    "build_job_id": "rq-job-2",
+                }
+            ]
+        }
+
+        class _RQJobStub:
+            def get_status(self, refresh=True):  # noqa: ARG002
+                return "started"
+
+        class _QueueStub:
+            def fetch_job(self, _job_id):
+                return _RQJobStub()
+
+        from app.routers import images as images_router
+        from app.tasks import iol_build as iol_build_task
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
+        )
+        monkeypatch.setattr(iol_build_task, "get_iol_build_status", lambda _image_id: None)
+        monkeypatch.setattr(images_router, "queue", _QueueStub())
+
+        response = test_client.get(
+            "/images/library/iol%3Ai86bi-linux-l2.bin/build-status",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["built"] is False
+        assert payload["status"] == "building"
+
+    def test_retry_iol_build_enqueues_job(
+        self,
+        test_client: TestClient,
+        admin_auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Retry endpoint should enqueue a new IOL build and persist metadata."""
+        iol_file = tmp_path / "i86bi-linux-l3.bin"
+        iol_file.write_bytes(b"fake-iol")
+        manifest = {
+            "images": [
+                {
+                    "id": "iol:i86bi-linux-l3.bin",
+                    "kind": "iol",
+                    "reference": str(iol_file),
+                    "filename": iol_file.name,
+                    "device_id": "iol-xe",
+                }
+            ]
+        }
+        enqueue_calls: list[dict] = []
+
+        class _QueuedJob:
+            id = "rq-build-123"
+
+        class _QueueStub:
+            def fetch_job(self, _job_id):
+                return None
+
+            def enqueue(self, _func, **kwargs):
+                enqueue_calls.append(kwargs)
+                return _QueuedJob()
+
+        from app.routers import images as images_router
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(images_router, "save_manifest", lambda _manifest: None)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
+        )
+        monkeypatch.setattr(images_router, "queue", _QueueStub())
+
+        response = test_client.post(
+            "/images/library/iol%3Ai86bi-linux-l3.bin/retry-build",
+            headers=admin_auth_headers,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["build_job_id"] == "rq-build-123"
+        assert payload["build_status"] == "queued"
+        assert enqueue_calls
+        assert enqueue_calls[0]["iol_image_id"] == "iol:i86bi-linux-l3.bin"
+        assert manifest["images"][0]["build_job_id"] == "rq-build-123"
+
+    def test_retry_iol_build_rejects_active_job(
+        self,
+        test_client: TestClient,
+        admin_auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Retry should fail if an IOL build is already queued/running."""
+        iol_file = tmp_path / "i86bi-linux-l3.bin"
+        iol_file.write_bytes(b"fake-iol")
+        manifest = {
+            "images": [
+                {
+                    "id": "iol:i86bi-linux-l3.bin",
+                    "kind": "iol",
+                    "reference": str(iol_file),
+                    "filename": iol_file.name,
+                    "device_id": "iol-xe",
+                    "build_job_id": "rq-build-active",
+                }
+            ]
+        }
+
+        class _RQJobStub:
+            def get_status(self, refresh=True):  # noqa: ARG002
+                return "queued"
+
+        class _QueueStub:
+            def fetch_job(self, _job_id):
+                return _RQJobStub()
+
+        from app.routers import images as images_router
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
+        )
+        monkeypatch.setattr(images_router, "queue", _QueueStub())
+
+        response = test_client.post(
+            "/images/library/iol%3Ai86bi-linux-l3.bin/retry-build",
+            headers=admin_auth_headers,
+        )
+        assert response.status_code == 409
+
+    def test_ignore_iol_build_failure_marks_ignored(
+        self,
+        test_client: TestClient,
+        admin_auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Users can mark failed IOL builds as ignored from the UI."""
+        iol_file = tmp_path / "i86bi-linux-l3.bin"
+        iol_file.write_bytes(b"fake-iol")
+        manifest = {
+            "images": [
+                {
+                    "id": "iol:i86bi-linux-l3.bin",
+                    "kind": "iol",
+                    "reference": str(iol_file),
+                    "filename": iol_file.name,
+                    "device_id": "iol-xe",
+                    "build_status": "failed",
+                    "build_error": "build failed",
+                    "build_job_id": "rq-build-failed",
+                }
+            ]
+        }
+
+        class _RQJobStub:
+            def get_status(self, refresh=True):  # noqa: ARG002
+                return "failed"
+
+        class _QueueStub:
+            def fetch_job(self, _job_id):
+                return _RQJobStub()
+
+        from app.routers import images as images_router
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(images_router, "save_manifest", lambda _manifest: None)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
+        )
+        monkeypatch.setattr(images_router, "queue", _QueueStub())
+
+        response = test_client.post(
+            "/images/library/iol%3Ai86bi-linux-l3.bin/ignore-build-failure",
+            headers=admin_auth_headers,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["build_status"] == "ignored"
+        assert manifest["images"][0]["build_status"] == "ignored"
+        assert manifest["images"][0]["build_ignored_at"]
+        assert manifest["images"][0]["build_ignored_by"]
+
+    def test_get_iol_build_status_keeps_ignored_state(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Ignored build status should not be overwritten by stale failed queue status."""
+        iol_file = tmp_path / "i86bi-linux-l3.bin"
+        iol_file.write_bytes(b"fake-iol")
+        manifest = {
+            "images": [
+                {
+                    "id": "iol:i86bi-linux-l3.bin",
+                    "kind": "iol",
+                    "reference": str(iol_file),
+                    "filename": iol_file.name,
+                    "device_id": "iol-xe",
+                    "build_status": "ignored",
+                    "build_job_id": "rq-build-failed",
+                }
+            ]
+        }
+
+        class _RQJobStub:
+            exc_info = "Traceback: failed"
+
+            def get_status(self, refresh=True):  # noqa: ARG002
+                return "failed"
+
+        class _QueueStub:
+            def fetch_job(self, _job_id):
+                return _RQJobStub()
+
+        from app.routers import images as images_router
+        from app.tasks import iol_build as iol_build_task
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
+        )
+        monkeypatch.setattr(iol_build_task, "get_iol_build_status", lambda _image_id: None)
+        monkeypatch.setattr(images_router, "queue", _QueueStub())
+
+        response = test_client.get(
+            "/images/library/iol%3Ai86bi-linux-l3.bin/build-status",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ignored"
+        assert "failed" in payload["build_error"]
+
+    def test_get_iol_build_diagnostics_includes_queue_job_data(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Diagnostics endpoint should expose queue metadata and traceback tail."""
+        iol_file = tmp_path / "i86bi-linux-l3.bin"
+        iol_file.write_bytes(b"fake-iol")
+        manifest = {
+            "images": [
+                {
+                    "id": "iol:i86bi-linux-l3.bin",
+                    "kind": "iol",
+                    "reference": str(iol_file),
+                    "filename": iol_file.name,
+                    "device_id": "iol-xe",
+                    "build_status": "failed",
+                    "build_error": "build failed",
+                    "build_job_id": "rq-build-failed",
+                }
+            ]
+        }
+        now = datetime.now(timezone.utc)
+
+        class _RQJobStub:
+            created_at = now
+            enqueued_at = now
+            started_at = now
+            ended_at = now
+            last_heartbeat = now
+            result = {"success": False}
+            exc_info = "Traceback (most recent call last):\nValueError: invalid ELF header"
+
+            def get_status(self, refresh=True):  # noqa: ARG002
+                return "failed"
+
+        class _QueueStub:
+            def fetch_job(self, _job_id):
+                return _RQJobStub()
+
+        from app.routers import images as images_router
+        from app.tasks import iol_build as iol_build_task
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
+        )
+        monkeypatch.setattr(iol_build_task, "get_iol_build_status", lambda _image_id: None)
+        monkeypatch.setattr(images_router, "queue", _QueueStub())
+
+        response = test_client.get(
+            "/images/library/iol%3Ai86bi-linux-l3.bin/build-diagnostics",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "failed"
+        assert payload["queue_job"]["id"] == "rq-build-failed"
+        assert payload["queue_job"]["status"] == "failed"
+        assert "invalid ELF header" in payload["queue_job"]["error_log"]

@@ -11,10 +11,12 @@ LOG_FILE="${LOG_FILE:-$ROOT_DIR/reports/observability/cron.log}"
 
 ENTRY="$SCHEDULE cd $ROOT_DIR && $PYTHON_BIN scripts/observability_canary.py --apply --window 30m >> $LOG_FILE 2>&1"
 ENTRY_DB="15 */6 * * * cd $ROOT_DIR && ./scripts/observability_db_report.sh 30 >> $LOG_FILE 2>&1"
+ENTRY_DRIFT="30 2 * * * cd $ROOT_DIR && ./scripts/link_reservation_drift_check.sh >> $LOG_FILE 2>&1"
 
 echo "# Proposed cron entries:"
 echo "$ENTRY"
 echo "$ENTRY_DB"
+echo "$ENTRY_DRIFT"
 
 if [[ "${1:-}" != "--apply" ]]; then
   echo
@@ -31,6 +33,9 @@ if ! grep -Fq "$ENTRY" "$TMP_CRON"; then
 fi
 if ! grep -Fq "$ENTRY_DB" "$TMP_CRON"; then
   echo "$ENTRY_DB" >> "$TMP_CRON"
+fi
+if ! grep -Fq "$ENTRY_DRIFT" "$TMP_CRON"; then
+  echo "$ENTRY_DRIFT" >> "$TMP_CRON"
 fi
 
 crontab "$TMP_CRON"

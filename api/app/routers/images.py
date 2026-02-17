@@ -892,7 +892,7 @@ def upload_qcow2(
 def upload_iol(
     file: UploadFile = File(...),
     current_user: models.User = Depends(get_current_admin),
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Upload an IOL binary and automatically build a Docker image.
 
     IOL (IOS on Linux) binaries are raw Linux ELF executables. This endpoint
@@ -951,24 +951,13 @@ def upload_iol(
         size_bytes=file_size,
     )
     manifest["images"].append(entry)
-    save_manifest(manifest)
 
     result = {"path": str(destination), "filename": destination.name, "device_id": device_id}
 
-    # Trigger async Docker image build
-    from app.tasks.iol_build import build_iol_image
-    job = queue.enqueue(
-        build_iol_image,
-        iol_path=str(destination),
-        device_id=device_id,
-        version=version,
-        iol_image_id=image_id,
-        job_timeout=600,  # 10 minutes
-        result_ttl=3600, failure_ttl=86400,
-    )
-    result["build_job_id"] = job.id
-    result["build_status"] = "queued"
-    result["message"] = f"Building Docker image for {device_id}"
+    # Trigger async Docker image build and persist queue metadata on the source IOL entry.
+    build_result = _enqueue_iol_build_job(manifest, entry)
+    save_manifest(manifest)
+    result.update(build_result)
 
     return result
 
@@ -1082,14 +1071,161 @@ def trigger_docker_build(
     }
 
 
+def _normalize_rq_build_status(raw_status: str | None) -> str | None:
+    """Map RQ job statuses to UI-friendly build states."""
+    if not raw_status:
+        return None
+    status = raw_status.lower()
+    if status in {"queued", "deferred", "scheduled"}:
+        return "queued"
+    if status == "started":
+        return "building"
+    if status in {"failed", "stopped", "canceled"}:
+        return "failed"
+    if status == "finished":
+        return "complete"
+    return None
+
+
+def _to_iso8601(value: object | None) -> str | None:
+    """Serialize datetime-like values to ISO8601 strings."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "isoformat"):
+        try:
+            return str(value.isoformat()).replace("+00:00", "Z")  # type: ignore[attr-defined]
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _tail_text(value: object | None, max_chars: int = 8000) -> str | None:
+    """Return the last chunk of text for large log/traceback fields."""
+    if value is None:
+        return None
+    text = str(value)
+    return text[-max_chars:] if len(text) > max_chars else text
+
+
+def _enqueue_iol_build_job(
+    manifest: dict,
+    image: dict,
+    *,
+    force_rebuild: bool = False,
+    reject_if_active: bool = False,
+) -> dict[str, object]:
+    """Queue an IOL Docker build and update manifest metadata."""
+    if image.get("kind") != "iol":
+        raise HTTPException(status_code=400, detail="Only iol images can use IOL build jobs")
+
+    iol_ref = image.get("reference")
+    iol_file = Path(iol_ref) if isinstance(iol_ref, str) else None
+    if not iol_file or not iol_file.exists():
+        raise HTTPException(status_code=400, detail="IOL file not found on disk")
+
+    device_id = image.get("device_id") or detect_iol_device_type(image.get("filename", iol_file.name))
+    if not device_id:
+        raise HTTPException(status_code=400, detail="Could not determine IOL device type")
+
+    if reject_if_active and image.get("build_job_id"):
+        existing_job = queue.fetch_job(str(image["build_job_id"]))
+        if existing_job:
+            normalized = _normalize_rq_build_status(existing_job.get_status(refresh=True))
+            if normalized in {"queued", "building"}:
+                raise HTTPException(status_code=409, detail="IOL build is already in progress")
+
+    from app.tasks.iol_build import build_iol_image
+
+    enqueue_kwargs = {
+        "iol_path": str(iol_file),
+        "device_id": device_id,
+        "version": image.get("version"),
+        "iol_image_id": image.get("id"),
+    }
+    if force_rebuild:
+        enqueue_kwargs["force_rebuild"] = True
+
+    job = queue.enqueue(
+        build_iol_image,
+        **enqueue_kwargs,
+        job_timeout=600,  # 10 minutes
+        result_ttl=3600, failure_ttl=86400,
+    )
+
+    image["device_id"] = device_id
+    image["build_job_id"] = job.id
+    image["build_status"] = "queued"
+    image["build_requested_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    image.pop("build_error", None)
+    image.pop("build_ignored_at", None)
+    image.pop("build_ignored_by", None)
+
+    return {
+        "build_job_id": job.id,
+        "build_status": "queued",
+        "message": f"Building Docker image for {device_id}",
+        "device_id": device_id,
+    }
+
+
+def _get_iol_build_status(
+    image_id: str,
+    image: dict,
+) -> dict[str, object]:
+    """Return detailed build status for an IOL source image."""
+    from app.tasks.iol_build import get_iol_build_status
+
+    built_status = get_iol_build_status(image_id)
+    build_job_id = image.get("build_job_id")
+    build_error = image.get("build_error")
+    manifest_status = str(image.get("build_status") or "").strip().lower() or None
+    status = "complete" if built_status else (manifest_status or "not_started")
+    rq_status = None
+
+    if build_job_id:
+        rq_job = queue.fetch_job(str(build_job_id))
+        if rq_job:
+            rq_status = rq_job.get_status(refresh=True)
+            mapped = _normalize_rq_build_status(rq_status)
+            # Prefer active/failed queue state over stale manifest status.
+            if mapped in {"queued", "building"}:
+                status = mapped
+            elif mapped == "failed" and manifest_status != "ignored":
+                status = mapped
+            elif mapped == "complete" and status == "not_started":
+                status = mapped
+            if mapped == "failed" and not build_error and rq_job.exc_info:
+                build_error = str(rq_job.exc_info).splitlines()[-1][-500:]
+
+    iol_ref = image.get("reference")
+    buildable = bool(iol_ref and Path(iol_ref).exists())
+
+    return {
+        "built": bool(built_status),
+        "buildable": buildable,
+        "status": status,
+        "build_status": status,
+        "build_error": build_error,
+        "build_job_id": build_job_id,
+        "rq_status": rq_status,
+        "build_ignored_at": image.get("build_ignored_at"),
+        "build_ignored_by": image.get("build_ignored_by"),
+        "docker_image_id": built_status.get("docker_image_id") if built_status else None,
+        "docker_reference": built_status.get("docker_reference") if built_status else None,
+    }
+
+
 @router.get("/library/{image_id}/build-status")
 def get_docker_build_status(
     image_id: str,
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
-    """Check if a Docker image has been built from a qcow2 image.
+    """Check Docker build status for qcow2 or IOL source images.
 
-    Returns build status and the Docker image reference if built.
+    For qcow2 sources, returns whether a vrnetlab image has been built.
+    For IOL sources, returns queue-backed build status and built image details.
     """
     from urllib.parse import unquote
     from app.tasks.vrnetlab_build import get_build_status
@@ -1102,11 +1238,11 @@ def get_docker_build_status(
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    if image.get("kind") != "qcow2":
-        raise HTTPException(
-            status_code=400,
-            detail="Build status only available for qcow2 images"
-        )
+    kind = image.get("kind")
+    if kind == "iol":
+        return _get_iol_build_status(image_id, image)
+    if kind != "qcow2":
+        raise HTTPException(status_code=400, detail="Build status only available for qcow2/iol images")
 
     status = get_build_status(image_id)
     if status:
@@ -1122,6 +1258,140 @@ def get_docker_build_status(
         "device_id": vrnetlab_device_id,
         "vrnetlab_path": vrnetlab_path,
     }
+
+
+@router.get("/library/{image_id}/build-diagnostics")
+def get_iol_build_diagnostics(
+    image_id: str,
+    current_user: models.User = Depends(get_current_user),
+) -> dict[str, object]:
+    """Return queue diagnostics for an IOL build job."""
+    from urllib.parse import unquote
+
+    image_id = unquote(image_id)
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if image.get("kind") != "iol":
+        raise HTTPException(status_code=400, detail="Build diagnostics are only available for iol images")
+
+    build_status = _get_iol_build_status(image_id, image)
+    build_job_id = build_status.get("build_job_id")
+
+    queue_job: dict[str, object] | None = None
+    if build_job_id:
+        rq_job = queue.fetch_job(str(build_job_id))
+        if rq_job:
+            result_value = getattr(rq_job, "result", None)
+            if not isinstance(result_value, (dict, list, str, int, float, bool)) and result_value is not None:
+                result_value = str(result_value)
+            queue_job = {
+                "id": str(build_job_id),
+                "status": _normalize_rq_build_status(rq_job.get_status(refresh=True)) or rq_job.get_status(),
+                "created_at": _to_iso8601(getattr(rq_job, "created_at", None)),
+                "enqueued_at": _to_iso8601(getattr(rq_job, "enqueued_at", None)),
+                "started_at": _to_iso8601(getattr(rq_job, "started_at", None)),
+                "ended_at": _to_iso8601(getattr(rq_job, "ended_at", None)),
+                "last_heartbeat": _to_iso8601(getattr(rq_job, "last_heartbeat", None)),
+                "result": result_value,
+                "error_log": _tail_text(getattr(rq_job, "exc_info", None)),
+            }
+
+    recommended_action = None
+    if build_status.get("status") == "failed":
+        recommended_action = (
+            "Retry the build. If it still fails with the same error, use Force rebuild "
+            "or verify the IOL binary and host Docker capacity."
+        )
+    elif build_status.get("status") == "ignored":
+        recommended_action = "This failure is currently ignored. Use Retry to re-enable active build tracking."
+
+    return {
+        "image_id": image_id,
+        "filename": image.get("filename"),
+        "reference": image.get("reference"),
+        "built": bool(build_status.get("built")),
+        "buildable": bool(build_status.get("buildable")),
+        "status": build_status.get("status"),
+        "build_status": build_status.get("build_status"),
+        "build_error": build_status.get("build_error"),
+        "build_job_id": build_status.get("build_job_id"),
+        "rq_status": build_status.get("rq_status"),
+        "build_ignored_at": build_status.get("build_ignored_at"),
+        "build_ignored_by": build_status.get("build_ignored_by"),
+        "docker_image_id": build_status.get("docker_image_id"),
+        "docker_reference": build_status.get("docker_reference"),
+        "queue_job": queue_job,
+        "recommended_action": recommended_action,
+    }
+
+
+@router.post("/library/{image_id}/ignore-build-failure")
+def ignore_iol_build_failure(
+    image_id: str,
+    current_user: models.User = Depends(get_current_admin),
+) -> dict[str, object]:
+    """Mark a failed IOL build as ignored so users can manage noise themselves."""
+    from urllib.parse import unquote
+
+    image_id = unquote(image_id)
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if image.get("kind") != "iol":
+        raise HTTPException(status_code=400, detail="Ignore build failure is only available for iol images")
+
+    if image.get("build_job_id"):
+        existing_job = queue.fetch_job(str(image["build_job_id"]))
+        if existing_job:
+            normalized = _normalize_rq_build_status(existing_job.get_status(refresh=True))
+            if normalized in {"queued", "building"}:
+                raise HTTPException(status_code=409, detail="Cannot ignore an IOL build while it is in progress")
+
+    image["build_status"] = "ignored"
+    image["build_ignored_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    image["build_ignored_by"] = getattr(current_user, "username", None) or str(current_user.id)
+    save_manifest(manifest)
+
+    return {
+        "image_id": image_id,
+        "build_status": "ignored",
+        "message": "IOL build failure marked as ignored",
+        "build_ignored_at": image["build_ignored_at"],
+        "build_ignored_by": image["build_ignored_by"],
+    }
+
+
+@router.post("/library/{image_id}/retry-build")
+def retry_iol_build(
+    image_id: str,
+    force_rebuild: bool = Query(default=False, description="Force rebuild even if Docker image exists"),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict[str, object]:
+    """Retry an IOL Docker build for a raw IOL source image."""
+    from urllib.parse import unquote
+
+    image_id = unquote(image_id)
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if image.get("kind") != "iol":
+        raise HTTPException(status_code=400, detail="Retry build is only available for iol images")
+
+    result = _enqueue_iol_build_job(
+        manifest,
+        image,
+        force_rebuild=force_rebuild,
+        reject_if_active=True,
+    )
+    save_manifest(manifest)
+    return result
 
 
 @router.get("/qcow2")

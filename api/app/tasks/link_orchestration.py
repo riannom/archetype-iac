@@ -804,6 +804,14 @@ async def create_cross_host_link(
             )
             session.add(tunnel)
         else:
+            # Refresh endpoint ownership on every reconcile/recreate.
+            # Host placement can change after node migration, restart recovery,
+            # or split-brain cleanup; stale agent IDs here will misdirect
+            # declare-state convergence to the wrong host.
+            existing_tunnel.agent_a_id = agent_a.id
+            existing_tunnel.agent_a_ip = agent_ip_a
+            existing_tunnel.agent_b_id = agent_b.id
+            existing_tunnel.agent_b_ip = agent_ip_b
             existing_tunnel.vni = vni
             existing_tunnel.status = "active"
             if not existing_tunnel.port_name:

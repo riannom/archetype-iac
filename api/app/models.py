@@ -370,6 +370,28 @@ class LinkState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class LinkEndpointReservation(Base):
+    """Reserves normalized link endpoints for strict 1:1 wire semantics.
+
+    A reservation exists while a link is desired "up", including pending links.
+    The unique constraint on (lab_id, node_name, interface_name) prevents an
+    endpoint from being claimed by more than one LinkState at a time.
+    """
+    __tablename__ = "link_endpoint_reservations"
+    __table_args__ = (
+        UniqueConstraint("lab_id", "node_name", "interface_name", name="uq_link_endpoint_reservation_endpoint"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+    link_state_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("link_states.id", ondelete="CASCADE"), index=True
+    )
+    node_name: Mapped[str] = mapped_column(String(100))
+    interface_name: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class VxlanTunnel(Base):
     """Tracks VXLAN tunnels for cross-host links.
 

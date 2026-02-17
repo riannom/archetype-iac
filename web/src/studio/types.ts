@@ -106,6 +106,13 @@ export interface ImageLibraryEntry {
   compatible_devices?: string[];
   source?: string | null; // Import source (e.g., ISO filename)
   sha256?: string | null; // SHA256 checksum for integrity verification
+  build_status?: string | null; // queued, building, complete, failed, ignored (IOL source images)
+  build_error?: string | null; // Build error for IOL source images
+  build_job_id?: string | null; // Background job ID for image build
+  built_from?: string | null; // Source image ID for derived Docker images
+  build_requested_at?: string | null;
+  build_ignored_at?: string | null;
+  build_ignored_by?: string | null;
   // Sync status across agents (populated by API)
   host_status?: ImageHostStatus[];
 }

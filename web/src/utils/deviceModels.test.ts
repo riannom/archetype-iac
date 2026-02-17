@@ -1,4 +1,11 @@
-import { buildDeviceModels, enrichDeviceCategories, flattenVendorCategories, isInstantiableImageKind } from './deviceModels';
+import {
+  buildDeviceModels,
+  enrichDeviceCategories,
+  flattenVendorCategories,
+  getAllowedInstantiableImageKinds,
+  isInstantiableImageKind,
+  requiresRunnableImage,
+} from './deviceModels';
 import { DeviceType } from '../studio/types';
 
 const vendorCategories = [
@@ -55,6 +62,23 @@ describe('deviceModels', () => {
     expect(isInstantiableImageKind('docker')).toBe(true);
     expect(isInstantiableImageKind('qcow2')).toBe(true);
     expect(isInstantiableImageKind('iol')).toBe(false);
+  });
+
+  it('does not infer docker/qcow2 fallback when supportedImageKinds is explicitly non-instantiable', () => {
+    const allowed = getAllowedInstantiableImageKinds({ supportedImageKinds: ['iol'] });
+    expect(Array.from(allowed)).toEqual([]);
+  });
+
+  it('treats iol-tagged devices as requiring runnable images even if requiresImage is missing', () => {
+    expect(
+      requiresRunnableImage({
+        id: 'iol-xe',
+        kind: 'iol-xe',
+        tags: ['router', 'iol'],
+        requiresImage: undefined,
+        supportedImageKinds: ['iol'],
+      })
+    ).toBe(true);
   });
 
   it('enriches categories and adds Other', () => {

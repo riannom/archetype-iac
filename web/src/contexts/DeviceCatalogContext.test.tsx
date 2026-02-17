@@ -32,13 +32,13 @@ vi.mock('../studio/utils/interfaceRegistry', () => ({
 }));
 
 function Consumer() {
-  const { loading, vendorCategories, imageCatalog } = useDeviceCatalog();
+  const { loading, vendorCategories } = useDeviceCatalog();
   if (loading) {
     return <div>loading</div>;
   }
   return (
     <div>
-      vendors:{vendorCategories.length}-images:{Object.keys(imageCatalog).length}
+      vendors:{vendorCategories.length}
     </div>
   );
 }
@@ -52,13 +52,10 @@ describe('DeviceCatalogContext', () => {
     enrichDeviceCategories.mockReset();
   });
 
-  it('fetches vendor and image catalog data', async () => {
+  it('fetches vendor data', async () => {
     apiRequest.mockImplementation(async (path: string) => {
       if (path === '/vendors') {
         return [{ name: 'Compute', models: [{ id: 'linux' }] }];
-      }
-      if (path === '/images') {
-        return { images: { linux: { clab: 'linux:latest' } } };
       }
       return null;
     });
@@ -82,7 +79,7 @@ describe('DeviceCatalogContext', () => {
       </DeviceCatalogProvider>
     );
 
-    await waitFor(() => expect(screen.getByText('vendors:1-images:1')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('vendors:1')).toBeInTheDocument());
     expect(refreshImageLibrary).toHaveBeenCalledTimes(1);
     expect(initializePatterns).toHaveBeenCalledTimes(1);
   });
@@ -98,6 +95,6 @@ describe('DeviceCatalogContext', () => {
       </DeviceCatalogProvider>
     );
 
-    await waitFor(() => expect(screen.getByText('vendors:0-images:0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('vendors:0')).toBeInTheDocument());
   });
 });

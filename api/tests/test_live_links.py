@@ -172,6 +172,90 @@ async def test_create_link_if_ready_same_host_success(test_db, sample_lab, sampl
 
 
 @pytest.mark.asyncio
+async def test_create_link_if_ready_rejects_endpoint_conflict(
+    test_db,
+    sample_lab,
+    sample_host,
+    monkeypatch,
+) -> None:
+    existing = models.LinkState(
+        lab_id=sample_lab.id,
+        link_name="r1:Ethernet1-r3:eth1",
+        source_node="r1",
+        source_interface="Ethernet1",
+        target_node="r3",
+        target_interface="eth1",
+        desired_state="up",
+        actual_state="up",
+    )
+    requested = models.LinkState(
+        lab_id=sample_lab.id,
+        link_name="r1:eth1-r2:eth1",
+        source_node="r1",
+        source_interface="eth1",
+        target_node="r2",
+        target_interface="eth1",
+        desired_state="up",
+        actual_state="unknown",
+    )
+    test_db.add(existing)
+    test_db.add(requested)
+
+    test_db.add(
+        models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="r1",
+            node_name="r1",
+            desired_state="running",
+            actual_state="running",
+        )
+    )
+    test_db.add(
+        models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="r2",
+            node_name="r2",
+            desired_state="running",
+            actual_state="running",
+        )
+    )
+    test_db.commit()
+
+    called = {"same_host": False}
+
+    monkeypatch.setattr(
+        "app.tasks.live_links.lookup_endpoint_hosts",
+        lambda session, link_state: (sample_host.id, sample_host.id),
+    )
+
+    async def fake_same_host(*args, **kwargs):
+        called["same_host"] = True
+        return True
+
+    monkeypatch.setattr("app.tasks.live_links.create_same_host_link", fake_same_host)
+
+    ok = await live_links.create_link_if_ready(
+        test_db,
+        sample_lab.id,
+        requested,
+        host_to_agent={sample_host.id: sample_host},
+    )
+
+    assert not ok
+    assert called["same_host"] is False
+
+    updated = (
+        test_db.query(models.LinkState)
+        .filter(models.LinkState.id == requested.id)
+        .first()
+    )
+    assert updated is not None
+    assert updated.actual_state == "error"
+    assert "Endpoint already in use" in (updated.error_message or "")
+    assert existing.link_name in (updated.error_message or "")
+
+
+@pytest.mark.asyncio
 async def test_teardown_link_updates_persisted_state_same_host(
     test_db,
     sample_lab,

@@ -11,13 +11,15 @@ import os
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app import db, models
+from app.auth import get_current_admin
 from app.config import settings
 from app.schemas import LoginDefaultsOut, UpdateInfo, VersionInfo
+from app.services.link_reservations import get_link_endpoint_reservation_health_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +209,22 @@ def get_login_defaults(database: Session = Depends(db.get_db)) -> LoginDefaultsO
         light_background_id=settings_row.login_light_background_id,
         light_background_opacity=settings_row.login_light_background_opacity,
     )
+
+
+@router.get("/link-reservations/health")
+def get_link_reservations_health(
+    sample_limit: int = Query(
+        20,
+        ge=1,
+        le=200,
+        description="Maximum sample rows per drift category",
+    ),
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Return DB-backed health snapshot for link endpoint reservations."""
+    _ = current_user
+    return get_link_endpoint_reservation_health_snapshot(database, sample_limit=sample_limit)
 
 
 def _compare_versions(v1: str, v2: str) -> int:

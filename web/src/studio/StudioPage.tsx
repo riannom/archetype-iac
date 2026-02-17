@@ -30,7 +30,12 @@ import { useNotifications } from '../contexts/NotificationContext';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
 import { downloadBlob } from '../utils/download';
 import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
-import { getImageDeviceIds, isInstantiableImageKind } from '../utils/deviceModels';
+import {
+  getAllowedInstantiableImageKinds,
+  getImageDeviceIds,
+  isInstantiableImageKind,
+  requiresRunnableImage,
+} from '../utils/deviceModels';
 import './studio.css';
 import 'xterm/css/xterm.css';
 
@@ -207,7 +212,7 @@ const StudioPage: React.FC = () => {
   const { user, refreshUser, clearUser } = useUser();
   const { addNotification, preferences } = useNotifications();
   const { imageLibrary } = useImageLibrary();
-  const { deviceModels, deviceCategories, imageCatalog, refresh: refreshDeviceCatalog } = useDeviceCatalog();
+  const { deviceModels, deviceCategories, refresh: refreshDeviceCatalog } = useDeviceCatalog();
   const showAdminStrip = canViewInfrastructure(user ?? null);
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
@@ -1077,10 +1082,7 @@ const StudioPage: React.FC = () => {
   };
 
   const hasInstantiableImageForModel = useCallback((model: DeviceModel): boolean => {
-    const supportedKinds = model.supportedImageKinds
-      ?.map((kind) => (kind || '').toLowerCase())
-      .filter((kind) => isInstantiableImageKind(kind));
-    const allowedKinds = new Set((supportedKinds && supportedKinds.length > 0) ? supportedKinds : ['docker', 'qcow2']);
+    const allowedKinds = getAllowedInstantiableImageKinds(model);
 
     const modelId = (model.id || '').toLowerCase();
     const modelKind = (model.kind || '').toLowerCase();
@@ -1103,7 +1105,7 @@ const StudioPage: React.FC = () => {
   }, [imageLibrary]);
 
   const handleAddDevice = (model: DeviceModel, x?: number, y?: number) => {
-    if (model.requiresImage && !hasInstantiableImageForModel(model)) {
+    if (requiresRunnableImage(model) && !hasInstantiableImageForModel(model)) {
       addNotification(
         'warning',
         'No runnable image assigned',

@@ -1,7 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import FilterChip from './FilterChip';
 import { DeviceModel, ImageLibraryEntry } from '../types';
-import { getImageDeviceIds, isInstantiableImageKind } from '../../utils/deviceModels';
+import {
+  getAllowedInstantiableImageKinds,
+  getImageDeviceIds,
+  isInstantiableImageKind,
+} from '../../utils/deviceModels';
 
 export type ImageStatus = 'all' | 'has_image' | 'has_default' | 'no_image';
 
@@ -82,10 +86,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
     });
 
     devices.forEach((device) => {
-      const supportedKinds = device.supportedImageKinds
-        ?.map((kind) => kind.toLowerCase())
-        .filter((kind) => isInstantiableImageKind(kind));
-      const allowedKinds = new Set((supportedKinds && supportedKinds.length > 0) ? supportedKinds : ['docker', 'qcow2']);
+      const allowedKinds = getAllowedInstantiableImageKinds(device);
       const info = deviceImageMap.get(device.id);
       const hasDefault = info ? Array.from(allowedKinds).some((kind) => info.defaultKinds.has(kind)) : false;
       const hasImage = info ? Array.from(allowedKinds).some((kind) => info.imageKinds.has(kind)) : false;

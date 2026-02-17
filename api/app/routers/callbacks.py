@@ -25,6 +25,7 @@ from app.utils.lab import update_lab_state
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map
 from app.services.link_operational_state import recompute_link_oper_state
 from app.services.broadcaster import get_broadcaster
+from app.services.interface_naming import normalize_interface
 
 logger = logging.getLogger(__name__)
 
@@ -351,21 +352,33 @@ async def carrier_state_changed(
         lab_id, node, interface, carrier,
     )
 
-    # Find the LinkState where this node:interface is either source or target
-    link_state = (
+    normalized_interface = normalize_interface(interface) if interface else interface
+
+    # Find the LinkState where this node:interface is either source or target.
+    # Match on normalized interface names to handle vendor-form vs ethN drift.
+    candidates = (
         database.query(models.LinkState)
         .filter(
             models.LinkState.lab_id == lab_id,
             (
                 (models.LinkState.source_node == node)
-                & (models.LinkState.source_interface == interface)
-            )
-            | (
-                (models.LinkState.target_node == node)
-                & (models.LinkState.target_interface == interface)
+                | (models.LinkState.target_node == node)
             ),
         )
-        .first()
+        .all()
+    )
+    link_state = next(
+        (
+            ls for ls in candidates
+            if (
+                ls.source_node == node
+                and normalize_interface(ls.source_interface) == normalized_interface
+            ) or (
+                ls.target_node == node
+                and normalize_interface(ls.target_interface) == normalized_interface
+            )
+        ),
+        None,
     )
 
     if not link_state:
@@ -377,7 +390,7 @@ async def carrier_state_changed(
     # Determine which side matched and update carrier_state
     is_source = (
         link_state.source_node == node
-        and link_state.source_interface == interface
+        and normalize_interface(link_state.source_interface) == normalized_interface
     )
 
     if is_source:

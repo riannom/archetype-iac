@@ -14,7 +14,7 @@ faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
@@ -29,7 +29,6 @@ from starlette.routing import Route
 from app import db, models
 from app.config import settings
 from app.auth import get_current_user, hash_password
-from app.catalog import list_devices as catalog_devices, list_images as catalog_images
 from app.logging_config import (
     correlation_id_var,
     generate_correlation_id,
@@ -328,32 +327,6 @@ def metrics(database: Session = Depends(db.get_db)):
 
     content, content_type = get_metrics()
     return Response(content=content, media_type=content_type)
-
-
-@app.get("/devices", deprecated=True)
-def list_devices() -> dict[str, object]:
-    """List devices from netlab CLI.
-
-    DEPRECATED: Use GET /vendors instead. This endpoint requires netlab CLI
-    to be installed and is kept for backward compatibility only.
-    """
-    data = catalog_devices()
-    if data.get("error"):
-        raise HTTPException(status_code=500, detail=data["error"])
-    return data
-
-
-@app.get("/images", deprecated=True)
-def list_images() -> dict[str, object]:
-    """List images from netlab CLI.
-
-    DEPRECATED: Use GET /images/library instead. This endpoint requires netlab CLI
-    to be installed and is kept for backward compatibility only.
-    """
-    data = catalog_images()
-    if data.get("error"):
-        raise HTTPException(status_code=500, detail=data["error"])
-    return data
 
 
 @app.get("/dashboard/metrics")

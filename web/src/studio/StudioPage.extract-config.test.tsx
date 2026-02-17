@@ -59,7 +59,6 @@ vi.mock('../contexts/ImageLibraryContext', () => ({
 vi.mock('../contexts/DeviceCatalogContext', () => ({
   useDeviceCatalog: () => ({
     vendorCategories: [],
-    imageCatalog: {},
     deviceModels: [],
     deviceCategories: [],
     addCustomDevice: vi.fn(),

@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent.plugins.builtin.arista import AristaPlugin
 import agent.providers.libvirt as libvirt_provider
 from agent.providers.base import NodeStatus
 
@@ -102,47 +101,6 @@ class FakeDocker:
     def __init__(self, networks: FakeNetworks, containers: FakeContainers) -> None:
         self.networks = networks
         self.containers = containers
-
-
-def test_arista_plugin_metadata_and_config() -> None:
-    plugin = AristaPlugin()
-    metadata = plugin.metadata
-    assert metadata.name == "arista"
-    assert metadata.version == "1.0.0"
-    assert metadata.description == "Support for Arista EOS devices"
-
-    configs = plugin.vendor_configs
-    assert len(configs) == 1
-    config = configs[0]
-    assert config.kind == "ceos"
-    assert config.vendor == "Arista"
-    assert config.port_naming == "Ethernet"
-    assert config.port_start_index == 1
-
-
-def test_arista_on_container_create_merges_env() -> None:
-    plugin = AristaPlugin()
-    base_config = {"environment": {"CEOS": "0", "CUSTOM": "1"}}
-    updated = plugin.on_container_create("ceos1", base_config)
-
-    env = updated["environment"]
-    assert env["CEOS"] == "0"
-    assert env["CUSTOM"] == "1"
-    assert env["EOS_PLATFORM"] == "ceoslab"
-    assert env["INTFTYPE"] == "eth"
-
-
-def test_arista_is_boot_ready_patterns() -> None:
-    plugin = AristaPlugin()
-    assert plugin.is_boot_ready("ceos1", "System ready") is True
-    assert plugin.is_boot_ready("ceos1", "Startup complete") is True
-    assert plugin.is_boot_ready("ceos1", "booting...") is False
-
-
-def test_arista_get_interface_name() -> None:
-    plugin = AristaPlugin()
-    config = plugin.vendor_configs[0]
-    assert plugin.get_interface_name(3, config) == "Ethernet3"
 
 
 @pytest.mark.asyncio
@@ -241,10 +199,10 @@ def test_libvirt_undefine_domain_falls_back_to_nvram(monkeypatch) -> None:
 def test_libvirt_allocate_vlans_reuse() -> None:
     provider = _make_libvirt_provider()
     vlans = provider._allocate_vlans("lab1", "node1", 3)
-    assert vlans == [2000, 2001, 2002]
+    assert vlans == [100, 101, 102]
 
     reused = provider._allocate_vlans("lab1", "node1", 2)
-    assert reused == [2000, 2001]
+    assert reused == [100, 101]
 
 
 def test_libvirt_translate_container_path_to_host(monkeypatch, tmp_path: Path) -> None:

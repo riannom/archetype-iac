@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
@@ -11,15 +11,14 @@ import ImageSyncProgress from '../components/ImageSyncProgress';
 import { ArchetypeIcon } from '../components/icons';
 import AdminMenuButton from '../components/AdminMenuButton';
 
-type TabType = 'devices' | 'images' | 'sync';
+type TabType = 'devices' | 'images' | 'build-jobs' | 'sync';
 
 const NodesPage: React.FC = () => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user, loading: userLoading } = useUser();
-  const { imageLibrary } = useImageLibrary();
+  const { imageLibrary, refreshImageLibrary } = useImageLibrary();
   const {
     deviceModels,
-    imageCatalog,
     addCustomDevice,
     removeCustomDevice,
     loading: catalogLoading,
@@ -33,6 +32,7 @@ const NodesPage: React.FC = () => {
   const getActiveTab = (): TabType => {
     if (location.pathname === '/nodes/images') return 'images';
     if (location.pathname === '/nodes/devices') return 'devices';
+    if (location.pathname === '/nodes/build-jobs') return 'build-jobs';
     if (location.pathname === '/nodes/sync') return 'sync';
     return 'devices'; // Default to devices tab
   };
@@ -48,6 +48,21 @@ const NodesPage: React.FC = () => {
     setActiveTab(tab);
     navigate(`/nodes/${tab}`);
   };
+
+  const pendingIolBuildCount = useMemo(() => {
+    const builtSourceIds = new Set(
+      imageLibrary
+        .filter((img) => (img.kind || '').toLowerCase() === 'docker' && img.built_from)
+        .map((img) => String(img.built_from))
+    );
+
+    return imageLibrary.filter((img) => {
+      if ((img.kind || '').toLowerCase() !== 'iol') return false;
+      if (builtSourceIds.has(img.id)) return false;
+      const status = String(img.build_status || '').toLowerCase();
+      return status !== 'complete' && status !== 'ignored';
+    }).length;
+  }, [imageLibrary]);
 
   // Build list of custom device IDs from deviceModels (those with vendor='custom' or isCustom=true)
   const customDevices = deviceModels
@@ -142,6 +157,25 @@ const NodesPage: React.FC = () => {
               Image Management
             </button>
             <button
+              onClick={() => handleTabChange('build-jobs')}
+              className={`px-6 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2 -mb-px ${
+                activeTab === 'build-jobs'
+                  ? 'text-sage-600 dark:text-sage-400 border-sage-600 dark:border-sage-400'
+                  : 'text-stone-500 dark:text-stone-400 border-transparent hover:text-stone-700 dark:hover:text-stone-300'
+              }`}
+            >
+              <i className="fa-solid fa-gears mr-2"></i>
+              Build Jobs
+              {pendingIolBuildCount > 0 && (
+                <span
+                  className="ml-2 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-amber-500 text-white text-[10px] px-1"
+                  aria-label={`${pendingIolBuildCount} pending IOL builds`}
+                >
+                  {pendingIolBuildCount}
+                </span>
+              )}
+            </button>
+            <button
               onClick={() => handleTabChange('sync')}
               className={`px-6 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2 -mb-px ${
                 activeTab === 'sync'
@@ -173,11 +207,19 @@ const NodesPage: React.FC = () => {
           ) : activeTab === 'images' ? (
             <DeviceManager
               deviceModels={deviceModels}
-              imageCatalog={imageCatalog}
               imageLibrary={imageLibrary}
               onUploadImage={refreshCatalog}
               onUploadQcow2={refreshCatalog}
               onRefresh={refreshCatalog}
+            />
+          ) : activeTab === 'build-jobs' ? (
+            <DeviceManager
+              deviceModels={deviceModels}
+              imageLibrary={imageLibrary}
+              onUploadImage={refreshImageLibrary}
+              onUploadQcow2={refreshImageLibrary}
+              onRefresh={refreshImageLibrary}
+              mode="build-jobs"
             />
           ) : (
             <div className="h-full overflow-auto p-6">

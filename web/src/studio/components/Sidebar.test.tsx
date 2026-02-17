@@ -288,6 +288,58 @@ describe("Sidebar", () => {
       expect(screen.queryByText("Arista cEOS")).not.toBeInTheDocument();
     });
 
+    it("does not allow adding IOL devices without runnable images even when visible", async () => {
+      const user = userEvent.setup();
+      const iolModel: DeviceModel = {
+        id: "iol-xe",
+        kind: "iol-xe",
+        name: "Cisco IOL XE",
+        type: DeviceType.ROUTER,
+        icon: "fa-microchip",
+        versions: ["17.16.01"],
+        isActive: true,
+        vendor: "Cisco",
+        // Simulate stale/missing requiresImage metadata.
+        requiresImage: false,
+        supportedImageKinds: ["iol"],
+      };
+      const categories = [{ name: "Network Devices", models: [iolModel] }];
+      const images = [
+        {
+          id: "img-iol",
+          device_id: "iol-xe",
+          kind: "iol",
+          reference: "x86_64_crb_linux-adventerprisek9-ms.iol",
+          is_default: false,
+        },
+      ];
+
+      render(
+        <Sidebar
+          categories={categories}
+          imageLibrary={images}
+          onAddDevice={mockOnAddDevice}
+          onAddAnnotation={mockOnAddAnnotation}
+        />
+      );
+
+      // Hidden by default under "has_image".
+      expect(screen.queryByText("Cisco IOL XE")).not.toBeInTheDocument();
+
+      // Toggle has_image -> all so the device is visible.
+      await user.click(screen.getByRole("button", { name: /^filters$/i }));
+      await user.click(screen.getByRole("button", { name: /has image/i }));
+
+      const iolLabel = screen.getByText("Cisco IOL XE");
+      expect(iolLabel).toBeInTheDocument();
+
+      await user.click(iolLabel);
+      expect(mockOnAddDevice).not.toHaveBeenCalled();
+
+      const iolCard = iolLabel.closest("[draggable]");
+      expect(iolCard).toHaveAttribute("draggable", "false");
+    });
+
     it("matches image status by device kind when image is keyed by canonical kind", () => {
       const cat9kModel: DeviceModel = {
         id: "cat9000v-uadp",

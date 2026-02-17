@@ -1100,6 +1100,8 @@ async def _import_single_image(
             provisioning_driver=node_def.provisioning_driver if node_def else None,
             provisioning_media_type=node_def.provisioning_media_type if node_def else None,
         )
+        entry["build_status"] = "queued"
+        entry.pop("build_error", None)
 
         # Enqueue background Docker image build
         _update_image_progress(session_id, image_id, "building", 92)
@@ -1115,6 +1117,8 @@ async def _import_single_image(
             job_timeout=600,
             result_ttl=3600, failure_ttl=86400,
         )
+        entry["build_job_id"] = build_job.id
+        entry["build_requested_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         logger.info(f"Enqueued IOL Docker build job {build_job.id} for {image.disk_image_filename}")
 
     else:
@@ -1126,6 +1130,9 @@ async def _import_single_image(
         for dev in entry.get("compatible_devices", []):
             if dev not in existing.get("compatible_devices", []):
                 existing.setdefault("compatible_devices", []).append(dev)
+        for field in ("build_status", "build_error", "build_job_id", "build_requested_at"):
+            if field in entry:
+                existing[field] = entry[field]
         logger.info(f"Image {entry['id']} already exists, merged compatible_devices: {existing.get('compatible_devices')}")
     else:
         manifest_data["images"].append(entry)

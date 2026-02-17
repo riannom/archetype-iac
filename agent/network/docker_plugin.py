@@ -385,61 +385,111 @@ class DockerOVSPlugin:
     async def _allocate_vlan(self, lab_bridge: LabBridge) -> int:
         """Allocate next available VLAN tag across all labs.
 
-        Avoid reusing tags already in-use on the shared arch-ovs bridge.
+        Prefer the isolated range (100-2049). If exhausted, spill into the
+        linked range (2050-4000) to avoid hard failure.
         """
+        used_on_bridge = await self._get_used_vlan_tags_on_bridge(settings.ovs_bridge_name)
+        used_vlans = set(self._allocated_vlans) | set(self._allocated_linked_vlans) | used_on_bridge
+
+        # Pass 1: preferred isolated range
         max_attempts = VLAN_RANGE_END - VLAN_RANGE_START + 1
         vlan = self._global_next_vlan
-        used_on_bridge = await self._get_used_vlan_tags_on_bridge(settings.ovs_bridge_name)
-        used_vlans = set(self._allocated_vlans) | used_on_bridge
-
         for _ in range(max_attempts):
             if vlan not in used_vlans:
                 self._allocated_vlans.add(vlan)
-                vlan_next = vlan + 1
-                if vlan_next > VLAN_RANGE_END:
-                    vlan_next = VLAN_RANGE_START
-                self._global_next_vlan = vlan_next
+                self._global_next_vlan = VLAN_RANGE_START if vlan >= VLAN_RANGE_END else vlan + 1
                 return vlan
 
             vlan += 1
             if vlan > VLAN_RANGE_END:
                 vlan = VLAN_RANGE_START
 
-        raise RuntimeError("No available VLAN tags in configured range")
-
-    def _release_vlan(self, vlan_tag: int) -> None:
-        """Release a VLAN tag back to the pool."""
-        self._allocated_vlans.discard(vlan_tag)
-
-    async def _allocate_linked_vlan(self, lab_bridge: LabBridge) -> int:
-        """Allocate next available VLAN tag from the linked range (2050-4000).
-
-        Used for linked ports (hot_connect, attach-overlay) where the tag
-        is stored in the DB and managed by convergence.
-        """
+        # Pass 2: fallback to linked range if isolated range is exhausted
+        logger.warning(
+            "Isolated VLAN range exhausted on %s; falling back to linked range %s-%s",
+            settings.ovs_bridge_name,
+            LINKED_VLAN_START,
+            LINKED_VLAN_END,
+        )
         max_attempts = LINKED_VLAN_END - LINKED_VLAN_START + 1
         vlan = self._global_next_linked_vlan
-        used_on_bridge = await self._get_used_vlan_tags_on_bridge(settings.ovs_bridge_name)
-        used_vlans = set(self._allocated_linked_vlans) | used_on_bridge
-
         for _ in range(max_attempts):
             if vlan not in used_vlans:
                 self._allocated_linked_vlans.add(vlan)
-                vlan_next = vlan + 1
-                if vlan_next > LINKED_VLAN_END:
-                    vlan_next = LINKED_VLAN_START
-                self._global_next_linked_vlan = vlan_next
+                self._global_next_linked_vlan = (
+                    LINKED_VLAN_START if vlan >= LINKED_VLAN_END else vlan + 1
+                )
                 return vlan
 
             vlan += 1
             if vlan > LINKED_VLAN_END:
                 vlan = LINKED_VLAN_START
 
-        raise RuntimeError("No available VLAN tags in linked range")
+        raise RuntimeError("No available VLAN tags in isolated or linked ranges")
+
+    def _release_vlan(self, vlan_tag: int) -> None:
+        """Release a VLAN tag back to the pool.
+
+        Fallback allocations can come from either range, so release from both
+        tracking sets.
+        """
+        self._allocated_vlans.discard(vlan_tag)
+        self._allocated_linked_vlans.discard(vlan_tag)
+
+    async def _allocate_linked_vlan(self, lab_bridge: LabBridge) -> int:
+        """Allocate next available VLAN tag from the linked range (2050-4000).
+
+        Used for linked ports (hot_connect, attach-overlay) where the tag
+        is stored in the DB and managed by convergence.
+        If linked range is exhausted, spill into isolated range.
+        """
+        used_on_bridge = await self._get_used_vlan_tags_on_bridge(settings.ovs_bridge_name)
+        used_vlans = set(self._allocated_linked_vlans) | set(self._allocated_vlans) | used_on_bridge
+
+        # Pass 1: preferred linked range
+        max_attempts = LINKED_VLAN_END - LINKED_VLAN_START + 1
+        vlan = self._global_next_linked_vlan
+        for _ in range(max_attempts):
+            if vlan not in used_vlans:
+                self._allocated_linked_vlans.add(vlan)
+                self._global_next_linked_vlan = (
+                    LINKED_VLAN_START if vlan >= LINKED_VLAN_END else vlan + 1
+                )
+                return vlan
+
+            vlan += 1
+            if vlan > LINKED_VLAN_END:
+                vlan = LINKED_VLAN_START
+
+        # Pass 2: fallback to isolated range if linked range is exhausted
+        logger.warning(
+            "Linked VLAN range exhausted on %s; falling back to isolated range %s-%s",
+            settings.ovs_bridge_name,
+            VLAN_RANGE_START,
+            VLAN_RANGE_END,
+        )
+        max_attempts = VLAN_RANGE_END - VLAN_RANGE_START + 1
+        vlan = self._global_next_vlan
+        for _ in range(max_attempts):
+            if vlan not in used_vlans:
+                self._allocated_vlans.add(vlan)
+                self._global_next_vlan = VLAN_RANGE_START if vlan >= VLAN_RANGE_END else vlan + 1
+                return vlan
+
+            vlan += 1
+            if vlan > VLAN_RANGE_END:
+                vlan = VLAN_RANGE_START
+
+        raise RuntimeError("No available VLAN tags in linked or isolated ranges")
 
     def _release_linked_vlan(self, vlan_tag: int) -> None:
-        """Release a linked VLAN tag back to the pool."""
+        """Release a linked VLAN tag back to the pool.
+
+        Fallback allocations can come from either range, so release from both
+        tracking sets.
+        """
         self._allocated_linked_vlans.discard(vlan_tag)
+        self._allocated_vlans.discard(vlan_tag)
 
     def _touch_lab(self, lab_id: str) -> None:
         """Update last_activity timestamp for TTL tracking."""
