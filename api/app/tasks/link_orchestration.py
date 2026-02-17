@@ -610,10 +610,13 @@ async def create_same_host_link(
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
 
-        # Store the reported VLAN tag (same for both sides on same-host links)
-        # vlan_tag is nested inside the "link" sub-object from agent response
+        # Store the reported VLAN tag (same for both sides on same-host links).
+        # New agent responses nest it under result["link"]["vlan_tag"], while
+        # older mocks/callers still return top-level result["vlan_tag"].
         link_data = result.get("link", {})
         reported_vlan = link_data.get("vlan_tag") if isinstance(link_data, dict) else None
+        if reported_vlan is None:
+            reported_vlan = result.get("vlan_tag")
         link_state.vlan_tag = reported_vlan
         link_state.source_vlan_tag = reported_vlan
         link_state.target_vlan_tag = reported_vlan

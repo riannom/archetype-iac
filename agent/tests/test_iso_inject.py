@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from agent.providers.iso_inject import (
     _MAX_VOLUME_LABEL_LEN,
@@ -179,7 +178,7 @@ def test_create_iso_writes_config_file(mock_which, mock_run, mock_rmtree, tmp_pa
     assert result is True
     # Verify mkisofs was called with a real temp dir containing the file
     cmd = mock_run.call_args[0][0]
-    temp_dir = cmd[-1]  # Last arg is the source directory
+    assert cmd[-1]  # Last arg is the source directory
     # The temp dir was cleaned up by rmtree, but we verified the call succeeded
 
 

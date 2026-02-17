@@ -1741,14 +1741,7 @@ class OverlayManager:
                     continue
                 if not port_name.startswith("vxlan-"):
                     continue
-                # Check if this port belongs to any declared lab via _link_tunnels
-                belongs_to_declared_lab = False
-                for lt in self._link_tunnels.values():
-                    if lt.interface_name == port_name and lt.lab_id in declared_labs:
-                        belongs_to_declared_lab = True
-                        break
-                # Only remove if we can confirm it belongs to a declared lab,
-                # or if no tracking exists (recovered placeholder)
+                # Skip ports tracked to non-declared labs.
                 lt_for_port = next(
                     (lt for lt in self._link_tunnels.values()
                      if lt.interface_name == port_name),
@@ -1926,5 +1919,4 @@ class OverlayManager:
                 for lt in self._link_tunnels.values()
             ],
         }
-
 

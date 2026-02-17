@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import subprocess
-import threading
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-import pytest
 
 from agent.providers.bootflash_inject import (
     _find_bootflash_partition,

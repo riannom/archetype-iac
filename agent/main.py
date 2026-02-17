@@ -4573,7 +4573,7 @@ async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
 
         bridge = settings.ovs_bridge_name or "arch-ovs"
         used = await _ovs_list_used_vlans(bridge)
-        endpoint_plans: list[tuple[ResolvedOVSPort, str, str, int, int | None]] = []
+        endpoint_plans: list[tuple[OVSPortInfo, str, str, int, int | None]] = []
         errors: list[str] = []
 
         # Plan both endpoint VLAN moves first to keep disconnect transactional.

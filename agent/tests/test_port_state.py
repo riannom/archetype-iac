@@ -9,7 +9,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
@@ -29,7 +28,6 @@ def _make_plugin_mock(ports_data=None):
 @pytest.mark.asyncio
 async def test_port_state_returns_correct_data():
     """Port state endpoint returns node/interface/vlan data."""
-    from agent.schemas import PortStateResponse
 
     ports_data = [
         {

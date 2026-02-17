@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -233,8 +233,6 @@ async def test_declare_partial_failure(tmp_path):
 
     # First tunnel succeeds, second fails
     call_count = 0
-    original_create = overlay._create_vxlan_device
-
     async def _create_or_fail(**kwargs):
         nonlocal call_count
         call_count += 1

@@ -1,9 +1,7 @@
 """Tests for IOL NVRAM parser and config extraction."""
 from __future__ import annotations
 
-import struct
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
