@@ -356,7 +356,8 @@ def test_overlay_vtep_trunk_per_remote(test_client):
     assert backend.overlay_ensure_vtep.await_count == 2
 
 
-def test_overlay_attach_link(test_client):
+@pytest.mark.asyncio
+async def test_overlay_attach_link():
     """attach-link discovers local VLAN via _resolve_ovs_port and creates per-link tunnel."""
     backend = _backend_with_overlay()
     call_order: list[str] = []
@@ -374,33 +375,40 @@ def test_overlay_attach_link(test_client):
     )
 
     port_info = SimpleNamespace(port_name="vh_test", vlan_tag=3100, provider="docker")
+    plugin = MagicMock()
+    plugin._ensure_bridge = AsyncMock(return_value="br-lab1")
+    plugin._allocate_linked_vlan = AsyncMock(return_value=3100)
+    plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
+    plugin._release_vlan = MagicMock()
+
+    from agent.main import attach_overlay_interface
+    from agent.schemas import AttachOverlayInterfaceRequest
 
     with patch("agent.main.get_network_backend", return_value=backend):
         with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, return_value=port_info):
-            response = test_client.post(
-                "/overlay/attach-link",
-                json={
-                    "lab_id": "lab1",
-                    "container_name": "archetype-lab1-r1",
-                    "interface_name": "eth1",
-                    "vni": 100,
-                    "local_ip": "10.0.0.1",
-                    "remote_ip": "10.0.0.2",
-                    "link_id": "r1:eth1-r2:eth1",
-                    "tenant_mtu": 1450,
-                },
-            )
+            with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+                response = await attach_overlay_interface(
+                    AttachOverlayInterfaceRequest(
+                        lab_id="lab1",
+                        container_name="archetype-lab1-r1",
+                        interface_name="eth1",
+                        vni=100,
+                        local_ip="10.0.0.1",
+                        remote_ip="10.0.0.2",
+                        link_id="r1:eth1-r2:eth1",
+                        tenant_mtu=1450,
+                    )
+                )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    assert body["local_vlan"] == 3100
-    assert body["vni"] == 100
+    assert response.success is True
+    assert response.local_vlan == 3100
+    assert response.vni == 100
     backend.overlay_create_link_tunnel.assert_awaited_once()
     assert call_order == ["create_link_tunnel"]
 
 
-def test_overlay_attach_link_multiple(test_client):
+@pytest.mark.asyncio
+async def test_overlay_attach_link_multiple():
     """Multiple attach-link calls create separate per-link tunnels."""
     backend = _backend_with_overlay()
     call_count = 0
@@ -423,38 +431,45 @@ def test_overlay_attach_link_multiple(test_client):
 
     port_a = SimpleNamespace(port_name="vh_a", vlan_tag=3100, provider="docker")
     port_b = SimpleNamespace(port_name="vh_b", vlan_tag=3101, provider="docker")
+    plugin = MagicMock()
+    plugin._ensure_bridge = AsyncMock(return_value="br-lab1")
+    plugin._allocate_linked_vlan = AsyncMock(side_effect=[3100, 3101])
+    plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
+    plugin._release_vlan = MagicMock()
+
+    from agent.main import attach_overlay_interface
+    from agent.schemas import AttachOverlayInterfaceRequest
 
     with patch("agent.main.get_network_backend", return_value=backend):
         with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
-            response_a = test_client.post(
-                "/overlay/attach-link",
-                json={
-                    "lab_id": "lab1",
-                    "container_name": "archetype-lab1-r1",
-                    "interface_name": "eth1",
-                    "vni": 100,
-                    "local_ip": "10.0.0.1",
-                    "remote_ip": "10.0.0.2",
-                    "link_id": "r1:eth1-r2:eth1",
-                    "tenant_mtu": 1450,
-                },
-            )
-            response_b = test_client.post(
-                "/overlay/attach-link",
-                json={
-                    "lab_id": "lab1",
-                    "container_name": "archetype-lab1-r3",
-                    "interface_name": "eth2",
-                    "vni": 101,
-                    "local_ip": "10.0.0.1",
-                    "remote_ip": "10.0.0.2",
-                    "link_id": "r3:eth2-r4:eth2",
-                    "tenant_mtu": 1450,
-                },
-            )
+            with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+                response_a = await attach_overlay_interface(
+                    AttachOverlayInterfaceRequest(
+                        lab_id="lab1",
+                        container_name="archetype-lab1-r1",
+                        interface_name="eth1",
+                        vni=100,
+                        local_ip="10.0.0.1",
+                        remote_ip="10.0.0.2",
+                        link_id="r1:eth1-r2:eth1",
+                        tenant_mtu=1450,
+                    )
+                )
+                response_b = await attach_overlay_interface(
+                    AttachOverlayInterfaceRequest(
+                        lab_id="lab1",
+                        container_name="archetype-lab1-r3",
+                        interface_name="eth2",
+                        vni=101,
+                        local_ip="10.0.0.1",
+                        remote_ip="10.0.0.2",
+                        link_id="r3:eth2-r4:eth2",
+                        tenant_mtu=1450,
+                    )
+                )
 
-    assert response_a.status_code == 200
-    assert response_b.status_code == 200
+    assert response_a.success is True
+    assert response_b.success is True
     assert backend.overlay_create_link_tunnel.await_count == 2
 
 

@@ -18,18 +18,28 @@ def _make_provider() -> libvirt_provider.LibvirtProvider:
 
 def test_allocate_vlans_skips_tags_in_use_on_ovs_bridge(monkeypatch):
     p = _make_provider()
+    start = p.VLAN_RANGE_START
 
-    # Simulate OVS ports already using 2000-2002.
+    # Simulate OVS ports already using the first three tags in range.
     def _fake_run(args, **_kwargs):
         # libvirt provider queries:
         # 1) ovs-vsctl list-ports <bridge>
         # 2) ovs-vsctl --format=csv --columns=name,tag list port
         if args[:2] == ["ovs-vsctl", "list-ports"]:
-            return SimpleNamespace(returncode=0, stdout="p2000\np2001\np2002\n", stderr="")
+            return SimpleNamespace(
+                returncode=0,
+                stdout=f"p{start}\np{start + 1}\np{start + 2}\n",
+                stderr="",
+            )
         if args[:4] == ["ovs-vsctl", "--format=csv", "--columns=name,tag", "list"]:
             return SimpleNamespace(
                 returncode=0,
-                stdout="name,tag\np2000,2000\np2001,2001\np2002,2002\n",
+                stdout=(
+                    "name,tag\n"
+                    f"p{start},{start}\n"
+                    f"p{start + 1},{start + 1}\n"
+                    f"p{start + 2},{start + 2}\n"
+                ),
                 stderr="",
             )
         raise AssertionError(f"unexpected subprocess.run args: {args!r}")
@@ -37,7 +47,7 @@ def test_allocate_vlans_skips_tags_in_use_on_ovs_bridge(monkeypatch):
     monkeypatch.setattr(libvirt_provider.subprocess, "run", _fake_run)
 
     vlans = p._allocate_vlans("lab1", "node1", 3, workspace=None)
-    assert vlans == [2003, 2004, 2005]
+    assert vlans == [start + 3, start + 4, start + 5]
 
 
 def test_allocate_vlans_wraps_and_still_skips_used(monkeypatch):

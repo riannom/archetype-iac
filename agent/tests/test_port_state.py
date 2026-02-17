@@ -28,36 +28,44 @@ def _make_plugin_mock(ports_data=None):
 @pytest.mark.asyncio
 async def test_port_state_returns_correct_data():
     """Port state endpoint returns node/interface/vlan data."""
+    class _FakeProc:
+        def __init__(self, stdout: bytes, returncode: int = 0, stderr: bytes = b"") -> None:
+            self.returncode = returncode
+            self._stdout = stdout
+            self._stderr = stderr
 
-    ports_data = [
-        {
-            "port_name": "vh-abc123",
-            "bridge_name": "arch-ovs",
-            "container": "archetype-lab1-r1",
-            "interface": "eth1",
-            "vlan_tag": 100,
-            "rx_bytes": 0,
-            "tx_bytes": 0,
-        },
-        {
-            "port_name": "vh-def456",
-            "bridge_name": "arch-ovs",
-            "container": "archetype-lab1-r2",
-            "interface": "eth1",
-            "vlan_tag": 100,
-            "rx_bytes": 0,
-            "tx_bytes": 0,
-        },
-    ]
+        async def communicate(self):
+            return self._stdout, self._stderr
 
-    plugin = _make_plugin_mock(ports_data)
+    async def _fake_create_subprocess_exec(*cmd, **_kwargs):
+        if cmd[:2] == ("ovs-vsctl", "list-ports"):
+            return _FakeProc(b"vh-abc123\nvh-def456\n")
+        if cmd[:4] == ("ovs-vsctl", "get", "interface", "vh-abc123"):
+            return _FakeProc(b"111\n")
+        if cmd[:4] == ("ovs-vsctl", "get", "port", "vh-abc123"):
+            return _FakeProc(b"100\n")
+        if cmd[:4] == ("ovs-vsctl", "get", "interface", "vh-def456"):
+            return _FakeProc(b"222\n")
+        if cmd[:4] == ("ovs-vsctl", "get", "port", "vh-def456"):
+            return _FakeProc(b"100\n")
+        return _FakeProc(b"", returncode=1, stderr=b"unexpected command")
 
-    with patch("agent.main.settings") as mock_settings, \
-         patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        mock_settings.enable_ovs_plugin = True
+    container_a = MagicMock()
+    container_a.name = "archetype-11111111-2222-3333-4444-555555555555-r1"
+    container_a.exec_run.return_value = (0, b"eth0:10\neth1:111\n")
 
-        from agent.main import get_lab_port_state
-        result = await get_lab_port_state("lab1")
+    container_b = MagicMock()
+    container_b.name = "archetype-11111111-2222-3333-4444-555555555555-r2"
+    container_b.exec_run.return_value = (0, b"eth0:20\neth1:222\n")
+
+    docker_client = MagicMock()
+    docker_client.containers.list.return_value = [container_a, container_b]
+
+    with patch("agent.main.get_provider", return_value=MagicMock()):
+        with patch("docker.from_env", return_value=docker_client):
+            with patch("agent.main.asyncio.create_subprocess_exec", side_effect=_fake_create_subprocess_exec):
+                from agent.main import get_lab_port_state
+                result = await get_lab_port_state("lab1")
 
     assert len(result.ports) == 2
     assert result.ports[0].node_name == "r1"
@@ -69,24 +77,21 @@ async def test_port_state_returns_correct_data():
 @pytest.mark.asyncio
 async def test_port_state_handles_empty():
     """Port state with no containers returns empty list."""
-    plugin = _make_plugin_mock([])
+    docker_client = MagicMock()
+    docker_client.containers.list.return_value = []
 
-    with patch("agent.main.settings") as mock_settings, \
-         patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        mock_settings.enable_ovs_plugin = True
-
-        from agent.main import get_lab_port_state
-        result = await get_lab_port_state("empty-lab")
+    with patch("agent.main.get_provider", return_value=MagicMock()):
+        with patch("docker.from_env", return_value=docker_client):
+            from agent.main import get_lab_port_state
+            result = await get_lab_port_state("empty-lab")
 
     assert result.ports == []
 
 
 @pytest.mark.asyncio
 async def test_port_state_disabled_plugin():
-    """Port state returns empty when OVS plugin disabled."""
-    with patch("agent.main.settings") as mock_settings:
-        mock_settings.enable_ovs_plugin = False
-
+    """Port state returns empty when no Docker provider is available."""
+    with patch("agent.main.get_provider", return_value=None):
         from agent.main import get_lab_port_state
         result = await get_lab_port_state("lab1")
 

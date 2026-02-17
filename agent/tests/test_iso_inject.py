@@ -26,6 +26,7 @@ from agent.providers.iso_inject import (
 def test_create_iso_mkisofs(mock_mkdtemp, mock_which, mock_run, mock_rmtree, tmp_path):
     """mkisofs found on first try — should succeed."""
     iso_path = tmp_path / "config.iso"
+    Path("/tmp/iso_inject_abc").mkdir(parents=True, exist_ok=True)
     mock_which.return_value = "/usr/bin/mkisofs"
     mock_run.return_value = MagicMock(returncode=0)
 
@@ -65,6 +66,7 @@ def test_create_iso_mkisofs(mock_mkdtemp, mock_which, mock_run, mock_rmtree, tmp
 def test_create_iso_genisoimage_fallback(mock_mkdtemp, mock_which, mock_run, mock_rmtree, tmp_path):
     """mkisofs not found, genisoimage found — should succeed with fallback."""
     iso_path = tmp_path / "config.iso"
+    Path("/tmp/iso_inject_def").mkdir(parents=True, exist_ok=True)
 
     def which_side_effect(tool):
         if tool == "mkisofs":
@@ -95,6 +97,7 @@ def test_create_iso_genisoimage_fallback(mock_mkdtemp, mock_which, mock_run, moc
 def test_create_iso_no_tool(mock_mkdtemp, mock_which, mock_rmtree, tmp_path):
     """Neither mkisofs nor genisoimage available — should return False."""
     iso_path = tmp_path / "config.iso"
+    Path("/tmp/iso_inject_ghi").mkdir(parents=True, exist_ok=True)
 
     result = create_config_iso(iso_path, "hostname xr\n")
 
@@ -126,6 +129,7 @@ def test_create_iso_empty_config(tmp_path):
 def test_create_iso_label_truncation(mock_mkdtemp, mock_which, mock_run, mock_rmtree, tmp_path):
     """Volume labels longer than 32 chars should be truncated."""
     iso_path = tmp_path / "config.iso"
+    Path("/tmp/iso_inject_trunc").mkdir(parents=True, exist_ok=True)
     long_label = "a" * 50
 
     create_config_iso(iso_path, "config\n", volume_label=long_label)
@@ -148,6 +152,7 @@ def test_create_iso_label_truncation(mock_mkdtemp, mock_which, mock_run, mock_rm
 def test_create_iso_subprocess_failure(mock_mkdtemp, mock_which, mock_run, mock_rmtree, tmp_path):
     """Subprocess failure should return False and clean up temp dir."""
     iso_path = tmp_path / "config.iso"
+    Path("/tmp/iso_inject_fail").mkdir(parents=True, exist_ok=True)
 
     result = create_config_iso(iso_path, "config\n")
 

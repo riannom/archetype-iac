@@ -98,9 +98,15 @@ def test_network_init_imports() -> None:
 def _install_ovs_backend_dependencies(monkeypatch) -> None:
     overlay_mod = types.ModuleType("agent.network.overlay")
 
+    class VxlanTunnel:  # noqa: D401
+        """Minimal tunnel type for package import compatibility."""
+
+    class OverlayBridge:  # noqa: D401
+        """Minimal bridge type for package import compatibility."""
+
     class OverlayManager:
         async def recover_link_tunnels(self):
-            return 0
+            return 1
 
         async def create_tunnel(self, **_):
             return "tunnel"
@@ -133,6 +139,8 @@ def _install_ovs_backend_dependencies(monkeypatch) -> None:
             return {"success": True}
 
     overlay_mod.OverlayManager = OverlayManager
+    overlay_mod.VxlanTunnel = VxlanTunnel
+    overlay_mod.OverlayBridge = OverlayBridge
 
     ovs_mod = types.ModuleType("agent.network.ovs")
 
@@ -185,7 +193,12 @@ def _install_ovs_backend_dependencies(monkeypatch) -> None:
         async def shutdown(self):
             return None
 
+    async def run_plugin_standalone():
+        return None
+
+    plugin_mod.DockerOVSPlugin = DockerOVSPlugin
     plugin_mod.get_docker_ovs_plugin = lambda: DockerOVSPlugin()
+    plugin_mod.run_plugin_standalone = run_plugin_standalone
 
     monkeypatch.setitem(sys.modules, "agent.network.overlay", overlay_mod)
     monkeypatch.setitem(sys.modules, "agent.network.ovs", ovs_mod)
@@ -205,7 +218,7 @@ async def test_ovs_backend_initialize_and_shutdown(monkeypatch) -> None:
 
     backend = ovs_backend.OVSBackend()
     info = await backend.initialize()
-    assert info["vnis_recovered"] == 1
+    assert info["link_tunnels_recovered"] == 1
     assert info["vlans_recovered"] == 2
     assert info["ovs_plugin_started"] is True
 

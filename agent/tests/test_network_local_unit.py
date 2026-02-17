@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+import agent.network.local as local_mod
 from agent.network.local import LocalNetworkManager, get_local_manager, LocalLink
 
 
@@ -27,10 +28,10 @@ async def test_generate_veth_name_unique():
 async def test_ip_link_exists(monkeypatch):
     mgr = LocalNetworkManager()
 
-    async def fake_run_cmd(cmd):
-        return (0 if cmd[-1] == "exists" else 1), "", ""
+    async def fake_ip_link_exists(name: str):
+        return name == "exists"
 
-    monkeypatch.setattr(mgr, "_run_cmd", fake_run_cmd)
+    monkeypatch.setattr(local_mod, "_shared_ip_link_exists", fake_ip_link_exists)
 
     assert await mgr._ip_link_exists("exists") is True
     assert await mgr._ip_link_exists("missing") is False
