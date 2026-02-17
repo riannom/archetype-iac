@@ -366,6 +366,9 @@ async def run_overlay_convergence(
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Persist attachment-flag updates made from declare-state results.
+    session.commit()
+
     return all_results
 
 

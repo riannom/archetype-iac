@@ -356,7 +356,7 @@ def get_device_config(
             "portNaming": config.port_naming,
             "portStartIndex": config.port_start_index,
             "maxPorts": config.max_ports,
-            "managementInterface": config.management_interface,
+            "managementInterface": getattr(config, "management_interface", None),
             "memory": config.memory,
             "cpu": config.cpu,
             "diskDriver": getattr(config, "disk_driver", None),

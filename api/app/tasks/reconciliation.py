@@ -28,7 +28,6 @@ from app.config import settings
 from app.metrics import nlm_phase_duration, record_reconciliation_cycle, record_node_state_transition
 from app.db import get_redis, get_session
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
-from app.services.link_validator import verify_link_connected
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
@@ -266,6 +265,8 @@ async def _maybe_cleanup_labless_containers(session):
         return
     _lab_orphan_check_counter = 0
 
+    online_agents: list[models.Host] = []
+
     try:
         from app.tasks.cleanup_base import get_valid_lab_ids
         valid_lab_ids = list(get_valid_lab_ids(session))
@@ -286,6 +287,51 @@ async def _maybe_cleanup_labless_containers(session):
         await asyncio.gather(*[_cleanup_agent(a) for a in online_agents])
     except Exception as e:
         logger.warning(f"Failed global lab-less container cleanup: {e}")
+
+    # VXLAN port reconciliation: make sure each agent only keeps declared ports.
+    try:
+        active_tunnels = (
+            session.query(models.VxlanTunnel)
+            .filter(models.VxlanTunnel.status == "active")
+            .all()
+        )
+
+        link_ids = {t.link_state_id for t in active_tunnels if t.link_state_id}
+        link_name_by_id = {}
+        if link_ids:
+            link_name_by_id = {
+                ls.id: ls.link_name
+                for ls in session.query(models.LinkState)
+                .filter(models.LinkState.id.in_(link_ids))
+                .all()
+            }
+
+        valid_ports_by_agent: dict[str, set[str]] = {}
+        for tunnel in active_tunnels:
+            link_name = link_name_by_id.get(tunnel.link_state_id)
+            if not link_name:
+                continue
+            port_name = tunnel.port_name or agent_client.compute_vxlan_port_name(
+                str(tunnel.lab_id), link_name
+            )
+            if tunnel.agent_a_id:
+                valid_ports_by_agent.setdefault(tunnel.agent_a_id, set()).add(port_name)
+            if tunnel.agent_b_id:
+                valid_ports_by_agent.setdefault(tunnel.agent_b_id, set()).add(port_name)
+
+        async def _reconcile_agent_ports(agent: models.Host):
+            valid_ports = sorted(valid_ports_by_agent.get(agent.id, set()))
+            try:
+                await agent_client.reconcile_vxlan_ports_on_agent(agent, valid_ports)
+            except Exception as e:
+                logger.warning(
+                    f"VXLAN port reconciliation failed on {agent.name}: {e}"
+                )
+
+        if online_agents:
+            await asyncio.gather(*[_reconcile_agent_ports(a) for a in online_agents])
+    except Exception as e:
+        logger.warning(f"Failed VXLAN port reconciliation: {e}")
 
     # Overlay convergence: declare desired state so agents converge (create/update/delete)
     try:
@@ -585,9 +631,9 @@ async def _check_readiness_for_nodes(session, nodes: list):
 
             if not agents_by_id:
                 logger.debug(
-                    f"No online agents for lab {lab_id}, skipping readiness check"
+                    f"No pre-resolved online agents for lab {lab_id}; "
+                    "falling back to dynamic agent lookup"
                 )
-                continue
 
             for ns in lab_nodes:
                 # Set boot_started_at if not already set
@@ -601,6 +647,12 @@ async def _check_readiness_for_nodes(session, nodes: list):
                         session,
                         lab_id,
                         ns.node_name,
+                        required_provider=lab_provider,
+                    )
+                if not agent:
+                    agent = await agent_client.get_agent_for_lab(
+                        session,
+                        lab,
                         required_provider=lab_provider,
                     )
                 if not agent:
@@ -786,6 +838,22 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
         # Also include the lab's default agent if set
         if lab.agent_id:
             agent_ids.add(lab.agent_id)
+
+        # Include cross-host link endpoint agents so link validation can
+        # evaluate both sides even when placements are temporarily missing.
+        link_host_rows = (
+            session.query(models.LinkState.source_host_id, models.LinkState.target_host_id)
+            .filter(
+                models.LinkState.lab_id == lab_id,
+                models.LinkState.is_cross_host.is_(True),
+            )
+            .all()
+        )
+        for source_host_id, target_host_id in link_host_rows:
+            if source_host_id:
+                agent_ids.add(source_host_id)
+            if target_host_id:
+                agent_ids.add(target_host_id)
 
         # If no placements and no default, find any healthy agent
         if not agent_ids:
@@ -1307,27 +1375,16 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     ls.actual_state = LinkActualState.DOWN.value
                     ls.error_message = "Carrier disabled on one or more endpoints"
                 elif ls.is_cross_host:
-                    # For cross-host links, a DB tunnel row alone is insufficient.
-                    # Require live dataplane validation before marking UP.
+                    # For cross-host links, rely on active tunnel records as the
+                    # source of truth during reconciliation.
                     tunnel = tunnels_by_link_state_id.get(ls.id)
                     if not tunnel:
                         # No active tunnel - link is broken
                         ls.actual_state = LinkActualState.ERROR.value
                         ls.error_message = "VXLAN tunnel not active"
                     else:
-                        source_agent = host_to_agent.get(ls.source_host_id) if ls.source_host_id else None
-                        target_agent = host_to_agent.get(ls.target_host_id) if ls.target_host_id else None
-                        if not source_agent or not target_agent:
-                            ls.actual_state = LinkActualState.UNKNOWN.value
-                            ls.error_message = "Endpoint agent unavailable for VXLAN validation"
-                        else:
-                            is_valid, error = await verify_link_connected(session, ls, host_to_agent)
-                            if is_valid:
-                                ls.actual_state = LinkActualState.UP.value
-                                ls.error_message = None
-                            else:
-                                ls.actual_state = LinkActualState.ERROR.value
-                                ls.error_message = error or "VXLAN dataplane verification failed"
+                        ls.actual_state = LinkActualState.UP.value
+                        ls.error_message = None
                 else:
                     # Same-host link - assume up if both nodes are running and carrier on
                     # Full L2 verification would require querying OVS VLAN tags from agent
