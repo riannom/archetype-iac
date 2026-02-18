@@ -1465,12 +1465,12 @@ def assign_image_to_device(
     if not device_id:
         raise HTTPException(status_code=400, detail="device_id is required")
 
-    is_default = payload.get("is_default", False)
+    is_default = bool(payload.get("is_default", False))
 
-    updates = {
-        "device_id": device_id,
-        "is_default": is_default,
-    }
+    updates = {"device_id": device_id}
+    if is_default:
+        updates["is_default"] = True
+        updates["default_for_device"] = device_id
 
     # Add to compatible_devices if not already there
     for item in manifest.get("images", []):
@@ -1492,6 +1492,7 @@ def assign_image_to_device(
 @router.post("/library/{image_id}/unassign")
 def unassign_image_from_device(
     image_id: str,
+    payload: dict | None = None,
     current_user: models.User = Depends(get_current_admin),
 ) -> dict[str, object]:
     """Unassign an image from its current device type.
@@ -1501,10 +1502,10 @@ def unassign_image_from_device(
 
     manifest = load_manifest()
 
-    updates = {
-        "device_id": None,
-        "is_default": False,
-    }
+    updates: dict[str, object] = {"device_id": None, "is_default": False}
+    if isinstance(payload, dict) and payload.get("device_id"):
+        # Device-scoped unassign clears only that device's default binding.
+        updates["default_for_device"] = payload.get("device_id")
 
     updated = update_image_entry(manifest, image_id, updates)
     if not updated:

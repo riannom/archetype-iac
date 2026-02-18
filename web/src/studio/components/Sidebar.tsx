@@ -6,6 +6,7 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import {
   getAllowedInstantiableImageKinds,
   getImageDeviceIds,
+  isImageDefaultForDevice,
   isInstantiableImageKind,
   requiresRunnableImage,
 } from '../../utils/deviceModels';
@@ -17,6 +18,15 @@ interface SidebarProps {
   onAddExternalNetwork?: () => void;
   imageLibrary?: ImageLibraryEntry[];
 }
+
+const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
+  'cat9000v-uadp': ['cisco_cat9kv'],
+  'cat9000v-q200': ['cisco_cat9kv'],
+  'cat9000v_uadp': ['cisco_cat9kv'],
+  'cat9000v_q200': ['cisco_cat9kv'],
+  c8000v: ['cisco_c8000v'],
+  ftdv: ['cisco_ftdv'],
+};
 
 const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotation, onAddExternalNetwork, imageLibrary = [] }) => {
   const { preferences, updateCanvasSettings } = useNotifications();
@@ -111,58 +121,50 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     return devices;
   }, [categories]);
 
-  // Build device image status map (uses compatible_devices for shared images)
-  const deviceImageStatus = useMemo(() => {
-    const statusMap = new Map<string, { imageKinds: Set<string>; defaultKinds: Set<string> }>();
-    imageLibrary.forEach((img) => {
-      if (!isInstantiableImageKind(img.kind)) {
-        return;
+  const resolveImageDeviceIds = useCallback((image: ImageLibraryEntry): string[] => {
+    const rawDeviceIds = getImageDeviceIds(image);
+    if (rawDeviceIds.length === 0) return [];
+
+    const normalizedRawIds = new Set(rawDeviceIds.map((id) => String(id).toLowerCase()));
+    const resolved = new Set<string>(rawDeviceIds);
+
+    allDevices.forEach((device) => {
+      const modelId = String(device.id || '').toLowerCase();
+      const aliases = IMAGE_COMPAT_ALIASES[modelId] || [];
+      const matchesById = normalizedRawIds.has(modelId);
+      const matchesByAlias = aliases.some((alias) => normalizedRawIds.has(alias));
+      if (matchesById || matchesByAlias) {
+        resolved.add(device.id);
       }
-      const imageKind = (img.kind || '').toLowerCase();
-      getImageDeviceIds(img).forEach((devId) => {
-        const existing = statusMap.get(devId) || { imageKinds: new Set<string>(), defaultKinds: new Set<string>() };
-        existing.imageKinds.add(imageKind);
-        if (img.is_default) {
-          existing.defaultKinds.add(imageKind);
-        }
-        statusMap.set(devId, existing);
-      });
     });
-    return statusMap;
-  }, [imageLibrary]);
 
-  const resolveStatusFromEntry = useCallback(
-    (entry: { imageKinds: Set<string>; defaultKinds: Set<string> } | undefined, allowedKinds: Set<string>) => {
-      if (!entry) return undefined;
-
-      const hasDefault = Array.from(allowedKinds).some((kind) => entry.defaultKinds.has(kind));
-      if (hasDefault) return { hasImage: true, hasDefault: true };
-
-      const hasImage = Array.from(allowedKinds).some((kind) => entry.imageKinds.has(kind));
-      if (hasImage) return { hasImage: true, hasDefault: false };
-
-      return undefined;
-    },
-    []
-  );
+    return Array.from(resolved);
+  }, [allDevices]);
 
   const getDeviceImageStatus = useCallback((device: DeviceModel) => {
     const allowedKinds = getAllowedInstantiableImageKinds(device);
+    let hasImage = false;
+    let hasDefault = false;
 
-    const byId = resolveStatusFromEntry(deviceImageStatus.get(device.id), allowedKinds);
-    if (byId) return byId;
-    if (device.kind) {
-      const byKind = resolveStatusFromEntry(deviceImageStatus.get(device.kind), allowedKinds);
-      if (byKind) return byKind;
-    }
+    imageLibrary.forEach((img) => {
+      if (!isInstantiableImageKind(img.kind)) return;
+      const imageKind = (img.kind || '').toLowerCase();
+      if (!allowedKinds.has(imageKind)) return;
 
-    const aliases = IMAGE_COMPAT_ALIASES[(device.id || '').toLowerCase()] || [];
-    for (const alias of aliases) {
-      const byAlias = resolveStatusFromEntry(deviceImageStatus.get(alias), allowedKinds);
-      if (byAlias) return byAlias;
+      const imageDeviceIds = resolveImageDeviceIds(img);
+      if (!imageDeviceIds.includes(device.id)) return;
+
+      hasImage = true;
+      if (isImageDefaultForDevice(img, device.id)) {
+        hasDefault = true;
+      }
+    });
+
+    if (!hasImage) {
+      return undefined;
     }
-    return undefined;
-  }, [deviceImageStatus, resolveStatusFromEntry]);
+    return { hasImage: true, hasDefault };
+  }, [imageLibrary, resolveImageDeviceIds]);
 
   // Filter devices based on search and filters
   const filterDevice = (device: DeviceModel): boolean => {
@@ -551,9 +553,3 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
 };
 
 export default Sidebar;
-  const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
-    'cat9000v-uadp': ['cisco_cat9kv'],
-    'cat9000v-q200': ['cisco_cat9kv'],
-    'cat9000v_uadp': ['cisco_cat9kv'],
-    'cat9000v_q200': ['cisco_cat9kv'],
-  };

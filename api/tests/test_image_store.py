@@ -19,6 +19,7 @@ from app.image_store import (
     detect_device_from_filename,
     detect_qcow2_device_type,
     find_image_by_id,
+    find_image_reference,
     load_custom_devices,
     image_matches_device,
     load_manifest,
@@ -210,6 +211,169 @@ class TestManifestOperations:
             image = loaded["images"][0]
             assert image["device_id"] == "cisco_iosv"
             assert image["compatible_devices"] == ["cisco_iosv"]
+
+    def test_load_manifest_sets_default_for_single_runnable_image(self, tmp_path):
+        """Single runnable image per device is auto-marked as default."""
+        manifest_path = tmp_path / "manifest.json"
+        with patch("app.image_store.manifest_path", return_value=manifest_path):
+            manifest_path.write_text(
+                json.dumps({
+                    "images": [
+                        {
+                            "id": "docker:ceos:4.28.0F",
+                            "kind": "docker",
+                            "reference": "ceos:4.28.0F",
+                            "filename": "ceos-4.28.0F.tar",
+                            "device_id": "eos",
+                            "compatible_devices": ["eos"],
+                            "is_default": False,
+                        }
+                    ]
+                }),
+                encoding="utf-8",
+            )
+
+            loaded = load_manifest()
+            image = loaded["images"][0]
+            assert image["device_id"] == "ceos"
+            assert image["is_default"] is True
+
+    def test_load_manifest_does_not_force_default_when_multiple_images(self, tmp_path):
+        """Multiple runnable images keep explicit default selection behavior."""
+        manifest_path = tmp_path / "manifest.json"
+        with patch("app.image_store.manifest_path", return_value=manifest_path):
+            manifest_path.write_text(
+                json.dumps({
+                    "images": [
+                        {
+                            "id": "docker:ceos:4.28.0F",
+                            "kind": "docker",
+                            "reference": "ceos:4.28.0F",
+                            "filename": "ceos-4.28.0F.tar",
+                            "device_id": "eos",
+                            "compatible_devices": ["eos"],
+                            "is_default": False,
+                        },
+                        {
+                            "id": "docker:ceos:4.29.0F",
+                            "kind": "docker",
+                            "reference": "ceos:4.29.0F",
+                            "filename": "ceos-4.29.0F.tar",
+                            "device_id": "eos",
+                            "compatible_devices": ["eos"],
+                            "is_default": False,
+                        },
+                    ]
+                }),
+                encoding="utf-8",
+            )
+
+            loaded = load_manifest()
+            assert loaded["images"][0]["is_default"] is False
+            assert loaded["images"][1]["is_default"] is False
+
+    def test_save_manifest_backfills_default_for_single_runnable_image(self, tmp_path):
+        """Saving manifest applies the same auto-default normalization."""
+        manifest_path = tmp_path / "manifest.json"
+        with patch("app.image_store.manifest_path", return_value=manifest_path):
+            manifest = {
+                "images": [
+                    {
+                        "id": "qcow2:vios-15.9",
+                        "kind": "qcow2",
+                        "reference": "/images/vios-15.9.qcow2",
+                        "filename": "vios-15.9.qcow2",
+                        "device_id": "iosv",
+                        "compatible_devices": ["iosv"],
+                        "is_default": False,
+                    }
+                ]
+            }
+            save_manifest(manifest)
+
+            saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+            image = saved["images"][0]
+            assert image["device_id"] == "cisco_iosv"
+            assert image["compatible_devices"] == ["cisco_iosv"]
+            assert image["is_default"] is True
+
+    def test_load_manifest_backfills_legacy_linux_frr_assignment(self, tmp_path):
+        """Legacy linux+frr image entries are remapped to draggable frr device type."""
+        manifest_path = tmp_path / "manifest.json"
+        with patch("app.image_store.manifest_path", return_value=manifest_path):
+            manifest_path.write_text(
+                json.dumps({
+                    "images": [
+                        {
+                            "id": "docker:frr:10.2.1",
+                            "kind": "docker",
+                            "reference": "quay.io/frrouting/frr:10.2.1",
+                            "filename": "frr-10.2.1.tar.gz",
+                            "device_id": "linux",
+                            "compatible_devices": ["linux"],
+                            "is_default": False,
+                        }
+                    ]
+                }),
+                encoding="utf-8",
+            )
+
+            loaded = load_manifest()
+            image = loaded["images"][0]
+            assert image["device_id"] == "frr"
+            assert image["compatible_devices"] == ["frr"]
+
+    def test_load_manifest_backfills_legacy_linux_alpine_assignment(self, tmp_path):
+        """Legacy linux+alpine entries are remapped to draggable alpine device type."""
+        manifest_path = tmp_path / "manifest.json"
+        with patch("app.image_store.manifest_path", return_value=manifest_path):
+            manifest_path.write_text(
+                json.dumps({
+                    "images": [
+                        {
+                            "id": "qcow2:alpine-base-3-21-3.qcow2",
+                            "kind": "qcow2",
+                            "reference": "/images/alpine-base-3-21-3.qcow2",
+                            "filename": "alpine-base-3-21-3.qcow2",
+                            "device_id": "linux",
+                            "compatible_devices": ["linux"],
+                            "is_default": False,
+                        }
+                    ]
+                }),
+                encoding="utf-8",
+            )
+
+            loaded = load_manifest()
+            image = loaded["images"][0]
+            assert image["device_id"] == "alpine"
+            assert image["compatible_devices"] == ["alpine"]
+
+    def test_load_manifest_backfills_legacy_linux_tcl_assignment(self, tmp_path):
+        """Legacy linux+tcl entries are remapped to draggable tcl device type."""
+        manifest_path = tmp_path / "manifest.json"
+        with patch("app.image_store.manifest_path", return_value=manifest_path):
+            manifest_path.write_text(
+                json.dumps({
+                    "images": [
+                        {
+                            "id": "qcow2:tcl-16-0.qcow2",
+                            "kind": "qcow2",
+                            "reference": "/images/tcl-16-0.qcow2",
+                            "filename": "tcl-16-0.qcow2",
+                            "device_id": "linux",
+                            "compatible_devices": ["linux"],
+                            "is_default": False,
+                        }
+                    ]
+                }),
+                encoding="utf-8",
+            )
+
+            loaded = load_manifest()
+            image = loaded["images"][0]
+            assert image["device_id"] == "tcl"
+            assert image["compatible_devices"] == ["tcl"]
 
 
 class TestCustomDeviceShadowing:
@@ -476,6 +640,118 @@ class TestImageDefaultHandling:
         )
         assert updated["is_default"] is True
 
+    def test_defaults_are_scoped_per_device_type(self):
+        """Different device types can hold independent defaults on shared images."""
+        manifest = {
+            "images": [
+                {
+                    "id": "qcow2:cat9k-a",
+                    "kind": "qcow2",
+                    "reference": "/images/cat9k-a.qcow2",
+                    "device_id": "cisco_cat9kv",
+                    "compatible_devices": ["cisco_cat9kv"],
+                    "is_default": False,
+                    "default_for_devices": [],
+                },
+                {
+                    "id": "qcow2:cat9k-b",
+                    "kind": "qcow2",
+                    "reference": "/images/cat9k-b.qcow2",
+                    "device_id": "cisco_cat9kv",
+                    "compatible_devices": ["cisco_cat9kv"],
+                    "is_default": False,
+                    "default_for_devices": [],
+                },
+            ]
+        }
+
+        update_image_entry(
+            manifest,
+            "qcow2:cat9k-a",
+            {"device_id": "cat9000v-uadp", "is_default": True, "default_for_device": "cat9000v-uadp"},
+        )
+        update_image_entry(
+            manifest,
+            "qcow2:cat9k-b",
+            {"device_id": "cat9800", "is_default": True, "default_for_device": "cat9800"},
+        )
+
+        image_a = find_image_by_id(manifest, "qcow2:cat9k-a")
+        image_b = find_image_by_id(manifest, "qcow2:cat9k-b")
+        assert image_a is not None
+        assert image_b is not None
+        assert image_a["default_for_devices"] == ["cat9000v-uadp"]
+        assert image_b["default_for_devices"] == ["cat9800"]
+
+    def test_default_replacement_is_scoped_to_same_device(self):
+        """Setting default for one device type does not clear other device defaults."""
+        manifest = {
+            "images": [
+                {
+                    "id": "qcow2:cat9k-a",
+                    "kind": "qcow2",
+                    "reference": "/images/cat9k-a.qcow2",
+                    "device_id": "cisco_cat9kv",
+                    "compatible_devices": ["cisco_cat9kv"],
+                    "is_default": True,
+                    "default_for_devices": ["cat9000v-uadp", "cat9800"],
+                },
+                {
+                    "id": "qcow2:cat9k-b",
+                    "kind": "qcow2",
+                    "reference": "/images/cat9k-b.qcow2",
+                    "device_id": "cisco_cat9kv",
+                    "compatible_devices": ["cisco_cat9kv"],
+                    "is_default": False,
+                    "default_for_devices": [],
+                },
+            ]
+        }
+
+        update_image_entry(
+            manifest,
+            "qcow2:cat9k-b",
+            {"device_id": "cat9000v-uadp", "is_default": True, "default_for_device": "cat9000v-uadp"},
+        )
+
+        image_a = find_image_by_id(manifest, "qcow2:cat9k-a")
+        image_b = find_image_by_id(manifest, "qcow2:cat9k-b")
+        assert image_a is not None
+        assert image_b is not None
+        assert "cat9000v-uadp" not in image_a["default_for_devices"]
+        assert "cat9800" in image_a["default_for_devices"]
+        assert image_b["default_for_devices"] == ["cat9000v-uadp"]
+
+    def test_find_image_reference_uses_device_scoped_defaults(self, tmp_path):
+        """Runtime lookup selects default based on requested device type scope."""
+        manifest_path = tmp_path / "manifest.json"
+        with patch("app.image_store.manifest_path", return_value=manifest_path):
+            save_manifest({
+                "images": [
+                    {
+                        "id": "qcow2:cat9k-a",
+                        "kind": "qcow2",
+                        "reference": "/images/cat9k-a.qcow2",
+                        "device_id": "cisco_cat9kv",
+                        "compatible_devices": ["cisco_cat9kv"],
+                        "is_default": True,
+                        "default_for_devices": ["cat9000v-uadp"],
+                    },
+                    {
+                        "id": "qcow2:cat9k-b",
+                        "kind": "qcow2",
+                        "reference": "/images/cat9k-b.qcow2",
+                        "device_id": "cisco_cat9kv",
+                        "compatible_devices": ["cisco_cat9kv"],
+                        "is_default": True,
+                        "default_for_devices": ["cat9000v-q200"],
+                    },
+                ]
+            })
+
+            assert find_image_reference("cat9000v-uadp") == "/images/cat9k-a.qcow2"
+            assert find_image_reference("cat9000v-q200") == "/images/cat9k-b.qcow2"
+
 
 class TestImageMatching:
     """Tests for device/image matching across canonical and legacy IDs."""
@@ -489,6 +765,28 @@ class TestImageMatching:
         }
 
         assert image_matches_device(image, "cisco_iosv") is True
+
+    def test_image_does_not_match_linux_family_by_kind_only(self):
+        image = {
+            "id": "docker:linux-base",
+            "kind": "docker",
+            "device_id": "linux",
+            "compatible_devices": ["linux"],
+        }
+
+        assert image_matches_device(image, "frr") is False
+
+    def test_create_image_entry_preserves_frr_device_id(self):
+        entry = create_image_entry(
+            image_id="docker:frr:10.2.1",
+            kind="docker",
+            reference="quay.io/frrouting/frr:10.2.1",
+            filename="frr-10.2.1.tar.gz",
+            device_id="frr",
+        )
+
+        assert entry["device_id"] == "frr"
+        assert entry["compatible_devices"] == ["frr"]
 
 
 class TestCompatibleDevices:

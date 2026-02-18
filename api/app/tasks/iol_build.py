@@ -23,6 +23,8 @@ from app.image_store import (
     create_image_entry,
     find_image_by_id,
     load_manifest,
+    normalize_default_device_scope_id,
+    normalize_default_device_scope_ids,
     save_manifest,
 )
 
@@ -222,12 +224,26 @@ def _update_manifest_with_iol_image(
     manifest = load_manifest()
 
     new_id = f"docker:{docker_image}"
+    default_scope = normalize_default_device_scope_id(device_id)
 
     # Check if entry already exists
     existing = find_image_by_id(manifest, new_id)
     if existing:
         logger.info(f"Docker image already in manifest: {docker_image}")
-        existing["is_default"] = True
+        scopes = normalize_default_device_scope_ids(existing.get("default_for_devices") or [])
+        if default_scope and default_scope not in scopes:
+            scopes.append(default_scope)
+        existing["default_for_devices"] = scopes
+        existing["is_default"] = bool(scopes)
+        if default_scope:
+            for img in manifest.get("images", []):
+                if img.get("id") == new_id:
+                    continue
+                other_scopes = normalize_default_device_scope_ids(img.get("default_for_devices") or [])
+                if default_scope in other_scopes:
+                    other_scopes = [scope for scope in other_scopes if scope != default_scope]
+                    img["default_for_devices"] = other_scopes
+                    img["is_default"] = bool(other_scopes)
         save_manifest(manifest)
         return
 
@@ -240,13 +256,20 @@ def _update_manifest_with_iol_image(
         version=version,
         notes="Built automatically from IOL binary",
     )
-    new_entry["is_default"] = True
+    new_entry["is_default"] = bool(default_scope)
+    new_entry["default_for_devices"] = [default_scope] if default_scope else []
     new_entry["built_from"] = iol_image_id
 
-    # Clear is_default from other images for same device
-    for img in manifest.get("images", []):
-        if img.get("device_id") == device_id and img.get("id") != new_id:
-            img["is_default"] = False
+    # Clear this device scope from other defaults.
+    if default_scope:
+        for img in manifest.get("images", []):
+            if img.get("id") == new_id:
+                continue
+            other_scopes = normalize_default_device_scope_ids(img.get("default_for_devices") or [])
+            if default_scope in other_scopes:
+                other_scopes = [scope for scope in other_scopes if scope != default_scope]
+                img["default_for_devices"] = other_scopes
+                img["is_default"] = bool(other_scopes)
 
     manifest["images"].append(new_entry)
     save_manifest(manifest)

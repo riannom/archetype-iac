@@ -102,6 +102,7 @@ export interface ImageLibraryEntry {
   uploaded_at?: string | null;
   size_bytes?: number | null;
   is_default?: boolean;
+  default_for_devices?: string[];
   notes?: string;
   compatible_devices?: string[];
   source?: string | null; // Import source (e.g., ISO filename)

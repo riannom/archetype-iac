@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DeviceManager from "./DeviceManager";
 import { DeviceModel, DeviceType, ImageLibraryEntry } from "../types";
@@ -259,7 +259,7 @@ describe("DeviceManager", () => {
       expect(screen.getByText("ISO scan complete")).toBeInTheDocument();
       expect(screen.getByText("QCOW2 upload failed")).toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: /ISO \(1\)/i }));
+      await user.selectOptions(screen.getByLabelText("Image log filter"), "iso");
       expect(screen.getByText("ISO scan complete")).toBeInTheDocument();
       expect(screen.queryByText("QCOW2 upload failed")).not.toBeInTheDocument();
     });
@@ -298,6 +298,128 @@ describe("DeviceManager", () => {
       );
 
       expect(screen.queryByRole("heading", { name: "Build Jobs" })).not.toBeInTheDocument();
+    });
+
+    it("hides raw IOL source binaries in image management mode and keeps runnable images", () => {
+      const iolLibrary: ImageLibraryEntry[] = [
+        ...mockImageLibrary,
+        {
+          id: "iol:i86bi-linux-l3.bin",
+          kind: "iol",
+          reference: "/images/i86bi-linux-l3.bin",
+          filename: "i86bi-linux-l3.bin",
+          device_id: "iol-xe",
+          build_status: "complete",
+        },
+        {
+          id: "docker:archetype/iol-xe:17.16",
+          kind: "docker",
+          reference: "archetype/iol-xe:17.16",
+          filename: "iol-xe-docker.tar",
+          device_id: "iol-xe",
+          is_default: true,
+          built_from: "iol:i86bi-linux-l3.bin",
+        },
+      ];
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} imageLibrary={iolLibrary} />
+        </TestWrapper>
+      );
+
+      expect(screen.getAllByText(/iol-xe-docker\.tar/i).length).toBeGreaterThan(0);
+      expect(screen.queryByText("i86bi-linux-l3.bin")).not.toBeInTheDocument();
+    });
+
+    it("matches cat9000v variants to canonical cat9kv images", () => {
+      const cat9kDevices: DeviceModel[] = [
+        {
+          id: "cat9000v-uadp",
+          name: "BETA CAT9000v UADP",
+          type: DeviceType.SWITCH,
+          icon: "fa-microchip",
+          versions: [],
+          isActive: true,
+          vendor: "Cisco",
+          kind: "cisco_cat9kv",
+        },
+        {
+          id: "cat9000v-q200",
+          name: "BETA CAT9000v Q200",
+          type: DeviceType.SWITCH,
+          icon: "fa-microchip",
+          versions: [],
+          isActive: true,
+          vendor: "Cisco",
+          kind: "cisco_cat9kv",
+        },
+      ];
+      const cat9kImages: ImageLibraryEntry[] = [
+        {
+          id: "qcow2:cat9kv_prd.17.15.03.qcow2",
+          kind: "qcow2",
+          reference: "/images/cat9kv_prd.17.15.03.qcow2",
+          filename: "cat9kv_prd.17.15.03.qcow2",
+          device_id: "cisco_cat9kv",
+          version: "17.15.03",
+        },
+      ];
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} deviceModels={cat9kDevices} imageLibrary={cat9kImages} />
+        </TestWrapper>
+      );
+
+      expect(screen.getAllByText("BETA CAT9000v UADP").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("BETA CAT9000v Q200").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("cat9kv_prd.17.15.03.qcow2").length).toBeGreaterThan(0);
+    });
+
+    it("does not match linux images to FRR only by shared kind", () => {
+      const linuxFamilyDevices: DeviceModel[] = [
+        {
+          id: "linux",
+          name: "Linux Server",
+          type: DeviceType.HOST,
+          icon: "fa-server",
+          versions: [],
+          isActive: true,
+          vendor: "Open Source",
+          kind: "linux",
+        },
+        {
+          id: "frr",
+          name: "FRR Container",
+          type: DeviceType.CONTAINER,
+          icon: "fa-box-open",
+          versions: [],
+          isActive: true,
+          vendor: "Open Source",
+          kind: "linux",
+        },
+      ];
+      const linuxOnlyImage: ImageLibraryEntry[] = [
+        {
+          id: "docker:alpine:3.21",
+          kind: "docker",
+          reference: "alpine:3.21",
+          filename: "alpine-3.21.tar.gz",
+          device_id: "linux",
+          version: "3.21",
+        },
+      ];
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} deviceModels={linuxFamilyDevices} imageLibrary={linuxOnlyImage} />
+        </TestWrapper>
+      );
+
+      const frrCard = screen.getByText("FRR Container").closest(".rounded-xl");
+      expect(frrCard).not.toBeNull();
+      expect(within(frrCard as HTMLElement).queryByText("alpine-3.21.tar.gz")).not.toBeInTheDocument();
     });
 
     it("shows IOL build panel when in build-jobs mode", () => {

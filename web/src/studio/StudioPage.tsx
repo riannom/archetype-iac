@@ -61,6 +61,8 @@ const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
   'cat9000v-q200': ['cisco_cat9kv'],
   'cat9000v_uadp': ['cisco_cat9kv'],
   'cat9000v_q200': ['cisco_cat9kv'],
+  c8000v: ['cisco_c8000v'],
+  ftdv: ['cisco_ftdv'],
 };
 
 /**
@@ -1085,7 +1087,6 @@ const StudioPage: React.FC = () => {
     const allowedKinds = getAllowedInstantiableImageKinds(model);
 
     const modelId = (model.id || '').toLowerCase();
-    const modelKind = (model.kind || '').toLowerCase();
     const aliases = IMAGE_COMPAT_ALIASES[modelId] || [];
 
     return imageLibrary.some((img) => {
@@ -1099,7 +1100,6 @@ const StudioPage: React.FC = () => {
 
       const deviceIds = getImageDeviceIds(img).map((id) => id.toLowerCase());
       if (deviceIds.includes(modelId)) return true;
-      if (modelKind && deviceIds.includes(modelKind)) return true;
       return aliases.some((alias) => deviceIds.includes(alias));
     });
   }, [imageLibrary]);

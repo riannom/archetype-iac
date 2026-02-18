@@ -51,9 +51,10 @@ class TestVIRL2ToVendorMap:
 
     def test_linux_mappings(self):
         """Test Linux/container device mappings."""
-        assert VIRL2_TO_VENDOR_MAP["alpine"] == "linux"
+        assert VIRL2_TO_VENDOR_MAP["alpine"] == "alpine"
         assert VIRL2_TO_VENDOR_MAP["ubuntu"] == "linux"
         assert VIRL2_TO_VENDOR_MAP["server"] == "linux"
+        assert VIRL2_TO_VENDOR_MAP["tcl"] == "tcl"
 
 
 class TestNatureToIcon:
@@ -547,8 +548,13 @@ class TestGetImageDeviceMapping:
         assert new_config is None
 
     def test_mapping_linux_devices(self):
-        """Test Linux-based devices map to linux."""
-        for virl_id in ["alpine", "ubuntu", "server"]:
+        """Test Linux-based devices map to expected draggable IDs."""
+        expected = {
+            "alpine": "alpine",
+            "ubuntu": "linux",
+            "server": "linux",
+        }
+        for virl_id, expected_device in expected.items():
             image = ParsedImage(
                 id=f"{virl_id}-latest",
                 node_definition_id=virl_id,
@@ -558,5 +564,5 @@ class TestGetImageDeviceMapping:
 
             device_id, new_config = get_image_device_mapping(image, [node_def])
 
-            assert device_id == "linux", f"Expected 'linux' for {virl_id}"
+            assert device_id == expected_device, f"Expected '{expected_device}' for {virl_id}"
             assert new_config is None

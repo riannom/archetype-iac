@@ -11,7 +11,7 @@ import type { ISOImportLogEvent } from '../../components/ISOImportModal';
 import { Modal } from '../../components/ui/Modal';
 import { usePersistedState, usePersistedSet } from '../hooks/usePersistedState';
 import { usePolling } from '../hooks/usePolling';
-import { getImageDeviceIds } from '../../utils/deviceModels';
+import { getImageDeviceIds, isImageDefaultForDevice, isInstantiableImageKind } from '../../utils/deviceModels';
 
 interface DeviceManagerProps {
   deviceModels: DeviceModel[];
@@ -76,6 +76,43 @@ interface ImageManagementLogEntry {
 type ImageManagementLogFilter = 'all' | 'errors' | 'iso' | 'docker' | 'qcow2';
 
 const IMAGE_LOG_LIMIT = 200;
+const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
+  'cat9000v-uadp': ['cisco_cat9kv'],
+  'cat9000v-q200': ['cisco_cat9kv'],
+  'cat9000v_uadp': ['cisco_cat9kv'],
+  'cat9000v_q200': ['cisco_cat9kv'],
+  c8000v: ['cisco_c8000v'],
+  ftdv: ['cisco_ftdv'],
+};
+const IMAGE_LOG_LEVEL_COLORS: Record<ImageManagementLogEntry['level'], string> = {
+  info: 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30',
+  error: 'text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/30',
+};
+const IMAGE_LOG_CATEGORY_COLORS: Record<string, string> = {
+  iso: 'text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/30',
+  docker: 'text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-900/30',
+  qcow2: 'text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/30',
+};
+
+function formatImageLogTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  return date.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function formatImageLogDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+}
 
 function normalizeBuildStatus(raw?: string | null): 'queued' | 'building' | 'complete' | 'failed' | 'ignored' | 'not_started' {
   const status = (raw || '').toLowerCase();
@@ -145,6 +182,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     'archetype:image-management:log-filter',
     'all'
   );
+  const [imageLogSearch, setImageLogSearch] = useState('');
   const [autoRefreshIolBuilds, setAutoRefreshIolBuilds] = usePersistedState<boolean>(
     'archetype:iol-build:auto-refresh',
     true
@@ -165,19 +203,56 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const isBuildJobsMode = mode === 'build-jobs';
+  const runnableImageLibrary = useMemo(
+    () => imageLibrary.filter((img) => isInstantiableImageKind(img.kind)),
+    [imageLibrary]
+  );
+  const selectedRunnableImageKinds = useMemo(() => {
+    const kinds = new Set<string>();
+    selectedImageKinds.forEach((kind) => {
+      if (isInstantiableImageKind(kind)) kinds.add(kind);
+    });
+    return kinds;
+  }, [selectedImageKinds]);
+  const resolveImageDeviceIds = useCallback((image: ImageLibraryEntry): string[] => {
+    const rawDeviceIds = getImageDeviceIds(image);
+    if (rawDeviceIds.length === 0) return [];
+
+    const normalizedRawIds = new Set(rawDeviceIds.map((id) => String(id).toLowerCase()));
+    const resolved = new Set<string>(rawDeviceIds);
+
+    deviceModels.forEach((device) => {
+      const modelId = String(device.id || '').toLowerCase();
+      const aliases = IMAGE_COMPAT_ALIASES[modelId] || [];
+      const matchesById = normalizedRawIds.has(modelId);
+      const matchesByAlias = aliases.some((alias) => normalizedRawIds.has(alias));
+      if (matchesById || matchesByAlias) {
+        resolved.add(device.id);
+      }
+    });
+
+    return Array.from(resolved);
+  }, [deviceModels]);
+  const withDeviceScopedDefault = useCallback(
+    (image: ImageLibraryEntry, deviceId: string): ImageLibraryEntry => ({
+      ...image,
+      is_default: isImageDefaultForDevice(image, deviceId),
+    }),
+    []
+  );
 
   // Build device to images map (uses compatible_devices for shared images)
   const imagesByDevice = useMemo(() => {
     const map = new Map<string, ImageLibraryEntry[]>();
-    imageLibrary.forEach((img) => {
-      getImageDeviceIds(img).forEach((devId) => {
+    runnableImageLibrary.forEach((img) => {
+      resolveImageDeviceIds(img).forEach((devId) => {
         const list = map.get(devId) || [];
-        list.push(img);
+        list.push(withDeviceScopedDefault(img, devId));
         map.set(devId, list);
       });
     });
     return map;
-  }, [imageLibrary]);
+  }, [runnableImageLibrary, resolveImageDeviceIds, withDeviceScopedDefault]);
 
   const iolSourceImages = useMemo(
     () => imageLibrary.filter((img) => (img.kind || '').toLowerCase() === 'iol'),
@@ -304,7 +379,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
         .map((device) => [device.id, String(device.vendor)])
     );
     const map = new Map<string, string[]>();
-    imageLibrary.forEach((img) => {
+    runnableImageLibrary.forEach((img) => {
       const vendors = new Set<string>();
       if (img.vendor) vendors.add(img.vendor);
       getImageDeviceIds(img).forEach((deviceId) => {
@@ -314,7 +389,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       map.set(img.id, Array.from(vendors).sort());
     });
     return map;
-  }, [deviceModels, imageLibrary]);
+  }, [deviceModels, runnableImageLibrary]);
 
   // Filter and sort devices
   const filteredDevices = useMemo(() => {
@@ -361,7 +436,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
   // Filter and sort images
   const filteredImages = useMemo(() => {
-    const filtered = imageLibrary.filter((img) => {
+    const filtered = runnableImageLibrary.filter((img) => {
       const imgVendors = imageVendorsById.get(img.id) || [];
 
       // Search filter
@@ -382,7 +457,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       }
 
       // Kind filter
-      if (selectedImageKinds.size > 0 && !selectedImageKinds.has(img.kind)) {
+      if (selectedRunnableImageKinds.size > 0 && !selectedRunnableImageKinds.has(img.kind)) {
         return false;
       }
 
@@ -410,13 +485,21 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           return 0;
       }
     });
-  }, [imageLibrary, imageSearch, selectedImageVendors, selectedImageKinds, imageAssignmentFilter, imageSort, imageVendorsById]);
+  }, [
+    runnableImageLibrary,
+    imageSearch,
+    selectedImageVendors,
+    selectedRunnableImageKinds,
+    imageAssignmentFilter,
+    imageSort,
+    imageVendorsById,
+  ]);
 
   const filteredPendingQcow2Uploads = useMemo(() => {
     if (isBuildJobsMode) return [];
     if (imageAssignmentFilter === 'assigned') return [];
     if (selectedImageVendors.size > 0) return [];
-    if (selectedImageKinds.size > 0 && !selectedImageKinds.has('qcow2')) return [];
+    if (selectedRunnableImageKinds.size > 0 && !selectedRunnableImageKinds.has('qcow2')) return [];
 
     const query = imageSearch.trim().toLowerCase();
     return pendingQcow2Uploads
@@ -426,7 +509,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     isBuildJobsMode,
     imageAssignmentFilter,
     selectedImageVendors,
-    selectedImageKinds,
+    selectedRunnableImageKinds,
     imageSearch,
     pendingQcow2Uploads,
   ]);
@@ -440,10 +523,29 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   }), [imageManagementLogs]);
 
   const filteredImageManagementLogs = useMemo(() => {
-    if (imageLogFilter === 'all') return imageManagementLogs;
-    if (imageLogFilter === 'errors') return imageManagementLogs.filter((entry) => entry.level === 'error');
-    return imageManagementLogs.filter((entry) => entry.category === imageLogFilter);
-  }, [imageManagementLogs, imageLogFilter]);
+    let filtered: ImageManagementLogEntry[];
+    if (imageLogFilter === 'all') {
+      filtered = imageManagementLogs;
+    } else if (imageLogFilter === 'errors') {
+      filtered = imageManagementLogs.filter((entry) => entry.level === 'error');
+    } else {
+      filtered = imageManagementLogs.filter((entry) => entry.category === imageLogFilter);
+    }
+
+    const query = imageLogSearch.trim().toLowerCase();
+    if (!query) return filtered;
+
+    return filtered.filter((entry) => {
+      const haystack = [
+        entry.message,
+        entry.category,
+        entry.phase,
+        entry.filename || '',
+        entry.details || '',
+      ].join('\n').toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [imageManagementLogs, imageLogFilter, imageLogSearch]);
 
   const uploadErrorCount = useMemo(
     () => imageManagementLogs.filter((entry) => entry.level === 'error').length,
@@ -457,20 +559,20 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     const seen = new Set<string>(); // avoid duplicating unassigned
 
     filteredImages.forEach((img) => {
-      const deviceIds = getImageDeviceIds(img);
+      const deviceIds = resolveImageDeviceIds(img);
       if (deviceIds.length === 0) {
         unassigned.push(img);
       } else {
         deviceIds.forEach((devId) => {
           const list = byDevice.get(devId) || [];
-          list.push(img);
+          list.push(withDeviceScopedDefault(img, devId));
           byDevice.set(devId, list);
         });
       }
     });
 
     return { unassignedImages: unassigned, assignedImagesByDevice: byDevice };
-  }, [filteredImages]);
+  }, [filteredImages, resolveImageDeviceIds, withDeviceScopedDefault]);
 
   function openFilePicker() {
     fileInputRef.current?.click();
@@ -905,9 +1007,9 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     }
   }, []);
 
-  const handleUnassignImage = async (imageId: string) => {
+  const handleUnassignImage = async (imageId: string, deviceId?: string) => {
     try {
-      await unassignImage(imageId);
+      await unassignImage(imageId, deviceId);
       onRefresh();
     } catch (error) {
       console.error('Failed to unassign image:', error);
@@ -1316,37 +1418,41 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                 Drag images onto devices to assign them. Drop zones appear when dragging.
               </p>
             </div>
-            <div className="flex gap-3">
-              <button
-                onClick={openFilePicker}
-                className="px-4 py-2 bg-sage-600 hover:bg-sage-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
-              >
-                <i className="fa-solid fa-cloud-arrow-up mr-2"></i> Upload Docker
-              </button>
-              <button
-                onClick={openQcow2Picker}
-                className="px-4 py-2 glass-control text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
-              >
-                <i className="fa-solid fa-hard-drive mr-2"></i> Upload QCOW2
-              </button>
-              <button
-                onClick={() => setShowUploadLogsModal(true)}
-                className="px-4 py-2 glass-control text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
-                title="View image upload and processing logs"
-              >
-                <i className="fa-solid fa-file-lines mr-2"></i> Logs
-                {uploadErrorCount > 0 && (
-                  <span className="ml-2 inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-[9px] font-black">
-                    {uploadErrorCount}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => setShowISOModal(true)}
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
-              >
-                <i className="fa-solid fa-compact-disc mr-2"></i> Import ISO
-              </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={openFilePicker}
+                  className="px-4 py-2 bg-sage-600 hover:bg-sage-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
+                >
+                  <i className="fa-solid fa-cloud-arrow-up mr-2"></i> Upload Docker
+                </button>
+                <button
+                  onClick={openQcow2Picker}
+                  className="px-4 py-2 glass-control text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
+                >
+                  <i className="fa-solid fa-hard-drive mr-2"></i> Upload QCOW2
+                </button>
+                <button
+                  onClick={() => setShowISOModal(true)}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
+                >
+                  <i className="fa-solid fa-compact-disc mr-2"></i> Import ISO
+                </button>
+              </div>
+              <div className="ml-2 pl-3 border-l border-stone-200 dark:border-stone-700">
+                <button
+                  onClick={() => setShowUploadLogsModal(true)}
+                  className="px-4 py-2 glass-control text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
+                  title="View image upload and processing logs"
+                >
+                  <i className="fa-solid fa-file-lines mr-2"></i> Logs
+                  {uploadErrorCount > 0 && (
+                    <span className="ml-2 inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-[9px] font-black">
+                      {uploadErrorCount}
+                    </span>
+                  )}
+                </button>
+              </div>
               <input
                 ref={fileInputRef}
                 className="hidden"
@@ -1511,7 +1617,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           <div className="flex-1 flex flex-col overflow-hidden min-h-0">
             {/* Image filter bar */}
             <ImageFilterBar
-              images={imageLibrary}
+              images={runnableImageLibrary}
               devices={deviceModels}
               searchQuery={imageSearch}
               onSearchChange={setImageSearch}
@@ -1595,7 +1701,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                           key={img.id}
                           image={img}
                           device={device}
-                          onUnassign={() => handleUnassignImage(img.id)}
+                          onUnassign={() => handleUnassignImage(img.id, deviceId)}
                           onSetDefault={() => handleSetDefaultImage(img.id, deviceId)}
                           onDelete={() => handleDeleteImage(img.id)}
                           onSync={onRefresh}
@@ -1646,136 +1752,131 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
         title="Image Upload Logs"
         size="xl"
       >
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-xs text-stone-500 dark:text-stone-400">
-              {filteredImageManagementLogs.length} shown of {imageManagementLogs.length} entries
-              {uploadErrorCount > 0 && (
-                <span className="ml-2 text-red-600 dark:text-red-400 font-semibold">
-                  {uploadErrorCount} errors
-                </span>
-              )}
+        <div className="flex flex-col h-[70vh]">
+          <div className="flex flex-wrap items-center gap-3 pb-4 border-b border-stone-200 dark:border-stone-700">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-stone-500 dark:text-stone-400">Filter:</label>
+              <select
+                aria-label="Image log filter"
+                value={imageLogFilter}
+                onChange={(e) => setImageLogFilter(e.target.value as ImageManagementLogFilter)}
+                className="px-2 py-1 text-sm bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md text-stone-700 dark:text-stone-200"
+              >
+                <option value="all">All ({imageLogCounts.all})</option>
+                <option value="errors">Errors ({imageLogCounts.errors})</option>
+                <option value="iso">ISO ({imageLogCounts.iso})</option>
+                <option value="docker">Docker ({imageLogCounts.docker})</option>
+                <option value="qcow2">QCOW2 ({imageLogCounts.qcow2})</option>
+              </select>
             </div>
+
+            <div className="flex-1 min-w-[220px]">
+              <input
+                aria-label="Search image logs"
+                type="text"
+                value={imageLogSearch}
+                onChange={(e) => setImageLogSearch(e.target.value)}
+                placeholder="Search logs..."
+                className="w-full px-3 py-1 text-sm bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md text-stone-700 dark:text-stone-200 placeholder-stone-400"
+              />
+            </div>
+
             <button
               onClick={clearImageManagementLogs}
               disabled={imageManagementLogs.length === 0}
-              className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 disabled:text-stone-400 transition-colors"
+              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 text-stone-700 dark:text-stone-300 disabled:opacity-50 transition-colors"
             >
               Clear History
             </button>
           </div>
 
-          {imageManagementLogs.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              <button
-                onClick={() => setImageLogFilter('all')}
-                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
-                  imageLogFilter === 'all'
-                    ? 'bg-sage-600 text-white'
-                    : 'glass-control text-stone-700 dark:text-stone-300'
-                }`}
-              >
-                All ({imageLogCounts.all})
-              </button>
-              <button
-                onClick={() => setImageLogFilter('errors')}
-                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
-                  imageLogFilter === 'errors'
-                    ? 'bg-red-600 text-white'
-                    : 'glass-control text-stone-700 dark:text-stone-300'
-                }`}
-              >
-                Errors ({imageLogCounts.errors})
-              </button>
-              <button
-                onClick={() => setImageLogFilter('iso')}
-                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
-                  imageLogFilter === 'iso'
-                    ? 'bg-blue-600 text-white'
-                    : 'glass-control text-stone-700 dark:text-stone-300'
-                }`}
-              >
-                ISO ({imageLogCounts.iso})
-              </button>
-              <button
-                onClick={() => setImageLogFilter('docker')}
-                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
-                  imageLogFilter === 'docker'
-                    ? 'bg-blue-600 text-white'
-                    : 'glass-control text-stone-700 dark:text-stone-300'
-                }`}
-              >
-                Docker ({imageLogCounts.docker})
-              </button>
-              <button
-                onClick={() => setImageLogFilter('qcow2')}
-                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
-                  imageLogFilter === 'qcow2'
-                    ? 'bg-blue-600 text-white'
-                    : 'glass-control text-stone-700 dark:text-stone-300'
-                }`}
-              >
-                QCOW2 ({imageLogCounts.qcow2})
-              </button>
-            </div>
-          )}
+          <div className="flex items-center justify-between pt-3 text-xs text-stone-500 dark:text-stone-400">
+            <span>
+              Showing {filteredImageManagementLogs.length} of {imageManagementLogs.length} entries
+            </span>
+            {uploadErrorCount > 0 && (
+              <span className="text-red-600 dark:text-red-400 font-semibold">
+                {uploadErrorCount} errors
+              </span>
+            )}
+          </div>
 
-          {imageManagementLogs.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-stone-300 dark:border-stone-700 p-4 text-xs text-stone-500 dark:text-stone-400">
-              No upload or processing events recorded yet.
-            </div>
-          ) : filteredImageManagementLogs.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-stone-300 dark:border-stone-700 p-4 text-xs text-stone-500 dark:text-stone-400">
-              No log entries match the current filter.
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-[60vh] overflow-y-auto custom-scrollbar">
-              {filteredImageManagementLogs.map((entry) => (
-                <div
-                  key={entry.id}
-                  className="rounded-lg border border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/40 p-3"
-                >
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="min-w-0">
-                      <div className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 truncate">
-                        {entry.message}
-                      </div>
-                      <div className="text-[10px] text-stone-500 dark:text-stone-400">
-                        {new Date(entry.timestamp).toLocaleString()}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
-                          entry.level === 'error'
-                            ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
-                            : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                        }`}
-                      >
-                        {entry.level}
-                      </span>
-                      <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-300">
-                        {entry.category}/{entry.phase}
-                      </span>
-                      <button
-                        onClick={() => copyUploadLogEntry(entry)}
-                        className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 transition-colors"
-                      >
-                        <i className={`fa-solid ${copiedUploadLogId === entry.id ? 'fa-check' : 'fa-copy'} mr-1`} />
-                        {copiedUploadLogId === entry.id ? 'Copied' : 'Copy'}
-                      </button>
-                    </div>
-                  </div>
-                  <textarea
-                    readOnly
-                    value={formatUploadLogEntry(entry)}
-                    onFocus={(e) => e.currentTarget.select()}
-                    className="w-full h-24 rounded border border-stone-200 dark:border-stone-700 bg-white/80 dark:bg-stone-950/50 px-2 py-1.5 text-[11px] font-mono text-stone-700 dark:text-stone-200 leading-relaxed resize-y"
-                  />
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="flex-1 overflow-auto mt-3">
+            {imageManagementLogs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-stone-400 dark:text-stone-500">
+                <i className="fa-solid fa-file-lines text-4xl mb-3 opacity-30"></i>
+                <p className="text-sm">No logs found</p>
+                <p className="text-xs mt-1">No upload or processing events recorded yet.</p>
+              </div>
+            ) : filteredImageManagementLogs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-stone-400 dark:text-stone-500">
+                <i className="fa-solid fa-filter-circle-xmark text-3xl mb-3 opacity-40"></i>
+                <p className="text-sm">No matching logs</p>
+                <p className="text-xs mt-1">No log entries match the current filter.</p>
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-stone-100 dark:bg-stone-800 z-10">
+                  <tr>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider w-20">Time</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider w-20">Level</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider w-24">Category</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider w-32">Phase</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider">Message</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider w-24">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-200 dark:divide-stone-700">
+                  {filteredImageManagementLogs.map((entry) => (
+                    <tr
+                      key={entry.id}
+                      className="hover:bg-stone-50 dark:hover:bg-stone-800/50 align-top"
+                    >
+                      <td className="px-3 py-2 text-stone-500 dark:text-stone-400 whitespace-nowrap font-mono text-xs">
+                        <div>{formatImageLogTime(entry.timestamp)}</div>
+                        <div className="text-[10px] text-stone-400 dark:text-stone-500">{formatImageLogDate(entry.timestamp)}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium uppercase ${IMAGE_LOG_LEVEL_COLORS[entry.level]}`}>
+                          {entry.level}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${IMAGE_LOG_CATEGORY_COLORS[entry.category] || 'text-stone-700 dark:text-stone-300 bg-stone-200 dark:bg-stone-700'}`}>
+                          {entry.category}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-[11px] text-stone-600 dark:text-stone-300 font-mono">
+                        {entry.phase}
+                      </td>
+                      <td className="px-3 py-2 text-stone-700 dark:text-stone-200 font-mono text-xs">
+                        <div>{entry.message}</div>
+                        {entry.filename && (
+                          <div className="text-[10px] text-stone-500 dark:text-stone-400 mt-1">
+                            file: {entry.filename}
+                          </div>
+                        )}
+                        {entry.details && (
+                          <pre className="mt-1 p-2 bg-stone-100 dark:bg-stone-900 rounded text-[10px] text-stone-600 dark:text-stone-300 whitespace-pre-wrap break-words max-h-20 overflow-auto custom-scrollbar">
+                            {entry.details}
+                          </pre>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={() => copyUploadLogEntry(entry)}
+                          className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 transition-colors whitespace-nowrap"
+                        >
+                          <i className={`fa-solid ${copiedUploadLogId === entry.id ? 'fa-check' : 'fa-copy'} mr-1`} />
+                          {copiedUploadLogId === entry.id ? 'Copied' : 'Copy'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       </Modal>
     </div>

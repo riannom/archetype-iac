@@ -9,7 +9,7 @@ interface DeviceCardProps {
   breadcrumb?: string;
   isSelected: boolean;
   onSelect: () => void;
-  onUnassignImage: (imageId: string) => void;
+  onUnassignImage: (imageId: string, deviceId?: string) => void;
   onSetDefaultImage: (imageId: string) => void;
 }
 
@@ -199,7 +199,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onUnassignImage(img.id);
+                    onUnassignImage(img.id, device.id);
                   }}
                   className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-stone-400 hover:text-red-500"
                   title="Unassign image"

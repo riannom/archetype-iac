@@ -48,9 +48,10 @@ VIRL2_TO_VENDOR_MAP = {
     "iol-l2": "iol-l2",
     "ioll2-xe": "iol-l2",
     # Linux/Containers
-    "alpine": "linux",
+    "alpine": "alpine",
     "ubuntu": "linux",
     "server": "linux",
+    "tcl": "tcl",
 }
 
 # Icon mapping based on device nature

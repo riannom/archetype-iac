@@ -26,7 +26,7 @@ interface DragContextValue {
   endDrag: () => void;
   setDragOverDevice: (deviceId: string | null, isValid: boolean) => void;
   assignImageToDevice: (imageId: string, deviceId: string, isDefault?: boolean) => Promise<void>;
-  unassignImage: (imageId: string) => Promise<void>;
+  unassignImage: (imageId: string, deviceId?: string) => Promise<void>;
   deleteImage: (imageId: string) => Promise<void>;
 }
 
@@ -90,9 +90,10 @@ export const DragProvider: React.FC<DragProviderProps> = ({ children, onImageAss
     onImageAssigned?.();
   }, [onImageAssigned]);
 
-  const unassignImage = useCallback(async (imageId: string) => {
+  const unassignImage = useCallback(async (imageId: string, deviceId?: string) => {
     await apiRequest(`/images/library/${encodeURIComponent(imageId)}/unassign`, {
       method: 'POST',
+      body: deviceId ? JSON.stringify({ device_id: deviceId }) : undefined,
     });
     onImageAssigned?.();
   }, [onImageAssigned]);

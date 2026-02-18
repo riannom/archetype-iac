@@ -123,6 +123,7 @@ DEVICE_VENDOR_MAP = {
     "frr": "Open Source",
     "linux": "Open Source",
     "alpine": "Open Source",
+    "tcl": "Open Source",
 }
 
 # Legacy/simplified IDs seen in filenames/manifests that should map to canonical
@@ -132,21 +133,82 @@ DEVICE_ID_ALIASES = {
     "ceos": "eos",
 }
 
+# Explicit compatibility aliases for device types that intentionally share
+# image artifacts while remaining separate draggable device IDs.
+IMAGE_COMPAT_ALIASES: dict[str, list[str]] = {
+    "cat9000v-uadp": ["cisco_cat9kv"],
+    "cat9000v-q200": ["cisco_cat9kv"],
+    "cat9000v_uadp": ["cisco_cat9kv"],
+    "cat9000v_q200": ["cisco_cat9kv"],
+}
+
+
+def normalize_default_device_scope_id(device_id: str | None) -> str | None:
+    """Normalize per-device default scope key.
+
+    Unlike canonicalize_device_id, this keeps distinct UI device IDs separate
+    (for example cat9800 vs cat9000v-uadp) so defaults can be independent.
+    """
+    if not device_id:
+        return None
+    normalized = device_id.strip().lower()
+    return normalized or None
+
+
+def normalize_default_device_scope_ids(device_ids: list[str] | None) -> list[str]:
+    """Normalize and deduplicate per-device default scope keys."""
+    if not device_ids:
+        return []
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for device_id in device_ids:
+        normalized = normalize_default_device_scope_id(device_id)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
 
 def canonicalize_device_id(device_id: str | None) -> str | None:
-    """Normalize a device ID to the canonical vendor/device key."""
+    """Normalize an image device ID to a canonical draggable device key.
+
+    Image assignment should align with UI device IDs (same IDs used in the
+    draggable device catalog), not broad runtime kinds.
+    """
     if not device_id:
         return None
 
     normalized = device_id.strip().lower()
     normalized = DEVICE_ID_ALIASES.get(normalized, normalized)
 
-    # Also let vendor alias resolution handle known aliases.
+    # Prefer exact vendor keys first (these are the UI/draggable IDs).
     try:
-        from agent.vendors import get_kind_for_device
-        return get_kind_for_device(normalized)
+        from agent.vendors import VENDOR_CONFIGS
+
+        if normalized in VENDOR_CONFIGS:
+            return normalized
+
+        alias_matches = [
+            key
+            for key, config in VENDOR_CONFIGS.items()
+            if normalized in {alias.lower() for alias in (config.aliases or [])}
+        ]
+        if len(alias_matches) == 1:
+            return alias_matches[0]
+
+        kind_matches = [
+            key
+            for key, config in VENDOR_CONFIGS.items()
+            if (config.kind or "").lower() == normalized
+        ]
+        if len(kind_matches) == 1:
+            return kind_matches[0]
     except Exception:
-        return normalized
+        pass
+
+    return normalized
 
 
 def canonicalize_device_ids(device_ids: list[str] | None) -> list[str]:
@@ -163,6 +225,35 @@ def canonicalize_device_ids(device_ids: list[str] | None) -> list[str]:
         seen.add(canonical)
         result.append(canonical)
     return result
+
+
+def _maybe_backfill_specific_linux_device(image: dict) -> str | None:
+    """Migrate legacy generic-linux assignments for known container images.
+
+    Historical manifests collapsed several Linux-family device types into
+    device_id='linux'. When image metadata clearly identifies a distinct
+    draggable type, backfill it during normalization.
+    """
+    current = normalize_default_device_scope_id(image.get("device_id"))
+    if current != "linux":
+        return image.get("device_id")
+
+    haystack = " ".join(
+        [
+            str(image.get("id") or ""),
+            str(image.get("reference") or ""),
+            str(image.get("filename") or ""),
+        ]
+    ).lower()
+    if "frr" in haystack:
+        return "frr"
+    if "haproxy" in haystack:
+        return "haproxy"
+    if "tcl" in haystack or "tiny core" in haystack:
+        return "tcl"
+    if "alpine" in haystack:
+        return "alpine"
+    return image.get("device_id")
 
 
 def image_store_root() -> Path:
@@ -189,19 +280,33 @@ def manifest_path() -> Path:
     return ensure_image_store() / "manifest.json"
 
 
-def load_manifest() -> dict:
-    path = manifest_path()
-    if not path.exists():
-        return {"images": []}
-    manifest = json.loads(path.read_text(encoding="utf-8"))
+RUNNABLE_IMAGE_KINDS = {"docker", "qcow2"}
 
-    # Normalize legacy device IDs in-memory so callers always see canonical IDs.
-    for image in manifest.get("images", []):
+
+def _normalize_manifest_images(manifest: dict) -> None:
+    """Canonicalize image metadata and backfill sensible default flags."""
+    images = manifest.get("images", [])
+    if not isinstance(images, list):
+        return
+
+    for image in images:
         if not isinstance(image, dict):
             continue
 
-        canonical_device_id = canonicalize_device_id(image.get("device_id"))
-        compatible_devices = canonicalize_device_ids(image.get("compatible_devices") or [])
+        raw_device_id = _maybe_backfill_specific_linux_device(image)
+        raw_compatible_devices = list(image.get("compatible_devices") or [])
+
+        # If a legacy Linux assignment is clearly a distinct device type and
+        # compatibility only listed linux, shift compatibility to the inferred type.
+        inferred_scope = normalize_default_device_scope_id(raw_device_id)
+        compat_scopes = {
+            normalize_default_device_scope_id(dev) for dev in raw_compatible_devices if dev
+        }
+        if inferred_scope in {"frr", "haproxy", "alpine", "tcl"} and compat_scopes <= {"linux"}:
+            raw_compatible_devices = [raw_device_id]
+
+        canonical_device_id = canonicalize_device_id(raw_device_id)
+        compatible_devices = canonicalize_device_ids(raw_compatible_devices)
         if canonical_device_id and canonical_device_id not in compatible_devices:
             compatible_devices.append(canonical_device_id)
 
@@ -209,11 +314,60 @@ def load_manifest() -> dict:
         image["compatible_devices"] = compatible_devices
         if canonical_device_id:
             image["vendor"] = get_vendor_for_device(canonical_device_id)
+        default_for_devices = normalize_default_device_scope_ids(image.get("default_for_devices") or [])
+        if not default_for_devices and image.get("is_default") and canonical_device_id:
+            # Legacy manifest entries only tracked a single boolean default.
+            scope = normalize_default_device_scope_id(canonical_device_id)
+            default_for_devices = [scope] if scope else []
+        image["default_for_devices"] = default_for_devices
+        image["is_default"] = bool(default_for_devices)
 
+    _backfill_single_image_defaults(manifest)
+
+
+def _backfill_single_image_defaults(manifest: dict) -> None:
+    """Mark a runnable image default when it is the only match for a device."""
+    images = [img for img in manifest.get("images", []) if isinstance(img, dict)]
+    if not images:
+        return
+
+    candidate_devices: set[str] = set()
+    for image in images:
+        kind = str(image.get("kind") or "").lower()
+        if kind not in RUNNABLE_IMAGE_KINDS:
+            continue
+        for device_id in image.get("compatible_devices") or []:
+            canonical = canonicalize_device_id(device_id)
+            if canonical:
+                candidate_devices.add(canonical)
+
+    for device_id in candidate_devices:
+        matches = [
+            image
+            for image in images
+            if str(image.get("kind") or "").lower() in RUNNABLE_IMAGE_KINDS
+            and image_matches_device(image, device_id)
+        ]
+        if len(matches) == 1:
+            scopes = normalize_default_device_scope_ids(matches[0].get("default_for_devices") or [])
+            scope = normalize_default_device_scope_id(device_id)
+            if scope and scope not in scopes:
+                scopes.append(scope)
+                matches[0]["default_for_devices"] = scopes
+            matches[0]["is_default"] = bool(matches[0].get("default_for_devices"))
+
+
+def load_manifest() -> dict:
+    path = manifest_path()
+    if not path.exists():
+        return {"images": []}
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    _normalize_manifest_images(manifest)
     return manifest
 
 
 def save_manifest(data: dict) -> None:
+    _normalize_manifest_images(data)
     path = manifest_path()
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -534,21 +688,68 @@ def ensure_custom_device_exists(device_id: str) -> Optional[dict]:
     return add_custom_device(custom_device)
 
 
+def _device_compatibility_tokens(device_id: str | None) -> set[str]:
+    """Return normalized matching tokens for a device ID."""
+    canonical = canonicalize_device_id(device_id)
+    if not canonical:
+        return set()
+
+    tokens = {canonical}
+
+    # Direct aliases: target -> legacy/shared IDs.
+    for alias in IMAGE_COMPAT_ALIASES.get(canonical, []):
+        normalized = canonicalize_device_id(alias)
+        if normalized:
+            tokens.add(normalized)
+
+    # Reverse aliases: legacy/shared ID -> one or more target device IDs.
+    for target, aliases in IMAGE_COMPAT_ALIASES.items():
+        if canonical in aliases:
+            normalized_target = canonicalize_device_id(target)
+            if normalized_target:
+                tokens.add(normalized_target)
+
+    return tokens
+
+
 def image_matches_device(image: dict, device_id: str) -> bool:
     """Check if an image matches a device via device_id or compatible_devices.
 
-    Device IDs are normalized to canonical IDs before comparison.
+    Device IDs are normalized to draggable device IDs. Matching also applies
+    explicit compatibility aliases for known shared-image families.
     """
-    target = canonicalize_device_id(device_id)
-    if not target:
+    target_tokens = _device_compatibility_tokens(device_id)
+    if not target_tokens:
         return False
 
-    if canonicalize_device_id(image.get("device_id") or "") == target:
-        return True
+    image_tokens: set[str] = set()
+    image_tokens.update(_device_compatibility_tokens(image.get("device_id")))
     for cd in image.get("compatible_devices") or []:
-        if canonicalize_device_id(cd) == target:
-            return True
-    return False
+        image_tokens.update(_device_compatibility_tokens(cd))
+
+    return bool(image_tokens.intersection(target_tokens))
+
+
+def get_image_default_device_scopes(image: dict) -> list[str]:
+    """Return normalized per-device default scopes for an image entry."""
+    scopes = normalize_default_device_scope_ids(image.get("default_for_devices") or [])
+    if scopes:
+        return scopes
+
+    # Legacy fallback: boolean default scoped to primary device_id.
+    if image.get("is_default"):
+        scope = normalize_default_device_scope_id(image.get("device_id"))
+        if scope:
+            return [scope]
+    return []
+
+
+def is_image_default_for_device(image: dict, device_id: str) -> bool:
+    """Check whether image is default for the specific device type."""
+    scope = normalize_default_device_scope_id(device_id)
+    if not scope:
+        return False
+    return scope in get_image_default_device_scopes(image)
 
 
 def get_device_image_count(device_id: str) -> int:
@@ -576,6 +777,10 @@ def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
         "iosv": "iosv",
         "csr": "csr",
         "nxos": "nxos",
+        "frr": "frr",
+        "haproxy": "haproxy",
+        "alpine": "alpine",
+        "tcl": "tcl",
         "viosl2": "iosvl2",
         "iosvl2": "iosvl2",
         "iosxr": "iosxr",
@@ -676,6 +881,7 @@ def create_image_entry(
         "size_bytes": size_bytes,
         "sha256": sha256,
         "is_default": False,
+        "default_for_devices": [],
         "notes": notes,
         "compatible_devices": normalized_compatible_devices,
         "source": source,
@@ -715,6 +921,8 @@ def update_image_entry(
     Returns:
         Updated image entry or None if not found
     """
+    default_for_device = normalize_default_device_scope_id(updates.pop("default_for_device", None))
+
     for item in manifest.get("images", []):
         if item.get("id") == image_id:
             # Update vendor if device_id is being changed
@@ -725,6 +933,9 @@ def update_image_entry(
             if "compatible_devices" in updates:
                 updates["compatible_devices"] = canonicalize_device_ids(updates["compatible_devices"])
 
+            if "default_for_devices" in updates:
+                updates["default_for_devices"] = normalize_default_device_scope_ids(updates["default_for_devices"])
+
             # Ensure device_id is included in compatible_devices when assigned.
             if updates.get("device_id"):
                 compatible = updates.get("compatible_devices")
@@ -734,12 +945,43 @@ def update_image_entry(
                     compatible.append(updates["device_id"])
                 updates["compatible_devices"] = compatible
 
-            # Handle is_default - if setting as default, unset other defaults for same device
-            if updates.get("is_default") and updates.get("device_id"):
-                device_id = updates.get("device_id") or item.get("device_id")
-                for other in manifest.get("images", []):
-                    if other.get("device_id") == device_id and other.get("id") != image_id:
-                        other["is_default"] = False
+            if "is_default" in updates:
+                requested_default = bool(updates["is_default"])
+                default_scope = default_for_device or normalize_default_device_scope_id(
+                    updates.get("device_id") or item.get("device_id")
+                )
+                current_scopes = updates.get("default_for_devices")
+                if current_scopes is None:
+                    current_scopes = get_image_default_device_scopes(item)
+
+                if requested_default:
+                    if default_scope:
+                        # Only one default image per device scope.
+                        for other in manifest.get("images", []):
+                            if other.get("id") == image_id:
+                                continue
+                            other_scopes = get_image_default_device_scopes(other)
+                            if default_scope in other_scopes:
+                                other_scopes = [scope for scope in other_scopes if scope != default_scope]
+                                other["default_for_devices"] = other_scopes
+                                other["is_default"] = bool(other_scopes)
+                        if default_scope not in current_scopes:
+                            current_scopes.append(default_scope)
+                        updates["default_for_devices"] = normalize_default_device_scope_ids(current_scopes)
+                        updates["is_default"] = True
+                    else:
+                        # No scope available; leave existing default scopes unchanged.
+                        updates.pop("is_default", None)
+                else:
+                    if default_scope:
+                        current_scopes = [scope for scope in current_scopes if scope != default_scope]
+                        updates["default_for_devices"] = normalize_default_device_scope_ids(current_scopes)
+                        updates["is_default"] = bool(updates["default_for_devices"])
+                    else:
+                        updates["default_for_devices"] = []
+                        updates["is_default"] = False
+            elif "default_for_devices" in updates:
+                updates["is_default"] = bool(updates["default_for_devices"])
 
             item.update(updates)
             return item
@@ -879,7 +1121,7 @@ def find_image_reference(device_id: str, version: str | None = None) -> str | No
     for img in images:
         if img.get("kind") not in supported_kinds:
             continue
-        if image_matches_device(img, device_id) and img.get("is_default"):
+        if image_matches_device(img, device_id) and is_image_default_for_device(img, device_id):
             return img.get("reference")
 
     # Fall back to any image for this device type

@@ -79,6 +79,35 @@ export function getImageDeviceIds(image: ImageLibraryEntry): string[] {
   return image.device_id ? [image.device_id] : [];
 }
 
+export function normalizeDefaultDeviceScopeId(deviceId?: string | null): string | null {
+  if (!deviceId) return null;
+  const normalized = String(deviceId).trim().toLowerCase();
+  return normalized || null;
+}
+
+export function getImageDefaultDeviceIds(image: ImageLibraryEntry): string[] {
+  const scopedDefaults = (image.default_for_devices || [])
+    .map((id) => normalizeDefaultDeviceScopeId(id))
+    .filter((id): id is string => Boolean(id));
+  if (scopedDefaults.length > 0) {
+    return Array.from(new Set(scopedDefaults));
+  }
+
+  // Legacy fallback for entries that only tracked a boolean default flag.
+  if (image.is_default && image.device_id) {
+    const scope = normalizeDefaultDeviceScopeId(image.device_id);
+    return scope ? [scope] : [];
+  }
+
+  return [];
+}
+
+export function isImageDefaultForDevice(image: ImageLibraryEntry, deviceId?: string | null): boolean {
+  const scope = normalizeDefaultDeviceScopeId(deviceId);
+  if (!scope) return false;
+  return getImageDefaultDeviceIds(image).includes(scope);
+}
+
 /**
  * Flatten vendor categories into a flat list of DeviceModels
  */
