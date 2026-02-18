@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import types
 
 import pytest
@@ -118,14 +119,35 @@ def test_kill_orphaned_virsh(monkeypatch):
             self.stdout = stdout
             self.returncode = returncode
 
-    killed = []
+    sent_signals: list[tuple[int, int]] = []
+    alive = {123}
 
     monkeypatch.setattr(console_lock_mod.subprocess, "run", lambda *_args, **_kwargs: Result("123\n456\n"))
     monkeypatch.setattr(console_lock_mod.os, "getpid", lambda: 456)
-    monkeypatch.setattr(console_lock_mod.os, "kill", lambda pid, _sig: killed.append(pid))
+    monkeypatch.setattr(console_lock_mod.time, "sleep", lambda *_args, **_kwargs: None)
+
+    now = {"value": 0.0}
+
+    def fake_monotonic() -> float:
+        now["value"] += 0.6
+        return now["value"]
+
+    monkeypatch.setattr(console_lock_mod.time, "monotonic", fake_monotonic)
+
+    def fake_kill(pid: int, sig: int):
+        sent_signals.append((pid, sig))
+        if sig == 0:
+            if pid not in alive:
+                raise ProcessLookupError()
+            return
+        if sig == signal.SIGKILL:
+            alive.discard(pid)
+
+    monkeypatch.setattr(console_lock_mod.os, "kill", fake_kill)
 
     assert console_lock_mod.kill_orphaned_virsh("vm1") == 1
-    assert killed == [123]
+    assert (123, signal.SIGTERM) in sent_signals
+    assert (123, signal.SIGKILL) in sent_signals
 
 
 def test_session_registry_register_get_unregister():

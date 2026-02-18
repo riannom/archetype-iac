@@ -72,6 +72,12 @@ def get_session(domain_name: str) -> Optional[ActiveConsoleSession]:
         return _registry.get(domain_name)
 
 
+def list_active_domains() -> list[str]:
+    """Return a snapshot of domains with active web console sessions."""
+    with _registry_lock:
+        return list(_registry.keys())
+
+
 # ---------------------------------------------------------------------------
 # PtyInjector — minimal pexpect replacement for raw PTY I/O
 # ---------------------------------------------------------------------------

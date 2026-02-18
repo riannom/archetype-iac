@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 from contextlib import contextmanager
 from typing import Generator
 
@@ -60,9 +61,21 @@ def kill_orphaned_virsh(domain_name: str) -> int:
     """Kill orphaned virsh console processes for a domain.
 
     Finds processes matching 'virsh.*console.*<domain_name>' and sends
-    SIGTERM, then SIGKILL if still alive. Returns number of processes killed.
+    SIGTERM, escalating to SIGKILL if they remain alive. Returns number of
+    processes confirmed terminated.
     """
     killed = 0
+
+    def _pid_exists(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # Process exists but we cannot signal it.
+            return True
+
     try:
         result = subprocess.run(
             ["pgrep", "-f", f"virsh.*console.*{domain_name}"],
@@ -80,8 +93,31 @@ def kill_orphaned_virsh(domain_name: str) -> int:
                 if pid == my_pid:
                     continue
                 os.kill(pid, signal.SIGTERM)
-                killed += 1
-                logger.info(f"Killed orphaned virsh console process {pid} for {domain_name}")
+
+                # Give virsh a short grace window to exit cleanly.
+                term_deadline = time.monotonic() + 1.0
+                while time.monotonic() < term_deadline and _pid_exists(pid):
+                    time.sleep(0.05)
+
+                if _pid_exists(pid):
+                    os.kill(pid, signal.SIGKILL)
+                    kill_deadline = time.monotonic() + 1.0
+                    while time.monotonic() < kill_deadline and _pid_exists(pid):
+                        time.sleep(0.05)
+
+                if _pid_exists(pid):
+                    logger.warning(
+                        "Failed to terminate orphaned virsh console process %s for %s",
+                        pid,
+                        domain_name,
+                    )
+                else:
+                    killed += 1
+                    logger.info(
+                        "Killed orphaned virsh console process %s for %s",
+                        pid,
+                        domain_name,
+                    )
             except (ValueError, ProcessLookupError):
                 pass
             except OSError as e:

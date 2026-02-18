@@ -200,6 +200,7 @@ logger = logging.getLogger(__name__)
 _registered = False
 _heartbeat_task: asyncio.Task | None = None
 _event_listener_task: asyncio.Task | None = None
+_fix_interfaces_task: asyncio.Task | None = None
 
 # Overlay network manager (lazy initialized)
 # Deploy results cache for concurrent request deduplication
@@ -391,6 +392,36 @@ async def _fix_running_interfaces() -> None:
 
         if attempt == 0:
             await asyncio.sleep(5)
+
+
+async def _cleanup_lingering_virsh_sessions() -> None:
+    """Best-effort shutdown cleanup for active virsh console sessions."""
+    try:
+        from agent.console_session_registry import list_active_domains, unregister_session
+        from agent.virsh_console_lock import kill_orphaned_virsh
+
+        for domain in list_active_domains():
+            try:
+                unregister_session(domain)
+            except Exception:
+                pass
+
+            try:
+                killed = await asyncio.to_thread(kill_orphaned_virsh, domain)
+                if killed > 0:
+                    logger.info(
+                        "Terminated %d lingering virsh console process(es) for %s",
+                        killed,
+                        domain,
+                    )
+            except Exception as e:
+                logger.debug(
+                    "Failed to clean up lingering virsh console session for %s: %s",
+                    domain,
+                    e,
+                )
+    except Exception as e:
+        logger.debug(f"Virsh session cleanup skipped: {e}")
 
 
 def provider_status_to_schema(status: ProviderNodeStatus) -> NodeStatus:
@@ -831,7 +862,7 @@ async def heartbeat_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - register on startup, cleanup on shutdown."""
-    global _heartbeat_task, _event_listener_task, _lock_manager
+    global _heartbeat_task, _event_listener_task, _fix_interfaces_task, _lock_manager
 
     logger.info(f"Agent {AGENT_ID} starting...")
 
@@ -885,7 +916,7 @@ async def lifespan(app: FastAPI):
             )
         if init_info.get("ovs_plugin_started"):
             logger.info("Docker OVS network plugin started")
-            asyncio.create_task(_fix_running_interfaces())
+            _fix_interfaces_task = asyncio.create_task(_fix_running_interfaces())
     except Exception as e:
         logger.warning(f"Failed to recover network allocations: {e}")
 
@@ -982,9 +1013,21 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+    if _fix_interfaces_task:
+        _fix_interfaces_task.cancel()
+        try:
+            await _fix_interfaces_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            _fix_interfaces_task = None
+
     # Stop carrier monitor
     if _carrier_monitor is not None:
         _carrier_monitor.stop()
+
+    # Terminate any lingering virsh console sessions before backend shutdown.
+    await _cleanup_lingering_virsh_sessions()
 
     # Close network backend
     try:
@@ -7662,6 +7705,10 @@ async def _console_websocket_libvirt(
                 await asyncio.wait_for(process.wait(), timeout=2.0)
             except asyncio.TimeoutError:
                 process.kill()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
 
         try:
             os.close(master_fd)
