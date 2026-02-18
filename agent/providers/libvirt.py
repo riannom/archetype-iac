@@ -38,6 +38,7 @@ from agent.providers.base import (
 from agent.readiness import ReadinessResult, get_libvirt_probe, get_readiness_timeout
 from agent.vendors import (
     get_config_extraction_settings,
+    get_kind_for_device,
     get_console_credentials,
     get_console_method,
     get_libvirt_config,
@@ -2032,6 +2033,10 @@ class LibvirtProvider(Provider):
                 config_file = workspace / "configs" / node_name / "startup-config"
                 if config_file.exists():
                     startup_config = config_file.read_text()
+            if startup_config:
+                startup_config = self._prepare_startup_config_for_injection(
+                    kind, startup_config
+                )
 
             if startup_config and libvirt_config.config_inject_method == "bootflash":
                 from agent.providers.bootflash_inject import inject_startup_config
@@ -2136,6 +2141,69 @@ class LibvirtProvider(Provider):
                 node_name=node_name,
                 error=str(e),
             )
+
+    def _prepare_startup_config_for_injection(
+        self,
+        kind: str,
+        startup_config: str,
+    ) -> str:
+        """Normalize startup-config content before disk/ISO injection.
+
+        N9Kv extraction may include serial-console prompt/echo artifacts
+        (for example, 'switch# show running-config') that break bootstrap
+        parsing when staged directly into bootflash.
+        """
+        text = startup_config or ""
+        if not text:
+            return ""
+
+        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+        text = ansi_escape.sub("", text).replace("\r", "")
+
+        # Keep normalization narrowly scoped to N9Kv bootflash staging.
+        vendor = get_vendor_config(kind)
+        canonical_kind = vendor.kind if vendor else get_kind_for_device(kind)
+        if canonical_kind != "cisco_n9kv":
+            return text
+
+        cmd_echo_pat = re.compile(
+            r"^\s*(?:[^\s]+(?:\([^)\r\n]+\))?[>#]\s*)?"
+            r"(?:show\s+running-config|show\s+startup-config|terminal\s+length\s+0)\s*$",
+            re.IGNORECASE,
+        )
+        prompt_only_pat = re.compile(
+            r"^\s*[A-Za-z0-9_.-]+(?:\([^)\r\n]+\))?[>#]\s*$"
+        )
+
+        cleaned: list[str] = []
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                cleaned.append(line)
+                continue
+            if cmd_echo_pat.match(line):
+                continue
+            if stripped.startswith("Building configuration"):
+                continue
+            if stripped.startswith("Connected to domain"):
+                continue
+            if stripped.startswith("Escape character is"):
+                continue
+            if stripped == "--More--":
+                continue
+            if prompt_only_pat.match(line):
+                continue
+            cleaned.append(line)
+
+        while cleaned and not cleaned[0].strip():
+            cleaned = cleaned[1:]
+        while cleaned and not cleaned[-1].strip():
+            cleaned = cleaned[:-1]
+
+        normalized = "\n".join(cleaned)
+        if normalized and not normalized.endswith("\n"):
+            normalized += "\n"
+        return normalized
 
     async def destroy_node(
         self,

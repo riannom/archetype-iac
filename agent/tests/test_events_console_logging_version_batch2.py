@@ -286,6 +286,29 @@ def test_console_extractor_clean_config(monkeypatch) -> None:
     assert "interface eth0" in cleaned
 
 
+def test_console_extractor_clean_config_strips_prompt_prefixed_echoes() -> None:
+    import agent.console_extractor as console_extractor
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    raw = (
+        "\r\n"
+        "N9K-4# show running-config\r\n"
+        "Building configuration...\r\n"
+        "\r\n"
+        "version 10.3(3)\r\n"
+        "hostname N9K-4\r\n"
+        "N9K-4#\r\n"
+    )
+    cleaned = extractor._clean_config(raw, "show running-config")
+
+    assert "show running-config" not in cleaned
+    assert "N9K-4#" not in cleaned
+    assert "version 10.3(3)" in cleaned
+    assert "hostname N9K-4" in cleaned
+
+
 def test_console_extractor_validate_config_rejects_truncated_echo() -> None:
     import agent.console_extractor as console_extractor
 

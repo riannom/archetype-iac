@@ -443,8 +443,9 @@ class SerialConsoleExtractor:
 
         Removes:
         - ANSI escape sequences
-        - The command echo
+        - Command echo lines (with or without prompt prefixes)
         - "Building configuration..." messages
+        - Stray prompt/banner lines from serial transports
         - Extra blank lines
         - Terminal control characters
         """
@@ -458,12 +459,35 @@ class SerialConsoleExtractor:
         # Split into lines for processing
         lines = output.split('\n')
 
-        # Remove command echo (first line usually)
-        if lines and command in lines[0]:
-            lines = lines[1:]
-
-        # Remove "Building configuration..." line
-        lines = [line for line in lines if not line.strip().startswith("Building configuration")]
+        # Remove command echo lines, including optional prompt prefixes.
+        cmd_pat = re.compile(
+            rf"^\s*(?:[^\s]+(?:\([^)\r\n]+\))?[>#]\s*)?{re.escape(command)}\s*$",
+            re.IGNORECASE,
+        )
+        # Remove pure prompt lines left in captured output.
+        prompt_only_pat = re.compile(
+            r"^\s*[A-Za-z0-9_.-]+(?:\([^)\r\n]+\))?[>#]\s*$"
+        )
+        cleaned_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if cmd_pat.match(line):
+                continue
+            if not stripped:
+                cleaned_lines.append(line)
+                continue
+            if stripped.startswith("Building configuration"):
+                continue
+            if stripped.startswith("Connected to domain"):
+                continue
+            if stripped.startswith("Escape character is"):
+                continue
+            if stripped == "--More--":
+                continue
+            if prompt_only_pat.match(line):
+                continue
+            cleaned_lines.append(line)
+        lines = cleaned_lines
 
         # Remove empty lines at start and end
         while lines and not lines[0].strip():

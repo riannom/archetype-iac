@@ -167,6 +167,41 @@ def test_libvirt_domain_name_and_prefix() -> None:
     assert prefix == "arch-lab"
 
 
+def test_libvirt_prepare_startup_config_for_n9kv_strips_console_noise() -> None:
+    provider = _make_libvirt_provider()
+    raw = (
+        "\r\n"
+        "N9K-4# show running-config\r\n"
+        "Building configuration...\r\n"
+        "\r\n"
+        "version 10.3(3)\r\n"
+        "hostname N9K-4\r\n"
+        "N9K-4#\r\n"
+    )
+    cleaned = provider._prepare_startup_config_for_injection("cisco_n9kv", raw)
+
+    assert "show running-config" not in cleaned
+    assert "N9K-4#" not in cleaned
+    assert "version 10.3(3)" in cleaned
+    assert cleaned.endswith("\n")
+
+
+def test_libvirt_prepare_startup_config_for_n9kv_alias_strips_console_noise() -> None:
+    provider = _make_libvirt_provider()
+    raw = "N9K-4# show running-config\r\nhostname N9K-4\r\nN9K-4#\r\n"
+    cleaned = provider._prepare_startup_config_for_injection("nxosv9000", raw)
+
+    assert cleaned == "hostname N9K-4\n"
+
+
+def test_libvirt_prepare_startup_config_non_n9kv_only_normalizes_newlines() -> None:
+    provider = _make_libvirt_provider()
+    raw = "Router# show running-config\r\nhostname R1\r\n"
+    cleaned = provider._prepare_startup_config_for_injection("cisco_iosv", raw)
+
+    assert cleaned == "Router# show running-config\nhostname R1\n"
+
+
 def test_libvirt_undefine_domain_falls_back_to_nvram(monkeypatch) -> None:
     provider = _make_libvirt_provider()
 
