@@ -2029,6 +2029,7 @@ class LibvirtProvider(Provider):
                 )
 
             # Inject startup-config into bootflash if supported
+            inject_summary = ""
             if not startup_config:
                 config_file = workspace / "configs" / node_name / "startup-config"
                 if config_file.exists():
@@ -2040,6 +2041,7 @@ class LibvirtProvider(Provider):
 
             if startup_config and libvirt_config.config_inject_method == "bootflash":
                 from agent.providers.bootflash_inject import inject_startup_config
+                inject_diag: dict[str, Any] = {}
                 inject_ok = await asyncio.to_thread(
                     inject_startup_config,
                     overlay_path,
@@ -2047,7 +2049,11 @@ class LibvirtProvider(Provider):
                     partition=libvirt_config.config_inject_partition,
                     fs_type=libvirt_config.config_inject_fs_type,
                     config_path=libvirt_config.config_inject_path,
+                    diagnostics=inject_diag,
                 )
+                inject_summary = self._format_injection_diagnostics(inject_ok, inject_diag)
+                if inject_summary:
+                    logger.info("Config injection details for %s: %s", node_name, inject_summary)
                 if inject_ok:
                     logger.info("Injected startup config for %s (%d bytes)", node_name, len(startup_config))
                 else:
@@ -2122,11 +2128,15 @@ class LibvirtProvider(Provider):
 
             logger.info(f"Defined domain {domain_name} (not started)")
 
+            details = f"Defined domain {domain_name}"
+            if inject_summary:
+                details = f"{details}\nConfig injection: {inject_summary}"
+
             return NodeActionResult(
                 success=True,
                 node_name=node_name,
                 new_status=NodeStatus.STOPPED,
-                stdout=f"Defined domain {domain_name}",
+                stdout=details,
             )
 
         except libvirt.libvirtError as e:
@@ -2210,6 +2220,46 @@ class LibvirtProvider(Provider):
         if normalized and not normalized.endswith("\n"):
             normalized += "\n"
         return normalized
+
+    def _format_injection_diagnostics(self, inject_ok: bool, diag: dict[str, Any]) -> str:
+        """Render compact bootflash injection diagnostics for callback logs."""
+        if not diag:
+            return ""
+
+        parts: list[str] = [f"ok={inject_ok}"]
+        bytes_written = diag.get("bytes")
+        if bytes_written is not None:
+            parts.append(f"bytes={bytes_written}")
+
+        partition = diag.get("resolved_partition")
+        if partition:
+            parts.append(f"partition={partition}")
+
+        fs_type = diag.get("fs_type")
+        if fs_type:
+            parts.append(f"fs={fs_type}")
+
+        requested = diag.get("requested_config_path")
+        if requested:
+            parts.append(f"requested={requested}")
+
+        written_paths = diag.get("written_paths")
+        if isinstance(written_paths, list) and written_paths:
+            parts.append(f"written={','.join(str(p) for p in written_paths)}")
+        else:
+            targets = diag.get("write_targets")
+            if isinstance(targets, list) and targets:
+                parts.append(f"targets={','.join(str(p) for p in targets)}")
+
+        error = diag.get("error")
+        if error:
+            parts.append(f"error={error}")
+
+        exception = diag.get("exception")
+        if exception:
+            parts.append(f"exception={exception}")
+
+        return " ".join(parts)
 
     async def destroy_node(
         self,

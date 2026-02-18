@@ -1880,6 +1880,11 @@ class NodeLifecycleManager:
                 self.log_parts.append(f"  {ns.node_name}: CREATE FAILED - {error_msg}")
                 return None
 
+            create_details = (create_result.get("details") or "").strip()
+            if create_details and node_provider == "libvirt":
+                for line in create_details.splitlines():
+                    self.log_parts.append(f"    {ns.node_name} create: {line}")
+
             # Start container/VM
             start_result = await agent_client.start_node_on_agent(
                 self.agent,

@@ -1047,6 +1047,7 @@ class CreateNodeResponse(BaseModel):
     container_name: str | None = None
     container_id: str | None = None
     status: str = "unknown"
+    details: str | None = None
     error: str | None = None
     duration_ms: int | None = None
 

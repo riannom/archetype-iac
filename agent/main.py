@@ -3931,6 +3931,7 @@ async def create_node(
         success=result.success,
         container_name=provider_instance.get_container_name(lab_id, node_name) if hasattr(provider_instance, "get_container_name") else f"archetype-{lab_id}-{node_name}",
         status=result.new_status.value if result.new_status else "unknown",
+        details=result.stdout or result.stderr or None,
         error=result.error,
         duration_ms=elapsed_ms,
     )

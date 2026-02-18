@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ def inject_startup_config(
     partition: int = 0,
     fs_type: str = "ext2",
     config_path: str = "/startup-config",
+    diagnostics: dict[str, Any] | None = None,
 ) -> bool:
     """Write *config_content* into the bootflash partition of *overlay_path*.
 
@@ -49,16 +51,28 @@ def inject_startup_config(
     Returns:
         True on success, False on any failure (logged as warning).
     """
+    diag = diagnostics if diagnostics is not None else {}
+    diag.clear()
+    diag["overlay_path"] = str(overlay_path)
+    diag["fs_type"] = fs_type
+    diag["requested_config_path"] = config_path
+    diag["partition_hint"] = partition
+
     if not overlay_path.exists():
+        diag["error"] = "overlay_missing"
         logger.warning("Overlay image does not exist: %s", overlay_path)
         return False
 
     if not config_content or not config_content.strip():
+        diag["error"] = "empty_config"
         logger.debug("Empty config content, skipping injection")
         return False
 
+    diag["bytes"] = len(config_content)
+
     acquired = _nbd_lock.acquire(timeout=_LOCK_TIMEOUT)
     if not acquired:
+        diag["error"] = "nbd_lock_timeout"
         logger.warning("Could not acquire NBD lock within %ds", _LOCK_TIMEOUT)
         return False
 
@@ -76,7 +90,9 @@ def inject_startup_config(
 
         # Wait for partition devices to appear
         part_dev = _resolve_partition(partition, fs_type)
+        diag["resolved_partition"] = part_dev
         if not part_dev:
+            diag["error"] = "partition_not_found"
             logger.warning(
                 "No suitable bootflash partition found in %s", overlay_path
             )
@@ -96,6 +112,7 @@ def inject_startup_config(
             write_targets.append("/bootflash/startup-config")
         elif requested == "/bootflash/startup-config":
             write_targets.append("/startup-config")
+        diag["write_targets"] = write_targets
 
         written_paths: list[str] = []
         for rel_path in write_targets:
@@ -103,9 +120,11 @@ def inject_startup_config(
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(config_content)
             written_paths.append(rel_path)
+        diag["written_paths"] = written_paths
 
         # Flush to disk
         _run(["sync"])
+        diag["sync"] = True
 
         logger.info(
             "Wrote %d bytes to %s on %s",
@@ -113,9 +132,12 @@ def inject_startup_config(
             ",".join(written_paths),
             part_dev,
         )
+        diag["success"] = True
         return True
 
-    except Exception:
+    except Exception as exc:
+        diag["error"] = "exception"
+        diag["exception"] = str(exc)
         logger.warning(
             "Config injection failed for %s", overlay_path, exc_info=True
         )
