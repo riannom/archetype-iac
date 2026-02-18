@@ -355,8 +355,8 @@ const StudioPage: React.FC = () => {
           actual_state: wsState.actual_state,
           error_message: wsState.error_message,
           is_ready: wsState.is_ready,
-          host_id: wsState.host_id,
-          host_name: wsState.host_name,
+          host_id: wsState.host_id ?? prev[nodeId]?.host_id,
+          host_name: wsState.host_name ?? prev[nodeId]?.host_name,
           // Preserve image-sync fields when WS payload omits them.
           // Clear only when server explicitly sends null.
           image_sync_status:
