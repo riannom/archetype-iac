@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import FilterChip from './FilterChip';
 import { DeviceModel, ImageLibraryEntry } from '../types';
+import { getImageDeviceIds } from '../../utils/deviceModels';
 
 export type ImageAssignmentFilter = 'all' | 'unassigned' | 'assigned';
 export type ImageSortOption = 'name' | 'vendor' | 'kind' | 'date';
@@ -23,6 +24,7 @@ interface ImageFilterBarProps {
 
 const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
   images,
+  devices,
   searchQuery,
   onSearchChange,
   selectedVendors,
@@ -39,11 +41,20 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
   const { vendors, kinds, assignmentCounts } = useMemo(() => {
     const vendorSet = new Set<string>();
     const kindSet = new Set<string>();
+    const deviceVendorById = new Map(
+      devices
+        .filter((device) => !!device.vendor)
+        .map((device) => [device.id, String(device.vendor)])
+    );
     let unassigned = 0;
     let assigned = 0;
 
     images.forEach((img) => {
       if (img.vendor) vendorSet.add(img.vendor);
+      getImageDeviceIds(img).forEach((deviceId) => {
+        const fallbackVendor = deviceVendorById.get(deviceId);
+        if (fallbackVendor) vendorSet.add(fallbackVendor);
+      });
       kindSet.add(img.kind);
       if (img.device_id) {
         assigned++;
@@ -57,7 +68,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
       kinds: Array.from(kindSet).sort(),
       assignmentCounts: { unassigned, assigned, all: images.length },
     };
-  }, [images]);
+  }, [images, devices]);
 
   const hasActiveFilters =
     searchQuery.length > 0 ||

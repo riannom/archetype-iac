@@ -78,10 +78,19 @@ interface ImageProgress {
   error_message?: string;
 }
 
+export interface ISOImportLogEvent {
+  level: 'info' | 'error';
+  phase: string;
+  message: string;
+  filename?: string;
+  details?: string;
+}
+
 interface ISOImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onImportComplete: () => void;
+  onLogEvent?: (event: ISOImportLogEvent) => void;
 }
 
 type Step = 'input' | 'uploading' | 'scanning' | 'review' | 'importing' | 'complete';
@@ -97,7 +106,12 @@ const formatBytes = (bytes: number): string => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
-const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImportComplete }) => {
+const ISOImportModal: React.FC<ISOImportModalProps> = ({
+  isOpen,
+  onClose,
+  onImportComplete,
+  onLogEvent,
+}) => {
   const [step, setStep] = useState<Step>('input');
   const [isoPath, setIsoPath] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -122,6 +136,11 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
   const [uploadId, setUploadId] = useState<string | null>(null);
   const uploadAbortRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastLoggedImportStatusRef = useRef<string | null>(null);
+
+  const logEvent = useCallback((event: ISOImportLogEvent) => {
+    onLogEvent?.(event);
+  }, [onLogEvent]);
 
   const fetchAvailableISOs = useCallback(async () => {
     setLoadingISOs(true);
@@ -139,10 +158,16 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
       }
     } catch (err) {
       console.error('Failed to fetch ISOs:', err);
+      logEvent({
+        level: 'error',
+        phase: 'browse',
+        message: 'Failed to fetch available ISOs',
+        details: err instanceof Error ? err.stack || err.message : String(err),
+      });
     } finally {
       setLoadingISOs(false);
     }
-  }, []);
+  }, [logEvent]);
 
   // Reset state when modal opens
   useEffect(() => {
@@ -162,6 +187,7 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
       setUploadStatus('');
       setUploadId(null);
       uploadAbortRef.current = false;
+      lastLoggedImportStatusRef.current = null;
       fetchAvailableISOs();
     }
     return () => {
@@ -180,6 +206,13 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
 
     setStep('scanning');
     setError(null);
+    logEvent({
+      level: 'info',
+      phase: 'scan_start',
+      message: 'Started ISO scan',
+      filename: isoPath.split('/').pop() || isoPath,
+      details: isoPath.trim(),
+    });
 
     try {
       const token = localStorage.getItem('token');
@@ -202,9 +235,26 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
       // Select all images by default
       setSelectedImages(new Set(data.images.map((img) => img.id)));
       setStep('review');
+      logEvent({
+        level: 'info',
+        phase: 'scan_complete',
+        message: `ISO scan complete (${data.images.length} images found)`,
+        filename: data.iso_path.split('/').pop() || data.iso_path,
+        details:
+          data.parse_errors.length > 0
+            ? `Warnings:\n${data.parse_errors.join('\n')}`
+            : `Session: ${data.session_id}`,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Scan failed');
       setStep('input');
+      logEvent({
+        level: 'error',
+        phase: 'scan_failed',
+        message: err instanceof Error ? err.message : 'ISO scan failed',
+        filename: isoPath.split('/').pop() || isoPath,
+        details: err instanceof Error ? err.stack || err.message : String(err),
+      });
     }
   };
 
@@ -213,6 +263,14 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
 
     setStep('importing');
     setError(null);
+    lastLoggedImportStatusRef.current = null;
+    logEvent({
+      level: 'info',
+      phase: 'import_start',
+      message: `Started ISO import (${selectedImages.size} selected image${selectedImages.size === 1 ? '' : 's'})`,
+      filename: scanResult.iso_path.split('/').pop() || scanResult.iso_path,
+      details: `create_devices=${createDevices}`,
+    });
 
     try {
       const token = localStorage.getItem('token');
@@ -238,6 +296,13 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed');
       setStep('review');
+      logEvent({
+        level: 'error',
+        phase: 'import_start_failed',
+        message: err instanceof Error ? err.message : 'Import failed',
+        filename: scanResult.iso_path.split('/').pop() || scanResult.iso_path,
+        details: err instanceof Error ? err.stack || err.message : String(err),
+      });
     }
   };
 
@@ -260,6 +325,32 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
         setOverallProgress(data.progress_percent || 0);
         setImportStatus(data.status);
 
+        if (data.status && data.status !== lastLoggedImportStatusRef.current) {
+          lastLoggedImportStatusRef.current = data.status;
+          if (data.status === 'importing') {
+            logEvent({
+              level: 'info',
+              phase: 'importing',
+              message: `ISO import in progress (${data.progress_percent || 0}%)`,
+              filename: scanResult.iso_path.split('/').pop() || scanResult.iso_path,
+            });
+          } else if (data.status === 'completed') {
+            logEvent({
+              level: 'info',
+              phase: 'import_complete',
+              message: 'ISO import completed',
+              filename: scanResult.iso_path.split('/').pop() || scanResult.iso_path,
+            });
+          } else if (data.status === 'failed') {
+            logEvent({
+              level: 'error',
+              phase: 'import_failed',
+              message: data.error_message || 'ISO import failed',
+              filename: scanResult.iso_path.split('/').pop() || scanResult.iso_path,
+            });
+          }
+        }
+
         if (data.status === 'completed') {
           setStep('complete');
           onImportComplete();
@@ -271,6 +362,13 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
         }
       } catch (err) {
         console.error('Progress poll error:', err);
+        logEvent({
+          level: 'error',
+          phase: 'import_poll_error',
+          message: 'ISO import progress poll failed',
+          filename: scanResult.iso_path.split('/').pop() || scanResult.iso_path,
+          details: err instanceof Error ? err.stack || err.message : String(err),
+        });
         setTimeout(poll, 2000);
       }
     };
@@ -281,10 +379,23 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
   const handleFileSelect = (file: File) => {
     if (!file.name.toLowerCase().endsWith('.iso')) {
       setError('Please select an ISO file');
+      logEvent({
+        level: 'error',
+        phase: 'upload_file_validation',
+        message: 'Rejected selected file: not an ISO',
+        filename: file.name,
+      });
       return;
     }
     setSelectedFile(file);
     setError(null);
+    logEvent({
+      level: 'info',
+      phase: 'upload_file_selected',
+      message: 'ISO file selected for upload',
+      filename: file.name,
+      details: `size=${file.size}`,
+    });
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -306,6 +417,13 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
     setError(null);
     setUploadProgress(0);
     uploadAbortRef.current = false;
+    logEvent({
+      level: 'info',
+      phase: 'upload_start',
+      message: 'Started ISO chunked upload',
+      filename: selectedFile.name,
+      details: `size=${selectedFile.size}`,
+    });
 
     const token = localStorage.getItem('token');
     const headers: Record<string, string> = {};
@@ -336,6 +454,13 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
 
       const initData: UploadInitResponse = await initResponse.json();
       setUploadId(initData.upload_id);
+      logEvent({
+        level: 'info',
+        phase: 'upload_initialized',
+        message: 'ISO upload session initialized',
+        filename: selectedFile.name,
+        details: `upload_id=${initData.upload_id}, chunks=${initData.total_chunks}`,
+      });
 
       // Upload chunks
       const totalChunks = initData.total_chunks;
@@ -390,6 +515,13 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
       }
 
       const completeData: UploadCompleteResponse = await completeResponse.json();
+      logEvent({
+        level: 'info',
+        phase: 'upload_complete',
+        message: 'ISO upload completed; starting scan',
+        filename: completeData.filename || selectedFile.name,
+        details: completeData.iso_path,
+      });
 
       // Auto-scan the uploaded ISO
       setIsoPath(completeData.iso_path);
@@ -415,16 +547,31 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
       setScanResult(scanData);
       setSelectedImages(new Set(scanData.images.map((img) => img.id)));
       setStep('review');
+      logEvent({
+        level: 'info',
+        phase: 'upload_scan_complete',
+        message: `Uploaded ISO scanned successfully (${scanData.images.length} images found)`,
+        filename: scanData.iso_path.split('/').pop() || scanData.iso_path,
+      });
 
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
       setStep('input');
       setInputMode('upload');
+      logEvent({
+        level: 'error',
+        phase: 'upload_failed',
+        message: err instanceof Error ? err.message : 'ISO upload failed',
+        filename: selectedFile.name,
+        details: err instanceof Error ? err.stack || err.message : String(err),
+      });
     }
   };
 
   const cancelUpload = async () => {
     uploadAbortRef.current = true;
+    const cancelledUploadId = uploadId;
+    const cancelledFilename = selectedFile?.name;
     if (uploadId) {
       const token = localStorage.getItem('token');
       try {
@@ -436,10 +583,24 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({ isOpen, onClose, onImpo
         });
       } catch (err) {
         console.error('Failed to cancel upload:', err);
+        logEvent({
+          level: 'error',
+          phase: 'upload_cancel_failed',
+          message: 'Failed to cancel ISO upload on server',
+          filename: cancelledFilename,
+          details: err instanceof Error ? err.stack || err.message : String(err),
+        });
       }
     }
     setStep('input');
     setInputMode('upload');
+    logEvent({
+      level: 'info',
+      phase: 'upload_cancelled',
+      message: 'ISO upload cancelled by user',
+      filename: cancelledFilename,
+      details: cancelledUploadId ? `upload_id=${cancelledUploadId}` : undefined,
+    });
   };
 
   const toggleImage = (imageId: string) => {

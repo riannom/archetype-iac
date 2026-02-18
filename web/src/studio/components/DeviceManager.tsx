@@ -7,6 +7,7 @@ import ImageCard from './ImageCard';
 import ImageFilterBar, { ImageAssignmentFilter, ImageSortOption } from './ImageFilterBar';
 import FilterChip from './FilterChip';
 import ISOImportModal from '../../components/ISOImportModal';
+import type { ISOImportLogEvent } from '../../components/ISOImportModal';
 import { Modal } from '../../components/ui/Modal';
 import { usePersistedState, usePersistedSet } from '../hooks/usePersistedState';
 import { usePolling } from '../hooks/usePolling';
@@ -53,6 +54,29 @@ interface IolBuildDiagnosticsResponse extends IolBuildStatusResponse {
   recommended_action?: string | null;
 }
 
+interface PendingQcow2Upload {
+  tempId: string;
+  filename: string;
+  progress: number;
+  phase: 'uploading' | 'processing';
+  createdAt: number;
+}
+
+interface ImageManagementLogEntry {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'error';
+  category: string;
+  phase: string;
+  message: string;
+  filename?: string;
+  details?: string;
+}
+
+type ImageManagementLogFilter = 'all' | 'errors' | 'iso' | 'docker' | 'qcow2';
+
+const IMAGE_LOG_LIMIT = 200;
+
 function normalizeBuildStatus(raw?: string | null): 'queued' | 'building' | 'complete' | 'failed' | 'ignored' | 'not_started' {
   const status = (raw || '').toLowerCase();
   if (status === 'queued') return 'queued';
@@ -97,6 +121,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [qcow2Progress, setQcow2Progress] = useState<number | null>(null);
+  const [isQcow2PostProcessing, setIsQcow2PostProcessing] = useState(false);
+  const [pendingQcow2Uploads, setPendingQcow2Uploads] = useState<PendingQcow2Upload[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const qcow2InputRef = useRef<HTMLInputElement | null>(null);
   const completedIolBuildsRef = useRef<Set<string>>(new Set());
@@ -109,6 +135,16 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   const [iolDiagnostics, setIolDiagnostics] = useState<IolBuildDiagnosticsResponse | null>(null);
   const [iolDiagnosticsLoading, setIolDiagnosticsLoading] = useState(false);
   const [iolDiagnosticsError, setIolDiagnosticsError] = useState<string | null>(null);
+  const [showUploadLogsModal, setShowUploadLogsModal] = useState(false);
+  const [copiedUploadLogId, setCopiedUploadLogId] = useState<string | null>(null);
+  const [imageManagementLogs, setImageManagementLogs] = usePersistedState<ImageManagementLogEntry[]>(
+    'archetype:image-management:logs',
+    []
+  );
+  const [imageLogFilter, setImageLogFilter] = usePersistedState<ImageManagementLogFilter>(
+    'archetype:image-management:log-filter',
+    'all'
+  );
   const [autoRefreshIolBuilds, setAutoRefreshIolBuilds] = usePersistedState<boolean>(
     'archetype:iol-build:auto-refresh',
     true
@@ -166,6 +202,92 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     });
   }, [iolSourceImages, builtDockerBySource]);
 
+  useEffect(() => {
+    if (pendingQcow2Uploads.length === 0) return;
+    const knownQcow2Filenames = new Set(
+      imageLibrary
+        .filter((img) => (img.kind || '').toLowerCase() === 'qcow2')
+        .map((img) => img.filename || img.reference?.split('/').pop() || '')
+        .filter(Boolean)
+    );
+    setPendingQcow2Uploads((prev) => prev.filter((item) => !knownQcow2Filenames.has(item.filename)));
+  }, [imageLibrary, pendingQcow2Uploads.length]);
+
+  const addImageManagementLog = useCallback(
+    (entry: Omit<ImageManagementLogEntry, 'id' | 'timestamp'>) => {
+      setImageManagementLogs((prev) => [
+        {
+          ...entry,
+          id: `img-log-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          timestamp: new Date().toISOString(),
+        },
+        ...prev,
+      ].slice(0, IMAGE_LOG_LIMIT));
+    },
+    [setImageManagementLogs]
+  );
+
+  const clearImageManagementLogs = useCallback(() => {
+    setImageManagementLogs([]);
+  }, [setImageManagementLogs]);
+
+  const handleIsoLogEvent = useCallback((event: ISOImportLogEvent) => {
+    addImageManagementLog({
+      level: event.level,
+      category: 'iso',
+      phase: event.phase,
+      message: event.message,
+      filename: event.filename,
+      details: event.details,
+    });
+  }, [addImageManagementLog]);
+
+  const formatUploadLogEntry = useCallback((entry: ImageManagementLogEntry): string => {
+    const lines = [
+      `timestamp: ${entry.timestamp}`,
+      `level: ${entry.level}`,
+      `category: ${entry.category}`,
+      `phase: ${entry.phase}`,
+      `message: ${entry.message}`,
+    ];
+    if (entry.filename) lines.push(`filename: ${entry.filename}`);
+    if (entry.details) {
+      lines.push('details:');
+      lines.push(entry.details);
+    }
+    return lines.join('\n');
+  }, []);
+
+  const copyUploadLogEntry = useCallback(async (entry: ImageManagementLogEntry) => {
+    const value = formatUploadLogEntry(entry);
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!success) throw new Error('Copy failed');
+      }
+      setCopiedUploadLogId(entry.id);
+    } catch (error) {
+      console.error('Failed to copy upload log entry:', error);
+      setCopiedUploadLogId(null);
+    }
+  }, [formatUploadLogEntry]);
+
+  useEffect(() => {
+    if (!copiedUploadLogId) return;
+    const timeout = window.setTimeout(() => setCopiedUploadLogId(null), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [copiedUploadLogId]);
+
   // Get unique device vendors
   const deviceVendors = useMemo(() => {
     const vendors = new Set<string>();
@@ -174,6 +296,25 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     });
     return Array.from(vendors).sort();
   }, [deviceModels]);
+
+  const imageVendorsById = useMemo(() => {
+    const deviceVendorById = new Map(
+      deviceModels
+        .filter((device) => !!device.vendor)
+        .map((device) => [device.id, String(device.vendor)])
+    );
+    const map = new Map<string, string[]>();
+    imageLibrary.forEach((img) => {
+      const vendors = new Set<string>();
+      if (img.vendor) vendors.add(img.vendor);
+      getImageDeviceIds(img).forEach((deviceId) => {
+        const fallbackVendor = deviceVendorById.get(deviceId);
+        if (fallbackVendor) vendors.add(fallbackVendor);
+      });
+      map.set(img.id, Array.from(vendors).sort());
+    });
+    return map;
+  }, [deviceModels, imageLibrary]);
 
   // Filter and sort devices
   const filteredDevices = useMemo(() => {
@@ -221,20 +362,22 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   // Filter and sort images
   const filteredImages = useMemo(() => {
     const filtered = imageLibrary.filter((img) => {
+      const imgVendors = imageVendorsById.get(img.id) || [];
+
       // Search filter
       if (imageSearch) {
         const query = imageSearch.toLowerCase();
         const matchesFilename = img.filename?.toLowerCase().includes(query);
         const matchesRef = img.reference?.toLowerCase().includes(query);
         const matchesVersion = img.version?.toLowerCase().includes(query);
-        const matchesVendor = img.vendor?.toLowerCase().includes(query);
+        const matchesVendor = imgVendors.some((vendor) => vendor.toLowerCase().includes(query));
         if (!matchesFilename && !matchesRef && !matchesVersion && !matchesVendor) {
           return false;
         }
       }
 
       // Vendor filter
-      if (selectedImageVendors.size > 0 && (!img.vendor || !selectedImageVendors.has(img.vendor))) {
+      if (selectedImageVendors.size > 0 && !imgVendors.some((vendor) => selectedImageVendors.has(vendor))) {
         return false;
       }
 
@@ -252,11 +395,13 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
     // Sort images
     return filtered.sort((a, b) => {
+      const aPrimaryVendor = (imageVendorsById.get(a.id) || [])[0] || '';
+      const bPrimaryVendor = (imageVendorsById.get(b.id) || [])[0] || '';
       switch (imageSort) {
         case 'name':
           return (a.reference || a.filename || '').localeCompare(b.reference || b.filename || '');
         case 'vendor':
-          return (a.vendor || '').localeCompare(b.vendor || '') || (a.reference || '').localeCompare(b.reference || '');
+          return aPrimaryVendor.localeCompare(bPrimaryVendor) || (a.reference || '').localeCompare(b.reference || '');
         case 'kind':
           return a.kind.localeCompare(b.kind) || (a.reference || '').localeCompare(b.reference || '');
         case 'date':
@@ -265,7 +410,45 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           return 0;
       }
     });
-  }, [imageLibrary, imageSearch, selectedImageVendors, selectedImageKinds, imageAssignmentFilter, imageSort]);
+  }, [imageLibrary, imageSearch, selectedImageVendors, selectedImageKinds, imageAssignmentFilter, imageSort, imageVendorsById]);
+
+  const filteredPendingQcow2Uploads = useMemo(() => {
+    if (isBuildJobsMode) return [];
+    if (imageAssignmentFilter === 'assigned') return [];
+    if (selectedImageVendors.size > 0) return [];
+    if (selectedImageKinds.size > 0 && !selectedImageKinds.has('qcow2')) return [];
+
+    const query = imageSearch.trim().toLowerCase();
+    return pendingQcow2Uploads
+      .filter((item) => !query || item.filename.toLowerCase().includes(query))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }, [
+    isBuildJobsMode,
+    imageAssignmentFilter,
+    selectedImageVendors,
+    selectedImageKinds,
+    imageSearch,
+    pendingQcow2Uploads,
+  ]);
+
+  const imageLogCounts = useMemo(() => ({
+    all: imageManagementLogs.length,
+    errors: imageManagementLogs.filter((entry) => entry.level === 'error').length,
+    iso: imageManagementLogs.filter((entry) => entry.category === 'iso').length,
+    docker: imageManagementLogs.filter((entry) => entry.category === 'docker').length,
+    qcow2: imageManagementLogs.filter((entry) => entry.category === 'qcow2').length,
+  }), [imageManagementLogs]);
+
+  const filteredImageManagementLogs = useMemo(() => {
+    if (imageLogFilter === 'all') return imageManagementLogs;
+    if (imageLogFilter === 'errors') return imageManagementLogs.filter((entry) => entry.level === 'error');
+    return imageManagementLogs.filter((entry) => entry.category === imageLogFilter);
+  }, [imageManagementLogs, imageLogFilter]);
+
+  const uploadErrorCount = useMemo(
+    () => imageManagementLogs.filter((entry) => entry.level === 'error').length,
+    [imageManagementLogs]
+  );
 
   // Group images for display (uses compatible_devices for shared images)
   const { unassignedImages, assignedImagesByDevice } = useMemo(() => {
@@ -372,6 +555,13 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
       if (!progressResponse.ok) {
         if (progressResponse.status === 404) {
+          addImageManagementLog({
+            level: 'error',
+            category: 'docker',
+            phase: 'processing',
+            message: 'Upload progress record not found (may have expired)',
+            filename: file.name,
+          });
           throw new Error('Upload not found - it may have completed or expired');
         }
         continue; // Retry on other errors
@@ -385,6 +575,13 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       }
 
       if (progress.error) {
+        addImageManagementLog({
+          level: 'error',
+          category: 'docker',
+          phase: progress.phase || 'processing',
+          message: progress.message || 'Import failed',
+          filename: file.name,
+        });
         throw new Error(progress.message || 'Import failed');
       }
 
@@ -447,6 +644,13 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     if (!file) return;
 
     try {
+      addImageManagementLog({
+        level: 'info',
+        category: 'docker',
+        phase: 'uploading',
+        message: 'Started Docker image upload',
+        filename: file.name,
+      });
       setUploadStatus(`Uploading ${file.name}...`);
       setUploadProgress(0);
 
@@ -458,14 +662,38 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
       if (data.images && data.images.length === 0) {
         setUploadStatus('Upload finished, but no images were detected.');
+        addImageManagementLog({
+          level: 'error',
+          category: 'docker',
+          phase: 'processing',
+          message: 'Upload finished but no images were detected',
+          filename: file.name,
+          details: data.output || '',
+        });
       } else {
         setUploadStatus(data.output || 'Image loaded.');
+        addImageManagementLog({
+          level: 'info',
+          category: 'docker',
+          phase: 'complete',
+          message: data.output || 'Docker image loaded successfully',
+          filename: file.name,
+          details: data.images?.join(', ') || '',
+        });
       }
       onUploadImage();
       onRefresh();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Upload failed';
       setUploadStatus(errorMessage);
+      addImageManagementLog({
+        level: 'error',
+        category: 'docker',
+        phase: 'failed',
+        message: errorMessage,
+        filename: file.name,
+        details: error instanceof Error ? error.stack || error.message : String(error),
+      });
     } finally {
       event.target.value = '';
       setUploadProgress(null);
@@ -475,17 +703,96 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   async function uploadQcow2(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    const pendingId = `pending-qcow2:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    let processingLogged = false;
+    setPendingQcow2Uploads((prev) => [
+      {
+        tempId: pendingId,
+        filename: file.name,
+        progress: 0,
+        phase: 'uploading',
+        createdAt: Date.now(),
+      },
+      ...prev,
+    ]);
     try {
+      addImageManagementLog({
+        level: 'info',
+        category: 'qcow2',
+        phase: 'uploading',
+        message: 'Started QCOW2 upload',
+        filename: file.name,
+      });
       setUploadStatus(`Uploading ${file.name}...`);
       setQcow2Progress(0);
-      await uploadWithProgress(`${API_BASE_URL}/images/qcow2`, file, setQcow2Progress);
+      setIsQcow2PostProcessing(false);
+      await uploadWithProgress(`${API_BASE_URL}/images/qcow2`, file, (percent) => {
+        const nextPercent = Math.max(0, Math.min(100, percent ?? 0));
+        setQcow2Progress(nextPercent);
+        if (nextPercent >= 100) {
+          setIsQcow2PostProcessing(true);
+          setUploadStatus(`Upload complete for ${file.name}. Validating and finalizing image...`);
+          if (!processingLogged) {
+            processingLogged = true;
+            addImageManagementLog({
+              level: 'info',
+              category: 'qcow2',
+              phase: 'processing',
+              message: 'Upload bytes complete; validating and finalizing QCOW2 image',
+              filename: file.name,
+            });
+          }
+        }
+        setPendingQcow2Uploads((prev) =>
+          prev.map((item) =>
+            item.tempId === pendingId
+              ? {
+                  ...item,
+                  progress: nextPercent,
+                  phase: nextPercent >= 100 ? 'processing' : 'uploading',
+                }
+              : item
+          )
+        );
+      });
+      setIsQcow2PostProcessing(true);
+      setPendingQcow2Uploads((prev) =>
+        prev.map((item) =>
+          item.tempId === pendingId
+            ? {
+                ...item,
+                progress: 100,
+                phase: 'processing',
+              }
+            : item
+        )
+      );
+      setUploadStatus(`Finalizing ${file.name} in image library...`);
+      await Promise.resolve(onUploadQcow2());
+      await Promise.resolve(onRefresh());
       setUploadStatus('QCOW2 uploaded.');
-      onUploadQcow2();
-      onRefresh();
+      addImageManagementLog({
+        level: 'info',
+        category: 'qcow2',
+        phase: 'complete',
+        message: 'QCOW2 upload and processing completed',
+        filename: file.name,
+      });
     } catch (error) {
-      setUploadStatus(error instanceof Error ? error.message : 'Upload failed');
+      setPendingQcow2Uploads((prev) => prev.filter((item) => item.tempId !== pendingId));
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+      setUploadStatus(errorMessage);
+      addImageManagementLog({
+        level: 'error',
+        category: 'qcow2',
+        phase: processingLogged ? 'processing' : 'uploading',
+        message: errorMessage,
+        filename: file.name,
+        details: error instanceof Error ? error.stack || error.message : String(error),
+      });
     } finally {
       event.target.value = '';
+      setIsQcow2PostProcessing(false);
       setQcow2Progress(null);
     }
   }
@@ -868,7 +1175,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                       {historicalIolBuildRows.length} completed
                     </span>
                   </div>
-                  <div className="p-3 space-y-2 max-h-56 overflow-y-auto custom-scrollbar">
+                  <div className="p-3 space-y-2 max-h-[50vh] overflow-y-auto custom-scrollbar">
                     {historicalIolBuildRows.map((row) => (
                       <div
                         key={`history-${row.image.id}`}
@@ -1023,6 +1330,18 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
                 <i className="fa-solid fa-hard-drive mr-2"></i> Upload QCOW2
               </button>
               <button
+                onClick={() => setShowUploadLogsModal(true)}
+                className="px-4 py-2 glass-control text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
+                title="View image upload and processing logs"
+              >
+                <i className="fa-solid fa-file-lines mr-2"></i> Logs
+                {uploadErrorCount > 0 && (
+                  <span className="ml-2 inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-[9px] font-black">
+                    {uploadErrorCount}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => setShowISOModal(true)}
                 className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
               >
@@ -1061,11 +1380,21 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           )}
           {qcow2Progress !== null && (
             <div className="mt-3">
-              <div className="text-[10px] font-bold text-stone-500 uppercase mb-1">
-                QCOW2 upload {qcow2Progress}%
+              <div className="flex items-center gap-2 text-[10px] font-bold text-stone-500 uppercase mb-1">
+                <span>
+                  {isQcow2PostProcessing
+                    ? 'QCOW2 upload complete. Processing image...'
+                    : `QCOW2 upload ${qcow2Progress}%`}
+                </span>
+                {isQcow2PostProcessing && (
+                  <i className="fa-solid fa-circle-notch fa-spin text-stone-400" />
+                )}
               </div>
               <div className="h-1.5 bg-stone-200 dark:bg-stone-800 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 transition-all" style={{ width: `${qcow2Progress}%` }} />
+                <div
+                  className={`h-full bg-emerald-500 ${isQcow2PostProcessing ? 'animate-pulse' : 'transition-all'}`}
+                  style={{ width: isQcow2PostProcessing ? '100%' : `${qcow2Progress}%` }}
+                />
               </div>
             </div>
           )}
@@ -1109,33 +1438,42 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
               </div>
 
               {/* Filter chips */}
-              <div className="flex flex-wrap gap-1.5">
-                <FilterChip
-                  label="Has Image"
-                  isActive={deviceImageStatus === 'has_image'}
-                  onClick={() =>
-                    setDeviceImageStatus(deviceImageStatus === 'has_image' ? 'all' : 'has_image')
-                  }
-                  variant="status"
-                  statusColor="green"
-                />
-                <FilterChip
-                  label="No Image"
-                  isActive={deviceImageStatus === 'no_image'}
-                  onClick={() =>
-                    setDeviceImageStatus(deviceImageStatus === 'no_image' ? 'all' : 'no_image')
-                  }
-                  variant="status"
-                  statusColor="amber"
-                />
-                {deviceVendors.map((vendor) => (
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold text-stone-400 uppercase mr-1">Status:</span>
                   <FilterChip
-                    key={vendor}
-                    label={vendor}
-                    isActive={selectedDeviceVendors.has(vendor)}
-                    onClick={() => toggleDeviceVendor(vendor)}
+                    label="Has Image"
+                    isActive={deviceImageStatus === 'has_image'}
+                    onClick={() =>
+                      setDeviceImageStatus(deviceImageStatus === 'has_image' ? 'all' : 'has_image')
+                    }
+                    variant="status"
+                    statusColor="green"
                   />
-                ))}
+                  <FilterChip
+                    label="No Image"
+                    isActive={deviceImageStatus === 'no_image'}
+                    onClick={() =>
+                      setDeviceImageStatus(deviceImageStatus === 'no_image' ? 'all' : 'no_image')
+                    }
+                    variant="status"
+                    statusColor="amber"
+                  />
+                </div>
+                {deviceVendors.length > 0 && <div className="h-6 w-px bg-stone-200 dark:bg-stone-700" />}
+                {deviceVendors.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] font-bold text-stone-400 uppercase mr-1">Vendor:</span>
+                    {deviceVendors.map((vendor) => (
+                      <FilterChip
+                        key={vendor}
+                        label={vendor}
+                        isActive={selectedDeviceVendors.has(vendor)}
+                        onClick={() => toggleDeviceVendor(vendor)}
+                      />
+                    ))}
+                  </div>
+                )}
                 {hasDeviceFilters && (
                   <button
                     onClick={clearDeviceFilters}
@@ -1191,16 +1529,39 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
             {/* Image grid */}
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
               {/* Unassigned images section */}
-              {unassignedImages.length > 0 && (
+              {(unassignedImages.length > 0 || filteredPendingQcow2Uploads.length > 0) && (
                 <div className="mb-6">
                   <div className="flex items-center gap-2 mb-3">
                     <span className="w-2 h-2 rounded-full bg-amber-500" />
                     <h3 className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest">
                       Unassigned Images
                     </h3>
-                    <span className="text-[10px] text-stone-400">({unassignedImages.length})</span>
+                    <span className="text-[10px] text-stone-400">
+                      ({unassignedImages.length + filteredPendingQcow2Uploads.length})
+                    </span>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
+                    {filteredPendingQcow2Uploads.map((pending) => (
+                      <ImageCard
+                        key={pending.tempId}
+                        image={{
+                          id: pending.tempId,
+                          kind: 'qcow2',
+                          reference: pending.filename,
+                          filename: pending.filename,
+                          device_id: null,
+                          uploaded_at: new Date(pending.createdAt).toISOString(),
+                          vendor: null,
+                          version: null,
+                        }}
+                        isPending
+                        pendingMessage={
+                          pending.phase === 'uploading'
+                            ? `Uploading ${pending.progress}%`
+                            : 'Processing image (validation and metadata)...'
+                        }
+                      />
+                    ))}
                     {unassignedImages.map((img) => (
                       <ImageCard
                         key={img.id}
@@ -1272,11 +1633,151 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       <ISOImportModal
         isOpen={showISOModal}
         onClose={() => setShowISOModal(false)}
+        onLogEvent={handleIsoLogEvent}
         onImportComplete={() => {
           onRefresh();
           setShowISOModal(false);
         }}
       />
+
+      <Modal
+        isOpen={showUploadLogsModal}
+        onClose={() => setShowUploadLogsModal(false)}
+        title="Image Upload Logs"
+        size="xl"
+      >
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs text-stone-500 dark:text-stone-400">
+              {filteredImageManagementLogs.length} shown of {imageManagementLogs.length} entries
+              {uploadErrorCount > 0 && (
+                <span className="ml-2 text-red-600 dark:text-red-400 font-semibold">
+                  {uploadErrorCount} errors
+                </span>
+              )}
+            </div>
+            <button
+              onClick={clearImageManagementLogs}
+              disabled={imageManagementLogs.length === 0}
+              className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 disabled:text-stone-400 transition-colors"
+            >
+              Clear History
+            </button>
+          </div>
+
+          {imageManagementLogs.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => setImageLogFilter('all')}
+                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+                  imageLogFilter === 'all'
+                    ? 'bg-sage-600 text-white'
+                    : 'glass-control text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                All ({imageLogCounts.all})
+              </button>
+              <button
+                onClick={() => setImageLogFilter('errors')}
+                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+                  imageLogFilter === 'errors'
+                    ? 'bg-red-600 text-white'
+                    : 'glass-control text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                Errors ({imageLogCounts.errors})
+              </button>
+              <button
+                onClick={() => setImageLogFilter('iso')}
+                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+                  imageLogFilter === 'iso'
+                    ? 'bg-blue-600 text-white'
+                    : 'glass-control text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                ISO ({imageLogCounts.iso})
+              </button>
+              <button
+                onClick={() => setImageLogFilter('docker')}
+                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+                  imageLogFilter === 'docker'
+                    ? 'bg-blue-600 text-white'
+                    : 'glass-control text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                Docker ({imageLogCounts.docker})
+              </button>
+              <button
+                onClick={() => setImageLogFilter('qcow2')}
+                className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+                  imageLogFilter === 'qcow2'
+                    ? 'bg-blue-600 text-white'
+                    : 'glass-control text-stone-700 dark:text-stone-300'
+                }`}
+              >
+                QCOW2 ({imageLogCounts.qcow2})
+              </button>
+            </div>
+          )}
+
+          {imageManagementLogs.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-stone-300 dark:border-stone-700 p-4 text-xs text-stone-500 dark:text-stone-400">
+              No upload or processing events recorded yet.
+            </div>
+          ) : filteredImageManagementLogs.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-stone-300 dark:border-stone-700 p-4 text-xs text-stone-500 dark:text-stone-400">
+              No log entries match the current filter.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[60vh] overflow-y-auto custom-scrollbar">
+              {filteredImageManagementLogs.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="rounded-lg border border-stone-200 dark:border-stone-800 bg-stone-50/70 dark:bg-stone-900/40 p-3"
+                >
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 truncate">
+                        {entry.message}
+                      </div>
+                      <div className="text-[10px] text-stone-500 dark:text-stone-400">
+                        {new Date(entry.timestamp).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                          entry.level === 'error'
+                            ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                            : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                        }`}
+                      >
+                        {entry.level}
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-300">
+                        {entry.category}/{entry.phase}
+                      </span>
+                      <button
+                        onClick={() => copyUploadLogEntry(entry)}
+                        className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 transition-colors"
+                      >
+                        <i className={`fa-solid ${copiedUploadLogId === entry.id ? 'fa-check' : 'fa-copy'} mr-1`} />
+                        {copiedUploadLogId === entry.id ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    readOnly
+                    value={formatUploadLogEntry(entry)}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="w-full h-24 rounded border border-stone-200 dark:border-stone-700 bg-white/80 dark:bg-stone-950/50 px-2 py-1.5 text-[11px] font-mono text-stone-700 dark:text-stone-200 leading-relaxed resize-y"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };

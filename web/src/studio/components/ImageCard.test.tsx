@@ -202,6 +202,14 @@ describe("ImageCard", () => {
       expect(card).toHaveClass("opacity-50");
       expect(card).toHaveClass("scale-95");
     });
+
+    it("disables drag while pending", () => {
+      render(<ImageCard image={defaultImage} isPending pendingMessage="Processing image..." />);
+      const card = screen.getByText("ceos-4.28.0F.tar").closest("[draggable]");
+      expect(card).toHaveAttribute("draggable", "false");
+      expect(screen.getByText("PROCESSING")).toBeInTheDocument();
+      expect(screen.getByText("Processing image...")).toBeInTheDocument();
+    });
   });
 
   describe("sync status", () => {

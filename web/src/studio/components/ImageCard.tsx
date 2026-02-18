@@ -13,6 +13,8 @@ interface ImageCardProps {
   onSync?: () => void;
   compact?: boolean;
   showSyncStatus?: boolean;
+  isPending?: boolean;
+  pendingMessage?: string;
 }
 
 const ImageCard: React.FC<ImageCardProps> = ({
@@ -24,6 +26,8 @@ const ImageCard: React.FC<ImageCardProps> = ({
   onSync,
   compact = false,
   showSyncStatus = false,
+  isPending = false,
+  pendingMessage,
 }) => {
   const { dragState } = useDragContext();
   const { handleDragStart, handleDragEnd } = useDragHandlers({
@@ -91,11 +95,12 @@ const ImageCard: React.FC<ImageCardProps> = ({
   if (compact) {
     return (
       <div
-        draggable
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
+        draggable={!isPending}
+        onDragStart={isPending ? undefined : handleDragStart}
+        onDragEnd={isPending ? undefined : handleDragEnd}
         className={`
-          group flex items-center gap-2 p-2 rounded-lg border transition-all cursor-grab active:cursor-grabbing select-none
+          group flex items-center gap-2 p-2 rounded-lg border transition-all select-none
+          ${isPending ? 'cursor-progress opacity-70 animate-pulse' : 'cursor-grab active:cursor-grabbing'}
           ${isDragging
             ? 'opacity-50 scale-95 border-sage-500 bg-sage-50 dark:bg-sage-900/20'
             : 'glass-surface border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
@@ -129,12 +134,13 @@ const ImageCard: React.FC<ImageCardProps> = ({
 
   return (
     <div
-      draggable
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
+      draggable={!isPending}
+      onDragStart={isPending ? undefined : handleDragStart}
+      onDragEnd={isPending ? undefined : handleDragEnd}
       title={tooltipText}
       className={`
-        group relative rounded-lg border transition-all duration-200 cursor-grab active:cursor-grabbing select-none
+        group relative rounded-lg border transition-all duration-200 select-none
+        ${isPending ? 'cursor-progress opacity-70 animate-pulse' : 'cursor-grab active:cursor-grabbing'}
         ${isDragging
           ? 'opacity-50 scale-95 border-sage-500 bg-sage-50 dark:bg-sage-900/20'
           : 'glass-surface border-stone-200 dark:border-stone-800 hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm'
@@ -165,6 +171,11 @@ const ImageCard: React.FC<ImageCardProps> = ({
               <h4 className="font-bold text-xs text-stone-900 dark:text-white truncate">
                 {image.filename || image.reference}
               </h4>
+              {isPending && (
+                <span className="px-1 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded text-[8px] font-bold shrink-0">
+                  PROCESSING
+                </span>
+              )}
               {image.is_default && (
                 <span className="px-1 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded text-[8px] font-bold shrink-0">
                   DEFAULT
@@ -207,55 +218,66 @@ const ImageCard: React.FC<ImageCardProps> = ({
                   </span>
                 </>
               )}
+              {isPending && (
+                <>
+                  <span className="text-stone-300 dark:text-stone-600">•</span>
+                  <span className="text-amber-600 dark:text-amber-400">
+                    <i className="fa-solid fa-circle-notch fa-spin text-[8px] mr-1" />
+                    {pendingMessage || 'Processing image...'}
+                  </span>
+                </>
+              )}
             </div>
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-            {showSyncStatus && (
-              <button
-                onClick={handleSync}
-                disabled={syncing}
-                className="p-1 rounded text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100/50 dark:hover:bg-blue-800/50 disabled:opacity-50"
-                title="Sync to all agents"
-              >
-                <i className={`fa-solid fa-sync text-[10px] ${syncing ? 'fa-spin' : ''}`} />
-              </button>
-            )}
-            {image.device_id && !image.is_default && onSetDefault && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onSetDefault(); }}
-                className="p-1 rounded text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 hover:bg-sage-100/50 dark:hover:bg-sage-800/50"
-                title="Set as default"
-              >
-                <i className="fa-solid fa-star text-[10px]" />
-              </button>
-            )}
-            {onUnassign && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onUnassign(); }}
-                className="p-1 rounded text-stone-400 hover:text-amber-600 hover:bg-amber-100/50 dark:hover:bg-amber-800/50"
-                title="Unassign from device"
-              >
-                <i className="fa-solid fa-link-slash text-[10px]" />
-              </button>
-            )}
-            {onDelete && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (window.confirm('Delete this image from the library? This cannot be undone.')) {
-                    onDelete();
-                  }
-                }}
-                className="p-1 rounded text-stone-400 hover:text-red-500 hover:bg-red-100/50 dark:hover:bg-red-800/50"
-                title="Delete image"
-              >
-                <i className="fa-solid fa-trash text-[10px]" />
-              </button>
-            )}
-            <i className="fa-solid fa-grip-vertical text-[10px] text-stone-300 dark:text-stone-600 ml-1" />
-          </div>
+          {!isPending && (
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              {showSyncStatus && (
+                <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  className="p-1 rounded text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100/50 dark:hover:bg-blue-800/50 disabled:opacity-50"
+                  title="Sync to all agents"
+                >
+                  <i className={`fa-solid fa-sync text-[10px] ${syncing ? 'fa-spin' : ''}`} />
+                </button>
+              )}
+              {image.device_id && !image.is_default && onSetDefault && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onSetDefault(); }}
+                  className="p-1 rounded text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 hover:bg-sage-100/50 dark:hover:bg-sage-800/50"
+                  title="Set as default"
+                >
+                  <i className="fa-solid fa-star text-[10px]" />
+                </button>
+              )}
+              {onUnassign && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onUnassign(); }}
+                  className="p-1 rounded text-stone-400 hover:text-amber-600 hover:bg-amber-100/50 dark:hover:bg-amber-800/50"
+                  title="Unassign from device"
+                >
+                  <i className="fa-solid fa-link-slash text-[10px]" />
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm('Delete this image from the library? This cannot be undone.')) {
+                      onDelete();
+                    }
+                  }}
+                  className="p-1 rounded text-stone-400 hover:text-red-500 hover:bg-red-100/50 dark:hover:bg-red-800/50"
+                  title="Delete image"
+                >
+                  <i className="fa-solid fa-trash text-[10px]" />
+                </button>
+              )}
+              <i className="fa-solid fa-grip-vertical text-[10px] text-stone-300 dark:text-stone-600 ml-1" />
+            </div>
+          )}
         </div>
       </div>
     </div>

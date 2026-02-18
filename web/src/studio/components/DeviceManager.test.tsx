@@ -103,6 +103,8 @@ describe("DeviceManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApiRequest.mockResolvedValue({});
+    localStorage.removeItem("archetype:image-management:logs");
+    localStorage.removeItem("archetype:image-management:log-filter");
   });
 
   afterEach(() => {
@@ -206,6 +208,60 @@ describe("DeviceManager", () => {
       // Should have upload buttons
       const uploadButtons = screen.getAllByRole("button");
       expect(uploadButtons.length).toBeGreaterThan(0);
+    });
+
+    it("opens image upload logs modal", async () => {
+      const user = userEvent.setup();
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} />
+        </TestWrapper>
+      );
+
+      await user.click(screen.getByRole("button", { name: /logs/i }));
+      expect(screen.getByText("Image Upload Logs")).toBeInTheDocument();
+      expect(screen.getByText("No upload or processing events recorded yet.")).toBeInTheDocument();
+    });
+
+    it("filters image upload logs by category", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem(
+        "archetype:image-management:logs",
+        JSON.stringify([
+          {
+            id: "log-1",
+            timestamp: "2026-02-18T12:00:00.000Z",
+            level: "info",
+            category: "iso",
+            phase: "scan_complete",
+            message: "ISO scan complete",
+            filename: "refplat.iso",
+          },
+          {
+            id: "log-2",
+            timestamp: "2026-02-18T12:01:00.000Z",
+            level: "error",
+            category: "qcow2",
+            phase: "upload_failed",
+            message: "QCOW2 upload failed",
+            filename: "veos.qcow2",
+          },
+        ])
+      );
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} />
+        </TestWrapper>
+      );
+
+      await user.click(screen.getByRole("button", { name: /logs/i }));
+      expect(screen.getByText("ISO scan complete")).toBeInTheDocument();
+      expect(screen.getByText("QCOW2 upload failed")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /ISO \(1\)/i }));
+      expect(screen.getByText("ISO scan complete")).toBeInTheDocument();
+      expect(screen.queryByText("QCOW2 upload failed")).not.toBeInTheDocument();
     });
   });
 

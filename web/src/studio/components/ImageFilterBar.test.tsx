@@ -271,6 +271,41 @@ describe("ImageFilterBar", () => {
       expect(mockOnVendorToggle).toHaveBeenCalledWith("Arista");
     });
 
+    it("derives vendor filters from mapped device vendor when image vendor is missing", () => {
+      const imagesWithoutVendor: ImageLibraryEntry[] = [
+        {
+          id: "img-1",
+          kind: "docker",
+          reference: "srlinux:latest",
+          vendor: null,
+          device_id: "srlinux",
+        },
+      ];
+      const devicesWithNokia: DeviceModel[] = [
+        ...defaultDevices,
+        {
+          id: "srlinux",
+          name: "Nokia SR Linux",
+          type: DeviceType.ROUTER,
+          icon: "fa-microchip",
+          versions: ["24.3"],
+          isActive: true,
+          vendor: "Nokia",
+        },
+      ];
+
+      render(
+        <ImageFilterBar
+          {...defaultProps}
+          images={imagesWithoutVendor}
+          devices={devicesWithNokia}
+        />
+      );
+
+      expect(screen.getByText("Vendor:")).toBeInTheDocument();
+      expect(screen.getByText("Nokia")).toBeInTheDocument();
+    });
+
     it("shows all vendors without limit", () => {
       const imagesWithManyVendors: ImageLibraryEntry[] = [
         { id: "1", kind: "docker", reference: "a", vendor: "Vendor1", device_id: null },
