@@ -7,7 +7,10 @@ def render_poap_script(config_url: str) -> str:
     """Render a minimal NX-OS POAP Python script that applies startup config."""
     return f"""#!/usr/bin/env python
 import sys
-import urllib.request
+try:
+    import urllib2 as _urlreq
+except ImportError:
+    import urllib.request as _urlreq
 from cli import cli
 
 CONFIG_URL = "{config_url}"
@@ -26,7 +29,7 @@ def _run(command):
 
 def main():
     _log("fetching startup-config")
-    payload = urllib.request.urlopen(CONFIG_URL, timeout=60).read()
+    payload = _urlreq.urlopen(CONFIG_URL, timeout=60).read()
     content = payload.decode("utf-8", "ignore")
     if not content.strip():
         raise RuntimeError("empty startup-config payload")
