@@ -5874,6 +5874,7 @@ async def check_node_ready(
                 "is_ready": result.is_ready,
                 "message": result.message,
                 "progress_percent": result.progress_percent,
+                "details": result.details,
                 "timeout": timeout_override if timeout_override is not None else get_readiness_timeout(kind),
                 "provider": "docker",
             }
@@ -5990,6 +5991,7 @@ async def _check_libvirt_readiness(
         "is_ready": result.is_ready,
         "message": result.message,
         "progress_percent": result.progress_percent,
+        "details": result.details,
         "timeout": timeout,
         "provider": "libvirt",
     }

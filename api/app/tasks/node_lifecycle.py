@@ -2828,6 +2828,42 @@ class NodeLifecycleManager:
 
         self.log_parts.append(f"  Waiting for {len(unready_nodes)} node(s) to become ready...")
         start_time = asyncio.get_event_loop().time()
+        last_status_by_node: dict[str, tuple[str, str | None, str]] = {}
+        last_status_log_elapsed: dict[str, float] = {}
+
+        def _log_waiting_status(
+            node_name: str,
+            elapsed_seconds: float,
+            message: str,
+            progress_percent: int | None,
+            details: str | None,
+        ) -> None:
+            """Log readiness wait status on change or at a low periodic rate."""
+            normalized_message = (message or "not ready").strip()
+            normalized_details = (details or "").strip()
+            normalized_progress = (
+                str(progress_percent) if progress_percent is not None else None
+            )
+            status_key = (
+                normalized_message,
+                normalized_progress,
+                normalized_details,
+            )
+            previous = last_status_by_node.get(node_name)
+            previous_elapsed = last_status_log_elapsed.get(node_name, -1e9)
+
+            # Log immediately on state change; otherwise at most every 20s.
+            if previous == status_key and (elapsed_seconds - previous_elapsed) < 20:
+                return
+
+            line = f"  {node_name}: waiting ({int(elapsed_seconds)}s) - {normalized_message}"
+            if progress_percent is not None:
+                line += f" [progress={progress_percent}%]"
+            if normalized_details:
+                line += f" | {normalized_details}"
+            self.log_parts.append(line)
+            last_status_by_node[node_name] = status_key
+            last_status_log_elapsed[node_name] = elapsed_seconds
 
         while unready_nodes:
             elapsed = asyncio.get_event_loop().time() - start_time
@@ -2859,12 +2895,30 @@ class NodeLifecycleManager:
                     if result.get("is_ready"):
                         ns.is_ready = True
                         self._broadcast_state(ns, name_suffix="ready")
-                        self.log_parts.append(f"  {ns.node_name}: ready ({int(elapsed)}s)")
+                        self.log_parts.append(
+                            f"  {ns.node_name}: ready ({int(elapsed)}s)"
+                        )
+                        last_status_by_node.pop(ns.node_name, None)
+                        last_status_log_elapsed.pop(ns.node_name, None)
                     else:
                         still_unready.append(ns)
+                        _log_waiting_status(
+                            ns.node_name,
+                            elapsed,
+                            str(result.get("message", "not ready")),
+                            result.get("progress_percent"),
+                            result.get("details"),
+                        )
                 except Exception as e:
                     logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
                     still_unready.append(ns)
+                    _log_waiting_status(
+                        ns.node_name,
+                        elapsed,
+                        f"Readiness check failed: {e}",
+                        None,
+                        None,
+                    )
 
             unready_nodes = still_unready
 

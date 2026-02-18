@@ -2667,6 +2667,49 @@ class TestActiveReadinessPolling:
         # Node not ready but no crash
         assert ns.is_ready is not True
 
+    @pytest.mark.asyncio
+    async def test_readiness_logs_probe_details_when_waiting(self, test_db, test_user):
+        """Unready poll cycles should include readiness message/details in job log."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        responses = iter([
+            {
+                "is_ready": False,
+                "message": "Boot in progress (POAP failure observed)",
+                "progress_percent": 30,
+                "details": "markers=poap_failure,startup_config_ref",
+            },
+            {"is_ready": True},
+        ])
+
+        async def mock_readiness(*args, **kwargs):
+            return next(responses)
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.get_event_loop") as mock_loop:
+            times = iter([0, 6, 12])
+            mock_loop.return_value.time = lambda: next(times, 120)
+            mock_ac.check_node_readiness = mock_readiness
+            await manager._wait_for_readiness(["R1"])
+
+        assert ns.is_ready is True
+        assert any(
+            "Boot in progress (POAP failure observed)" in line and
+            "markers=poap_failure,startup_config_ref" in line
+            for line in manager.log_parts
+        )
+
 
 class TestPlacementFailover:
     """Tests for failed placement fallback to resource scoring."""

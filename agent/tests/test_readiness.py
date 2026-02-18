@@ -17,6 +17,7 @@ from agent.readiness import (
     LogPatternProbe,
     CliProbe,
     LibvirtLogPatternProbe,
+    get_libvirt_probe,
     get_probe_for_vendor,
     get_readiness_timeout,
     run_post_boot_commands,
@@ -24,6 +25,7 @@ from agent.readiness import (
     clear_all_post_boot_state,
     _post_boot_completed,
     CEOS_PROGRESS_PATTERNS,
+    N9KV_DIAGNOSTIC_PATTERNS,
 )
 from agent.vendors import get_vendor_config
 
@@ -364,6 +366,42 @@ class TestLibvirtLogPatternProbe:
 
         output = probe._get_console_output()
         assert "Router>" in output
+
+    def test_diagnostic_details_capture_n9kv_markers(self):
+        """N9Kv diagnostics should expose POAP/startup-config markers and tail."""
+        probe = LibvirtLogPatternProbe(
+            pattern=r"login:",
+            domain_name="dummy-domain",
+            uri="qemu:///system",
+            diagnostic_patterns=N9KV_DIAGNOSTIC_PATTERNS,
+        )
+        probe._last_console_read_reason = "pexpect_output"
+        console = (
+            "POAP-2-POAP_FAILURE: POAP DHCP discover phase failed\n"
+            "Abort Power On Auto Provisioning and continue with normal setup\n"
+            "checking startup-config in bootflash:/startup-config\n"
+        )
+
+        hits = probe._collect_diagnostic_hits(console)
+        details = probe._build_diagnostic_details(console, hits)
+
+        assert "poap_failure" in hits
+        assert "startup_config_ref" in hits
+        assert details is not None
+        assert "console_reason=pexpect_output" in details
+        assert "markers=poap_failure,poap_abort_prompt,poap_dhcp_issue,startup_config_ref,bootflash_startup_path" in details
+        assert "tail=" in details
+
+    def test_get_libvirt_probe_adds_n9kv_diagnostics_for_log_probe(self):
+        """Explicit log-pattern probe for N9Kv should include diagnostic markers."""
+        probe = get_libvirt_probe(
+            "cisco_n9kv",
+            domain_name="dummy-domain",
+            readiness_probe="log_pattern",
+            readiness_pattern=r"login:",
+        )
+        assert isinstance(probe, LibvirtLogPatternProbe)
+        assert probe.diagnostic_patterns == N9KV_DIAGNOSTIC_PATTERNS
 
 
 # --- Post-boot Commands Tests ---

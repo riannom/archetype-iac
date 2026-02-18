@@ -62,6 +62,7 @@ class ReadinessResult:
     is_ready: bool
     message: str = ""
     progress_percent: Optional[int] = None  # 0-100, None if unknown
+    details: Optional[str] = None
 
 
 class ReadinessProbe(ABC):
@@ -245,6 +246,7 @@ class LibvirtLogPatternProbe(ReadinessProbe):
         domain_name: str,
         uri: str = "qemu:///system",
         progress_patterns: Optional[dict[str, int]] = None,
+        diagnostic_patterns: Optional[dict[str, str]] = None,
     ):
         """Initialize libvirt log pattern probe.
 
@@ -262,6 +264,55 @@ class LibvirtLogPatternProbe(ReadinessProbe):
             re.compile(p, re.IGNORECASE): pct
             for p, pct in self.progress_patterns.items()
         }
+        self.diagnostic_patterns = diagnostic_patterns or {}
+        self._compiled_diagnostics = [
+            (name, re.compile(pattern, re.IGNORECASE))
+            for name, pattern in self.diagnostic_patterns.items()
+        ]
+        self._last_console_read_reason = "not_attempted"
+
+    @staticmethod
+    def _sanitize_console_output(text: str) -> str:
+        """Normalize console text for marker extraction and compact logging."""
+        # Strip ANSI escape sequences and non-printable control chars.
+        text = re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", text)
+        text = text.replace("\r", "\n")
+        text = re.sub(r"[^\x09\x0A\x20-\x7E]", "", text)
+        return text
+
+    def _collect_diagnostic_hits(self, console_output: str) -> list[str]:
+        """Return ordered diagnostic marker names found in console output."""
+        if not self._compiled_diagnostics:
+            return []
+        hits: list[str] = []
+        for name, compiled_pattern in self._compiled_diagnostics:
+            if compiled_pattern.search(console_output):
+                hits.append(name)
+        return hits
+
+    def _console_tail(self, console_output: str, lines: int = 4, max_chars: int = 220) -> str:
+        """Build a compact tail summary from recent console lines."""
+        cleaned = self._sanitize_console_output(console_output)
+        non_empty = [line.strip() for line in cleaned.splitlines() if line.strip()]
+        if not non_empty:
+            return ""
+        tail = " | ".join(non_empty[-lines:])
+        if len(tail) > max_chars:
+            tail = f"...{tail[-(max_chars - 3):]}"
+        return tail
+
+    def _build_diagnostic_details(self, console_output: str, diagnostic_hits: list[str]) -> str | None:
+        """Build compact probe detail text for logs/API responses."""
+        parts: list[str] = []
+        if self._last_console_read_reason:
+            parts.append(f"console_reason={self._last_console_read_reason}")
+        if self._compiled_diagnostics:
+            marker_summary = ",".join(diagnostic_hits) if diagnostic_hits else "none"
+            parts.append(f"markers={marker_summary}")
+        tail = self._console_tail(console_output)
+        if tail:
+            parts.append(f"tail={tail}")
+        return "; ".join(parts) if parts else None
 
     async def check(self, container_name: str) -> ReadinessResult:
         """Check VM console for readiness pattern.
@@ -314,7 +365,14 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                         is_ready=False,
                         message="No console output available",
                         progress_percent=5,
+                        details=f"console_reason={self._last_console_read_reason}",
                     )
+
+                diagnostic_hits = self._collect_diagnostic_hits(console_output)
+                diagnostic_details = self._build_diagnostic_details(
+                    console_output,
+                    diagnostic_hits,
+                )
 
                 # Check for completion pattern
                 if self.pattern.search(console_output):
@@ -322,6 +380,7 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                         is_ready=True,
                         message="Boot complete",
                         progress_percent=100,
+                        details=diagnostic_details,
                     )
 
                 # Check for progress patterns
@@ -330,10 +389,17 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                     if compiled_pattern.search(console_output):
                         max_progress = max(max_progress, progress)
 
+                status_message = "Boot in progress"
+                if "poap_failure" in diagnostic_hits:
+                    status_message = "Boot in progress (POAP failure observed)"
+                elif "poap_abort_prompt" in diagnostic_hits:
+                    status_message = "Boot in progress (POAP prompt observed)"
+
                 return ReadinessResult(
                     is_ready=False,
-                    message="Boot in progress",
+                    message=status_message,
                     progress_percent=max_progress,
+                    details=diagnostic_details,
                 )
 
             except Exception as e:
@@ -418,9 +484,11 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                 except Exception:
                     break
             sock.close()
+            self._last_console_read_reason = "tcp_serial_output"
             return b"".join(chunks).decode("utf-8", errors="replace")
         except Exception as e:
             logger.debug(f"Error reading TCP serial port {port}: {e}")
+            self._last_console_read_reason = "tcp_serial_error"
             return ""
 
     def _get_console_output(self) -> str:
@@ -434,6 +502,7 @@ class LibvirtLogPatternProbe(ReadinessProbe):
         # Connecting from the readiness probe blocks the user's console session
         # (CLOSE-WAIT sockets prevent QEMU from accepting new connections).
         # Skip serial output reading for TCP serial — rely on SSH probe or timeout.
+        self._last_console_read_reason = "attempted"
         tcp_port = self._get_tcp_serial_port()
         if tcp_port:
             logger.debug(
@@ -441,6 +510,7 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                 "(QEMU TCP chardev is single-connection)",
                 self.domain_name,
             )
+            self._last_console_read_reason = "tcp_serial_skipped_single_connection"
             return ""
 
         # PTY serial: use virsh console with lock
@@ -452,6 +522,7 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                     f"Console locked for {self.domain_name}, "
                     "skipping readiness probe this cycle"
                 )
+                self._last_console_read_reason = "console_lock_busy"
                 return ""
 
             try:
@@ -487,7 +558,11 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                     except Exception:
                         pass
                     child.close(force=True)
-                    return "".join(chunks)
+                    output = "".join(chunks)
+                    self._last_console_read_reason = (
+                        "pexpect_output" if output.strip() else "pexpect_no_output"
+                    )
+                    return output
 
                 virsh_cmd = (
                     f"timeout 6 virsh -c {shlex.quote(self.uri)} "
@@ -501,9 +576,16 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                     timeout=12,
                     stdin=subprocess.DEVNULL,
                 )
-                return result.stdout + result.stderr
+                output = result.stdout + result.stderr
+                self._last_console_read_reason = (
+                    f"script_output_exit_{result.returncode}"
+                    if output.strip()
+                    else f"script_no_output_exit_{result.returncode}"
+                )
+                return output
             except Exception as e:
                 logger.debug(f"Error getting console output: {e}")
+                self._last_console_read_reason = "console_read_exception"
                 return ""
 
 
@@ -553,6 +635,26 @@ JUNIPER_PROGRESS_PATTERNS = {
     r"mgd": 70,
 }
 
+# Progress patterns for Cisco NX-OSv (N9Kv) boot sequence.
+# Used only when readiness probe is explicitly set to log_pattern.
+N9KV_PROGRESS_PATTERNS = {
+    r"loader|Booting|Initializing": 10,
+    r"POAP|Power On Auto Provisioning": 30,
+    r"startup-config": 50,
+    r"Abort Power On Auto Provisioning": 70,
+    r"login:|Username:": 90,
+}
+
+# Diagnostic markers to understand whether NX-OS consumed startup-config.
+N9KV_DIAGNOSTIC_PATTERNS = {
+    "poap_failure": r"POAP-\d+-POAP_FAILURE|POAP.*(?:failure|failed)",
+    "poap_abort_prompt": r"Abort Power On Auto Provisioning",
+    "poap_dhcp_issue": r"Invalid DHCP OFFER|DHCP discover phase failed",
+    "startup_config_ref": r"startup-config",
+    "bootflash_startup_path": r"bootflash[:/].*startup-config",
+    "login_prompt": r"login:|Username:",
+}
+
 
 def get_libvirt_probe(
     kind: str,
@@ -589,11 +691,15 @@ def get_libvirt_probe(
 
         # Select progress patterns based on device kind
         progress_patterns: dict[str, int] = {}
+        diagnostic_patterns: dict[str, str] = {}
         kind_lower = kind.lower()
         if "iosxr" in kind_lower or "xrv" in kind_lower:
             progress_patterns = CISCO_IOSXR_PROGRESS_PATTERNS
         elif "iosv" in kind_lower or "csr" in kind_lower or "c8000v" in kind_lower:
             progress_patterns = CISCO_IOS_PROGRESS_PATTERNS
+        elif "nxos" in kind_lower or "n9k" in kind_lower:
+            progress_patterns = N9KV_PROGRESS_PATTERNS
+            diagnostic_patterns = N9KV_DIAGNOSTIC_PATTERNS
         elif "asa" in kind_lower:
             progress_patterns = CISCO_ASA_PROGRESS_PATTERNS
         elif "juniper" in kind_lower or "vsrx" in kind_lower or "vqfx" in kind_lower:
@@ -604,6 +710,7 @@ def get_libvirt_probe(
             domain_name=domain_name,
             uri=uri,
             progress_patterns=progress_patterns,
+            diagnostic_patterns=diagnostic_patterns,
         )
 
     return NoopProbe()
