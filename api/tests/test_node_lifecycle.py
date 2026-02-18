@@ -177,6 +177,93 @@ class TestLifecycleResult:
 
 
 # ---------------------------------------------------------------------------
+# _get_startup_config
+# ---------------------------------------------------------------------------
+
+
+class TestGetStartupConfig:
+    def test_n9kv_prefers_saved_workspace_config(
+        self, test_db, test_user, tmp_path
+    ):
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        node_def = _make_node_def(
+            test_db, lab, "n1", "R1", "R1", device="cisco_n9kv", host_id=host.id
+        )
+        node_def.active_config_snapshot_id = "snap-1"
+        test_db.commit()
+
+        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
+        manager.explicit_snapshots_map = {"snap-1": MagicMock(content="from-active")}
+        manager.latest_snapshots_map = {"R1": MagicMock(content="from-latest")}
+
+        ws = tmp_path / lab.id
+        cfg = ws / "configs" / "R1" / "startup-config"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text("from-workspace", encoding="utf-8")
+
+        with patch("app.tasks.node_lifecycle.lab_workspace", return_value=ws):
+            assert manager._get_startup_config("R1", node_def) == "from-workspace"
+
+    def test_non_n9kv_prefers_active_then_json_then_latest(
+        self, test_db, test_user, tmp_path
+    ):
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        node_def = _make_node_def(
+            test_db, lab, "n1", "R1", "R1", device="linux", host_id=host.id
+        )
+        node_def.active_config_snapshot_id = "snap-1"
+        node_def.config_json = json.dumps({"startup-config": "from-json"})
+        test_db.commit()
+
+        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
+        manager.explicit_snapshots_map = {"snap-1": MagicMock(content="from-active")}
+        manager.latest_snapshots_map = {"R1": MagicMock(content="from-latest")}
+
+        ws = tmp_path / lab.id
+        cfg = ws / "configs" / "R1" / "startup-config"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text("from-workspace", encoding="utf-8")
+
+        with patch("app.tasks.node_lifecycle.lab_workspace", return_value=ws):
+            assert manager._get_startup_config("R1", node_def) == "from-active"
+
+            node_def.active_config_snapshot_id = None
+            assert manager._get_startup_config("R1", node_def) == "from-json"
+
+            node_def.config_json = None
+            assert manager._get_startup_config("R1", node_def) == "from-latest"
+
+    def test_non_n9kv_falls_back_to_saved_workspace_config(
+        self, test_db, test_user, tmp_path
+    ):
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        node_def = _make_node_def(
+            test_db, lab, "n1", "R1", "R1", device="linux", host_id=host.id
+        )
+        node_def.active_config_snapshot_id = None
+        node_def.config_json = None
+        test_db.commit()
+
+        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
+        manager.explicit_snapshots_map = {}
+        manager.latest_snapshots_map = {}
+
+        ws = tmp_path / lab.id
+        cfg = ws / "configs" / "R1" / "startup-config"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text("from-workspace", encoding="utf-8")
+
+        with patch("app.tasks.node_lifecycle.lab_workspace", return_value=ws):
+            assert manager._get_startup_config("R1", node_def) == "from-workspace"
+
+
+# ---------------------------------------------------------------------------
 # _load_and_validate
 # ---------------------------------------------------------------------------
 

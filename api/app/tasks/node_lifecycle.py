@@ -31,6 +31,7 @@ from app.services.broadcaster import broadcast_node_state_change, get_broadcaste
 from app.services.state_machine import NodeStateMachine
 from app.image_store import find_image_by_reference, get_image_provider, load_manifest
 from app.services.topology import TopologyService, graph_to_deploy_topology, resolve_node_image
+from app.storage import lab_workspace
 from app.state import (
     HostStatus,
     JobStatus,
@@ -2167,28 +2168,62 @@ class NodeLifecycleManager:
         return max(count, 4)  # Minimum 4 interfaces for flexibility
 
     def _get_startup_config(self, node_name: str, db_node: models.Node) -> str | None:
-        """Get startup config for a node from batch-loaded config snapshots.
+        """Resolve startup config content for create/start operations.
 
-        Priority: active snapshot > latest snapshot.
-        Uses cached maps from _load_and_validate() to avoid N+1 queries.
+        Priority:
+        1. N9Kv: saved workspace config (explicitly prefer persisted file)
+        2. active snapshot
+        3. config_json["startup-config"]
+        4. latest snapshot
+        5. saved workspace config (fallback for non-N9Kv)
         """
+
+        def _read_saved_workspace_config() -> str | None:
+            try:
+                config_file = (
+                    lab_workspace(self.lab.id)
+                    / "configs"
+                    / node_name
+                    / "startup-config"
+                )
+                if not config_file.exists():
+                    return None
+                content = config_file.read_text(encoding="utf-8")
+                return content if content.strip() else None
+            except Exception:
+                return None
+
+        saved_workspace = _read_saved_workspace_config()
+        kind = (db_node.device or "").strip().lower()
+
+        # N9Kv startup-config staging is sensitive; prefer the saved workspace file.
+        if kind == "cisco_n9kv" and saved_workspace:
+            return saved_workspace
+
         try:
             # Use active config snapshot if set
             if db_node.active_config_snapshot_id:
                 snapshot = self.explicit_snapshots_map.get(
                     db_node.active_config_snapshot_id
                 )
-                if snapshot:
+                if snapshot and snapshot.content:
                     return snapshot.content
+
+            # Fall back to config_json startup-config
+            if db_node.config_json:
+                config = json.loads(db_node.config_json)
+                startup = config.get("startup-config")
+                if isinstance(startup, str) and startup.strip():
+                    return startup
 
             # Fall back to latest snapshot
             snapshot = self.latest_snapshots_map.get(node_name)
-            if snapshot:
+            if snapshot and snapshot.content:
                 return snapshot.content
         except Exception:
             pass
 
-        return None
+        return saved_workspace
 
     async def _connect_same_host_links(self, node_names: set[str]):
         """Connect same-host links for the given nodes.

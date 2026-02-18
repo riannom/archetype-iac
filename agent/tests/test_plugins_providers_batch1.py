@@ -194,6 +194,24 @@ def test_libvirt_prepare_startup_config_for_n9kv_alias_strips_console_noise() ->
     assert cleaned == "hostname N9K-4\n"
 
 
+def test_libvirt_prepare_startup_config_for_n9kv_strips_extraction_headers() -> None:
+    provider = _make_libvirt_provider()
+    raw = (
+        "!Command: show running-config\r\n"
+        "!Running configuration last done at: Wed Feb 18 05:19:18 2026\r\n"
+        "!Time: Wed Feb 18 05:21:30 2026\r\n"
+        "\r\n"
+        "version 10.5(3)\r\n"
+        "hostname N9K-4\r\n"
+    )
+    cleaned = provider._prepare_startup_config_for_injection("cisco_n9kv", raw)
+
+    assert "!Command:" not in cleaned
+    assert "!Running configuration" not in cleaned
+    assert "!Time:" not in cleaned
+    assert cleaned.startswith("version 10.5(3)\n")
+
+
 def test_libvirt_prepare_startup_config_non_n9kv_only_normalizes_newlines() -> None:
     provider = _make_libvirt_provider()
     raw = "Router# show running-config\r\nhostname R1\r\n"

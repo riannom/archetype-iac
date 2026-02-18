@@ -2181,6 +2181,12 @@ class LibvirtProvider(Provider):
             if not stripped:
                 cleaned.append(line)
                 continue
+            if stripped.startswith("!Command:"):
+                continue
+            if stripped.startswith("!Running configuration"):
+                continue
+            if stripped.startswith("!Time:"):
+                continue
             if cmd_echo_pat.match(line):
                 continue
             if stripped.startswith("Building configuration"):
