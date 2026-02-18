@@ -2555,23 +2555,63 @@ class LibvirtProvider(Provider):
         bridge_name = self._n9kv_poap_bridge_name(lab_id, node_name)
         gateway_ip, dhcp_start, dhcp_end = self._n9kv_poap_subnet(lab_id, node_name)
         bootfile_url = self._n9kv_poap_bootfile_url(lab_id, node_name, gateway_ip)
+        script_server_opt = f"dhcp-option-force=66,{gateway_ip}"
+        script_name_opt = f"dhcp-option-force=67,{bootfile_url}"
 
         try:
             network = self.conn.networkLookupByName(network_name)
             if network is not None:
-                if network.isActive() != 1:
-                    network.create()
+                needs_recreate = False
                 try:
-                    network.setAutostart(True)
+                    existing_xml = network.XMLDesc(0)
+                    if script_server_opt not in existing_xml or script_name_opt not in existing_xml:
+                        needs_recreate = True
                 except Exception:
-                    pass
-                return network_name
+                    needs_recreate = True
+
+                if needs_recreate:
+                    logger.info(
+                        "Recreating N9Kv POAP network %s for %s/%s to apply DHCP script options",
+                        network_name,
+                        lab_id,
+                        node_name,
+                    )
+                    try:
+                        if network.isActive() == 1:
+                            network.destroy()
+                    except Exception:
+                        pass
+                    try:
+                        network.undefine()
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to recreate N9Kv POAP network %s for %s/%s: %s",
+                            network_name,
+                            lab_id,
+                            node_name,
+                            e,
+                        )
+                        if network.isActive() != 1:
+                            network.create()
+                        try:
+                            network.setAutostart(True)
+                        except Exception:
+                            pass
+                        return network_name
+                else:
+                    if network.isActive() != 1:
+                        network.create()
+                    try:
+                        network.setAutostart(True)
+                    except Exception:
+                        pass
+                    return network_name
         except Exception:
             # Define the network if it does not already exist.
             pass
 
         network_xml = f"""
-<network>
+<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>
   <name>{xml_escape(network_name)}</name>
   <bridge name='{xml_escape(bridge_name)}' stp='on' delay='0'/>
   <forward mode='nat'/>
@@ -2581,6 +2621,10 @@ class LibvirtProvider(Provider):
       <bootp file='{xml_escape(bootfile_url)}' server='{gateway_ip}'/>
     </dhcp>
   </ip>
+  <dnsmasq:options>
+    <dnsmasq:option value='{xml_escape(script_server_opt)}'/>
+    <dnsmasq:option value='{xml_escape(script_name_opt)}'/>
+  </dnsmasq:options>
 </network>""".strip()
 
         try:
