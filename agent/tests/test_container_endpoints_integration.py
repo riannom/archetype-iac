@@ -111,7 +111,7 @@ class TestContainerEndpointsUnit:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                response = test_client.delete("/containers/test-container")
+                response = test_client.delete("/containers/archetype-test-container")
 
         assert response.status_code == 200
         result = response.json()
@@ -126,7 +126,7 @@ class TestContainerEndpointsUnit:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("not found")
 
-                response = test_client.delete("/containers/missing")
+                response = test_client.delete("/containers/archetype-missing")
 
         assert response.status_code == 404
 
@@ -143,7 +143,7 @@ class TestContainerEndpointsUnit:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                response = test_client.delete("/containers/test-lab/test-container")
+                response = test_client.delete("/containers/test-lab/archetype-test-container")
 
         assert response.status_code == 200
         result = response.json()
@@ -158,7 +158,7 @@ class TestContainerEndpointsUnit:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("not found")
 
-                response = test_client.delete("/containers/test-lab/missing")
+                response = test_client.delete("/containers/test-lab/archetype-missing")
 
         assert response.status_code == 200
         result = response.json()
@@ -176,7 +176,7 @@ class TestContainerEndpointsUnit:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                response = test_client.post("/containers/test-container/start")
+                response = test_client.post("/containers/archetype-test-container/start")
 
         assert response.status_code == 200
         result = response.json()
@@ -194,7 +194,7 @@ class TestContainerEndpointsUnit:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.return_value = mock_container
 
-                response = test_client.post("/containers/test-container/start")
+                response = test_client.post("/containers/archetype-test-container/start")
 
         assert response.status_code == 200
         result = response.json()
@@ -213,7 +213,7 @@ class TestContainerEndpointsUnit:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
-                response = test_client.post("/containers/test-container/stop")
+                response = test_client.post("/containers/archetype-test-container/stop")
 
         assert response.status_code == 200
         result = response.json()
@@ -231,7 +231,7 @@ class TestContainerEndpointsUnit:
             with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.return_value = mock_container
 
-                response = test_client.post("/containers/test-container/stop")
+                response = test_client.post("/containers/archetype-test-container/stop")
 
         assert response.status_code == 200
         result = response.json()
