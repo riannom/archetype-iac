@@ -915,6 +915,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_password="admin",
         config_extract_timeout=60,
         config_extract_paging_disable="terminal length 0",
+        # Post-boot recovery: when NX-OS boots into POAP and ignores staged
+        # bootflash startup-config, copy it into startup-config explicitly.
+        post_boot_commands=[
+            "copy bootflash:startup-config startup-config",
+        ],
         # Config injection: write startup-config to bootflash partition before boot
         config_inject_method="bootflash",
         config_inject_partition=0,  # auto-detect via blkid

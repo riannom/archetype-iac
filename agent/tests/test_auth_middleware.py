@@ -1,6 +1,8 @@
 """Tests for AgentAuthMiddleware in agent/main.py."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -58,3 +60,22 @@ class TestAgentAuthMiddleware:
         # but there's no handler so we expect 404 (not 403).
         resp = client.get("/healthz")
         assert resp.status_code != 403
+
+    @pytest.mark.usefixtures("_enable_auth")
+    def test_exempt_path_poap_prefix(self, client: TestClient):
+        # POAP paths must be reachable without controller auth headers.
+        # This endpoint returns 400 due to invalid path params, but should never
+        # be blocked by middleware as 403.
+        resp = client.get("/poap/invalid-lab/invalid.node/script.py")
+        assert resp.status_code != 403
+
+    @pytest.mark.usefixtures("_enable_auth")
+    def test_exempt_path_poap_with_existing_config(self, client: TestClient, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(settings, "workspace_path", str(tmp_path))
+        cfg = tmp_path / "lab1" / "configs" / "n9k1"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "startup-config").write_text("hostname n9k1\n", encoding="utf-8")
+
+        resp = client.get("/poap/lab1/n9k1/startup-config")
+        assert resp.status_code == 200
+        assert "hostname n9k1" in resp.text

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     # Libvirt settings
     libvirt_uri: str = "qemu:///system"
     qcow2_store_path: str = ""  # Path to qcow2 image store (auto-detect if empty)
+    # Enable N9Kv pre-boot POAP provisioning path via libvirt DHCP boot options.
+    # When enabled, N9Kv management NICs use a dedicated libvirt network with
+    # DHCP bootfile/server set to the agent POAP script endpoint.
+    n9kv_poap_preboot_enabled: bool = False
 
     # Overlay networking
     enable_vxlan: bool = True  # Enable VXLAN overlay for multi-host

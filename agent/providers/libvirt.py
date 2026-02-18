@@ -17,6 +17,7 @@ import subprocess
 import uuid
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
+from urllib.parse import quote
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -1548,6 +1549,8 @@ class LibvirtProvider(Provider):
                         domain_name,
                     )
                     self._undefine_domain(existing, domain_name)
+                    self._clear_vm_post_boot_commands_cache(domain_name)
+                    self._teardown_n9kv_poap_network(lab_id, node_name)
                     for suffix in ("", "-data"):
                         disk = disks_dir / f"{node_name}{suffix}.qcow2"
                         if disk.exists():
@@ -1589,14 +1592,11 @@ class LibvirtProvider(Provider):
         workspace = disks_dir.parent
         vlan_tags = self._allocate_vlans(lab_id, node_name, interface_count + reserved_nics, workspace)
 
-        include_management_interface = False
-        if kind and self._node_uses_dedicated_mgmt_interface(kind):
-            include_management_interface = self._ensure_libvirt_network("default")
-            if not include_management_interface:
-                logger.warning(
-                    f"Unable to enable libvirt 'default' network for {node_name}; "
-                    "management NIC omitted, SSH console may be unavailable"
-                )
+        include_management_interface, management_network = self._resolve_management_network(
+            lab_id,
+            node_name,
+            kind,
+        )
 
         # Generate domain XML with multiple interfaces
         xml = self._generate_domain_xml(
@@ -1608,7 +1608,7 @@ class LibvirtProvider(Provider):
             vlan_tags=vlan_tags,
             kind=kind,
             include_management_interface=include_management_interface,
-            management_network="default",
+            management_network=management_network,
         )
 
         # Define and start the domain
@@ -1658,6 +1658,9 @@ class LibvirtProvider(Provider):
 
                     # Undefine (remove from libvirt)
                     self._undefine_domain(domain, name)
+                    self._clear_vm_post_boot_commands_cache(name)
+                    node_name = name[len(prefix) + 1:]
+                    self._teardown_n9kv_poap_network(lab_id, node_name)
                     destroyed_count += 1
                     logger.info(f"Destroyed domain {name}")
 
@@ -1812,6 +1815,8 @@ class LibvirtProvider(Provider):
 
         # Undefine domain (removes definition + NVRAM)
         self._undefine_domain(domain, domain_name)
+        self._clear_vm_post_boot_commands_cache(domain_name)
+        self._teardown_n9kv_poap_network(lab_id, node_name)
         logger.info(f"Undefined domain {domain_name}")
 
         # Delete overlay disks and config ISO
@@ -1838,6 +1843,20 @@ class LibvirtProvider(Provider):
         if node_name in lab_allocs:
             del lab_allocs[node_name]
             self._save_vlan_allocations(lab_id, workspace)
+
+    @staticmethod
+    def _clear_vm_post_boot_commands_cache(domain_name: str) -> None:
+        """Clear serial post-boot command cache for a specific VM."""
+        try:
+            from agent.console_extractor import clear_vm_post_boot_cache
+
+            clear_vm_post_boot_cache(domain_name)
+        except Exception:
+            logger.debug(
+                "Unable to clear VM post-boot cache for %s",
+                domain_name,
+                exc_info=True,
+            )
 
     async def stop_node(
         self,
@@ -1955,6 +1974,8 @@ class LibvirtProvider(Provider):
                         domain_name,
                     )
                     self._undefine_domain(existing, domain_name)
+                    self._clear_vm_post_boot_commands_cache(domain_name)
+                    self._teardown_n9kv_poap_network(lab_id, node_name)
                     disks_dir = self._disks_dir(workspace)
                     for suffix in ("", "-data"):
                         disk = disks_dir / f"{node_name}{suffix}.qcow2"
@@ -2094,14 +2115,11 @@ class LibvirtProvider(Provider):
             reserved_nics = node_config.get("reserved_nics", 0)
             vlan_tags = self._allocate_vlans(lab_id, node_name, iface_count + reserved_nics, workspace)
 
-            include_management_interface = False
-            if self._node_uses_dedicated_mgmt_interface(kind):
-                include_management_interface = self._ensure_libvirt_network("default")
-                if not include_management_interface:
-                    logger.warning(
-                        f"Unable to enable libvirt 'default' network for {node_name}; "
-                        "management NIC omitted, SSH console may be unavailable"
-                    )
+            include_management_interface, management_network = self._resolve_management_network(
+                lab_id,
+                node_name,
+                kind,
+            )
 
             # Generate domain XML
             xml = self._generate_domain_xml(
@@ -2113,7 +2131,7 @@ class LibvirtProvider(Provider):
                 vlan_tags=vlan_tags,
                 kind=kind,
                 include_management_interface=include_management_interface,
-                management_network="default",
+                management_network=management_network,
                 config_iso_path=config_iso_path,
             )
 
@@ -2504,6 +2522,142 @@ class LibvirtProvider(Provider):
         except Exception:
             return False
 
+    @staticmethod
+    def _n9kv_poap_network_name(lab_id: str, node_name: str) -> str:
+        """Build a deterministic libvirt network name for N9Kv POAP bootstrapping."""
+        digest = hashlib.sha1(f"{lab_id}:{node_name}".encode("utf-8")).hexdigest()
+        return f"ap-poap-{digest[:10]}"
+
+    @staticmethod
+    def _n9kv_poap_bridge_name(lab_id: str, node_name: str) -> str:
+        """Build a deterministic Linux bridge name (<=15 chars)."""
+        digest = hashlib.sha1(f"{lab_id}:{node_name}".encode("utf-8")).hexdigest()
+        return f"vpoap{digest[:8]}"
+
+    @staticmethod
+    def _n9kv_poap_subnet(lab_id: str, node_name: str) -> tuple[str, str, str]:
+        """Derive a deterministic /24 subnet (gateway, dhcp_start, dhcp_end)."""
+        digest = hashlib.sha1(f"{lab_id}:{node_name}".encode("utf-8")).digest()
+        octet_2 = 64 + (digest[0] % 64)  # 10.64.0.0/10 private slice
+        octet_3 = digest[1]
+        base = f"10.{octet_2}.{octet_3}"
+        return f"{base}.1", f"{base}.10", f"{base}.250"
+
+    def _n9kv_poap_bootfile_url(self, lab_id: str, node_name: str, gateway_ip: str) -> str:
+        """Build bootfile URL served by this agent for POAP script fetch."""
+        lab_q = quote(lab_id, safe="")
+        node_q = quote(node_name, safe="")
+        return f"http://{gateway_ip}:{settings.agent_port}/poap/{lab_q}/{node_q}/script.py"
+
+    def _ensure_n9kv_poap_network(self, lab_id: str, node_name: str) -> str | None:
+        """Ensure per-node libvirt network with DHCP bootp options for N9Kv POAP."""
+        network_name = self._n9kv_poap_network_name(lab_id, node_name)
+        bridge_name = self._n9kv_poap_bridge_name(lab_id, node_name)
+        gateway_ip, dhcp_start, dhcp_end = self._n9kv_poap_subnet(lab_id, node_name)
+        bootfile_url = self._n9kv_poap_bootfile_url(lab_id, node_name, gateway_ip)
+
+        try:
+            network = self.conn.networkLookupByName(network_name)
+            if network is not None:
+                if network.isActive() != 1:
+                    network.create()
+                try:
+                    network.setAutostart(True)
+                except Exception:
+                    pass
+                return network_name
+        except Exception:
+            # Define the network if it does not already exist.
+            pass
+
+        network_xml = f"""
+<network>
+  <name>{xml_escape(network_name)}</name>
+  <bridge name='{xml_escape(bridge_name)}' stp='on' delay='0'/>
+  <forward mode='nat'/>
+  <ip address='{gateway_ip}' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='{dhcp_start}' end='{dhcp_end}'/>
+      <bootp file='{xml_escape(bootfile_url)}' server='{gateway_ip}'/>
+    </dhcp>
+  </ip>
+</network>""".strip()
+
+        try:
+            network = self.conn.networkDefineXML(network_xml)
+            if network is None:
+                return None
+            if network.isActive() != 1:
+                network.create()
+            try:
+                network.setAutostart(True)
+            except Exception:
+                pass
+            logger.info(
+                "Created N9Kv POAP network %s for %s/%s (bootfile=%s)",
+                network_name,
+                lab_id,
+                node_name,
+                bootfile_url,
+            )
+            return network_name
+        except Exception as e:
+            logger.warning(
+                "Failed to create N9Kv POAP network %s for %s/%s: %s",
+                network_name,
+                lab_id,
+                node_name,
+                e,
+            )
+            return None
+
+    def _teardown_n9kv_poap_network(self, lab_id: str, node_name: str) -> None:
+        """Remove per-node N9Kv POAP network if it exists."""
+        network_name = self._n9kv_poap_network_name(lab_id, node_name)
+        try:
+            network = self.conn.networkLookupByName(network_name)
+        except Exception:
+            return
+        try:
+            if network.isActive() == 1:
+                network.destroy()
+        except Exception:
+            pass
+        try:
+            network.undefine()
+        except Exception:
+            pass
+
+    def _resolve_management_network(
+        self,
+        lab_id: str,
+        node_name: str,
+        kind: str | None,
+    ) -> tuple[bool, str]:
+        """Resolve management network behavior for a VM node."""
+        if not self._node_uses_dedicated_mgmt_interface(kind):
+            return False, "default"
+
+        normalized_kind = (kind or "").strip().lower()
+        if normalized_kind == "cisco_n9kv" and settings.n9kv_poap_preboot_enabled:
+            poap_network = self._ensure_n9kv_poap_network(lab_id, node_name)
+            if poap_network:
+                return True, poap_network
+            logger.warning(
+                "Falling back to libvirt default management network for %s/%s after POAP network failure",
+                lab_id,
+                node_name,
+            )
+
+        include_management_interface = self._ensure_libvirt_network("default")
+        if not include_management_interface:
+            logger.warning(
+                "Unable to enable libvirt 'default' network for %s; management NIC omitted, SSH console may be unavailable",
+                node_name,
+            )
+            return False, "default"
+        return True, "default"
+
     def _ensure_libvirt_network(self, network_name: str) -> bool:
         """Ensure a libvirt network exists, is active, and autostarted."""
         try:
@@ -2522,13 +2676,13 @@ class LibvirtProvider(Provider):
             return False
 
     def _domain_has_dedicated_mgmt_interface(self, domain) -> bool:
-        """Detect whether a domain includes a default-network management NIC."""
+        """Detect whether a domain includes a libvirt-managed network NIC."""
         try:
             xml = domain.XMLDesc(0)
             root = ET.fromstring(xml)
             for iface in root.findall(".//devices/interface[@type='network']"):
                 src = iface.find("source")
-                if src is not None and src.get("network") == "default":
+                if src is not None and src.get("network"):
                     return True
         except Exception:
             return False
@@ -3347,6 +3501,8 @@ class LibvirtProvider(Provider):
 
                         # Undefine domain (remove from libvirt)
                         self._undefine_domain(domain, domain_name)
+                        self._clear_vm_post_boot_commands_cache(domain_name)
+                        self._teardown_n9kv_poap_network(lab_id, node.name)
                         removed["domains"].append(domain_name)
                         logger.info(f"Removed orphan domain: {domain_name}")
 
@@ -3467,6 +3623,8 @@ class LibvirtProvider(Provider):
 
                     # Undefine domain (remove from libvirt)
                     self._undefine_domain(domain, name)
+                    self._clear_vm_post_boot_commands_cache(name)
+                    self._teardown_n9kv_poap_network(lab_id, node_name)
                     removed["domains"].append(name)
 
                     # Clean up VLAN allocation for this node

@@ -209,6 +209,12 @@ def test_n9kv_config_inject_path():
     assert config.config_inject_path == "/startup-config"
 
 
+def test_n9kv_post_boot_commands_seed_startup_config():
+    """N9Kv should copy staged bootflash config into startup-config after boot."""
+    config = VENDOR_CONFIGS["cisco_n9kv"]
+    assert "copy bootflash:startup-config startup-config" in config.post_boot_commands
+
+
 def test_default_device_has_no_config_injection():
     """Devices without explicit config_inject_method should default to 'none'."""
     config = VENDOR_CONFIGS["cisco_iosv"]

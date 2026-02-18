@@ -258,6 +258,52 @@ def test_libvirt_allocate_vlans_reuse() -> None:
     assert reused == [100, 101]
 
 
+@pytest.mark.asyncio
+async def test_libvirt_remove_vm_clears_post_boot_cache(monkeypatch, tmp_path: Path) -> None:
+    provider = _make_libvirt_provider()
+
+    class DummyLibvirt:
+        VIR_DOMAIN_SHUTOFF = 5
+        VIR_DOMAIN_CRASHED = 6
+
+    class DummyDomain:
+        def state(self):
+            return (DummyLibvirt.VIR_DOMAIN_SHUTOFF, 0)
+
+    class DummyConn:
+        def isAlive(self):
+            return True
+
+        def lookupByName(self, _name):
+            return DummyDomain()
+
+    provider._conn = DummyConn()
+    monkeypatch.setattr(libvirt_provider, "libvirt", DummyLibvirt)
+
+    workspace = tmp_path / "workspace"
+    disks_dir = workspace / "disks"
+    disks_dir.mkdir(parents=True, exist_ok=True)
+    (disks_dir / "node1.qcow2").write_text("disk")
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        provider,
+        "_undefine_domain",
+        lambda _domain, domain_name: calls.append(("undefine", domain_name)),
+    )
+    monkeypatch.setattr(
+        provider,
+        "_clear_vm_post_boot_commands_cache",
+        lambda domain_name: calls.append(("clear", domain_name)),
+    )
+    monkeypatch.setattr(provider, "_disks_dir", lambda _workspace: disks_dir)
+
+    await provider._remove_vm("lab1", "node1", workspace)
+
+    domain_name = provider._domain_name("lab1", "node1")
+    assert ("undefine", domain_name) in calls
+    assert ("clear", domain_name) in calls
+
 def test_libvirt_translate_container_path_to_host(monkeypatch, tmp_path: Path) -> None:
     provider = _make_libvirt_provider()
     host_path = tmp_path / "images"

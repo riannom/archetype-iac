@@ -27,7 +27,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 from agent.config import settings
 from agent.network.backends.registry import get_network_backend
@@ -1092,6 +1092,9 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         # Skip health endpoints
         if request.url.path in self.EXEMPT_PATHS:
             return await call_next(request)
+        # POAP bootstrap must be reachable by device DHCP/bootstrap clients.
+        if request.url.path.startswith("/poap/"):
+            return await call_next(request)
 
         # Skip WebSocket upgrades (handled in WS handlers)
         if request.headers.get("upgrade", "").lower() == "websocket":
@@ -1183,6 +1186,86 @@ def metrics():
 def info():
     """Return agent info and capabilities."""
     return get_agent_info().model_dump()
+
+
+def _load_node_startup_config(lab_id: str, node_name: str) -> str:
+    """Load startup-config content from workspace for POAP/bootstrap delivery."""
+    if not _SAFE_ID_RE.match(lab_id):
+        raise HTTPException(status_code=400, detail="Invalid lab_id")
+    if not _SAFE_ID_RE.match(node_name):
+        raise HTTPException(status_code=400, detail="Invalid node_name")
+
+    config_path = get_workspace(lab_id) / "configs" / node_name / "startup-config"
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail="startup-config not found")
+    content = config_path.read_text(encoding="utf-8")
+    if not content.strip():
+        raise HTTPException(status_code=404, detail="startup-config is empty")
+    return content
+
+
+def _render_n9kv_poap_script(config_url: str) -> str:
+    """Render a minimal NX-OS POAP Python script that applies startup config."""
+    return f"""#!/usr/bin/env python
+import sys
+import urllib.request
+from cli import cli
+
+CONFIG_URL = "{config_url}"
+
+
+def _log(message):
+    print("POAP-ARCTYPE: %s" % message)
+
+
+def _run(command):
+    try:
+        cli(command)
+    except Exception as exc:
+        _log("command failed '%s': %s" % (command, exc))
+
+
+def main():
+    _log("fetching startup-config")
+    payload = urllib.request.urlopen(CONFIG_URL, timeout=60).read()
+    content = payload.decode("utf-8", "ignore")
+    if not content.strip():
+        raise RuntimeError("empty startup-config payload")
+
+    with open("/bootflash/startup-config", "w") as handle:
+        handle.write(content)
+
+    _run("copy bootflash:startup-config startup-config")
+    _run("copy startup-config running-config")
+    _run("copy running-config startup-config")
+    _log("startup-config applied")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        _log("fatal: %s" % exc)
+        sys.exit(1)
+"""
+
+
+@app.get("/poap/{lab_id}/{node_name}/startup-config")
+def poap_startup_config(lab_id: str, node_name: str):
+    """Serve node startup-config for pre-boot POAP script fetch."""
+    content = _load_node_startup_config(lab_id, node_name)
+    return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
+
+
+@app.get("/poap/{lab_id}/{node_name}/script.py")
+def poap_script(lab_id: str, node_name: str, request: Request):
+    """Serve a generated POAP script that fetches and applies startup-config."""
+    _load_node_startup_config(lab_id, node_name)  # Ensure config exists before serving script.
+    base_url = f"{request.url.scheme}://{request.url.netloc}"
+    config_url = f"{base_url}/poap/{lab_id}/{node_name}/startup-config"
+    script = _render_n9kv_poap_script(config_url)
+    return PlainTextResponse(content=script, media_type="text/x-python")
 
 
 @app.get("/callbacks/dead-letters")

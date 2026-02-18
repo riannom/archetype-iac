@@ -442,6 +442,81 @@ def test_console_extractor_wait_for_prompt_accepts_config_mode_prompt() -> None:
     assert extractor._wait_for_prompt(r"[\w\-]+[>#]\s*$") is True
 
 
+def test_console_extractor_handle_login_handles_nxos_first_boot_prompts() -> None:
+    import agent.console_extractor as console_extractor
+
+    class _FakeChild:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+            self.calls = 0
+
+        def sendline(self, value: str) -> None:
+            self.sent.append(value)
+
+        def expect(self, patterns, timeout: int | None = None) -> int:
+            self.calls += 1
+            prompt_count = 1
+            sequence = [
+                prompt_count + 3,  # POAP abort prompt
+                prompt_count + 5,  # secure password standard prompt
+                prompt_count + 6,  # enter admin password
+                prompt_count + 7,  # confirm admin password
+                0,                 # final CLI prompt
+            ]
+            return sequence[self.calls - 1]
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    extractor.timeout = 30
+    extractor.child = _FakeChild()
+    extractor._prompt_patterns = lambda _prompt: [r"[\w\-]+[>#]\s*$"]  # type: ignore[method-assign]
+
+    ok = extractor._handle_login("admin", "admin", r"[\w\-]+[>#]\s*$")
+
+    assert ok is True
+    assert extractor.child.sent == [
+        "yes",
+        "yes",
+        "Archetype123!",
+        "Archetype123!",
+    ]
+
+
+def test_console_extractor_handle_login_username_password_flow() -> None:
+    import agent.console_extractor as console_extractor
+
+    class _FakeChild:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+            self.calls = 0
+
+        def sendline(self, value: str) -> None:
+            self.sent.append(value)
+
+        def expect(self, patterns, timeout: int | None = None) -> int:
+            self.calls += 1
+            prompt_count = 1
+            sequence = [
+                prompt_count + 0,  # username
+                prompt_count + 2,  # password
+                0,                 # final prompt
+            ]
+            return sequence[self.calls - 1]
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    extractor.timeout = 30
+    extractor.child = _FakeChild()
+    extractor._prompt_patterns = lambda _prompt: [r"[\w\-]+[>#]\s*$"]  # type: ignore[method-assign]
+
+    ok = extractor._handle_login("admin", "Secr3tPass!", r"[\w\-]+[>#]\s*$")
+
+    assert ok is True
+    assert extractor.child.sent == ["admin", "Secr3tPass!"]
+
+
 def test_extract_vm_config_no_pexpect(monkeypatch) -> None:
     import agent.console_extractor as console_extractor
 

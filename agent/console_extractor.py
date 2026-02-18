@@ -322,6 +322,10 @@ class SerialConsoleExtractor:
             r"[Uu]sername:",
             r"[Ll]ogin:",
             r"Would you like to enter the initial configuration dialog\?\s*\[yes/no\]:",
+            r"Abort\s+Power\s+On\s+Auto\s+Provisioning[^\r\n]*\(yes/no\)\[no\]:",
+            r"Would you like to enforce secure password standard\s*\(yes/no\)\s*\[y\]:",
+            r"Enter the password for \"admin\":",
+            r"Confirm the password for \"admin\":",
         ]
         for _ in range(8):
             self.child.send("\r")
@@ -332,6 +336,10 @@ class SerialConsoleExtractor:
                 if patterns[idx].startswith(r"Would you like to enter"):
                     self.child.sendline("no")
                     self.child.send("\r")
+                # Console is awake; let _handle_login drive any remaining
+                # onboarding prompts (POAP abort, admin password setup, etc).
+                if patterns[idx] != r"Press RETURN to get started!":
+                    return True
             except pexpect.TIMEOUT:
                 pass
             time.sleep(0.35)
@@ -352,28 +360,95 @@ class SerialConsoleExtractor:
             patterns.append(generic_line_prompt)
         return patterns
 
+    @staticmethod
+    def _is_strong_admin_password(password: str) -> bool:
+        """Return True when password is likely to satisfy NX-OS first-boot policy."""
+        if len(password) < 8:
+            return False
+        checks = [
+            re.search(r"[a-z]", password),
+            re.search(r"[A-Z]", password),
+            re.search(r"[0-9]", password),
+            re.search(r"[^A-Za-z0-9]", password),
+        ]
+        return all(checks)
+
+    def _bootstrap_admin_password(self, password: str) -> str:
+        """Pick a first-boot admin password for onboarding prompts.
+
+        Some vendors (notably NX-OSv) enforce password complexity before the
+        usual login prompt appears. Use the configured password when possible,
+        otherwise fall back to a deterministic strong default.
+        """
+        candidate = (password or "").strip()
+        if self._is_strong_admin_password(candidate):
+            return candidate
+        return "Archetype123!"
+
     def _handle_login(
         self,
         username: str,
         password: str,
         prompt_pattern: str,
     ) -> bool:
-        """Handle login prompts."""
-        try:
-            # Look for username prompt or existing CLI prompt
-            index = self.child.expect([
-                r"[Uu]sername:",
-                r"[Ll]ogin:",
-                prompt_pattern,
-            ], timeout=self.timeout)
+        """Handle login and first-boot onboarding prompts."""
+        prompt_patterns = self._prompt_patterns(prompt_pattern)
+        bootstrap_password = self._bootstrap_admin_password(password)
+        patterns = [
+            *prompt_patterns,
+            r"[Uu]sername:",
+            r"[Ll]ogin:",
+            r"[Pp]assword:",
+            r"Abort\s+Power\s+On\s+Auto\s+Provisioning[^\r\n]*\(yes/no\)\[no\]:",
+            r"Would you like to enter (?:the )?(?:initial|basic) configuration dialog[^\r\n]*\(yes/no\)[^\r\n]*:",
+            r"Would you like to enforce secure password standard\s*\(yes/no\)\s*\[y\]:",
+            r"Enter the password for \"admin\":",
+            r"Confirm the password for \"admin\":",
+            r"Wrong Password,\s*Reason:",
+        ]
 
-            if index in (0, 1):  # Username prompt
-                self.child.sendline(username)
-                self.child.expect(r"[Pp]assword:", timeout=self.timeout)
-                self.child.sendline(password)
-                return self._wait_for_prompt(prompt_pattern)
-            # index == 2 means already at prompt, no login needed
-            return True
+        try:
+            for _ in range(40):
+                index = self.child.expect(patterns, timeout=self.timeout)
+
+                # Existing CLI prompt.
+                if index < len(prompt_patterns):
+                    return True
+
+                action = index - len(prompt_patterns)
+
+                if action in (0, 1):  # Username/login prompt
+                    self.child.sendline(username)
+                    continue
+
+                if action == 2:  # Password prompt after username/login
+                    self.child.sendline(password or bootstrap_password)
+                    continue
+
+                if action == 3:  # POAP abort
+                    self.child.sendline("yes")
+                    continue
+
+                if action == 4:  # Basic/initial config dialog
+                    self.child.sendline("no")
+                    continue
+
+                if action == 5:  # Enforce secure password standard
+                    self.child.sendline("yes")
+                    continue
+
+                if action in (6, 7):  # Enter/confirm admin password
+                    self.child.sendline(bootstrap_password)
+                    continue
+
+                if action == 8:
+                    # If the configured password is weak, we may see this once
+                    # before switching to the strong fallback.
+                    bootstrap_password = "Archetype123!"
+                    continue
+
+            logger.warning("Login prompt handling exceeded maximum attempts")
+            return False
         except pexpect.TIMEOUT:
             logger.warning("Timeout during login")
             return False
