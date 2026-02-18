@@ -1422,19 +1422,19 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
               <div className="flex flex-wrap items-center gap-3">
                 <button
                   onClick={openFilePicker}
-                  className="px-4 py-2 bg-sage-600 hover:bg-sage-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
                 >
                   <i className="fa-solid fa-cloud-arrow-up mr-2"></i> Upload Docker
                 </button>
                 <button
                   onClick={openQcow2Picker}
-                  className="px-4 py-2 glass-control text-stone-700 dark:text-white rounded-lg border border-stone-300 dark:border-stone-700 text-xs font-bold transition-all"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
                 >
                   <i className="fa-solid fa-hard-drive mr-2"></i> Upload QCOW2
                 </button>
                 <button
                   onClick={() => setShowISOModal(true)}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
                 >
                   <i className="fa-solid fa-compact-disc mr-2"></i> Import ISO
                 </button>
