@@ -197,6 +197,50 @@ def test_find_bootflash_skips_lvm(mock_glob, mock_run):
     assert result == "/dev/nbd0p3"
 
 
+@patch("agent.providers.bootflash_inject._partition_has_bootflash_markers")
+@patch("agent.providers.bootflash_inject._run")
+@patch("agent.providers.bootflash_inject.Path.glob")
+def test_find_bootflash_prefers_marker_partition(
+    mock_glob,
+    mock_run,
+    mock_has_markers,
+):
+    """When multiple fs matches exist, prefer partition with bootflash markers."""
+    mock_glob.return_value = [Path("/dev/nbd0p2"), Path("/dev/nbd0p4")]
+
+    def blkid_side_effect(cmd, **kwargs):
+        dev = cmd[-1]
+        result = MagicMock()
+        if dev == "/dev/nbd0p2":
+            result.stdout = (
+                b"DEVNAME=/dev/nbd0p2\nTYPE=ext3\nSEC_TYPE=ext2\n"
+            )
+        else:
+            result.stdout = (
+                b"DEVNAME=/dev/nbd0p4\nTYPE=ext3\nSEC_TYPE=ext2\n"
+            )
+        return result
+
+    mock_run.side_effect = blkid_side_effect
+    mock_has_markers.side_effect = lambda dev, _fs: dev == "/dev/nbd0p4"
+
+    result = _find_bootflash_partition("ext2")
+    assert result == "/dev/nbd0p4"
+
+
+@patch("agent.providers.bootflash_inject._run")
+@patch("agent.providers.bootflash_inject.Path.glob")
+def test_find_bootflash_matches_sec_type(mock_glob, mock_run):
+    """SEC_TYPE fallback should match ext2 expectation on ext3 partitions."""
+    mock_glob.return_value = [Path("/dev/nbd0p7")]
+    result = MagicMock()
+    result.stdout = b"DEVNAME=/dev/nbd0p7\nTYPE=ext3\nSEC_TYPE=ext2\n"
+    mock_run.return_value = result
+
+    found = _find_bootflash_partition("ext2")
+    assert found == "/dev/nbd0p7"
+
+
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------

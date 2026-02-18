@@ -190,6 +190,9 @@ def _find_bootflash_partition(fs_type: str) -> str | None:
     if not parts:
         return None
 
+    expected = fs_type.lower()
+    candidates: list[str] = []
+
     for part in parts:
         dev = str(part)
         try:
@@ -203,11 +206,83 @@ def _find_bootflash_partition(fs_type: str) -> str | None:
             logger.debug("Skipping LVM partition %s", dev)
             continue
 
-        if info.get("TYPE", "").lower() == fs_type.lower():
-            logger.debug("Auto-detected bootflash partition: %s (%s)", dev, fs_type)
+        part_type = info.get("TYPE", "").lower()
+        sec_type = info.get("SEC_TYPE", "").lower()
+        if part_type == expected or sec_type == expected:
+            candidates.append(dev)
+
+    if not candidates:
+        return None
+
+    if len(candidates) == 1:
+        logger.debug(
+            "Auto-detected bootflash partition: %s (%s)",
+            candidates[0],
+            fs_type,
+        )
+        return candidates[0]
+
+    # Heuristic for multi-partition images (e.g. newer N9Kv):
+    # prefer the partition that looks like NX-OS bootflash.
+    for dev in candidates:
+        if _partition_has_bootflash_markers(dev, fs_type):
+            logger.debug(
+                "Auto-detected bootflash partition via markers: %s (%s)",
+                dev,
+                fs_type,
+            )
             return dev
 
-    return None
+    logger.debug(
+        "Bootflash marker heuristic found no match; falling back to first candidate %s",
+        candidates[0],
+    )
+    return candidates[0]
+
+
+def _partition_has_bootflash_markers(part_dev: str, fs_type: str) -> bool:
+    """Check whether a partition resembles NX-OS bootflash.
+
+    Marker set is intentionally small and conservative to avoid false positives:
+    - existing /startup-config file
+    - /bootflash directory
+    - nxos*.bin image file at partition root
+    """
+    mount_dir = tempfile.mkdtemp(prefix="bootflash_probe_")
+    mounted = False
+    try:
+        for mount_type in (fs_type, "auto"):
+            try:
+                _run(["mount", "-o", "ro", "-t", mount_type, part_dev, mount_dir])
+                mounted = True
+                break
+            except Exception:
+                continue
+
+        if not mounted:
+            return False
+
+        root = Path(mount_dir)
+        if (root / "startup-config").exists():
+            return True
+        if (root / "bootflash").is_dir():
+            return True
+        for f in root.glob("*.bin"):
+            if f.name.lower().startswith("nxos"):
+                return True
+        return False
+    except Exception:
+        return False
+    finally:
+        if mounted:
+            try:
+                _run(["umount", mount_dir])
+            except Exception:
+                logger.debug("Failed to unmount probe dir %s", mount_dir, exc_info=True)
+        try:
+            Path(mount_dir).rmdir()
+        except OSError:
+            pass
 
 
 def _parse_blkid(output: str) -> dict[str, str]:
