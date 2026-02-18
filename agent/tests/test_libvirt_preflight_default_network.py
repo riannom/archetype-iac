@@ -109,9 +109,10 @@ def test_domain_has_dedicated_mgmt_interface_accepts_custom_network():
     assert provider._domain_has_dedicated_mgmt_interface(_Domain()) is True
 
 
-def test_ensure_n9kv_poap_network_defines_dnsmasq_script_options(monkeypatch):
+def test_ensure_n9kv_poap_network_defines_dnsmasq_script_options(monkeypatch, tmp_path):
     provider = _make_provider()
     monkeypatch.setattr(libvirt_provider.settings, "agent_port", 8001, raising=False)
+    monkeypatch.setattr(libvirt_provider.settings, "workspace_path", str(tmp_path), raising=False)
     captured: dict[str, str] = {}
 
     class _Net:
@@ -145,17 +146,22 @@ def test_ensure_n9kv_poap_network_defines_dnsmasq_script_options(monkeypatch):
 
     name = provider._ensure_n9kv_poap_network("lab1", "n9k1")
     gateway, _, _ = provider._n9kv_poap_subnet("lab1", "n9k1")
-    bootfile = provider._n9kv_poap_bootfile_url("lab1", "n9k1", gateway)
+    bootfile = provider._n9kv_poap_bootfile_name()
+    tftp_root = provider._n9kv_poap_tftp_root("lab1", "n9k1")
 
     assert name == provider._n9kv_poap_network_name("lab1", "n9k1")
     assert "xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'" in captured["xml"]
+    assert f"<tftp root='{tftp_root}'/>" in captured["xml"]
+    assert f"<bootp file='{bootfile}' server='{gateway}'/>" in captured["xml"]
     assert f"dhcp-option-force=66,{gateway}" in captured["xml"]
     assert f"dhcp-option-force=67,{bootfile}" in captured["xml"]
+    assert (tftp_root / bootfile).exists()
 
 
-def test_ensure_n9kv_poap_network_recreates_stale_network(monkeypatch):
+def test_ensure_n9kv_poap_network_recreates_stale_network(monkeypatch, tmp_path):
     provider = _make_provider()
     monkeypatch.setattr(libvirt_provider.settings, "agent_port", 8001, raising=False)
+    monkeypatch.setattr(libvirt_provider.settings, "workspace_path", str(tmp_path), raising=False)
     captured: dict[str, str] = {}
 
     class _ExistingNet:
@@ -228,11 +234,13 @@ def test_ensure_n9kv_poap_network_recreates_stale_network(monkeypatch):
     assert "dhcp-option-force=66," in captured["xml"]
 
 
-def test_ensure_n9kv_poap_network_keeps_existing_when_options_present(monkeypatch):
+def test_ensure_n9kv_poap_network_keeps_existing_when_options_present(monkeypatch, tmp_path):
     provider = _make_provider()
     monkeypatch.setattr(libvirt_provider.settings, "agent_port", 8001, raising=False)
+    monkeypatch.setattr(libvirt_provider.settings, "workspace_path", str(tmp_path), raising=False)
     gateway, _, _ = provider._n9kv_poap_subnet("lab1", "n9k1")
-    bootfile = provider._n9kv_poap_bootfile_url("lab1", "n9k1", gateway)
+    bootfile = provider._n9kv_poap_bootfile_name()
+    tftp_root = provider._n9kv_poap_tftp_root("lab1", "n9k1")
 
     class _Net:
         def __init__(self) -> None:
@@ -253,6 +261,8 @@ def test_ensure_n9kv_poap_network_keeps_existing_when_options_present(monkeypatc
         def XMLDesc(self, _flags):  # noqa: N802
             return (
                 "<network>"
+                f"<tftp root='{tftp_root}'/>"
+                f"<bootp file='{bootfile}' server='{gateway}'/>"
                 f"<dnsmasq:option value='dhcp-option-force=66,{gateway}'/>"
                 f"<dnsmasq:option value='dhcp-option-force=67,{bootfile}'/>"
                 "</network>"

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 
 from agent.config import settings
+from agent.n9kv_poap import render_poap_script
 from agent.providers.naming import libvirt_domain_name as _libvirt_name
 from agent.providers.base import (
     DeployResult,
@@ -2543,20 +2544,54 @@ class LibvirtProvider(Provider):
         base = f"10.{octet_2}.{octet_3}"
         return f"{base}.1", f"{base}.10", f"{base}.250"
 
-    def _n9kv_poap_bootfile_url(self, lab_id: str, node_name: str, gateway_ip: str) -> str:
-        """Build bootfile URL served by this agent for POAP script fetch."""
+    def _n9kv_poap_config_url(self, lab_id: str, node_name: str, gateway_ip: str) -> str:
+        """Build startup-config URL consumed by the staged POAP script."""
         lab_q = quote(lab_id, safe="")
         node_q = quote(node_name, safe="")
-        return f"http://{gateway_ip}:{settings.agent_port}/poap/{lab_q}/{node_q}/script.py"
+        return f"http://{gateway_ip}:{settings.agent_port}/poap/{lab_q}/{node_q}/startup-config"
+
+    def _n9kv_poap_tftp_root(self, lab_id: str, node_name: str) -> Path:
+        """Build deterministic per-node TFTP root for POAP script staging."""
+        return Path(settings.workspace_path) / ".poap-tftp" / self._n9kv_poap_network_name(lab_id, node_name)
+
+    @staticmethod
+    def _n9kv_poap_bootfile_name() -> str:
+        """Return the staged POAP script filename served via TFTP."""
+        return "script.py"
+
+    def _stage_n9kv_poap_tftp_script(self, lab_id: str, node_name: str, gateway_ip: str) -> tuple[Path, str] | None:
+        """Write per-node POAP script to the deterministic TFTP root."""
+        tftp_root = self._n9kv_poap_tftp_root(lab_id, node_name)
+        script_name = self._n9kv_poap_bootfile_name()
+        script_path = tftp_root / script_name
+        config_url = self._n9kv_poap_config_url(lab_id, node_name, gateway_ip)
+        script_content = render_poap_script(config_url)
+
+        try:
+            tftp_root.mkdir(parents=True, exist_ok=True)
+            script_path.write_text(script_content, encoding="utf-8")
+            return tftp_root, script_name
+        except Exception as e:
+            logger.warning(
+                "Failed to stage N9Kv POAP script for %s/%s under %s: %s",
+                lab_id,
+                node_name,
+                script_path,
+                e,
+            )
+            return None
 
     def _ensure_n9kv_poap_network(self, lab_id: str, node_name: str) -> str | None:
         """Ensure per-node libvirt network with DHCP bootp options for N9Kv POAP."""
         network_name = self._n9kv_poap_network_name(lab_id, node_name)
         bridge_name = self._n9kv_poap_bridge_name(lab_id, node_name)
         gateway_ip, dhcp_start, dhcp_end = self._n9kv_poap_subnet(lab_id, node_name)
-        bootfile_url = self._n9kv_poap_bootfile_url(lab_id, node_name, gateway_ip)
+        staged = self._stage_n9kv_poap_tftp_script(lab_id, node_name, gateway_ip)
+        if staged is None:
+            return None
+        tftp_root, script_name = staged
         script_server_opt = f"dhcp-option-force=66,{gateway_ip}"
-        script_name_opt = f"dhcp-option-force=67,{bootfile_url}"
+        script_name_opt = f"dhcp-option-force=67,{script_name}"
 
         try:
             network = self.conn.networkLookupByName(network_name)
@@ -2564,7 +2599,12 @@ class LibvirtProvider(Provider):
                 needs_recreate = False
                 try:
                     existing_xml = network.XMLDesc(0)
-                    if script_server_opt not in existing_xml or script_name_opt not in existing_xml:
+                    if (
+                        script_server_opt not in existing_xml
+                        or script_name_opt not in existing_xml
+                        or "<tftp root=" not in existing_xml
+                        or f"<bootp file='{script_name}'" not in existing_xml
+                    ):
                         needs_recreate = True
                 except Exception:
                     needs_recreate = True
@@ -2616,9 +2656,10 @@ class LibvirtProvider(Provider):
   <bridge name='{xml_escape(bridge_name)}' stp='on' delay='0'/>
   <forward mode='nat'/>
   <ip address='{gateway_ip}' netmask='255.255.255.0'>
+    <tftp root='{xml_escape(str(tftp_root))}'/>
     <dhcp>
       <range start='{dhcp_start}' end='{dhcp_end}'/>
-      <bootp file='{xml_escape(bootfile_url)}' server='{gateway_ip}'/>
+      <bootp file='{xml_escape(script_name)}' server='{gateway_ip}'/>
     </dhcp>
   </ip>
   <dnsmasq:options>
@@ -2642,7 +2683,7 @@ class LibvirtProvider(Provider):
                 network_name,
                 lab_id,
                 node_name,
-                bootfile_url,
+                script_name,
             )
             return network_name
         except Exception as e:
