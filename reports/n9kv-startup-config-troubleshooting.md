@@ -508,3 +508,79 @@
 ### Remaining validation needed
 - Capture console from this specific boot to confirm NX-OS actually fetches/runs the script and bypasses manual POAP cancel/password flow end-to-end.
 - Repeat once with host-move/recreate scenario to verify behavior survives relocation.
+
+## POAP DHCP Metadata Root Cause + TFTP Follow-up (2026-02-18)
+
+### Root-cause evidence from isolated serial capture (pre-fix)
+- Capture method:
+  - stop/create/start node via agent API
+  - temporarily stop `archetype-agent` for exclusive serial capture (to avoid console lock contention)
+  - capture file: `/tmp/n9kv_virsh_console_bootsolo_20260218_125219.log`
+- Critical POAP lines observed:
+  - `Recieved DHCP offer from server ip  - 10.105.213.1`
+  - `Invalid DHCP OFFER: Missing Script Server information`
+  - `POAP DHCP discover phase failed`
+- Interpretation:
+  - N9Kv is receiving DHCP from the correct POAP network gateway, but rejects offer metadata.
+
+### Fix 1 deployed: force DHCP script-server/script-name options
+- Commit: `5c4bf6f` (`fix(n9kv): add dhcp script-server options for poap network`)
+- Change summary:
+  - Added dnsmasq options in per-node POAP network:
+    - `dhcp-option-force=66,<gateway>`
+    - `dhcp-option-force=67,<script>`
+  - Added reconciliation logic to recreate stale existing POAP networks missing required options.
+- After deploy, capture changed to:
+  - `Using DHCP, valid information received over mgmt0 from 10.105.213.1`
+  - `Script Server: 10.105.213.1`
+  - `Script Name: http://10.105.213.1:8001/.../script.py`
+  - then failure:
+    - `The POAP Script is being downloaded from [copy tftp://10.105.213.1/http://10.105.213.1:8001/... ]`
+    - `POAP boot file download failed`
+- Interpretation:
+  - Metadata was accepted, but this NX-OS POAP path still used TFTP semantics and treated the HTTP URL as a TFTP path.
+
+### Fix 2 deployed: true TFTP bootfile staging
+- Commit: `56a4344` (`fix(n9kv): stage poap script via tftp metadata`)
+- Change summary:
+  - Stage per-node `script.py` under deterministic TFTP root:
+    - `/var/lib/archetype-agent/.poap-tftp/ap-poap-e9d5a7f014/script.py`
+  - POAP network XML now includes:
+    - `<tftp root='.../.poap-tftp/ap-poap-e9d5a7f014'/>`
+    - `<bootp file='script.py' server='10.105.213.1'/>`
+    - option `67=script.py` (instead of HTTP URL).
+- Verified on host via:
+  - `virsh -c qemu:///system net-dumpxml ap-poap-e9d5a7f014`
+
+### Post-fix serial validation (agent paused for exclusive capture)
+- Capture file: `/tmp/n9kv_virsh_console_tftpcheck_20260218_132032.log`
+- Critical POAP lines observed:
+  - `Script Name: script.py`
+  - `The POAP Script is being downloaded from [copy tftp://10.105.213.1/script.py ...]`
+  - `POAP_SCRIPT_DOWNLOADED ... Successfully downloaded POAP script file`
+  - `POAP script execution started`
+  - `POAP Script execution failed`
+- Note:
+  - This run intentionally had `archetype-agent` stopped during capture; script execution failure here is expected because the script fetches startup-config from agent HTTP endpoint.
+
+### Fix 3 deployed: POAP script Python runtime compatibility
+- Commit: `2d15f75` (`fix(n9kv): make poap script compatible with poap python`)
+- Change summary:
+  - Script switched to urllib import fallback:
+    - `urllib2` (Py2) or `urllib.request` (Py3)
+
+### Current blocker in live-agent runs
+- In full live-agent cycles (agent left running), no `POAP startup-config request` logs were observed.
+- Concurrently, agent logs show repeated console automation churn for this domain:
+  - repeated `Retrying post-boot commands ...`
+  - repeated `Post-boot commands failed ... Console connection closed unexpectedly`
+  - frequent virsh console lock/process kills.
+- Working hypothesis:
+  - aggressive post-boot console automation is contending with first-boot POAP script execution timing and preventing stable end-to-end completion.
+
+### Next concrete step
+1. Temporarily suppress or defer libvirt post-boot command runner for `cisco_n9kv` when `ARCHETYPE_AGENT_N9KV_POAP_PREBOOT_ENABLED=true`.
+2. Re-run one clean stop/create/start cycle and verify:
+  - POAP script execution completes
+  - `POAP startup-config request` appears in agent logs
+  - node avoids fallback manual POAP/first-boot flow.
