@@ -584,3 +584,37 @@
   - POAP script execution completes
   - `POAP startup-config request` appears in agent logs
   - node avoids fallback manual POAP/first-boot flow.
+
+## Post-Boot Suppression + Live POAP Fetch Signal (2026-02-18)
+
+### Code changes deployed
+- Commit: `37a73be` (`fix(n9kv): defer post-boot automation and add poap debug logs`)
+- Key behavior changes:
+  - libvirt provider now skips console-based post-boot automation for N9Kv when:
+    - `ARCHETYPE_AGENT_N9KV_POAP_PREBOOT_ENABLED=true`
+  - POAP script now emits richer diagnostics and traceback to:
+    - `/bootflash/poap_archetype_debug.log`
+- Remote host (`10.14.23.181`) health confirmed on deployed SHA:
+  - `37a73be43796275c2ab0c045d22679bf159c6864`
+
+### Live-cycle validation (agent online, no manual console intervention)
+- Stop/create/start cycle executed for:
+  - lab `52c138e7-de39-4b4a-8daa-d75014ffe2e0`
+  - node `cisco_n9kv_4`
+- Agent logs in epoch-bounded window now show:
+  - post-boot suppression active:
+    - `Skipping post-boot console automation for arch-...-cisco_n9kv_4 while N9Kv pre-boot POAP is enabled`
+  - critical success signal:
+    - `POAP startup-config request`
+    - client host: `10.105.213.166` (N9Kv POAP mgmt address on per-node subnet)
+
+### What this confirms
+- POAP path is now reaching script execution far enough to issue runtime fetch of startup-config from agent endpoint.
+- The earlier blocking failure mode (POAP script download/exec failing before config fetch) has moved forward materially after:
+  - DHCP option fixes
+  - TFTP script staging
+  - post-boot console suppression
+
+### Remaining check
+- We now have direct runtime fetch evidence, but still need one explicit final verification that on-box active startup-config is populated without manual intervention:
+  - `show startup-config` should no longer be empty after boot settles.
