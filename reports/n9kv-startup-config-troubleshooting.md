@@ -459,3 +459,52 @@
   - `ARCHETYPE_AGENT_N9KV_POAP_PREBOOT_ENABLED=true`
 - Run fresh N9Kv stop/start and host-move cycle.
 - Confirm in console whether POAP auto-fetches script and applies config without manual abort/password flow.
+
+## Deployment + Pre-Boot Activation Validation (2026-02-18)
+
+### Remote deploy completed on agent-01
+- Host: `x300` (`10.14.23.181`)
+- Repo path: `/opt/archetype-agent/repo`
+- Deployed commit:
+  - `5e5c13b` (`git pull --ff-only origin main` on remote host)
+- Agent runtime health (local-on-host check):
+  - `http://127.0.0.1:8001/health` returned commit `5e5c13b77599cddab5a77d6666835c55693472e1`
+
+### Feature flag enabled via systemd drop-in
+- Drop-in file:
+  - `/etc/systemd/system/archetype-agent.service.d/n9kv-poap.conf`
+- Content:
+  - `[Service]`
+  - `Environment=ARCHETYPE_AGENT_N9KV_POAP_PREBOOT_ENABLED=true`
+- `systemctl show archetype-agent` confirmed:
+  - `Environment=ARCHETYPE_AGENT_N9KV_POAP_PREBOOT_ENABLED=true`
+  - `DropInPaths=/etc/systemd/system/archetype-agent.service.d/n9kv-poap.conf`
+
+### Agent-side pre-boot endpoint validation
+- `GET /poap/{lab}/{node}/script.py` returned generated script content including:
+  - `CONFIG_URL = "http://127.0.0.1:8001/poap/.../startup-config"`
+  - `copy bootflash:startup-config startup-config`
+
+### N9Kv cycle performed directly via agent API
+- Lab/node:
+  - `lab_id=52c138e7-de39-4b4a-8daa-d75014ffe2e0`
+  - `node=cisco_n9kv_4`
+- Direct stop:
+  - success (`status=stopped`)
+- Direct start immediately after stop:
+  - failed as expected in per-node API flow (`Domain not found`) because libvirt stop removes domain/disks.
+- Direct create + start sequence:
+  - `create` succeeded with injection details:
+    - `Config injection: ok=True bytes=2621 partition=/dev/nbd0p4 fs=ext2 requested=/startup-config written=/startup-config,/bootflash/startup-config`
+  - `start` succeeded (`status=running`)
+
+### Libvirt POAP network provisioning evidence
+- Agent journal logged:
+  - `Created N9Kv POAP network ap-poap-e9d5a7f014 ... bootfile=http://10.105.213.1:8001/poap/.../script.py`
+- `virsh net-dumpxml ap-poap-e9d5a7f014` confirmed DHCP BOOTP settings:
+  - `<bootp file='http://10.105.213.1:8001/poap/.../script.py' server='10.105.213.1'/>`
+- This confirms the **pre-boot** POAP script delivery path is wired into the VM management network for this node.
+
+### Remaining validation needed
+- Capture console from this specific boot to confirm NX-OS actually fetches/runs the script and bypasses manual POAP cancel/password flow end-to-end.
+- Repeat once with host-move/recreate scenario to verify behavior survives relocation.
