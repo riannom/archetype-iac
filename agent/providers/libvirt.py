@@ -2927,6 +2927,14 @@ class LibvirtProvider(Provider):
         Returns:
             True if commands were run (or already completed), False on error
         """
+        canonical_kind = get_kind_for_device(kind) or kind
+        if canonical_kind == "cisco_n9kv" and settings.n9kv_poap_preboot_enabled:
+            logger.info(
+                "Skipping post-boot console automation for %s while N9Kv pre-boot POAP is enabled",
+                domain_name,
+            )
+            return True
+
         from agent.console_extractor import run_vm_post_boot_commands, PEXPECT_AVAILABLE
 
         if not PEXPECT_AVAILABLE:

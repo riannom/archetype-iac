@@ -153,6 +153,48 @@ def _make_libvirt_provider() -> libvirt_provider.LibvirtProvider:
     return provider
 
 
+@pytest.mark.asyncio
+async def test_libvirt_run_post_boot_commands_skips_n9kv_when_poap_preboot_enabled(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+    import agent.console_extractor as console_extractor
+
+    calls = {"count": 0}
+
+    def _fake_run(_domain_name: str, _kind: str, _uri: str):
+        calls["count"] += 1
+        return types.SimpleNamespace(success=True)
+
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
+    monkeypatch.setattr(console_extractor, "run_vm_post_boot_commands", _fake_run)
+
+    result = await provider._run_post_boot_commands("arch-lab-node1", "cisco_n9kv")
+
+    assert result is True
+    assert calls["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_libvirt_run_post_boot_commands_runs_for_n9kv_when_preboot_disabled(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+    import agent.console_extractor as console_extractor
+
+    calls = {"count": 0}
+
+    def _fake_run(_domain_name: str, _kind: str, _uri: str):
+        calls["count"] += 1
+        return types.SimpleNamespace(success=True)
+
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", False, raising=False)
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
+    monkeypatch.setattr(console_extractor, "run_vm_post_boot_commands", _fake_run)
+
+    result = await provider._run_post_boot_commands("arch-lab-node1", "cisco_n9kv")
+
+    assert result is True
+    assert calls["count"] == 1
+
+
 def test_libvirt_log_name() -> None:
     assert libvirt_provider._log_name("node1", {"_display_name": "Node 1"}) == "Node 1(node1)"
     assert libvirt_provider._log_name("node1", {"_display_name": "node1"}) == "node1"

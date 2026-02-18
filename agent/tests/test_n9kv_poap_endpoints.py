@@ -38,6 +38,9 @@ def test_poap_script_endpoint_includes_startup_config_url(client: TestClient, tm
     assert resp.status_code == 200
     assert "CONFIG_URL = \"http://testserver/poap/lab2/n9k2/startup-config\"" in resp.text
     assert "copy bootflash:startup-config startup-config" in resp.text
+    assert "DEBUG_LOG = \"/bootflash/poap_archetype_debug.log\"" in resp.text
+    assert "traceback.format_exc()" in resp.text
+    assert "import urllib2 as _urlreq" in resp.text
 
 
 def test_poap_script_endpoint_returns_404_when_config_missing(client: TestClient) -> None:
