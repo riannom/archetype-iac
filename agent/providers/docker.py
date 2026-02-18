@@ -953,6 +953,15 @@ no aaa root
 !
 username admin privilege 15 role network-admin nopassword
 !
+! Remove iptables DROP rules on data interfaces at boot.
+! EOS adds per-interface DROP rules in the EOS_FORWARD chain
+! which block forwarding until the forwarding agent is ready.
+! In a lab environment these rules are unnecessary and cause
+! connectivity issues.
+event-handler IPTABLES_CLEANUP
+   trigger on-boot
+   action bash for i in $(seq 1 64); do iptables -D EOS_FORWARD -i eth$i -j DROP 2>/dev/null; done
+!
 """
             startup_config_path.write_text(minimal_config)
             logger.debug(f"Created minimal startup-config for {node.log_name()}")
