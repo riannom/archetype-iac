@@ -1252,8 +1252,17 @@ if __name__ == "__main__":
 
 
 @app.get("/poap/{lab_id}/{node_name}/startup-config")
-def poap_startup_config(lab_id: str, node_name: str):
+def poap_startup_config(lab_id: str, node_name: str, request: Request):
     """Serve node startup-config for pre-boot POAP script fetch."""
+    logger.info(
+        "POAP startup-config request",
+        extra={
+            "event": "poap_startup_config_request",
+            "lab_id": lab_id,
+            "node_name": node_name,
+            "client_host": request.client.host if request.client else None,
+        },
+    )
     content = _load_node_startup_config(lab_id, node_name)
     return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
 
@@ -1261,6 +1270,15 @@ def poap_startup_config(lab_id: str, node_name: str):
 @app.get("/poap/{lab_id}/{node_name}/script.py")
 def poap_script(lab_id: str, node_name: str, request: Request):
     """Serve a generated POAP script that fetches and applies startup-config."""
+    logger.info(
+        "POAP script request",
+        extra={
+            "event": "poap_script_request",
+            "lab_id": lab_id,
+            "node_name": node_name,
+            "client_host": request.client.host if request.client else None,
+        },
+    )
     _load_node_startup_config(lab_id, node_name)  # Ensure config exists before serving script.
     base_url = f"{request.url.scheme}://{request.url.netloc}"
     config_url = f"{base_url}/poap/{lab_id}/{node_name}/startup-config"
