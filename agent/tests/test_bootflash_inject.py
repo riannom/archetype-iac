@@ -241,6 +241,53 @@ def test_find_bootflash_matches_sec_type(mock_glob, mock_run):
     assert found == "/dev/nbd0p7"
 
 
+@patch("agent.providers.bootflash_inject._partition_size_bytes")
+@patch("agent.providers.bootflash_inject._partition_has_bootflash_markers", return_value=False)
+@patch("agent.providers.bootflash_inject._run")
+@patch("agent.providers.bootflash_inject.Path.glob")
+def test_find_bootflash_falls_back_to_largest_partition(
+    mock_glob,
+    mock_run,
+    _mock_has_markers,
+    mock_part_size,
+):
+    """Without markers, choose the largest matching partition, not first."""
+    mock_glob.return_value = [Path("/dev/nbd0p2"), Path("/dev/nbd0p4"), Path("/dev/nbd0p7")]
+
+    def blkid_side_effect(cmd, **kwargs):
+        dev = cmd[-1]
+        result = MagicMock()
+        result.stdout = f"DEVNAME={dev}\nTYPE=ext3\nSEC_TYPE=ext2\n".encode()
+        return result
+
+    mock_run.side_effect = blkid_side_effect
+    mock_part_size.side_effect = lambda dev: {
+        "/dev/nbd0p2": 400,
+        "/dev/nbd0p4": 8000,
+        "/dev/nbd0p7": 5000,
+    }[dev]
+
+    found = _find_bootflash_partition("ext2")
+    assert found == "/dev/nbd0p4"
+
+
+@patch("agent.providers.bootflash_inject._resolve_partition", return_value="/dev/nbd0p3")
+@patch("agent.providers.bootflash_inject._run")
+def test_inject_mirrors_to_bootflash_and_root_paths(mock_run, _mock_resolve, tmp_path):
+    """Write both /startup-config and /bootflash/startup-config for N9Kv compatibility."""
+    overlay = tmp_path / "test.qcow2"
+    overlay.write_text("fake")
+    mount_dir = tmp_path / "mnt"
+    mount_dir.mkdir()
+
+    with patch("agent.providers.bootflash_inject.tempfile.mkdtemp", return_value=str(mount_dir)):
+        ok = inject_startup_config(overlay, "hostname N9K\n", config_path="/startup-config")
+
+    assert ok is True
+    assert (mount_dir / "startup-config").read_text() == "hostname N9K\n"
+    assert (mount_dir / "bootflash" / "startup-config").read_text() == "hostname N9K\n"
+
+
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------

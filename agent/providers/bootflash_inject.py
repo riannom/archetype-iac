@@ -87,10 +87,22 @@ def inject_startup_config(
         _run(["mount", "-t", fs_type, part_dev, mount_dir])
         mounted = True
 
-        # Write startup-config
-        dest = Path(mount_dir) / config_path.lstrip("/")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(config_content)
+        # Write startup-config. For N9Kv images we mirror to both common
+        # paths because some builds expect /startup-config while others
+        # look under /bootflash/startup-config.
+        requested = "/" + config_path.lstrip("/")
+        write_targets = [requested]
+        if requested == "/startup-config":
+            write_targets.append("/bootflash/startup-config")
+        elif requested == "/bootflash/startup-config":
+            write_targets.append("/startup-config")
+
+        written_paths: list[str] = []
+        for rel_path in write_targets:
+            dest = Path(mount_dir) / rel_path.lstrip("/")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(config_content)
+            written_paths.append(rel_path)
 
         # Flush to disk
         _run(["sync"])
@@ -98,7 +110,7 @@ def inject_startup_config(
         logger.info(
             "Wrote %d bytes to %s on %s",
             len(config_content),
-            config_path,
+            ",".join(written_paths),
             part_dev,
         )
         return True
@@ -233,11 +245,27 @@ def _find_bootflash_partition(fs_type: str) -> str | None:
             )
             return dev
 
+    # No markers found. Prefer the largest candidate partition since N9Kv
+    # bootflash/data partitions are typically larger than helper partitions.
+    largest = max(candidates, key=_partition_size_bytes)
     logger.debug(
-        "Bootflash marker heuristic found no match; falling back to first candidate %s",
-        candidates[0],
+        "Bootflash marker heuristic found no match; falling back to largest candidate %s",
+        largest,
     )
-    return candidates[0]
+    return largest
+
+
+def _partition_size_bytes(part_dev: str) -> int:
+    """Return partition size in bytes from sysfs.
+
+    Returns 0 on failure, allowing safe use in max()/sorting.
+    """
+    try:
+        name = Path(part_dev).name
+        sectors = Path(f"/sys/class/block/{name}/size").read_text().strip()
+        return int(sectors) * 512
+    except Exception:
+        return 0
 
 
 def _partition_has_bootflash_markers(part_dev: str, fs_type: str) -> bool:
