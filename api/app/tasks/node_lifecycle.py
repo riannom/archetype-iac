@@ -2803,6 +2803,8 @@ class NodeLifecycleManager:
 
     # Readiness polling constants
     READINESS_POLL_INTERVAL = 5  # seconds
+    # Fallback timeout used when an agent readiness response does not include
+    # a per-node timeout override.
     READINESS_POLL_MAX_DURATION = 120  # seconds
 
     async def _wait_for_readiness(self, deployed_names: list[str]) -> None:
@@ -2828,6 +2830,9 @@ class NodeLifecycleManager:
 
         self.log_parts.append(f"  Waiting for {len(unready_nodes)} node(s) to become ready...")
         start_time = asyncio.get_event_loop().time()
+        timeout_by_node: dict[str, int] = {
+            ns.node_name: self.READINESS_POLL_MAX_DURATION for ns in unready_nodes
+        }
         last_status_by_node: dict[str, tuple[str, str | None, str]] = {}
         last_status_log_elapsed: dict[str, float] = {}
 
@@ -2865,20 +2870,27 @@ class NodeLifecycleManager:
             last_status_by_node[node_name] = status_key
             last_status_log_elapsed[node_name] = elapsed_seconds
 
-        while unready_nodes:
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed >= self.READINESS_POLL_MAX_DURATION:
-                remaining = [ns.node_name for ns in unready_nodes]
-                self.log_parts.append(
-                    f"  Readiness timeout ({self.READINESS_POLL_MAX_DURATION}s): "
-                    f"{len(remaining)} node(s) still not ready: {', '.join(remaining)}"
-                )
-                break
+        def _coerce_timeout(timeout_value: object) -> int | None:
+            """Parse positive timeout values from agent responses."""
+            if timeout_value is None:
+                return None
+            try:
+                parsed = int(timeout_value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed > 0 else None
 
+        while unready_nodes:
             await asyncio.sleep(self.READINESS_POLL_INTERVAL)
+            elapsed = asyncio.get_event_loop().time() - start_time
 
             still_unready = []
+            timed_out_by_timeout: dict[int, list[str]] = {}
             for ns in unready_nodes:
+                current_timeout = timeout_by_node.get(
+                    ns.node_name,
+                    self.READINESS_POLL_MAX_DURATION,
+                )
                 try:
                     # Resolve device kind and provider for readiness check
                     db_node = self.db_nodes_map.get(ns.node_name)
@@ -2892,16 +2904,21 @@ class NodeLifecycleManager:
                         self.agent, self.lab.id, ns.node_name,
                         kind=kind, provider_type=provider_type,
                     )
+                    timeout_override = _coerce_timeout(result.get("timeout"))
+                    if timeout_override is not None:
+                        current_timeout = timeout_override
+                        timeout_by_node[ns.node_name] = timeout_override
+
                     if result.get("is_ready"):
                         ns.is_ready = True
                         self._broadcast_state(ns, name_suffix="ready")
                         self.log_parts.append(
                             f"  {ns.node_name}: ready ({int(elapsed)}s)"
                         )
+                        timeout_by_node.pop(ns.node_name, None)
                         last_status_by_node.pop(ns.node_name, None)
                         last_status_log_elapsed.pop(ns.node_name, None)
                     else:
-                        still_unready.append(ns)
                         _log_waiting_status(
                             ns.node_name,
                             elapsed,
@@ -2909,9 +2926,15 @@ class NodeLifecycleManager:
                             result.get("progress_percent"),
                             result.get("details"),
                         )
+                        if elapsed >= current_timeout:
+                            timed_out_by_timeout.setdefault(current_timeout, []).append(ns.node_name)
+                            timeout_by_node.pop(ns.node_name, None)
+                            last_status_by_node.pop(ns.node_name, None)
+                            last_status_log_elapsed.pop(ns.node_name, None)
+                        else:
+                            still_unready.append(ns)
                 except Exception as e:
                     logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
-                    still_unready.append(ns)
                     _log_waiting_status(
                         ns.node_name,
                         elapsed,
@@ -2919,6 +2942,19 @@ class NodeLifecycleManager:
                         None,
                         None,
                     )
+                    if elapsed >= current_timeout:
+                        timed_out_by_timeout.setdefault(current_timeout, []).append(ns.node_name)
+                        timeout_by_node.pop(ns.node_name, None)
+                        last_status_by_node.pop(ns.node_name, None)
+                        last_status_log_elapsed.pop(ns.node_name, None)
+                    else:
+                        still_unready.append(ns)
+
+            for timeout_seconds, node_names in sorted(timed_out_by_timeout.items()):
+                self.log_parts.append(
+                    f"  Readiness timeout ({timeout_seconds}s): "
+                    f"{len(node_names)} node(s) still not ready: {', '.join(node_names)}"
+                )
 
             unready_nodes = still_unready
 

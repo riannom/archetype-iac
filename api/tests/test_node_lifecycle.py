@@ -2598,6 +2598,41 @@ class TestActiveReadinessPolling:
         assert any("timeout" in line.lower() for line in manager.log_parts)
 
     @pytest.mark.asyncio
+    async def test_readiness_uses_agent_timeout_override(self, test_db, test_user):
+        """Per-node timeout from agent readiness should override default 120s."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+
+        responses = iter([
+            {"is_ready": False, "timeout": 600, "message": "Boot in progress"},
+            {"is_ready": True, "timeout": 600},
+        ])
+
+        async def mock_readiness(*args, **kwargs):
+            return next(responses)
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.get_event_loop") as mock_loop:
+            # Elapsed passes 120s before first probe result is processed.
+            times = iter([0, 130, 136])
+            mock_loop.return_value.time = lambda: next(times, 136)
+            mock_ac.check_node_readiness = mock_readiness
+            await manager._wait_for_readiness(["R1"])
+
+        assert ns.is_ready is True
+        assert not any("Readiness timeout (120s)" in line for line in manager.log_parts)
+
+    @pytest.mark.asyncio
     async def test_multiple_nodes_different_boot_times(self, test_db, test_user):
         """Nodes boot at different times, each detected independently."""
         host = _make_host(test_db)
