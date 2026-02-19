@@ -432,6 +432,7 @@ class SerialConsoleExtractor:
             r"Enter the password for \"admin\":",
             r"Confirm the password for \"admin\":",
             r"Wrong Password,\s*Reason:",
+            r"[Ll]ogin incorrect",
         ]
 
         step_timeout = max(2, min(self.timeout, 8))
@@ -476,7 +477,7 @@ class SerialConsoleExtractor:
                 self.child.sendline(bootstrap_password)
                 continue
 
-            if action == 8:
+            if action in (8, 9):
                 if password_index < len(password_candidates) - 1:
                     password_index += 1
                 continue
