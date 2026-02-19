@@ -159,7 +159,7 @@ The supported device catalog is served dynamically from the API (`/vendors`) and
 | Citrix | `citrix_adc` |
 | F5 | `f5_bigip` |
 | Fortinet | `fortinet_fortigate` |
-| Juniper | `juniper_crpd`, `juniper_vjunosswitch`, `juniper_vqfx`, `juniper_vsrx3` |
+| Juniper | `juniper_crpd`, `juniper_vjunosrouter`, `juniper_vjunosswitch`, `juniper_vqfx`, `juniper_vsrx3` |
 | Microsoft | `windows` |
 | NVIDIA | `cvx` |
 | Nokia | `nokia_srlinux` |

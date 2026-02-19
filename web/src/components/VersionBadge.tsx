@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { checkForUpdates, UpdateInfo } from '../api';
 import { VersionModal } from './VersionModal';
 
@@ -66,11 +67,14 @@ export const VersionBadge: React.FC<VersionBadgeProps> = ({ className = '' }) =>
         <span>v{updateInfo.current_version}</span>
       </button>
 
-      <VersionModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        updateInfo={updateInfo}
-      />
+      {createPortal(
+        <VersionModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          updateInfo={updateInfo}
+        />,
+        document.body
+      )}
     </>
   );
 };

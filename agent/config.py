@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # When enabled, N9Kv management NICs use a dedicated libvirt network with
     # DHCP bootfile/server set to the agent POAP script endpoint.
     n9kv_poap_preboot_enabled: bool = False
+    # Guardrail for N9Kv boot-path mutations. When disabled (default), the
+    # agent avoids mutating N9Kv boot flow (disk injection, POAP preboot
+    # network overrides, post-boot automation, loader auto-recovery) so the
+    # base image can boot unmodified for manual CLI bootstrap.
+    n9kv_boot_modifications_enabled: bool = False
 
     # Overlay networking
     enable_vxlan: bool = True  # Enable VXLAN overlay for multi-host

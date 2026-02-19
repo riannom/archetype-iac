@@ -70,6 +70,7 @@ def test_ensure_libvirt_network_returns_false_when_missing(monkeypatch):
 
 def test_resolve_management_network_prefers_poap_for_n9kv(monkeypatch):
     provider = _make_provider()
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
     monkeypatch.setattr(provider, "_node_uses_dedicated_mgmt_interface", lambda _kind: True)
     monkeypatch.setattr(provider, "_ensure_n9kv_poap_network", lambda _lab, _node: "ap-poap-123")
@@ -81,9 +82,23 @@ def test_resolve_management_network_prefers_poap_for_n9kv(monkeypatch):
 
 def test_resolve_management_network_falls_back_to_default_when_poap_unavailable(monkeypatch):
     provider = _make_provider()
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
     monkeypatch.setattr(provider, "_node_uses_dedicated_mgmt_interface", lambda _kind: True)
     monkeypatch.setattr(provider, "_ensure_n9kv_poap_network", lambda _lab, _node: None)
+    monkeypatch.setattr(provider, "_ensure_libvirt_network", lambda _name: True)
+
+    include, network = provider._resolve_management_network("lab1", "n9k1", "cisco_n9kv")
+    assert include is True
+    assert network == "default"
+
+
+def test_resolve_management_network_ignores_poap_when_boot_mods_disabled(monkeypatch):
+    provider = _make_provider()
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", False, raising=False)
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
+    monkeypatch.setattr(provider, "_node_uses_dedicated_mgmt_interface", lambda _kind: True)
+    monkeypatch.setattr(provider, "_ensure_n9kv_poap_network", lambda _lab, _node: "ap-poap-123")
     monkeypatch.setattr(provider, "_ensure_libvirt_network", lambda _name: True)
 
     include, network = provider._resolve_management_network("lab1", "n9k1", "cisco_n9kv")

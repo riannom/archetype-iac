@@ -175,7 +175,7 @@ class TestJobHealthSettings:
         settings = Settings()
         assert settings.job_timeout_deploy == 1200  # 20 minutes
         assert settings.job_timeout_destroy == 360  # 6 minutes
-        assert settings.job_timeout_sync == 300  # 5 minutes
+        assert settings.job_timeout_sync == 900  # 15 minutes
         assert settings.job_timeout_node == 300  # 5 minutes
 
 

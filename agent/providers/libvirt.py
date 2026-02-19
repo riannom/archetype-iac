@@ -181,6 +181,8 @@ class LibvirtProvider(Provider):
         "vmxnet2": "e1000",
         "vmxnet": "e1000",
     }
+    # One-shot guard for loader recovery per VM lifecycle.
+    _n9kv_loader_recovery_attempted: set[str] = set()
 
     def __init__(self):
         if not LIBVIRT_AVAILABLE:
@@ -221,6 +223,13 @@ class LibvirtProvider(Provider):
         """Get domain name prefix for a lab."""
         safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
         return f"arch-{safe_lab_id}"
+
+    @staticmethod
+    def _canonical_kind(kind: str | None) -> str:
+        """Resolve aliases and normalize kind identifiers."""
+        if not kind:
+            return ""
+        return (get_kind_for_device(kind) or kind).strip().lower()
 
     def _undefine_domain(self, domain: libvirt.virDomain, domain_name: str) -> None:
         """Undefine a domain, cleaning up NVRAM when required."""
@@ -1971,6 +1980,7 @@ class LibvirtProvider(Provider):
                 domain_name,
                 exc_info=True,
             )
+        LibvirtProvider._n9kv_loader_recovery_attempted.discard(domain_name)
         LibvirtProvider._clear_vm_console_control_state(domain_name)
 
     @staticmethod
@@ -2014,7 +2024,11 @@ class LibvirtProvider(Provider):
         if not kind:
             return
 
-        canonical_kind = get_kind_for_device(kind) or kind
+        canonical_kind = self._canonical_kind(kind)
+        if canonical_kind == "cisco_n9kv" and not settings.n9kv_boot_modifications_enabled:
+            self._clear_vm_console_control_state(domain_name)
+            return
+
         config = get_vendor_config(canonical_kind)
         if config is None or not config.post_boot_commands:
             self._clear_vm_console_control_state(domain_name)
@@ -2225,19 +2239,31 @@ class LibvirtProvider(Provider):
             if libvirt_config.needs_nested_vmx:
                 await asyncio.to_thread(self._patch_vjunos_svm_compat, overlay_path)
 
-            # Inject startup-config into bootflash if supported
+            # Inject startup-config into bootflash if supported.
+            # N9Kv boot mutations are guarded so we can run with an unmodified
+            # base boot path and apply config manually via CLI when needed.
             inject_summary = ""
+            canonical_kind = self._canonical_kind(kind)
             if not startup_config:
                 config_file = workspace / "configs" / node_name / "startup-config"
                 if config_file.exists():
                     startup_config = config_file.read_text()
-            if startup_config:
+            if startup_config and (
+                canonical_kind != "cisco_n9kv" or settings.n9kv_boot_modifications_enabled
+            ):
                 startup_config = self._prepare_startup_config_for_injection(
                     kind, startup_config
                 )
 
-            if startup_config and libvirt_config.config_inject_method == "bootflash":
+            if startup_config and canonical_kind == "cisco_n9kv" and not settings.n9kv_boot_modifications_enabled:
+                inject_summary = "skipped=n9kv_boot_modifications_disabled"
+                logger.info(
+                    "Skipping N9Kv startup-config injection for %s (boot mutations disabled)",
+                    node_name,
+                )
+            elif startup_config and libvirt_config.config_inject_method == "bootflash":
                 from agent.providers.bootflash_inject import inject_startup_config
+
                 inject_diag: dict[str, Any] = {}
                 inject_ok = await asyncio.to_thread(
                     inject_startup_config,
@@ -2898,8 +2924,12 @@ class LibvirtProvider(Provider):
         if not self._node_uses_dedicated_mgmt_interface(kind):
             return False, "default"
 
-        normalized_kind = (kind or "").strip().lower()
-        if normalized_kind == "cisco_n9kv" and settings.n9kv_poap_preboot_enabled:
+        normalized_kind = self._canonical_kind(kind)
+        if (
+            normalized_kind == "cisco_n9kv"
+            and settings.n9kv_boot_modifications_enabled
+            and settings.n9kv_poap_preboot_enabled
+        ):
             poap_network = self._ensure_n9kv_poap_network(lab_id, node_name)
             if poap_network:
                 return True, poap_network
@@ -3102,7 +3132,15 @@ class LibvirtProvider(Provider):
         Returns:
             True if commands were run (or already completed), False on error
         """
-        canonical_kind = get_kind_for_device(kind) or kind
+        canonical_kind = self._canonical_kind(kind)
+        if canonical_kind == "cisco_n9kv" and not settings.n9kv_boot_modifications_enabled:
+            logger.info(
+                "Skipping N9Kv post-boot console automation for %s (boot mutations disabled)",
+                domain_name,
+            )
+            self._clear_vm_console_control_state(domain_name)
+            return True
+
         if canonical_kind == "cisco_n9kv" and settings.n9kv_poap_preboot_enabled:
             logger.info(
                 "Running N9Kv post-boot console automation for %s (pre-boot POAP enabled)",
@@ -3126,6 +3164,83 @@ class LibvirtProvider(Provider):
         except Exception as e:
             logger.warning(f"Post-boot commands failed for {domain_name}: {e}")
             return False
+
+    @staticmethod
+    def _extract_probe_markers(details: str | None) -> set[str]:
+        """Parse `markers=` payload from readiness details."""
+        if not details:
+            return set()
+        match = re.search(r"(?:^|;\s*)markers=([^;]+)", details)
+        if not match:
+            return set()
+        raw = match.group(1).strip()
+        if not raw or raw == "none":
+            return set()
+        return {item.strip() for item in raw.split(",") if item.strip()}
+
+    async def _run_n9kv_loader_recovery(
+        self,
+        domain_name: str,
+        kind: str,
+    ) -> str:
+        """Attempt one-shot loader recovery by booting NX-OS image from bootflash."""
+        if domain_name in LibvirtProvider._n9kv_loader_recovery_attempted:
+            return "skipped_already_attempted"
+
+        LibvirtProvider._n9kv_loader_recovery_attempted.add(domain_name)
+
+        from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
+
+        if not PEXPECT_AVAILABLE:
+            logger.warning(
+                "Skipping N9Kv loader recovery for %s: pexpect unavailable",
+                domain_name,
+            )
+            return "skipped_pexpect_unavailable"
+
+        try:
+            result = await asyncio.to_thread(
+                run_vm_cli_commands,
+                domain_name=domain_name,
+                kind=kind,
+                commands=["boot bootflash:nxos64-cs.10.5.3.F.bin"],
+                libvirt_uri=self._uri,
+                prompt_pattern=r"loader >\s*$",
+                paging_disable="",
+                attempt_enable=False,
+                timeout=45,
+                retries=0,
+            )
+        except Exception as e:
+            logger.warning(
+                "N9Kv loader recovery command failed for %s: %s",
+                domain_name,
+                e,
+            )
+            return "error"
+
+        status = "failed"
+        if result.success:
+            status = "sent"
+        else:
+            first_error = ""
+            if result.outputs:
+                first_error = (result.outputs[0].error or "").strip()
+            overall_error = (result.error or "").strip()
+            if "Timeout waiting for command output" in first_error:
+                # Expected when loader hands off to image boot and prompt disappears.
+                status = "sent_handoff_timeout"
+            elif "Console connection closed unexpectedly" in overall_error:
+                status = "sent_console_closed"
+
+        logger.info(
+            "N9Kv loader recovery for %s: status=%s commands_run=%s error=%s",
+            domain_name,
+            status,
+            result.commands_run,
+            result.error,
+        )
+        return status
 
     async def check_readiness(
         self,
@@ -3205,6 +3320,27 @@ class LibvirtProvider(Provider):
 
         # Run the probe
         result = await probe.check(node_name)
+
+        canonical_kind = self._canonical_kind(kind)
+        if (
+            canonical_kind == "cisco_n9kv"
+            and settings.n9kv_boot_modifications_enabled
+            and not result.is_ready
+        ):
+            markers = self._extract_probe_markers(result.details)
+            if "loader_prompt" in markers:
+                recovery_status = await self._run_n9kv_loader_recovery(
+                    domain_name,
+                    kind,
+                )
+                recovery_note = f"loader_recovery={recovery_status}"
+                result.details = (
+                    f"{result.details}; {recovery_note}"
+                    if result.details
+                    else recovery_note
+                )
+                if recovery_status.startswith("sent"):
+                    result.message = "Boot recovery in progress (loader prompt observed)"
 
         # If ready, run post-boot commands (idempotent - only runs once)
         if result.is_ready:

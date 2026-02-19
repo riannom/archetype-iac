@@ -150,32 +150,41 @@ def _make_libvirt_provider() -> libvirt_provider.LibvirtProvider:
     provider._next_vlan = {}
     provider._conn = None
     provider._uri = "qemu:///system"
+    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempted = set()
     return provider
 
 
 @pytest.mark.asyncio
-async def test_libvirt_run_post_boot_commands_runs_for_n9kv_when_poap_preboot_enabled(monkeypatch) -> None:
+async def test_libvirt_run_post_boot_commands_skips_n9kv_when_boot_mods_disabled(monkeypatch) -> None:
     provider = _make_libvirt_provider()
     import agent.console_extractor as console_extractor
 
     calls = {"count": 0}
+    clear_calls: list[str] = []
 
     def _fake_run(_domain_name: str, _kind: str, _uri: str):
         calls["count"] += 1
         return types.SimpleNamespace(success=True)
 
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", False, raising=False)
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
     monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
     monkeypatch.setattr(console_extractor, "run_vm_post_boot_commands", _fake_run)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_clear_vm_console_control_state",
+        staticmethod(lambda domain_name: clear_calls.append(domain_name)),
+    )
 
     result = await provider._run_post_boot_commands("arch-lab-node1", "cisco_n9kv")
 
     assert result is True
-    assert calls["count"] == 1
+    assert calls["count"] == 0
+    assert clear_calls == ["arch-lab-node1"]
 
 
 @pytest.mark.asyncio
-async def test_libvirt_run_post_boot_commands_runs_for_n9kv_when_preboot_disabled(monkeypatch) -> None:
+async def test_libvirt_run_post_boot_commands_runs_for_n9kv_when_boot_mods_enabled(monkeypatch) -> None:
     provider = _make_libvirt_provider()
     import agent.console_extractor as console_extractor
 
@@ -185,6 +194,7 @@ async def test_libvirt_run_post_boot_commands_runs_for_n9kv_when_preboot_disable
         calls["count"] += 1
         return types.SimpleNamespace(success=True)
 
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", False, raising=False)
     monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
     monkeypatch.setattr(console_extractor, "run_vm_post_boot_commands", _fake_run)
@@ -212,11 +222,29 @@ def test_libvirt_mark_post_boot_console_ownership_pending_sets_read_only(monkeyp
         ),
     )
 
-    provider._mark_post_boot_console_ownership_pending("arch-lab-node1", "cisco_n9kv")
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
+
+    provider._mark_post_boot_console_ownership_pending("arch-lab-node1", "cisco_iosv")
 
     assert calls
     assert calls[-1][0] == "arch-lab-node1"
     assert calls[-1][1] == "read_only"
+
+
+def test_libvirt_mark_post_boot_console_ownership_pending_skips_n9kv_when_boot_mods_disabled(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+    clear_calls: list[str] = []
+
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", False, raising=False)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_clear_vm_console_control_state",
+        staticmethod(lambda domain_name: clear_calls.append(domain_name)),
+    )
+
+    provider._mark_post_boot_console_ownership_pending("arch-lab-node1", "cisco_n9kv")
+
+    assert clear_calls == ["arch-lab-node1"]
 
 
 @pytest.mark.asyncio
@@ -961,6 +989,165 @@ async def test_libvirt_check_readiness_ssh_console_uses_probe_when_not_ssh_readi
 
     assert result.is_ready is True
     assert result.message == "Boot complete"
+
+
+@pytest.mark.asyncio
+async def test_libvirt_check_readiness_n9kv_loader_recovery_runs_once(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
+
+    class DummyLibvirt:
+        VIR_DOMAIN_RUNNING = 1
+
+        class libvirtError(Exception):
+            pass
+
+    class DummyDomain:
+        def state(self):
+            return (DummyLibvirt.VIR_DOMAIN_RUNNING, 0)
+
+        def XMLDesc(self):
+            return "<domain/>"
+
+    class DummyConn:
+        def lookupByName(self, _name):
+            return DummyDomain()
+
+    monkeypatch.setattr(libvirt_provider, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "conn",
+        property(lambda self: DummyConn()),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_domain_name",
+        lambda self, _lab_id, _node_name: "arch-lab-node1",
+    )
+    monkeypatch.setattr(libvirt_provider, "get_console_method", lambda _kind: "virsh")
+
+    class DummyCfg:
+        readiness_probe = "log_pattern"
+
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
+
+    class DummyProbe:
+        async def check(self, _node_name):
+            return libvirt_provider.ReadinessResult(
+                is_ready=False,
+                message="Boot blocked (loader prompt observed)",
+                progress_percent=10,
+                details="console_reason=pexpect_output; markers=loader_prompt; tail=loader >",
+            )
+
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_probe", lambda *args, **kwargs: DummyProbe())
+
+    import agent.console_extractor as console_extractor
+
+    calls = {"count": 0}
+
+    def _fake_run_vm_cli_commands(*_args, **_kwargs):
+        calls["count"] += 1
+        return types.SimpleNamespace(
+            success=False,
+            commands_run=0,
+            outputs=[types.SimpleNamespace(error="Timeout waiting for command output")],
+            error="1 command(s) failed",
+        )
+
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
+    monkeypatch.setattr(console_extractor, "run_vm_cli_commands", _fake_run_vm_cli_commands)
+
+    result_first = await provider.check_readiness("lab", "node1", "cisco_n9kv")
+    result_second = await provider.check_readiness("lab", "node1", "cisco_n9kv")
+
+    assert calls["count"] == 1
+    assert result_first.message == "Boot recovery in progress (loader prompt observed)"
+    assert result_first.details and "loader_recovery=sent_handoff_timeout" in result_first.details
+    assert result_second.details and "loader_recovery=skipped_already_attempted" in result_second.details
+
+
+@pytest.mark.asyncio
+async def test_libvirt_check_readiness_n9kv_loader_recovery_skipped_when_boot_mods_disabled(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", False, raising=False)
+
+    class DummyLibvirt:
+        VIR_DOMAIN_RUNNING = 1
+
+        class libvirtError(Exception):
+            pass
+
+    class DummyDomain:
+        def state(self):
+            return (DummyLibvirt.VIR_DOMAIN_RUNNING, 0)
+
+        def XMLDesc(self):
+            return "<domain/>"
+
+    class DummyConn:
+        def lookupByName(self, _name):
+            return DummyDomain()
+
+    monkeypatch.setattr(libvirt_provider, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "conn",
+        property(lambda self: DummyConn()),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_domain_name",
+        lambda self, _lab_id, _node_name: "arch-lab-node1",
+    )
+    monkeypatch.setattr(libvirt_provider, "get_console_method", lambda _kind: "virsh")
+
+    class DummyCfg:
+        readiness_probe = "log_pattern"
+
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
+
+    class DummyProbe:
+        async def check(self, _node_name):
+            return libvirt_provider.ReadinessResult(
+                is_ready=False,
+                message="Boot blocked (loader prompt observed)",
+                progress_percent=10,
+                details="console_reason=pexpect_output; markers=loader_prompt; tail=loader >",
+            )
+
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_probe", lambda *args, **kwargs: DummyProbe())
+
+    calls = {"count": 0}
+
+    async def _fake_recovery(*_args, **_kwargs):
+        calls["count"] += 1
+        return "sent"
+
+    monkeypatch.setattr(provider, "_run_n9kv_loader_recovery", _fake_recovery)
+
+    result = await provider.check_readiness("lab", "node1", "cisco_n9kv")
+
+    assert calls["count"] == 0
+    assert result.details and "loader_recovery=" not in result.details
+
+
+def test_libvirt_clear_vm_post_boot_cache_resets_n9kv_loader_guard(monkeypatch) -> None:
+    domain_name = "arch-lab-node1"
+    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempted = {domain_name}
+
+    import agent.console_extractor as console_extractor
+
+    monkeypatch.setattr(console_extractor, "clear_vm_post_boot_cache", lambda _domain: None)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_clear_vm_console_control_state",
+        staticmethod(lambda _domain: None),
+    )
+
+    libvirt_provider.LibvirtProvider._clear_vm_post_boot_commands_cache(domain_name)
+
+    assert domain_name not in libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempted
 
 
 def test_libvirt_domain_status_mapping(monkeypatch) -> None:

@@ -99,7 +99,9 @@ class Settings(BaseSettings):
     # Job timeout for destroy operations (seconds) - buffer above agent_destroy_timeout
     job_timeout_destroy: int = 360  # 6 minutes
     # Job timeout for sync operations (seconds)
-    job_timeout_sync: int = 300  # 5 minutes
+    # Keep above slow VM readiness windows (e.g. N9Kv 480-600s) to avoid
+    # health monitor retries racing legitimate long boots.
+    job_timeout_sync: int = 900  # 15 minutes
     # Job timeout for node start/stop operations (seconds)
     job_timeout_node: int = 300  # 5 minutes
     # Grace period after timeout before allowing reconciliation (seconds)

@@ -917,3 +917,135 @@
 - `pytest -q agent/tests/test_registry_transport_console.py`
 - `pytest -q agent/tests/test_events_console_logging_version_batch2.py -k "run_vm_post_boot_commands or serial_run_commands_prefers_piggyback_session"`
 - `pytest -q agent/tests/test_plugins_providers_batch1.py -k "libvirt"`
+
+## Fresh Revalidation: Loader Recurrence + Sysconf/Biosinfo Failure (2026-02-19)
+
+### Triggered run
+- Starting point:
+  - `node_id=g4hxozh` (`cisco_n9kv_4`) was `desired=stopped`, `actual=undeployed`.
+- Requested `desired_state=running` via controller API.
+- Sync jobs observed:
+  - `f3b2ca04-de2a-4775-80cf-816fd733815f` (`sync:node:g4hxozh`) -> **failed** after timeout window.
+    - job log tail: `Job timed out after 300s, retrying (attempt 1)...`
+  - Auto-retry `e36e19ce-cd57-4538-9cdb-b92d25781994` -> **completed** with:
+    - `All nodes already in desired state`
+
+### Post-run state
+- Node state after jobs:
+  - `desired_state=running`
+  - `actual_state=running`
+  - `is_ready=false`
+- Agent readiness endpoint repeatedly alternated between:
+  - `console_reason=console_lock_busy`
+  - `console_reason=pexpect_output; markers=none; tail=... loader >`
+
+### CLI verification evidence
+- Normal `cli-verify` failed login with buffer tail ending at `loader >`.
+- Loader-mode `cli-verify` (prompt override) succeeded and confirmed loader access:
+  - `help boot` output present.
+  - `dir bootflash:` shows expected files:
+    - `nxos64-cs.10.5.3.F.bin`
+    - `startup-config`
+- Loader diagnostics:
+  - `show ip` -> `Sysconf checksum failed. Using default values`
+  - `show gw` -> `Sysconf checksum failed. Using default values`
+  - `show sysconf` -> `No valid sysconf found`
+  - `bootmode` -> `Failed to read biosinfo`
+  - `bootmode -g` -> also `Failed to read biosinfo` (cannot set next boot mode)
+
+### Additional recovery attempt
+- Issued loader command:
+  - `boot bootflash:nxos64-cs.10.5.3.F.bin`
+- Command call returned timeout without output; subsequent readiness still showed recurring `loader >` tails.
+
+### Interpretation
+- Current blocker has shifted back to persistent loader-state behavior in this cycle.
+- Boot image and startup-config files exist on bootflash, but loader-side persistent boot metadata appears unreadable (`sysconf` checksum failure + biosinfo read failure), which prevents reliable handoff to NX-OS boot flow.
+- This failure mode is upstream of startup-config import/persistence logic.
+
+### Immediate next checks
+1. Add/extend loader-aware readiness diagnostics so `loader >` is surfaced as explicit `loader_state_detected` (not generic boot-in-progress).
+2. Capture domain XML + firmware/NVRAM settings for this VM instance during loader recurrence and compare to known-good cycles.
+3. Implement guarded loader recovery path for N9Kv (one-shot `boot bootflash:nxos...`) and emit structured outcome markers in sync logs.
+
+## Loader-State Readiness Signal Hardening (2026-02-19)
+
+### Code update applied locally
+- `agent/readiness.py`
+  - Added N9Kv diagnostic markers for loader failure signatures:
+    - `loader_prompt`
+    - `sysconf_checksum_failed`
+    - `biosinfo_read_failed`
+  - Updated readiness status mapping:
+    - when `loader_prompt` is detected, message is now
+      - `Boot blocked (loader prompt observed)`
+    - this replaces ambiguous generic `Boot in progress` for loader-stuck cycles.
+
+### Test coverage
+- `agent/tests/test_readiness.py`
+  - Added `test_n9kv_loader_prompt_reports_blocked_state` to verify:
+    - loader prompt detection is included in marker details,
+    - readiness message is the new blocked-state message.
+- Validation run:
+  - `pytest -q agent/tests/test_readiness.py`
+  - result: `39 passed`
+
+### Operational impact
+- Sync/job logs and readiness APIs now distinguish loader-stuck failures from normal long boots.
+- This reduces false troubleshooting branches (POAP/startup-config path) when the real blocker is loader/NVRAM state.
+
+## Timeout + Loader Auto-Recovery Implementation (2026-02-19)
+
+### Step 1 completed: sync timeout raised above N9Kv readiness window
+- Updated controller sync job timeout:
+  - `api/app/config.py`
+  - `job_timeout_sync: 900` (was `300`)
+- Rationale:
+  - avoid premature job-health retries while N9Kv is still within valid
+    readiness windows (`480s`/`600s` in recent runs).
+- Test:
+  - `make test-api-container API_TEST=tests/test_config.py::TestJobHealthSettings::test_job_timeouts` -> `1 passed`
+
+### Step 2 completed: guarded loader auto-recovery in libvirt readiness
+- Added one-shot N9Kv loader recovery in `agent/providers/libvirt.py`:
+  - when readiness diagnostics include `loader_prompt`,
+  - run `boot bootflash:nxos64-cs.10.5.3.F.bin` once per VM lifecycle,
+  - append recovery status in readiness details (`loader_recovery=...`),
+  - set readiness message to:
+    - `Boot recovery in progress (loader prompt observed)` when command was sent.
+- Added lifecycle cache clear:
+  - loader-recovery guard resets in `_clear_vm_post_boot_commands_cache(...)`.
+
+### Regression tests added/passed
+- `agent/tests/test_plugins_providers_batch1.py`
+  - `test_libvirt_check_readiness_n9kv_loader_recovery_runs_once`
+  - `test_libvirt_clear_vm_post_boot_cache_resets_n9kv_loader_guard`
+- Validation:
+  - `pytest -q agent/tests/test_plugins_providers_batch1.py -k "loader_recovery_runs_once or clear_vm_post_boot_cache_resets_n9kv_loader_guard"` -> `2 passed`
+  - `pytest -q agent/tests/test_plugins_providers_batch1.py -k "check_readiness"` -> `4 passed`
+
+## N9Kv Unmodified-Boot Pivot (2026-02-19)
+
+### Rationale
+- Latest troubleshooting direction: image boots reliably when left unmodified; loader recurrence appears correlated with our startup/boot mutation paths.
+- New default strategy is to preserve N9Kv boot path and use manual post-boot CLI config apply when needed.
+
+### Code changes applied
+- Added a new agent guardrail setting in `agent/config.py`:
+  - `ARCHETYPE_AGENT_N9KV_BOOT_MODIFICATIONS_ENABLED`
+  - default: `false`
+- When this setting is `false` and kind is `cisco_n9kv`, libvirt provider now skips:
+  1. startup-config disk injection during create (`Config injection: skipped=n9kv_boot_modifications_disabled`)
+  2. pre-boot POAP management network override
+  3. automatic post-boot console command automation
+  4. automatic loader-recovery command injection during readiness checks
+
+### Operational effect
+- N9Kv boots with minimal agent-side mutation.
+- Console ownership remains interactive (no post-boot read-only hold for N9Kv).
+- Startup config can be applied manually after reaching CLI (cut/paste workflow), which is currently preferred for isolation.
+
+### Validation
+- `pytest -q agent/tests/test_plugins_providers_batch1.py -k "run_post_boot_commands or mark_post_boot_console_ownership_pending or loader_recovery"` -> `6 passed`
+- `pytest -q agent/tests/test_libvirt_preflight_default_network.py -k "resolve_management_network"` -> `3 passed`
+- `pytest -q agent/tests/test_readiness.py -k "loader_prompt"` -> `1 passed`

@@ -390,7 +390,9 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                         max_progress = max(max_progress, progress)
 
                 status_message = "Boot in progress"
-                if "poap_failure" in diagnostic_hits:
+                if "loader_prompt" in diagnostic_hits:
+                    status_message = "Boot blocked (loader prompt observed)"
+                elif "poap_failure" in diagnostic_hits:
                     status_message = "Boot in progress (POAP failure observed)"
                 elif "poap_abort_prompt" in diagnostic_hits:
                     status_message = "Boot in progress (POAP prompt observed)"
@@ -650,6 +652,9 @@ N9KV_DIAGNOSTIC_PATTERNS = {
     "poap_failure": r"POAP-\d+-POAP_FAILURE|POAP.*(?:failure|failed)",
     "poap_abort_prompt": r"Abort Power On Auto Provisioning",
     "poap_dhcp_issue": r"Invalid DHCP OFFER|DHCP discover phase failed",
+    "loader_prompt": r"(?:^|\s)loader >",
+    "sysconf_checksum_failed": r"Sysconf checksum failed|No valid sysconf found",
+    "biosinfo_read_failed": r"Failed to read biosinfo",
     "startup_config_ref": r"startup-config",
     "bootflash_startup_path": r"bootflash[:/].*startup-config",
     "login_prompt": r"login:|Username:",

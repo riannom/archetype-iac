@@ -403,6 +403,44 @@ class TestLibvirtLogPatternProbe:
         assert isinstance(probe, LibvirtLogPatternProbe)
         assert probe.diagnostic_patterns == N9KV_DIAGNOSTIC_PATTERNS
 
+    @pytest.mark.asyncio
+    async def test_n9kv_loader_prompt_reports_blocked_state(self, monkeypatch):
+        """Loader prompt should be surfaced as blocked boot state, not generic progress."""
+        probe = LibvirtLogPatternProbe(
+            pattern=r"login:",
+            domain_name="dummy-domain",
+            uri="qemu:///system",
+            diagnostic_patterns=N9KV_DIAGNOSTIC_PATTERNS,
+        )
+
+        class FakeDomain:
+            def state(self):
+                return (1, 0)
+
+        class FakeConn:
+            def lookupByName(self, _name):
+                return FakeDomain()
+
+            def close(self):
+                return None
+
+        fake_libvirt = types.SimpleNamespace(
+            VIR_DOMAIN_RUNNING=1,
+            libvirtError=RuntimeError,
+            open=lambda _uri: FakeConn(),
+        )
+
+        monkeypatch.setattr("agent.readiness.LIBVIRT_AVAILABLE", True)
+        monkeypatch.setattr("agent.readiness.libvirt", fake_libvirt)
+        monkeypatch.setattr(probe, "_get_console_output", lambda: "Connected to domain\nloader >\n")
+
+        result = await probe.check("ignored-container-name")
+
+        assert result.is_ready is False
+        assert result.message == "Boot blocked (loader prompt observed)"
+        assert result.details is not None
+        assert "markers=loader_prompt" in result.details
+
 
 # --- Post-boot Commands Tests ---
 
