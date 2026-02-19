@@ -221,9 +221,13 @@ def _upsert_node_states(
         .all()
     )
     existing_by_node_id = {ns.node_id: ns for ns in existing_states}
+    # Secondary index by node_name to catch GUI ID changes (prevents duplicates)
+    existing_by_name = {ns.node_name: ns for ns in existing_states}
 
     added_node_ids: list[str] = []
     removed_node_info: list[dict] = []
+    # Track old node_ids that were reused via name-match (skip in removal pass)
+    reused_old_ids: set[str] = set()
 
     # Update or create node states
     for node in graph.nodes:
@@ -239,6 +243,13 @@ def _upsert_node_states(
                 # This was a placeholder - safe to correct it
                 existing_state.node_name = container_name
             # If node_name != node_id, it was already set correctly or deployed - don't touch
+        elif container_name in existing_by_name:
+            # Node exists by name but GUI ID changed — reuse the existing state
+            # to prevent duplicate node_states for the same container
+            existing_state = existing_by_name[container_name]
+            old_id = existing_state.node_id
+            existing_state.node_id = node.id
+            reused_old_ids.add(old_id)
         else:
             # Create new with defaults - node_name is set only once at creation
             new_state = models.NodeState(
@@ -253,6 +264,8 @@ def _upsert_node_states(
 
     # Collect info about nodes being removed (for teardown)
     for existing_node_id, existing_state in existing_by_node_id.items():
+        if existing_node_id in reused_old_ids:
+            continue  # This state was reused with a new node_id
         if existing_node_id not in current_node_ids:
             # Get placement info for teardown
             placement = (
