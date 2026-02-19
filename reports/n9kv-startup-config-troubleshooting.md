@@ -633,11 +633,7 @@
 - Updated POAP script generator (`agent/n9kv_poap.py`) to run:
   - `configure terminal ; system no poap ; end`
   - before copy/import/apply/save steps.
-- Expanded N9Kv post-boot fallback commands (`agent/vendors.py`) to:
-  - set `system no poap`,
-  - copy `bootflash:startup-config` to `startup-config`,
-  - apply startup to running,
-  - save running back to startup.
+- Post-boot fallback command expansion in `agent/vendors.py` was evaluated but deferred in this turn to avoid mixing with unrelated concurrent edits in that file.
 
 ### Validation status (local)
 - Targeted test runs passed:
