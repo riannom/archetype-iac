@@ -247,9 +247,25 @@ def _send_console_control(
             "message": message,
         }
     )
+
+    async def _deliver() -> None:
+        await session.websocket.send_text(payload)
+
     try:
+        current_loop = None
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        # When already on the target event loop thread, scheduling with
+        # run_coroutine_threadsafe and waiting for result can deadlock.
+        if current_loop is session.loop:
+            session.loop.create_task(_deliver())
+            return
+
         asyncio.run_coroutine_threadsafe(
-            session.websocket.send_text(payload),
+            _deliver(),
             session.loop,
         ).result(timeout=2)
     except Exception:

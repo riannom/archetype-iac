@@ -215,6 +215,58 @@ def test_session_registry_replays_persisted_console_control(monkeypatch):
         loop.close()
 
 
+@pytest.mark.asyncio
+async def test_session_registry_replay_uses_same_loop_task(monkeypatch):
+    import asyncio
+    import json
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.sent_text = []
+
+        async def send_text(self, text: str):
+            self.sent_text.append(text)
+
+    def fail_run_coroutine_threadsafe(*_args, **_kwargs):
+        raise AssertionError("run_coroutine_threadsafe should not be used on active loop")
+
+    monkeypatch.setattr(
+        session_registry.asyncio,
+        "run_coroutine_threadsafe",
+        fail_run_coroutine_threadsafe,
+    )
+
+    changed = session_registry.set_console_control_state(
+        "lab-loop",
+        state="read_only",
+        message="Config in progress",
+    )
+    assert changed is True
+
+    ws = FakeWebSocket()
+    session = session_registry.ActiveConsoleSession(
+        domain_name="lab-loop",
+        master_fd=1,
+        loop=asyncio.get_running_loop(),
+        websocket=ws,
+    )
+
+    try:
+        session_registry.register_session("lab-loop", session)
+        await asyncio.sleep(0)
+        controls = [json.loads(msg) for msg in ws.sent_text]
+        assert controls[-1]["type"] == "console-control"
+        assert controls[-1]["state"] == "read_only"
+        assert controls[-1]["message"] == "Config in progress"
+    finally:
+        session_registry.unregister_session("lab-loop")
+        session_registry.set_console_control_state(
+            "lab-loop",
+            state="interactive",
+            message="Config complete",
+        )
+
+
 def test_clean_config_strips_noise():
     raw = "show running-config\r\n\x1b[31mBuilding configuration...\x1b[0m\n\nline1\nline2\n\n"
     cleaned = session_registry._clean_config(raw, "show running-config")
