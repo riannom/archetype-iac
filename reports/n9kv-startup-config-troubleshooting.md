@@ -836,3 +836,57 @@
   - reach CLI,
   - `copy bootflash:startup-config running-config`,
   - verify/save startup-config as needed.
+
+## Post-Boot Re-Entrancy Guard + Live Validation (2026-02-19, commit `beb163c`)
+
+### Change implemented
+- Added in-progress locking to VM post-boot automation in `agent/console_extractor.py`:
+  - tracks `_vm_post_boot_in_progress` alongside `_vm_post_boot_completed`
+  - prevents overlapping execution attempts for the same domain
+  - clears in-progress/completed state via `clear_vm_post_boot_cache(...)`
+- Added regression tests in `agent/tests/test_events_console_logging_version_batch2.py`:
+  - re-entrant call skips while first invocation is active
+  - failed invocation can retry on later call (no stuck in-progress state)
+
+### Local verification
+- Targeted tests passed:
+  - `pytest -q agent/tests/test_events_console_logging_version_batch2.py -k "run_vm_post_boot_commands"`
+  - `pytest -q agent/tests/test_plugins_providers_batch1.py -k "run_post_boot_commands or prepare_startup_config or undefine_domain"`
+  - `pytest -q agent/tests/test_n9kv_vendor_config.py`
+  - `pytest -q agent/tests/test_n9kv_poap_endpoints.py`
+
+### Remote deploy + cycle
+- Host: `10.14.23.181` (`agent-01`)
+- Agent health reported commit:
+  - `beb163ce168c7aec7d7802f4e246c895c8720b15`
+- Cycle executed via authenticated agent API:
+  1. `stop` -> `success=true` (`duration_ms=12959`)
+  2. `create` -> `success=true`, injection:
+     - `Config injection: ok=True bytes=2566 ... written=/startup-config,/bootflash/startup-config`
+  3. `start` -> `success=true` (`duration_ms=4232`)
+
+### Journal evidence for this cycle window
+- `running_post_boot=30`
+- `failed=4`
+- `completed=1`
+- `in_progress_skip=0`
+- First successful post-boot command sequence logged at `03:40:43Z`..`03:40:57Z`:
+  - `configure terminal ; system no poap ; end`
+  - `copy bootflash:startup-config running-config`
+  - `copy running-config startup-config`
+  - fallback copy sequence
+  - final: `Post-boot commands completed ... 6/6 commands`
+
+### On-box verification after completion
+- `cli-verify` (`03:41:20Z`) returned:
+  - `show startup-config` populated (not empty), with header:
+    - `!Startup config saved at: Thu Feb 19 03:40:51 2026`
+  - `dir bootflash: | i startup-config`:
+    - `2566 ... startup-config`
+  - `show boot | i POAP`:
+    - `Boot POAP Disabled`
+    - `System-wide POAP is disabled using exec command 'system no poap'`
+
+### Interpretation
+- Post-boot automation now successfully reaches the proven import/persist path and yields non-empty active startup-config in this run.
+- The re-entrancy guard did not trigger (`in_progress_skip=0`) in this specific cycle, indicating repeated attempts were mostly serial retries/readiness loops rather than overlapping concurrent invocations.
