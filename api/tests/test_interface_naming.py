@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import pytest
 
+from agent.vendors import VENDOR_CONFIGS
 from app.services.interface_naming import (
     normalize_interface,
     denormalize_interface,
     _resolve_port_naming,
+    _build_normalize_regex,
 )
 
 
@@ -257,3 +259,46 @@ class TestIosxrBugFix:
         """Even without device_type, the fallback should get this right."""
         # Fallback uses raw index for GigE patterns (ambiguous without device_type)
         assert normalize_interface("GigabitEthernet0/0/0/3") == "eth3"
+
+
+# ---------------------------------------------------------------------------
+# Parametrized vendor registry validation
+# ---------------------------------------------------------------------------
+
+# Build test params from every VendorConfig in the catalog.
+_VENDOR_REGISTRY_PARAMS = [
+    pytest.param(key, cfg.port_naming, cfg.port_start_index, id=key)
+    for key, cfg in VENDOR_CONFIGS.items()
+]
+
+
+class TestVendorRegistryRoundTrip:
+    """Validate that every VendorConfig entry produces a working regex
+    and round-trips correctly through normalize → denormalize."""
+
+    @pytest.mark.parametrize("key,port_naming,port_start_index", _VENDOR_REGISTRY_PARAMS)
+    def test_regex_builds(self, key, port_naming, port_start_index):
+        """_build_normalize_regex should return a valid pattern (or None for 'eth')."""
+        regex = _build_normalize_regex(port_naming)
+        if port_naming == "eth":
+            assert regex is None, f"{key}: 'eth' naming should return None"
+        else:
+            assert regex is not None, f"{key}: regex should not be None for {port_naming!r}"
+
+    @pytest.mark.parametrize("key,port_naming,port_start_index", _VENDOR_REGISTRY_PARAMS)
+    def test_round_trip_eth1(self, key, port_naming, port_start_index):
+        """normalize(denormalize('eth1', key), key) should equal 'eth1'."""
+        vendor_name = denormalize_interface("eth1", key)
+        normalized = normalize_interface(vendor_name, key)
+        assert normalized == "eth1", (
+            f"{key}: round-trip failed: eth1 → {vendor_name!r} → {normalized!r}"
+        )
+
+    @pytest.mark.parametrize("key,port_naming,port_start_index", _VENDOR_REGISTRY_PARAMS)
+    def test_round_trip_eth4(self, key, port_naming, port_start_index):
+        """normalize(denormalize('eth4', key), key) should equal 'eth4'."""
+        vendor_name = denormalize_interface("eth4", key)
+        normalized = normalize_interface(vendor_name, key)
+        assert normalized == "eth4", (
+            f"{key}: round-trip failed: eth4 → {vendor_name!r} → {normalized!r}"
+        )
