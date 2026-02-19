@@ -513,6 +513,53 @@ class OVSNetworkManager:
         ports = stdout.strip().split("\n")
         discovered_count = 0
 
+        # Build one snapshot of running container interfaces keyed by host ifindex.
+        # This avoids an O(ports * containers) namespace scan on startup.
+        container_ifindex_map: dict[str, tuple[str, str, str]] = {}
+        try:
+            def _get_containers():
+                return self.docker.containers.list(
+                    filters={"label": "archetype.lab_id"}
+                )
+
+            containers = await asyncio.to_thread(_get_containers)
+            for container in containers:
+                pid = container.attrs.get("State", {}).get("Pid")
+                if not pid:
+                    continue
+
+                lab_id = (container.labels or {}).get("archetype.lab_id", "_unknown")
+                code, ns_stdout, _ = await self._run_cmd([
+                    "nsenter", "-t", str(pid), "-n",
+                    "ip", "-o", "link", "show",
+                ])
+                if code != 0:
+                    continue
+
+                for line in ns_stdout.split("\n"):
+                    if not line.strip():
+                        continue
+
+                    # Example: "2: eth1@if123: <...>"
+                    parts = line.split(":")
+                    if len(parts) < 2:
+                        continue
+
+                    iface = parts[1].strip().split("@")[0]
+                    if iface in ("lo", "eth0"):
+                        continue
+
+                    if "@if" not in parts[1]:
+                        continue
+
+                    peer_idx = parts[1].split("@if")[1].split(":")[0].strip()
+                    if not peer_idx:
+                        continue
+
+                    container_ifindex_map[peer_idx] = (container.name, iface, lab_id)
+        except Exception as e:
+            logger.debug(f"Error building container interface map: {e}")
+
         for port_name in ports:
             # Only process our container veth ports (start with 'vh')
             if not port_name.startswith("vh"):
@@ -530,70 +577,17 @@ class OVSNetworkManager:
             if vlan_tag is None:
                 continue
 
-            # Try to find which container owns this port by checking the veth peer
-            # The peer should be inside a container namespace
-            container_name = None
-            interface_name = None
+            # Match host-side ifindex to container peer references collected above.
+            code, idx_out, _ = await self._run_cmd([
+                "cat", f"/sys/class/net/{port_name}/ifindex"
+            ])
+            if code != 0:
+                continue
 
-            try:
-                # Get all running archetype containers (wrapped to avoid blocking)
-                def _get_containers():
-                    return self.docker.containers.list(
-                        filters={"label": "archetype.lab_id"}
-                    )
-                containers = await asyncio.to_thread(_get_containers)
-                for container in containers:
-                    pid = container.attrs["State"]["Pid"]
-                    if not pid:
-                        continue
-
-                    # List interfaces in container namespace
-                    code, ns_stdout, _ = await self._run_cmd([
-                        "nsenter", "-t", str(pid), "-n",
-                        "ip", "-o", "link", "show"
-                    ])
-                    if code != 0:
-                        continue
-
-                    # Parse interface names from output
-                    for line in ns_stdout.split("\n"):
-                        if not line.strip():
-                            continue
-                        # Format: "2: eth1@if123: <...>"
-                        parts = line.split(":")
-                        if len(parts) >= 2:
-                            iface = parts[1].strip().split("@")[0]
-                            # Skip loopback and management interfaces
-                            if iface in ("lo", "eth0"):
-                                continue
-
-                            # Check if this interface's peer index matches our port
-                            # by checking the ifindex relationship
-                            if "@if" in parts[1]:
-                                peer_idx = parts[1].split("@if")[1].split(":")[0]
-                                # Get our port's ifindex
-                                code, idx_out, _ = await self._run_cmd([
-                                    "cat", f"/sys/class/net/{port_name}/ifindex"
-                                ])
-                                if code == 0 and idx_out.strip() == peer_idx:
-                                    container_name = container.name
-                                    interface_name = iface
-                                    break
-                    if container_name:
-                        break
-
-            except Exception as e:
-                logger.debug(f"Error discovering container for port {port_name}: {e}")
-
-            if container_name and interface_name:
-                # Found the owner - reconstruct port tracking
+            match = container_ifindex_map.get(idx_out.strip())
+            if match:
+                container_name, interface_name, lab_id = match
                 port_key = f"{container_name}:{interface_name}"
-                # Get lab_id from container labels (wrapped to avoid blocking)
-                def _get_lab_id():
-                    return self.docker.containers.get(container_name).labels.get(
-                        "archetype.lab_id", "_unknown"
-                    )
-                lab_id = await asyncio.to_thread(_get_lab_id)
 
                 port = OVSPort(
                     port_name=port_name,

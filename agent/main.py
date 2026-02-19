@@ -1144,14 +1144,22 @@ def _validate_container_name(name: str) -> bool:
 # --- Health Endpoints ---
 
 @app.get("/health")
-def health():
-    """Basic health check."""
+async def health():
+    """Detailed health endpoint for diagnostics and UI status."""
     return {
         "status": "ok",
         "agent_id": AGENT_ID,
         "commit": get_commit(),
         "registered": _registered,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/healthz")
+async def healthz():
+    """Fast liveness endpoint used by container healthchecks."""
+    return {
+        "status": "ok",
     }
 
 
@@ -2496,29 +2504,8 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
     )
 
 
-@app.post("/prune-docker")
-async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
-    """Prune Docker resources to reclaim disk space.
-
-    This endpoint cleans up:
-    - Dangling images (images not tagged and not used by containers)
-    - Build cache (if enabled)
-    - Unused volumes (if enabled, conservative by default)
-
-    Images used by containers from valid labs are protected.
-
-    Args:
-        request: Contains valid_lab_ids and flags for what to prune
-
-    Returns:
-        Counts of removed resources and space reclaimed
-    """
-    logger.info(
-        f"Docker prune request: dangling_images={request.prune_dangling_images}, "
-        f"build_cache={request.prune_build_cache}, unused_volumes={request.prune_unused_volumes}, "
-        f"stopped_containers={request.prune_stopped_containers}, unused_networks={request.prune_unused_networks}"
-    )
-
+def _sync_prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
+    """Run Docker prune operations synchronously (called via asyncio.to_thread)."""
     images_removed = 0
     build_cache_removed = 0
     volumes_removed = 0
@@ -2529,6 +2516,7 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
 
     try:
         import docker
+
         client = docker.from_env()
 
         # Get images used by running containers (to protect them)
@@ -2536,11 +2524,8 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
         try:
             containers = client.containers.list(all=True)
             for container in containers:
-                # Check if container belongs to a valid lab
                 labels = container.labels
                 lab_id = labels.get("archetype.lab_id", "")
-
-                # Protect images from valid labs
                 is_valid_lab = lab_id in request.valid_lab_ids if lab_id else False
 
                 if is_valid_lab or container.status == "running":
@@ -2551,52 +2536,53 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
             errors.append(f"Error getting container info: {e}")
             logger.warning(f"Error getting container info for protection: {e}")
 
-        # Prune dangling images
         if request.prune_dangling_images:
             try:
-                # Use filters to only prune dangling images
                 result = client.images.prune(filters={"dangling": True})
                 deleted = result.get("ImagesDeleted") or []
                 images_removed = len([d for d in deleted if d.get("Deleted")])
                 space_reclaimed += result.get("SpaceReclaimed", 0)
-                logger.info(f"Pruned {images_removed} dangling images, reclaimed {result.get('SpaceReclaimed', 0)} bytes")
+                logger.info(
+                    f"Pruned {images_removed} dangling images, reclaimed "
+                    f"{result.get('SpaceReclaimed', 0)} bytes"
+                )
             except Exception as e:
                 errors.append(f"Error pruning images: {e}")
                 logger.warning(f"Error pruning dangling images: {e}")
 
-        # Prune build cache
         if request.prune_build_cache:
             try:
-                # Use the low-level API for build cache pruning
                 result = client.api.prune_builds()
                 build_cache_removed = len(result.get("CachesDeleted") or [])
                 space_reclaimed += result.get("SpaceReclaimed", 0)
-                logger.info(f"Pruned {build_cache_removed} build cache entries, reclaimed {result.get('SpaceReclaimed', 0)} bytes")
+                logger.info(
+                    f"Pruned {build_cache_removed} build cache entries, reclaimed "
+                    f"{result.get('SpaceReclaimed', 0)} bytes"
+                )
             except Exception as e:
                 errors.append(f"Error pruning build cache: {e}")
                 logger.warning(f"Error pruning build cache: {e}")
 
-        # Prune unused volumes (conservative - disabled by default)
         if request.prune_unused_volumes:
             try:
                 result = client.volumes.prune()
                 deleted = result.get("VolumesDeleted") or []
                 volumes_removed = len(deleted)
                 space_reclaimed += result.get("SpaceReclaimed", 0)
-                logger.info(f"Pruned {volumes_removed} volumes, reclaimed {result.get('SpaceReclaimed', 0)} bytes")
+                logger.info(
+                    f"Pruned {volumes_removed} volumes, reclaimed "
+                    f"{result.get('SpaceReclaimed', 0)} bytes"
+                )
             except Exception as e:
                 errors.append(f"Error pruning volumes: {e}")
                 logger.warning(f"Error pruning volumes: {e}")
 
-        # Prune stopped containers (conservative - only non-lab containers)
         if request.prune_stopped_containers:
             try:
-                # Get all stopped containers
                 stopped = client.containers.list(filters={"status": "exited"}, sparse=True)
                 for container in stopped:
                     labels = container.labels
                     lab_id = labels.get("archetype.lab_id", "")
-                    # Protect containers from valid labs
                     if lab_id and lab_id in request.valid_lab_ids:
                         continue
                     try:
@@ -2604,13 +2590,11 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
                         containers_removed += 1
                     except Exception as ce:
                         errors.append(f"Error removing container {container.short_id}: {ce}")
-                space_reclaimed += 0  # Docker doesn't report space for container removal
                 logger.info(f"Removed {containers_removed} stopped containers")
             except Exception as e:
                 errors.append(f"Error pruning containers: {e}")
                 logger.warning(f"Error pruning stopped containers: {e}")
 
-        # Prune unused networks
         if request.prune_unused_networks:
             try:
                 result = client.networks.prune()
@@ -2638,6 +2622,17 @@ async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
             success=False,
             errors=[str(e)],
         )
+
+
+@app.post("/prune-docker")
+async def prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
+    """Prune Docker resources to reclaim disk space without blocking the event loop."""
+    logger.info(
+        f"Docker prune request: dangling_images={request.prune_dangling_images}, "
+        f"build_cache={request.prune_build_cache}, unused_volumes={request.prune_unused_volumes}, "
+        f"stopped_containers={request.prune_stopped_containers}, unused_networks={request.prune_unused_networks}"
+    )
+    return await asyncio.to_thread(_sync_prune_docker, request)
 
 
 # --- Workspace Cleanup Endpoints ---

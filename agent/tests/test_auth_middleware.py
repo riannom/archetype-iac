@@ -56,10 +56,11 @@ class TestAgentAuthMiddleware:
 
     @pytest.mark.usefixtures("_enable_auth")
     def test_exempt_path_healthz(self, client: TestClient):
-        # /healthz is in EXEMPT_PATHS so middleware should not reject it,
-        # but there's no handler so we expect 404 (not 403).
+        # /healthz is in EXEMPT_PATHS and has a handler; should be reachable
+        # without auth and return healthy.
         resp = client.get("/healthz")
-        assert resp.status_code != 403
+        assert resp.status_code == 200
+        assert resp.json().get("status") == "ok"
 
     @pytest.mark.usefixtures("_enable_auth")
     def test_exempt_path_poap_prefix(self, client: TestClient):

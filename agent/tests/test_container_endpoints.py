@@ -10,7 +10,8 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi import HTTPException
 
-from agent.main import remove_container, remove_container_for_lab
+from agent.main import _sync_prune_docker, prune_docker, remove_container, remove_container_for_lab
+from agent.schemas import DockerPruneRequest, DockerPruneResponse
 
 
 def _run(coro):
@@ -220,3 +221,21 @@ class TestRemoveContainerGeneric:
             _run(remove_container("bad-name"))
 
         assert exc.value.status_code == 400
+
+
+class TestPruneDockerEndpoint:
+    """Tests for POST /prune-docker endpoint behavior."""
+
+    def test_prune_docker_offloads_to_thread(self):
+        """Prune should run in a worker thread so health endpoints stay responsive."""
+        request = DockerPruneRequest(valid_lab_ids=["lab-1"])
+        expected = DockerPruneResponse(success=True, images_removed=1)
+
+        with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            mock_thread.return_value = expected
+            result = _run(prune_docker(request))
+
+        assert result == expected
+        mock_thread.assert_awaited_once()
+        assert mock_thread.await_args.args[0] is _sync_prune_docker
+        assert mock_thread.await_args.args[1] == request
