@@ -645,3 +645,41 @@
   - `show startup-config` is populated,
   - `show boot` reflects POAP disabled after bootstrap/save.
 - Reboot same VM instance and confirm no POAP abort/password wizard path is presented.
+
+## Field Validation: Recreate + Same-VM Reboot (2026-02-19)
+
+### Recreate/start cycle (fresh overlay)
+- Executed on `agent-01` (`10.14.23.181`) against:
+  - lab `52c138e7-de39-4b4a-8daa-d75014ffe2e0`
+  - node `cisco_n9kv_4`
+- Direct agent API sequence:
+  - `stop` -> success
+  - `create` -> success, injection confirmed:
+    - `Config injection: ok=True bytes=2621 ... written=/startup-config,/bootflash/startup-config`
+  - `start` -> success (`status=running`)
+- Agent logs during this cycle confirmed:
+  - `Created N9Kv POAP network ... (bootfile=script.py)`
+  - `POAP startup-config request` at `2026-02-19T00:31:11Z` (client `10.105.213.166`)
+
+### Same-VM reboot check (state-preserving)
+- Performed in-place reboot (no destroy/recreate):
+  - `virsh -c qemu:///system reboot arch-52c138e7-de39-4b4a-8-cisco_n9kv_4 --mode acpi`
+- Observation window after reboot:
+  - repeated readiness/post-boot suppression logs continued,
+  - **no new** `POAP script request` or `POAP startup-config request` entries appeared.
+- VM remained `running` after reboot (`virsh domstate`).
+
+### Same-VM hard reset check (state-preserving, hypervisor-forced)
+- Performed hypervisor-level reset to remove ACPI-guest ambiguity:
+  - `virsh -c qemu:///system reset arch-52c138e7-de39-4b4a-8-cisco_n9kv_4`
+- Observation window after reset:
+  - no `POAP script request` / `POAP startup-config request` log entries were emitted.
+- VM remained `running` after reset (`virsh domstate`).
+
+### Interpretation
+- New evidence indicates first bootstrap still enters POAP path (expected for fresh state), but after bootstrap/save, subsequent same-state reboot/reset did not re-enter POAP endpoint flow.
+- This is consistent with `system no poap` being persisted by the POAP bootstrap path.
+
+### Remaining gap
+- Automated serial probe did not reach a stable CLI prompt in this cycle (`prompt_ok=False`), so direct on-box `show running-config/startup-config` confirmation is still pending.
+- A dedicated, stable console capture/interaction method is still needed for final CLI-level proof.
