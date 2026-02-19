@@ -175,6 +175,14 @@ class TestDenormalizeInterface:
         assert denormalize_interface("loopback0", "ceos") == "loopback0"
         assert denormalize_interface("mgmt0", "ceos") == "mgmt0"
 
+    def test_eth0_management_passthrough(self):
+        """eth0 is Docker management — never denormalize to vendor data port."""
+        assert denormalize_interface("eth0", "juniper_cjunos") == "eth0"
+        assert denormalize_interface("eth0", "juniper_vsrx3") == "eth0"
+        assert denormalize_interface("eth0", "sonic_vs") == "eth0"
+        assert denormalize_interface("eth0", "ceos") == "eth0"
+        assert denormalize_interface("eth0", "cisco_n9kv") == "eth0"
+
 
 class TestRoundTrip:
     """Verify normalize → denormalize round-trips for all device types."""

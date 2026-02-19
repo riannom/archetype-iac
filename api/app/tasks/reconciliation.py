@@ -733,12 +733,16 @@ async def _reconcile_single_lab(session, lab_id: str) -> int:
             logger.debug(f"Lab {lab_id} reconciliation skipped - another process holds lock")
             return 0
 
-        # Check if there's an active job for this lab
+        # Check if there's an active bulk deploy/destroy job for this lab.
+        # Only "up" and "down" jobs should block reconciliation — per-node
+        # sync/enforcement jobs should NOT prevent lab state updates, otherwise
+        # lab.state gets stuck while enforcement is recovering nodes.
         active_job = (
             session.query(models.Job)
             .filter(
                 models.Job.lab_id == lab_id,
                 models.Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+                models.Job.action.in_(["up", "down"]),
             )
             .first()
         )

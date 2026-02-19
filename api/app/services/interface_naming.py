@@ -216,6 +216,11 @@ def denormalize_interface(iface: str, device_type: str | None = None) -> str:
         return iface
 
     eth_index = int(m.group(1))
+
+    # eth0 is Docker management — not a data port, never denormalize it
+    if eth_index < DOCKER_DATA_PORT_START:
+        return iface
+
     # Reverse the normalize formula: vendor_index = eth_index - 1 + port_start_index
     vendor_index = eth_index - DOCKER_DATA_PORT_START + port_start_index
 
