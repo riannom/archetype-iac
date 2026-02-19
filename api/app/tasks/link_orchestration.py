@@ -591,8 +591,19 @@ async def create_same_host_link(
     session.flush()
 
     try:
-        source_iface = normalize_interface(link_state.source_interface) if link_state.source_interface else ""
-        target_iface = normalize_interface(link_state.target_interface) if link_state.target_interface else ""
+        # Look up device types for accurate interface normalization
+        _src_node = (
+            session.query(models.Node)
+            .filter(models.Node.lab_id == lab_id, models.Node.container_name == link_state.source_node)
+            .first()
+        )
+        _tgt_node = (
+            session.query(models.Node)
+            .filter(models.Node.lab_id == lab_id, models.Node.container_name == link_state.target_node)
+            .first()
+        )
+        source_iface = normalize_interface(link_state.source_interface, _src_node.device if _src_node else None) if link_state.source_interface else ""
+        target_iface = normalize_interface(link_state.target_interface, _tgt_node.device if _tgt_node else None) if link_state.target_interface else ""
 
         result = await agent_client.create_link_on_agent(
             agent,
@@ -697,8 +708,19 @@ async def create_cross_host_link(
     session.flush()
 
     try:
-        interface_a = normalize_interface(link_state.source_interface) if link_state.source_interface else ""
-        interface_b = normalize_interface(link_state.target_interface) if link_state.target_interface else ""
+        # Look up device types for accurate interface normalization
+        _src_node = (
+            session.query(models.Node)
+            .filter(models.Node.lab_id == lab_id, models.Node.container_name == link_state.source_node)
+            .first()
+        )
+        _tgt_node = (
+            session.query(models.Node)
+            .filter(models.Node.lab_id == lab_id, models.Node.container_name == link_state.target_node)
+            .first()
+        )
+        interface_a = normalize_interface(link_state.source_interface, _src_node.device if _src_node else None) if link_state.source_interface else ""
+        interface_b = normalize_interface(link_state.target_interface, _tgt_node.device if _tgt_node else None) if link_state.target_interface else ""
 
         # Use new trunk VTEP model (setup_cross_host_link_v2)
         result = await agent_client.setup_cross_host_link_v2(

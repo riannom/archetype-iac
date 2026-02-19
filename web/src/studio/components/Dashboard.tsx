@@ -14,6 +14,10 @@ interface LabSummary {
   id: string;
   name: string;
   created_at?: string;
+  node_count?: number;
+  running_count?: number;
+  container_count?: number;
+  vm_count?: number;
 }
 
 interface LabStatus {
@@ -191,9 +195,12 @@ const Dashboard: React.FC<DashboardProps> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {labs.length > 0 ? labs.map((lab) => {
-              const status = labStatuses?.[lab.id];
-              const isRunning = status && status.running > 0;
-              const isAllRunning = status && status.running === status.total && status.total > 0;
+              const agentStatus = labStatuses?.[lab.id];
+              // Prefer agent-polled status when available, fall back to DB counts from /labs
+              const running = agentStatus ? agentStatus.running : (lab.running_count ?? 0);
+              const total = agentStatus ? agentStatus.total : (lab.node_count ?? 0);
+              const isRunning = running > 0;
+              const isAllRunning = running === total && total > 0;
               const statusDotColor = isAllRunning ? 'bg-green-500' : isRunning ? 'bg-amber-500' : 'bg-stone-400 dark:bg-stone-600';
 
               return (
@@ -259,14 +266,32 @@ const Dashboard: React.FC<DashboardProps> = ({
                    <span className="flex items-center gap-1.5"><i className="fa-solid fa-calendar"></i> {lab.created_at ? new Date(lab.created_at).toLocaleDateString() : 'New'}</span>
                 </div>
 
-                {status && status.total > 0 && (
-                  <div className="flex items-center gap-2 mb-4">
-                    <div className={`w-2 h-2 rounded-full ${statusDotColor} ${isAllRunning ? 'animate-pulse' : ''}`}></div>
-                    <span className="text-xs text-stone-600 dark:text-stone-400">
-                      <span className="font-bold">{status.running}</span>
-                      <span className="text-stone-400 dark:text-stone-500">/{status.total}</span>
-                      <span className="ml-1 text-stone-500 dark:text-stone-500">nodes running</span>
-                    </span>
+                {total > 0 && (
+                  <div className="mb-4 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${statusDotColor} ${isAllRunning ? 'animate-pulse' : ''}`}></div>
+                      <span className="text-xs text-stone-600 dark:text-stone-400">
+                        <span className="font-bold">{running}</span>
+                        <span className="text-stone-400 dark:text-stone-500">/{total}</span>
+                        <span className="ml-1 text-stone-500 dark:text-stone-500">nodes running</span>
+                      </span>
+                    </div>
+                    {((lab.container_count ?? 0) > 0 || (lab.vm_count ?? 0) > 0) && (
+                      <div className="flex items-center gap-2 ml-4 text-[10px] text-stone-400 dark:text-stone-500">
+                        {(lab.container_count ?? 0) > 0 && (
+                          <span className="flex items-center gap-1">
+                            <i className="fa-solid fa-cube"></i>
+                            {lab.container_count} container{lab.container_count !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {(lab.vm_count ?? 0) > 0 && (
+                          <span className="flex items-center gap-1">
+                            <i className="fa-solid fa-server"></i>
+                            {lab.vm_count} VM{lab.vm_count !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 

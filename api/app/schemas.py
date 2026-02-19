@@ -27,6 +27,10 @@ class LabOut(BaseModel):
     state_error: str | None = None
     created_at: datetime
     user_role: str | None = None  # Effective lab role for the requesting user
+    node_count: int = 0  # Total nodes in topology (from DB)
+    running_count: int = 0  # Nodes with actual_state='running' (from DB)
+    container_count: int = 0  # Docker container nodes
+    vm_count: int = 0  # Libvirt/QEMU VM nodes
 
     model_config = ConfigDict(from_attributes=True)
 

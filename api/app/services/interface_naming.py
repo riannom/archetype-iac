@@ -1,7 +1,7 @@
 """Centralized interface name translation.
 
 Single source of truth for converting between vendor-specific interface names
-(e.g., Ethernet1, GigabitEthernet0/0, ge-0/0/0) and Linux-style names (eth0, eth1).
+(e.g., Ethernet1, GigabitEthernet0/0, ge-0/0/0) and Linux-style names (eth1, eth2).
 
 Translation is driven by the ``portNaming`` / ``portStartIndex`` fields in the
 vendor catalog (``agent/vendors.py``), with overrides from custom devices and
@@ -18,6 +18,11 @@ from typing import Optional
 
 from agent.vendors import get_config_by_device
 from app.image_store import find_custom_device, get_device_override
+
+# Docker reserves eth0 for management (default bridge network).
+# OVS plugin data networks start at eth1. This offset converts between
+# vendor port indices (which may start at 0) and Docker interface numbers.
+DOCKER_DATA_PORT_START = 1
 
 
 # ---------------------------------------------------------------------------
@@ -101,8 +106,8 @@ _FALLBACK_PATTERNS: list[tuple[re.Pattern, bool]] = [
     (re.compile(r"^Ethernet\d+/(\d+)$", re.IGNORECASE), False),
     # ethernet-1/{N} — Nokia SR Linux
     (re.compile(r"^ethernet-\d+/(\d+)$", re.IGNORECASE), False),
-    # ge-0/0/{N} or xe-0/0/{N} — Juniper
-    (re.compile(r"^[gx]e-\d+/\d+/(\d+)$", re.IGNORECASE), False),
+    # ge-0/0/{N}, xe-0/0/{N}, or et-0/0/{N} — Juniper (0-indexed)
+    (re.compile(r"^(?:[gx]e|et)-\d+/\d+/(\d+)$", re.IGNORECASE), True),
     # ge0/{N} — VyOS
     (re.compile(r"^ge\d+/(\d+)$", re.IGNORECASE), False),
     # e1-{N} — Nokia SR OS
@@ -165,19 +170,21 @@ def normalize_interface(iface: str, device_type: str | None = None) -> str:
                 m = regex.match(iface)
                 if m:
                     vendor_index = int(m.group(1))
-                    # Convert vendor index to eth index:
-                    # vendor index offset from port_start_index = position
-                    # eth index = position (eth is always 0-based from the vendor's start)
-                    # But we preserve the raw index — the vendor catalog index
-                    # IS the eth index. port_start_index is used only for
-                    # denormalization (going the other direction).
-                    return f"eth{vendor_index}"
+                    # Convert vendor index to Docker eth index:
+                    # eth1 = first data port (eth0 is Docker management).
+                    # Formula: eth{vendor_index - port_start_index + 1}
+                    # - cEOS (start=1): Ethernet1 → eth{1-1+1} = eth1 ✓
+                    # - Juniper (start=0): et-0/0/0 → eth{0-0+1} = eth1 ✓
+                    return f"eth{vendor_index - port_start_index + DOCKER_DATA_PORT_START}"
 
     # Fallback: try common patterns (backward compat for device_type=None)
-    for pattern, _ in _FALLBACK_PATTERNS:
+    for pattern, is_zero_indexed in _FALLBACK_PATTERNS:
         m = pattern.match(iface)
         if m:
-            return f"eth{m.group(1)}"
+            idx = int(m.group(1))
+            if is_zero_indexed:
+                return f"eth{idx + DOCKER_DATA_PORT_START}"
+            return f"eth{idx}"
 
     # Unrecognized — return as-is
     return iface
@@ -208,10 +215,12 @@ def denormalize_interface(iface: str, device_type: str | None = None) -> str:
     if not m:
         return iface
 
-    index = int(m.group(1))
+    eth_index = int(m.group(1))
+    # Reverse the normalize formula: vendor_index = eth_index - 1 + port_start_index
+    vendor_index = eth_index - DOCKER_DATA_PORT_START + port_start_index
 
     # Generate the vendor-specific interface name
     if "{index}" in port_naming:
-        return port_naming.replace("{index}", str(index))
+        return port_naming.replace("{index}", str(vendor_index))
     else:
-        return f"{port_naming}{index}"
+        return f"{port_naming}{vendor_index}"

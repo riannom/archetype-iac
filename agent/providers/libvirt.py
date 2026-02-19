@@ -7,6 +7,8 @@ like Cisco IOS-XRv, FTDv, vManage, etc.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+from functools import partial
 import hashlib
 import json
 import logging
@@ -193,6 +195,24 @@ class LibvirtProvider(Provider):
         self._vlan_allocations: dict[str, dict[str, list[int]]] = {}
         # Next VLAN to allocate per lab
         self._next_vlan: dict[str, int] = {}
+        # Single-thread executor for all libvirt calls.
+        # Libvirt Python bindings are NOT thread-safe — serializing all
+        # conn.* calls to one dedicated thread avoids races without locks
+        # while keeping the asyncio event loop free for /healthz etc.
+        self._libvirt_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="libvirt",
+        )
+
+    async def _run_libvirt(self, func, *args, **kwargs):
+        """Run a blocking function on the dedicated libvirt thread."""
+        loop = asyncio.get_running_loop()
+        if kwargs:
+            return await loop.run_in_executor(
+                self._libvirt_executor, partial(func, *args, **kwargs),
+            )
+        return await loop.run_in_executor(
+            self._libvirt_executor, partial(func, *args),
+        )
 
     @property
     def name(self) -> str:
@@ -623,14 +643,16 @@ class LibvirtProvider(Provider):
             port_name = await self.get_vm_interface_port(lab_id, node_name, i)
             if port_name:
                 try:
-                    subprocess.run(
-                        ["ip", "link", "set", port_name, "mtu", str(settings.local_mtu)],
-                        capture_output=True,
-                        text=True,
-                        check=True,
+                    proc = await asyncio.create_subprocess_exec(
+                        "ip", "link", "set", port_name, "mtu", str(settings.local_mtu),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
                     )
-                except subprocess.CalledProcessError as e:
-                    logger.warning(f"Failed to set MTU on {port_name}: {e.stderr}")
+                    _, stderr_bytes = await proc.communicate()
+                    if proc.returncode != 0:
+                        logger.warning(f"Failed to set MTU on {port_name}: {stderr_bytes.decode()}")
+                except Exception as e:
+                    logger.warning(f"Failed to set MTU on {port_name}: {e}")
 
     def get_node_vlans(self, lab_id: str, node_name: str) -> list[int]:
         """Get the VLAN tags allocated to a VM's interfaces.
@@ -1504,7 +1526,7 @@ class LibvirtProvider(Provider):
 
         # Attempt to recover stale network state from previous deployment
         # This handles the case where the agent restarted and lost in-memory VLAN allocations
-        recovered_vlans = self._recover_stale_network(lab_id, workspace)
+        recovered_vlans = await self._run_libvirt(self._recover_stale_network, lab_id, workspace)
         if recovered_vlans:
             logger.info(
                 f"Recovered network state for {len(recovered_vlans)} existing nodes"
@@ -1623,24 +1645,22 @@ class LibvirtProvider(Provider):
             nodes=deployed_nodes,
         )
 
-    async def _deploy_node(
+    def _deploy_node_pre_sync(
         self,
         lab_id: str,
         node_name: str,
-        node_config: dict,
+        domain_name: str,
         disks_dir: Path,
-        kind: str | None = None,
-    ) -> NodeInfo:
-        """Deploy a single VM node."""
-        domain_name = self._domain_name(lab_id, node_name)
-        # Ensure we have a complete view of existing VLAN allocations before allocating new ones.
-        # This avoids accidentally reusing VLAN tags that are already in use on arch-ovs.
+    ) -> NodeInfo | None:
+        """Pre-deploy: recover network state, check existing domain — libvirt thread.
+
+        Returns NodeInfo if domain already running, None to proceed with creation.
+        """
         try:
             self._recover_stale_network(lab_id, disks_dir.parent)
         except Exception:
             pass
 
-        # Check if domain already exists
         try:
             existing = self.conn.lookupByName(domain_name)
             if existing:
@@ -1652,45 +1672,72 @@ class LibvirtProvider(Provider):
                         status=state,
                         container_id=existing.UUIDString()[:12],
                     )
-                else:
-                    # Shut-off domain may have stale XML from a previous
-                    # vendor config.  Undefine it so we recreate with the
-                    # latest definition instead of booting the old one.
-                    logger.info(
-                        "Undefining stale shut-off domain %s for fresh creation",
-                        domain_name,
-                    )
-                    self._undefine_domain(existing, domain_name)
-                    self._clear_vm_post_boot_commands_cache(domain_name)
-                    self._teardown_n9kv_poap_network(lab_id, node_name)
-                    for suffix in ("", "-data"):
-                        disk = disks_dir / f"{node_name}{suffix}.qcow2"
-                        if disk.exists():
-                            disk.unlink()
-                            logger.info("Removed stale disk: %s", disk)
-                    lab_allocs = self._vlan_allocations.get(lab_id, {})
-                    if node_name in lab_allocs:
-                        del lab_allocs[node_name]
-                        self._save_vlan_allocations(lab_id, disks_dir.parent)
-                    # Fall through to fresh creation below
+                logger.info(
+                    "Undefining stale shut-off domain %s for fresh creation",
+                    domain_name,
+                )
+                self._undefine_domain(existing, domain_name)
+                self._clear_vm_post_boot_commands_cache(domain_name)
+                self._teardown_n9kv_poap_network(lab_id, node_name)
+                for suffix in ("", "-data"):
+                    disk = disks_dir / f"{node_name}{suffix}.qcow2"
+                    if disk.exists():
+                        disk.unlink()
+                        logger.info("Removed stale disk: %s", disk)
+                lab_allocs = self._vlan_allocations.get(lab_id, {})
+                if node_name in lab_allocs:
+                    del lab_allocs[node_name]
+                    self._save_vlan_allocations(lab_id, disks_dir.parent)
         except libvirt.libvirtError:
-            pass  # Domain doesn't exist, we'll create it
+            pass
+        return None
 
-        # Get base image
+    def _deploy_node_define_start_sync(
+        self,
+        domain_name: str,
+        xml: str,
+        kind: str | None,
+    ) -> str:
+        """Define and start domain — libvirt thread. Returns domain UUID."""
+        domain = self.conn.defineXML(xml)
+        if not domain:
+            raise RuntimeError(f"Failed to define domain {domain_name}")
+        domain.create()
+        logger.info(f"Started domain {domain_name}")
+        self._clear_vm_post_boot_commands_cache(domain_name)
+        self._mark_post_boot_console_ownership_pending(domain_name, kind)
+        return domain.UUIDString()[:12]
+
+    async def _deploy_node(
+        self,
+        lab_id: str,
+        node_name: str,
+        node_config: dict,
+        disks_dir: Path,
+        kind: str | None = None,
+    ) -> NodeInfo:
+        """Deploy a single VM node."""
+        domain_name = self._domain_name(lab_id, node_name)
+
+        # Phase 1: check existing domain (libvirt thread)
+        existing = await self._run_libvirt(
+            self._deploy_node_pre_sync, lab_id, node_name, domain_name, disks_dir,
+        )
+        if existing is not None:
+            return existing
+
+        # Phase 2: disk preparation (async subprocess)
         base_image = self._get_base_image(node_config)
         if not base_image:
             raise ValueError(f"No base image found for node {node_name}")
 
-        # Create overlay disk
         overlay_path = disks_dir / f"{node_name}.qcow2"
         if not await self._create_overlay_disk(base_image, overlay_path):
             raise RuntimeError(f"Failed to create overlay disk for {node_name}")
 
-        # Patch vJunos images for AMD SVM compatibility (Intel hosts unaffected)
         if node_config.get("needs_nested_vmx", False):
             await asyncio.to_thread(self._patch_vjunos_svm_compat, overlay_path)
 
-        # Check if data volume is needed
         data_volume_path = None
         data_volume_size = node_config.get("data_volume_gb")
         if data_volume_size:
@@ -1698,23 +1745,16 @@ class LibvirtProvider(Provider):
             if not await self._create_data_volume(data_volume_path, data_volume_size):
                 raise RuntimeError(f"Failed to create data volume for {node_name}")
 
-        # Get interface count from node config (default to 1)
+        # Phase 3: VLAN allocation + XML generation (libvirt thread for mgmt network)
         interface_count = node_config.get("interface_count", 1)
         reserved_nics = node_config.get("reserved_nics", 0)
-
-        # Allocate VLAN tags for each interface (for OVS isolation)
-        # Include reserved (dummy) NICs that need their own VLAN tags
-        # Pass workspace (parent of disks_dir) for persisting allocations
         workspace = disks_dir.parent
         vlan_tags = self._allocate_vlans(lab_id, node_name, interface_count + reserved_nics, workspace)
 
-        include_management_interface, management_network = self._resolve_management_network(
-            lab_id,
-            node_name,
-            kind,
+        include_management_interface, management_network = await self._run_libvirt(
+            self._resolve_management_network, lab_id, node_name, kind,
         )
 
-        # Generate domain XML with multiple interfaces
         xml = self._generate_domain_xml(
             domain_name,
             node_config,
@@ -1727,61 +1767,52 @@ class LibvirtProvider(Provider):
             management_network=management_network,
         )
 
-        # Define and start the domain
-        domain = self.conn.defineXML(xml)
-        if not domain:
-            raise RuntimeError(f"Failed to define domain {domain_name}")
+        # Phase 4: define + start domain (libvirt thread)
+        uuid_str = await self._run_libvirt(
+            self._deploy_node_define_start_sync, domain_name, xml, kind,
+        )
 
-        domain.create()
-        logger.info(f"Started domain {domain_name}")
-        self._clear_vm_post_boot_commands_cache(domain_name)
-        self._mark_post_boot_console_ownership_pending(domain_name, kind)
-
-        # Set MTU on tap devices (they inherit bridge MTU which may be 1450)
+        # Phase 5: post-start MTU fix (async subprocess)
         await self._set_vm_tap_mtu(lab_id, node_name)
 
         return NodeInfo(
             name=node_name,
             status=NodeStatus.RUNNING,
-            container_id=domain.UUIDString()[:12],
+            container_id=uuid_str,
         )
 
-    async def destroy(
+    def _destroy_sync(
         self,
         lab_id: str,
         workspace: Path,
-    ) -> DestroyResult:
-        """Destroy a libvirt topology."""
+    ) -> tuple[int, list[str], str | None]:
+        """Destroy all lab domains — runs on the libvirt thread.
+
+        Returns (destroyed_count, errors_list, fatal_error_or_none).
+        """
         prefix = self._lab_prefix(lab_id)
         destroyed_count = 0
         errors: list[str] = []
 
         try:
-            # Get all domains (running and defined)
             running_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE)
             defined_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_INACTIVE)
-
             all_domains = running_domains + defined_domains
 
             for domain in all_domains:
                 name = domain.name()
                 if not name.startswith(prefix + "-"):
                     continue
-
                 try:
-                    # Stop if running
                     state, _ = domain.state()
                     if state == libvirt.VIR_DOMAIN_RUNNING:
                         domain.destroy()
-
-                    # Undefine (remove from libvirt)
                     self._undefine_domain(domain, name)
                     self._clear_vm_post_boot_commands_cache(name)
                     node_name = name[len(prefix) + 1:]
                     self._teardown_n9kv_poap_network(lab_id, node_name)
                     destroyed_count += 1
                     logger.info(f"Destroyed domain {name}")
-
                 except libvirt.libvirtError as e:
                     logger.warning(f"Error destroying domain {name}: {e}")
                     errors.append(f"{name}: {e}")
@@ -1796,41 +1827,65 @@ class LibvirtProvider(Provider):
                     except Exception as e:
                         logger.warning(f"Failed to remove disk {disk_file}: {e}")
 
-            # Clean up VLAN allocations for this lab (in-memory and on disk)
+            # Clean up VLAN allocations
             if lab_id in self._vlan_allocations:
                 del self._vlan_allocations[lab_id]
             if lab_id in self._next_vlan:
                 del self._next_vlan[lab_id]
             self._remove_vlan_file(lab_id, workspace)
 
-            # Clean up OVS networking state for this lab
-            try:
-                from agent.network.backends.registry import get_network_backend
-                backend = get_network_backend()
-                if hasattr(backend, 'ovs_manager') and backend.ovs_manager._initialized:
-                    ovs_result = await backend.ovs_manager.cleanup_lab(lab_id)
-                    logger.info(f"OVS cleanup for lab {lab_id}: {ovs_result}")
-            except Exception as e:
-                logger.warning(f"OVS cleanup during VM destroy failed: {e}")
-
-            if errors and destroyed_count == 0:
-                return DestroyResult(
-                    success=False,
-                    error=f"Failed to destroy domains: {'; '.join(errors)}",
-                )
-
-            return DestroyResult(
-                success=True,
-                stdout=f"Destroyed {destroyed_count} VM domains",
-                stderr="; ".join(errors) if errors else "",
-            )
-
+            return (destroyed_count, errors, None)
         except Exception as e:
             logger.exception(f"Destroy failed for lab {lab_id}: {e}")
+            return (0, errors, str(e))
+
+    async def destroy(
+        self,
+        lab_id: str,
+        workspace: Path,
+    ) -> DestroyResult:
+        """Destroy a libvirt topology."""
+        destroyed_count, errors, fatal = await self._run_libvirt(
+            self._destroy_sync, lab_id, workspace,
+        )
+
+        if fatal:
+            return DestroyResult(success=False, error=fatal)
+
+        # OVS cleanup is async — run outside the libvirt executor
+        try:
+            from agent.network.backends.registry import get_network_backend
+            backend = get_network_backend()
+            if hasattr(backend, 'ovs_manager') and backend.ovs_manager._initialized:
+                ovs_result = await backend.ovs_manager.cleanup_lab(lab_id)
+                logger.info(f"OVS cleanup for lab {lab_id}: {ovs_result}")
+        except Exception as e:
+            logger.warning(f"OVS cleanup during VM destroy failed: {e}")
+
+        if errors and destroyed_count == 0:
             return DestroyResult(
                 success=False,
-                error=str(e),
+                error=f"Failed to destroy domains: {'; '.join(errors)}",
             )
+        return DestroyResult(
+            success=True,
+            stdout=f"Destroyed {destroyed_count} VM domains",
+            stderr="; ".join(errors) if errors else "",
+        )
+
+    def _status_sync(self, lab_id: str) -> StatusResult:
+        """Synchronous status check — runs on the libvirt thread."""
+        prefix = self._lab_prefix(lab_id)
+        nodes: list[NodeInfo] = []
+        try:
+            all_domains = self.conn.listAllDomains(0)
+            for domain in all_domains:
+                node = self._node_from_domain(domain, prefix)
+                if node:
+                    nodes.append(node)
+            return StatusResult(lab_exists=len(nodes) > 0, nodes=nodes)
+        except Exception as e:
+            return StatusResult(lab_exists=False, error=str(e))
 
     async def status(
         self,
@@ -1838,28 +1893,30 @@ class LibvirtProvider(Provider):
         workspace: Path,
     ) -> StatusResult:
         """Get status of all VMs in a lab."""
-        prefix = self._lab_prefix(lab_id)
-        nodes: list[NodeInfo] = []
+        return await self._run_libvirt(self._status_sync, lab_id)
 
+    def _start_node_sync(self, domain_name: str) -> tuple[str, str | None, str | None]:
+        """Lookup, start domain — runs on libvirt thread.
+
+        Returns:
+            ("already_running", None, None) | ("started", kind, None) | ("error", None, error_msg)
+        """
         try:
-            # Get all domains
-            all_domains = self.conn.listAllDomains(0)
-
-            for domain in all_domains:
-                node = self._node_from_domain(domain, prefix)
-                if node:
-                    nodes.append(node)
-
-            return StatusResult(
-                lab_exists=len(nodes) > 0,
-                nodes=nodes,
-            )
-
+            domain = self.conn.lookupByName(domain_name)
+            state, _ = domain.state()
+            if state == libvirt.VIR_DOMAIN_RUNNING:
+                return ("already_running", None, None)
+            kind = self._get_domain_kind(domain)
+            self._clear_vm_post_boot_commands_cache(domain_name)
+            self._mark_post_boot_console_ownership_pending(domain_name, kind)
+            domain.create()
+            return ("started", kind, None)
+        except libvirt.libvirtError as e:
+            self._clear_vm_console_control_state(domain_name)
+            return ("error", None, f"Libvirt error: {e}")
         except Exception as e:
-            return StatusResult(
-                lab_exists=False,
-                error=str(e),
-            )
+            self._clear_vm_console_control_state(domain_name)
+            return ("error", None, str(e))
 
     async def start_node(
         self,
@@ -1870,57 +1927,40 @@ class LibvirtProvider(Provider):
         """Start a specific VM."""
         domain_name = self._domain_name(lab_id, node_name)
 
-        try:
-            domain = self.conn.lookupByName(domain_name)
-            state, _ = domain.state()
+        status, _kind, error = await self._run_libvirt(self._start_node_sync, domain_name)
 
-            if state == libvirt.VIR_DOMAIN_RUNNING:
-                return NodeActionResult(
-                    success=True,
-                    node_name=node_name,
-                    new_status=NodeStatus.RUNNING,
-                    stdout="Domain already running",
-                )
-
-            kind = self._get_domain_kind(domain)
-            self._clear_vm_post_boot_commands_cache(domain_name)
-            self._mark_post_boot_console_ownership_pending(domain_name, kind)
-            domain.create()
-            await self._set_vm_tap_mtu(lab_id, node_name)
-
+        if status == "already_running":
             return NodeActionResult(
                 success=True,
                 node_name=node_name,
                 new_status=NodeStatus.RUNNING,
-                stdout=f"Started domain {domain_name}",
+                stdout="Domain already running",
             )
-
-        except libvirt.libvirtError as e:
-            self._clear_vm_console_control_state(domain_name)
+        if status == "error":
             return NodeActionResult(
                 success=False,
                 node_name=node_name,
-                error=f"Libvirt error: {e}",
-            )
-        except Exception as e:
-            self._clear_vm_console_control_state(domain_name)
-            return NodeActionResult(
-                success=False,
-                node_name=node_name,
-                error=str(e),
+                error=error,
             )
 
-    async def _remove_vm(
+        await self._set_vm_tap_mtu(lab_id, node_name)
+        return NodeActionResult(
+            success=True,
+            node_name=node_name,
+            new_status=NodeStatus.RUNNING,
+            stdout=f"Started domain {domain_name}",
+        )
+
+    def _remove_vm_sync(
         self,
         lab_id: str,
         node_name: str,
         workspace: Path,
     ) -> None:
-        """Remove a single VM and clean up per-node resources.
+        """Remove a single VM — runs on the libvirt thread.
 
         Force-stops the domain (if running), undefines it (including NVRAM),
-        deletes overlay disks, and cleans VLAN allocations. Does NOT clean
-        lab-level VLAN tracking — that's only done by destroy_node.
+        deletes overlay disks, and cleans VLAN allocations.
 
         Raises libvirt.libvirtError if the domain doesn't exist (caller handles).
         """
@@ -1966,6 +2006,15 @@ class LibvirtProvider(Provider):
         if node_name in lab_allocs:
             del lab_allocs[node_name]
             self._save_vlan_allocations(lab_id, workspace)
+
+    async def _remove_vm(
+        self,
+        lab_id: str,
+        node_name: str,
+        workspace: Path,
+    ) -> None:
+        """Remove a single VM and clean up per-node resources."""
+        await self._run_libvirt(self._remove_vm_sync, lab_id, node_name, workspace)
 
     @staticmethod
     def _clear_vm_post_boot_commands_cache(domain_name: str) -> None:
@@ -2102,6 +2151,61 @@ class LibvirtProvider(Provider):
                 error=str(e),
             )
 
+    def _create_node_pre_sync(
+        self,
+        lab_id: str,
+        node_name: str,
+        domain_name: str,
+        workspace: Path,
+    ) -> NodeActionResult | None:
+        """Pre-create: recover state, check existing domain — libvirt thread.
+
+        Returns NodeActionResult if domain already running, None to proceed.
+        """
+        try:
+            self._recover_stale_network(lab_id, workspace)
+        except Exception:
+            pass
+        try:
+            existing = self.conn.lookupByName(domain_name)
+            if existing:
+                state = self._get_domain_status(existing)
+                if state == NodeStatus.RUNNING:
+                    return NodeActionResult(
+                        success=True,
+                        node_name=node_name,
+                        new_status=state,
+                        stdout=f"Domain {domain_name} already running",
+                    )
+                logger.info(
+                    "Undefining stale shut-off domain %s for fresh creation",
+                    domain_name,
+                )
+                self._undefine_domain(existing, domain_name)
+                self._clear_vm_post_boot_commands_cache(domain_name)
+                self._teardown_n9kv_poap_network(lab_id, node_name)
+                disks_dir = self._disks_dir(workspace)
+                for suffix in ("", "-data"):
+                    disk = disks_dir / f"{node_name}{suffix}.qcow2"
+                    if disk.exists():
+                        disk.unlink()
+                        logger.info("Removed stale disk: %s", disk)
+                lab_allocs = self._vlan_allocations.get(lab_id, {})
+                if node_name in lab_allocs:
+                    del lab_allocs[node_name]
+                    self._save_vlan_allocations(lab_id, workspace)
+        except libvirt.libvirtError:
+            pass
+        return None
+
+    def _define_domain_sync(self, domain_name: str, xml: str) -> bool:
+        """Define (but don't start) a domain — libvirt thread. Returns success."""
+        domain = self.conn.defineXML(xml)
+        if not domain:
+            return False
+        logger.info(f"Defined domain {domain_name} (not started)")
+        return True
+
     async def create_node(
         self,
         lab_id: str,
@@ -2134,46 +2238,12 @@ class LibvirtProvider(Provider):
         domain_name = self._domain_name(lab_id, node_name)
 
         try:
-            # Ensure allocations are recovered/discovered before handing out VLAN tags.
-            try:
-                self._recover_stale_network(lab_id, workspace)
-            except Exception:
-                pass
-
-            # Check if domain already exists
-            try:
-                existing = self.conn.lookupByName(domain_name)
-                if existing:
-                    state = self._get_domain_status(existing)
-                    if state == NodeStatus.RUNNING:
-                        return NodeActionResult(
-                            success=True,
-                            node_name=node_name,
-                            new_status=state,
-                            stdout=f"Domain {domain_name} already running",
-                        )
-                    # Shut-off domain may have stale XML — undefine so we
-                    # recreate with the latest vendor config.
-                    logger.info(
-                        "Undefining stale shut-off domain %s for fresh creation",
-                        domain_name,
-                    )
-                    self._undefine_domain(existing, domain_name)
-                    self._clear_vm_post_boot_commands_cache(domain_name)
-                    self._teardown_n9kv_poap_network(lab_id, node_name)
-                    disks_dir = self._disks_dir(workspace)
-                    for suffix in ("", "-data"):
-                        disk = disks_dir / f"{node_name}{suffix}.qcow2"
-                        if disk.exists():
-                            disk.unlink()
-                            logger.info("Removed stale disk: %s", disk)
-                    lab_allocs = self._vlan_allocations.get(lab_id, {})
-                    if node_name in lab_allocs:
-                        del lab_allocs[node_name]
-                        self._save_vlan_allocations(lab_id, workspace)
-                    # Fall through to fresh creation below
-            except libvirt.libvirtError:
-                pass  # Domain doesn't exist, we'll create it
+            # Phase 1: recovery + existing check (libvirt thread)
+            early = await self._run_libvirt(
+                self._create_node_pre_sync, lab_id, node_name, domain_name, workspace,
+            )
+            if early is not None:
+                return early
 
             # Build node_config from vendor registry, with API-resolved overrides
             libvirt_config = get_libvirt_config(kind)
@@ -2214,9 +2284,7 @@ class LibvirtProvider(Provider):
                     error=f"No base image found for node {node_name} (image={image})",
                 )
 
-            # Verify backing image integrity before overlay creation.
-            # QEMU COW operations can corrupt the host page cache of backing
-            # images; this detects and recovers from stale cache data.
+            # Verify backing image integrity
             try:
                 self._verify_backing_image(base_image, image_sha256)
             except RuntimeError as e:
@@ -2226,7 +2294,7 @@ class LibvirtProvider(Provider):
                     error=str(e),
                 )
 
-            # Create overlay disk
+            # Phase 2: disk preparation (async subprocess)
             overlay_path = disks_dir / f"{node_name}.qcow2"
             if not await self._create_overlay_disk(base_image, overlay_path):
                 return NodeActionResult(
@@ -2235,13 +2303,10 @@ class LibvirtProvider(Provider):
                     error=f"Failed to create overlay disk for {node_name}",
                 )
 
-            # Patch vJunos images for AMD SVM compatibility (Intel hosts unaffected)
             if libvirt_config.needs_nested_vmx:
                 await asyncio.to_thread(self._patch_vjunos_svm_compat, overlay_path)
 
-            # Inject startup-config into bootflash if supported.
-            # N9Kv boot mutations are guarded so we can run with an unmodified
-            # base boot path and apply config manually via CLI when needed.
+            # Inject startup-config
             inject_summary = ""
             canonical_kind = self._canonical_kind(kind)
             if not startup_config:
@@ -2282,7 +2347,6 @@ class LibvirtProvider(Provider):
                 else:
                     logger.warning("Config injection failed for %s; VM will boot without config", node_name)
 
-            # Create config ISO for platforms that read config from CD-ROM (e.g., IOS-XR CVAC)
             config_iso_path: Path | None = None
             if startup_config and libvirt_config.config_inject_method == "iso":
                 from agent.providers.iso_inject import create_config_iso
@@ -2300,7 +2364,6 @@ class LibvirtProvider(Provider):
                     logger.warning("Config ISO creation failed for %s; VM will boot without config", node_name)
                     config_iso_path = None
 
-            # Create data volume if needed
             data_volume_path = None
             data_volume_size = node_config.get("data_volume_gb")
             if data_volume_size:
@@ -2312,18 +2375,15 @@ class LibvirtProvider(Provider):
                         error=f"Failed to create data volume for {node_name}",
                     )
 
-            # Allocate VLAN tags for OVS isolation (include reserved dummy NICs)
+            # Phase 3: VLAN + management network (libvirt thread for mgmt)
             iface_count = node_config.get("interface_count", 1)
             reserved_nics = node_config.get("reserved_nics", 0)
             vlan_tags = self._allocate_vlans(lab_id, node_name, iface_count + reserved_nics, workspace)
 
-            include_management_interface, management_network = self._resolve_management_network(
-                lab_id,
-                node_name,
-                kind,
+            include_management_interface, management_network = await self._run_libvirt(
+                self._resolve_management_network, lab_id, node_name, kind,
             )
 
-            # Generate domain XML
             xml = self._generate_domain_xml(
                 domain_name,
                 node_config,
@@ -2337,16 +2397,14 @@ class LibvirtProvider(Provider):
                 config_iso_path=config_iso_path,
             )
 
-            # Define but do NOT start
-            domain = self.conn.defineXML(xml)
-            if not domain:
+            # Phase 4: define domain (libvirt thread)
+            ok = await self._run_libvirt(self._define_domain_sync, domain_name, xml)
+            if not ok:
                 return NodeActionResult(
                     success=False,
                     node_name=node_name,
                     error=f"Failed to define domain {domain_name}",
                 )
-
-            logger.info(f"Defined domain {domain_name} (not started)")
 
             details = f"Defined domain {domain_name}"
             if inject_summary:
@@ -2525,6 +2583,23 @@ class LibvirtProvider(Provider):
                 error=str(e),
             )
 
+    def _get_console_info_sync(self, domain_name: str) -> tuple[str, str | None, int | None] | None:
+        """Lookup domain state, kind, and TCP serial port — libvirt thread.
+
+        Returns (console_method, kind, tcp_port) or None if domain not running.
+        """
+        try:
+            domain = self.conn.lookupByName(domain_name)
+            state, _ = domain.state()
+            if state != libvirt.VIR_DOMAIN_RUNNING:
+                return None
+            kind = self._get_domain_kind(domain)
+            console_method = get_console_method(kind) if kind else "docker_exec"
+            tcp_port = self._get_tcp_serial_port(domain) if console_method != "ssh" else None
+            return (console_method, kind, tcp_port)
+        except Exception:
+            return None
+
     async def get_console_command(
         self,
         lab_id: str,
@@ -2541,20 +2616,12 @@ class LibvirtProvider(Provider):
         """
         domain_name = self._domain_name(lab_id, node_name)
 
+        info = await self._run_libvirt(self._get_console_info_sync, domain_name)
+        if info is None:
+            return None
+        console_method, kind, tcp_port = info
+
         try:
-            domain = self.conn.lookupByName(domain_name)
-            state, _ = domain.state()
-
-            if state != libvirt.VIR_DOMAIN_RUNNING:
-                return None
-
-            # Get device kind from domain metadata
-            kind = self._get_domain_kind(domain)
-            if kind:
-                console_method = get_console_method(kind)
-            else:
-                console_method = "docker_exec"  # Default to virsh for VMs
-
             if console_method == "ssh":
                 # Get VM IP address and SSH credentials
                 ip = await self._get_vm_management_ip(domain_name)
@@ -2628,7 +2695,6 @@ class LibvirtProvider(Provider):
                 ]
             else:
                 # Check for TCP serial port (e.g., IOS-XRv 9000)
-                tcp_port = self._get_tcp_serial_port(domain)
                 if tcp_port:
                     return ["python3", "-c", _TCP_TELNET_CONSOLE_SCRIPT, str(tcp_port)]
 
@@ -2636,8 +2702,6 @@ class LibvirtProvider(Provider):
                 # --force takes over console even if another session is connected
                 return ["virsh", "-c", self._uri, "console", "--force", domain_name]
 
-        except libvirt.libvirtError:
-            return None
         except Exception:
             return None
 
@@ -2978,24 +3042,15 @@ class LibvirtProvider(Provider):
             return False
         return False
 
-    async def get_vm_interface_port(
+    def _get_vm_interface_port_sync(
         self,
         lab_id: str,
         node_name: str,
         interface_index: int,
     ) -> str | None:
-        """Get the OVS port name for a VM interface.
+        """Find OVS port for a VM interface — runs on libvirt thread.
 
-        Libvirt creates ports on OVS with names like 'vnet0', 'vnet1', etc.
-        We can find the port by looking for the interface with our MAC address.
-
-        Args:
-            lab_id: Lab identifier
-            node_name: Node name
-            interface_index: Interface index (0-based)
-
-        Returns:
-            OVS port name, or None if not found
+        Uses libvirt for MAC offset detection and OVS CLI for port lookup.
         """
         domain_name = self._domain_name(lab_id, node_name)
         mac_index = interface_index
@@ -3008,15 +3063,10 @@ class LibvirtProvider(Provider):
             pass
 
         guest_mac = self._generate_mac_address(domain_name, mac_index)
-
-        # Libvirt modifies the first byte of the MAC on host-side tap devices:
-        # guest sees 52:54:00:XX:XX:XX but the tap device (and OVS mac_in_use)
-        # reports fe:54:00:XX:XX:XX.  Match against both forms.
-        tap_mac = "fe" + guest_mac[2:]   # fe:54:00:XX:XX:XX
+        tap_mac = "fe" + guest_mac[2:]
         expected_macs = {guest_mac.lower(), tap_mac.lower()}
 
         try:
-            # Get OVS ports and find the one with matching MAC
             result = subprocess.run(
                 ["ovs-vsctl", "--format=json", "list-ports", settings.ovs_bridge_name],
                 capture_output=True,
@@ -3029,7 +3079,6 @@ class LibvirtProvider(Provider):
             for port in ports:
                 if not port:
                     continue
-                # Check if this port has our MAC address
                 mac_result = subprocess.run(
                     ["ovs-vsctl", "get", "interface", port, "mac_in_use"],
                     capture_output=True,
@@ -3039,11 +3088,21 @@ class LibvirtProvider(Provider):
                     port_mac = mac_result.stdout.strip().strip('"')
                     if port_mac.lower() in expected_macs:
                         return port
-
             return None
         except Exception as e:
             logger.error(f"Error finding VM interface port: {e}")
             return None
+
+    async def get_vm_interface_port(
+        self,
+        lab_id: str,
+        node_name: str,
+        interface_index: int,
+    ) -> str | None:
+        """Get the OVS port name for a VM interface."""
+        return await self._run_libvirt(
+            self._get_vm_interface_port_sync, lab_id, node_name, interface_index,
+        )
 
     async def hot_connect(
         self,
@@ -3096,13 +3155,14 @@ class LibvirtProvider(Provider):
         # Set both ports to the same VLAN
         try:
             for port in [source_port, target_port]:
-                result = subprocess.run(
-                    ["ovs-vsctl", "set", "port", port, f"tag={shared_vlan}"],
-                    capture_output=True,
-                    text=True,
+                proc = await asyncio.create_subprocess_exec(
+                    "ovs-vsctl", "set", "port", port, f"tag={shared_vlan}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                if result.returncode != 0:
-                    logger.error(f"Failed to set VLAN on port {port}: {result.stderr}")
+                _, stderr_bytes = await proc.communicate()
+                if proc.returncode != 0:
+                    logger.error(f"Failed to set VLAN on port {port}: {stderr_bytes.decode()}")
                     return False
 
             logger.info(
@@ -3242,6 +3302,19 @@ class LibvirtProvider(Provider):
         )
         return status
 
+    def _check_readiness_domain_sync(self, domain_name: str) -> tuple[int, dict] | None:
+        """Lookup domain state and readiness overrides — runs on libvirt thread.
+
+        Returns (state, overrides) or None if domain not found.
+        """
+        try:
+            domain = self.conn.lookupByName(domain_name)
+            state, _ = domain.state()
+            overrides = self._get_domain_readiness_overrides(domain)
+            return (state, overrides)
+        except libvirt.libvirtError:
+            return None
+
     async def check_readiness(
         self,
         lab_id: str,
@@ -3264,25 +3337,21 @@ class LibvirtProvider(Provider):
         """
         domain_name = self._domain_name(lab_id, node_name)
 
-        try:
-            domain = self.conn.lookupByName(domain_name)
-            state, _ = domain.state()
-
-            if state != libvirt.VIR_DOMAIN_RUNNING:
-                return ReadinessResult(
-                    is_ready=False,
-                    message=f"VM not running (state={state})",
-                    progress_percent=0,
-                )
-        except libvirt.libvirtError:
+        result = await self._run_libvirt(self._check_readiness_domain_sync, domain_name)
+        if result is None:
             return ReadinessResult(
                 is_ready=False,
                 message="VM domain not found",
                 progress_percent=0,
             )
+        state, overrides = result
 
-        # Apply per-node readiness metadata overrides when present.
-        overrides = self._get_domain_readiness_overrides(domain)
+        if state != libvirt.VIR_DOMAIN_RUNNING:
+            return ReadinessResult(
+                is_ready=False,
+                message=f"VM not running (state={state})",
+                progress_percent=0,
+            )
         effective_probe = overrides.get("readiness_probe") or get_libvirt_config(kind).readiness_probe
 
         # Only use management-IP/SSH gating when readiness probe explicitly asks
@@ -3357,20 +3426,13 @@ class LibvirtProvider(Provider):
         except Exception:
             return False
 
-    def get_readiness_timeout(
+    def _get_readiness_timeout_sync(
         self,
         kind: str,
-        lab_id: str | None = None,
-        node_name: str | None = None,
+        lab_id: str | None,
+        node_name: str | None,
     ) -> int:
-        """Get the readiness timeout for a device type.
-
-        Args:
-            kind: Device kind
-
-        Returns:
-            Timeout in seconds
-        """
+        """Get readiness timeout with domain overrides — libvirt thread."""
         if lab_id and node_name:
             domain_name = self._domain_name(lab_id, node_name)
             try:
@@ -3383,22 +3445,42 @@ class LibvirtProvider(Provider):
                 pass
         return get_readiness_timeout(kind)
 
-    def get_node_kind(self, lab_id: str, node_name: str) -> str | None:
-        """Get the device kind for a VM node from its domain metadata.
+    def get_readiness_timeout(
+        self,
+        kind: str,
+        lab_id: str | None = None,
+        node_name: str | None = None,
+    ) -> int:
+        """Sync accessor — use get_readiness_timeout_async from async contexts."""
+        return self._get_readiness_timeout_sync(kind, lab_id, node_name)
 
-        Args:
-            lab_id: Lab identifier
-            node_name: Node name
+    async def get_readiness_timeout_async(
+        self,
+        kind: str,
+        lab_id: str | None = None,
+        node_name: str | None = None,
+    ) -> int:
+        """Get the readiness timeout for a device type (async)."""
+        return await self._run_libvirt(
+            self._get_readiness_timeout_sync, kind, lab_id, node_name,
+        )
 
-        Returns:
-            Device kind string, or None if not found
-        """
+    def _get_node_kind_sync(self, lab_id: str, node_name: str) -> str | None:
+        """Get device kind from domain metadata — libvirt thread."""
         domain_name = self._domain_name(lab_id, node_name)
         try:
             domain = self.conn.lookupByName(domain_name)
             return self._get_domain_kind(domain)
         except Exception:
             return None
+
+    def get_node_kind(self, lab_id: str, node_name: str) -> str | None:
+        """Sync accessor — use get_node_kind_async from async contexts."""
+        return self._get_node_kind_sync(lab_id, node_name)
+
+    async def get_node_kind_async(self, lab_id: str, node_name: str) -> str | None:
+        """Get the device kind for a VM node (async)."""
+        return await self._run_libvirt(self._get_node_kind_sync, lab_id, node_name)
 
     def _get_domain_kind(self, domain) -> str | None:
         """Get the device kind for a libvirt domain.
@@ -3462,8 +3544,8 @@ class LibvirtProvider(Provider):
                     values[local_tag] = text
         return values
 
-    def get_runtime_profile(self, lab_id: str, node_name: str) -> dict[str, Any]:
-        """Get runtime configuration for a VM node from live libvirt XML."""
+    def _get_runtime_profile_sync(self, lab_id: str, node_name: str) -> dict[str, Any]:
+        """Get runtime configuration from live domain XML — libvirt thread."""
         import xml.etree.ElementTree as ET
 
         domain_name = self._domain_name(lab_id, node_name)
@@ -3586,6 +3668,26 @@ class LibvirtProvider(Provider):
             },
         }
 
+    def get_runtime_profile(self, lab_id: str, node_name: str) -> dict[str, Any]:
+        """Sync accessor — use get_runtime_profile_async from async contexts."""
+        return self._get_runtime_profile_sync(lab_id, node_name)
+
+    async def get_runtime_profile_async(self, lab_id: str, node_name: str) -> dict[str, Any]:
+        """Get runtime configuration for a VM node (async)."""
+        return await self._run_libvirt(self._get_runtime_profile_sync, lab_id, node_name)
+
+    def _check_domain_running_sync(self, domain_name: str) -> bool | None:
+        """Check if a domain exists and is running — libvirt thread.
+
+        Returns True if running, False if exists but not running, None if not found.
+        """
+        try:
+            domain = self.conn.lookupByName(domain_name)
+            state, _ = domain.state()
+            return state == libvirt.VIR_DOMAIN_RUNNING
+        except libvirt.libvirtError:
+            return None
+
     async def _extract_config(
         self,
         lab_id: str,
@@ -3608,15 +3710,12 @@ class LibvirtProvider(Provider):
         """
         domain_name = self._domain_name(lab_id, node_name)
 
-        # Check VM is running
-        try:
-            domain = self.conn.lookupByName(domain_name)
-            state, _ = domain.state()
-            if state != libvirt.VIR_DOMAIN_RUNNING:
-                logger.warning(f"Cannot extract config from {node_name}: VM not running")
-                return None
-        except libvirt.libvirtError:
+        running = await self._run_libvirt(self._check_domain_running_sync, domain_name)
+        if running is None:
             logger.warning(f"Cannot extract config from {node_name}: domain not found")
+            return None
+        if not running:
+            logger.warning(f"Cannot extract config from {node_name}: VM not running")
             return None
 
         # Check extraction method
@@ -3744,6 +3843,29 @@ class LibvirtProvider(Provider):
             logger.error(f"SSH extraction failed for {node_name}: {e}")
             return None
 
+    def _list_lab_vm_kinds_sync(self, lab_id: str) -> list[tuple[str, str]]:
+        """List running VMs for a lab with their kinds — libvirt thread.
+
+        Returns list of (node_name, kind) tuples.
+        """
+        prefix = self._lab_prefix(lab_id)
+        results: list[tuple[str, str]] = []
+        try:
+            all_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE)
+            for domain in all_domains:
+                name = domain.name()
+                if not name.startswith(prefix + "-"):
+                    continue
+                node_name = name[len(prefix) + 1:]
+                kind = self._get_domain_kind(domain)
+                if kind:
+                    results.append((node_name, kind))
+                else:
+                    logger.warning(f"Unknown device kind for {node_name}, skipping extraction")
+        except Exception as e:
+            logger.error(f"Error listing VM kinds for lab {lab_id}: {e}")
+        return results
+
     async def _extract_all_vm_configs(
         self,
         lab_id: str,
@@ -3762,25 +3884,11 @@ class LibvirtProvider(Provider):
             List of (node_name, config_content) tuples
         """
         extracted = []
-        prefix = self._lab_prefix(lab_id)
 
         try:
-            # Get all running VMs for this lab
-            all_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE)
+            vm_kinds = await self._run_libvirt(self._list_lab_vm_kinds_sync, lab_id)
 
-            for domain in all_domains:
-                name = domain.name()
-                if not name.startswith(prefix + "-"):
-                    continue
-
-                node_name = name[len(prefix) + 1:]
-
-                # Get device kind from domain metadata
-                kind = self._get_domain_kind(domain)
-                if not kind:
-                    logger.warning(f"Unknown device kind for {node_name}, skipping extraction")
-                    continue
-
+            for node_name, kind in vm_kinds:
                 result = await self._extract_config(lab_id, node_name, kind)
                 if result:
                     node_name, config = result
@@ -3799,120 +3907,74 @@ class LibvirtProvider(Provider):
 
         return extracted
 
-    async def discover_labs(self) -> dict[str, list[NodeInfo]]:
-        """Discover all running labs managed by this provider.
-
-        Enumerates all libvirt domains with the 'arch-' prefix and groups
-        them by lab_id. Domain naming convention: arch-{lab_id}-{node_name}
-
-        Returns:
-            Dict mapping lab_id -> list of NodeInfo for each lab's VMs.
-        """
+    def _discover_labs_sync(self) -> dict[str, list[NodeInfo]]:
+        """Enumerate all archetype-managed libvirt domains — libvirt thread."""
         discovered: dict[str, list[NodeInfo]] = {}
-
         try:
-            # Get all domains (running and defined/stopped)
             all_domains = self.conn.listAllDomains(0)
-
             for domain in all_domains:
                 name = domain.name()
-
-                # Only process Archetype-managed domains
                 if not name.startswith("arch-"):
                     continue
-
-                # Parse domain name: arch-{lab_id}-{node_name}
-                # lab_id may contain hyphens, but we truncate to 20 chars in _lab_prefix
-                parts = name.split("-", 2)  # Split into at most 3 parts
+                parts = name.split("-", 2)
                 if len(parts) < 3:
                     logger.debug(f"Skipping malformed domain name: {name}")
                     continue
-
-                # parts[0] = "arch", parts[1] = lab_id, parts[2] = node_name
                 lab_id = parts[1]
                 node_name = parts[2]
-
                 node = NodeInfo(
                     name=node_name,
                     status=self._get_domain_status(domain),
                     container_id=domain.UUIDString()[:12],
                 )
-
                 if lab_id not in discovered:
                     discovered[lab_id] = []
                 discovered[lab_id].append(node)
-
             logger.info(f"Discovered {len(discovered)} labs with LibvirtProvider")
-
         except Exception as e:
             logger.error(f"Error discovering labs: {e}")
-
         return discovered
 
-    async def cleanup_orphan_domains(
+    async def discover_labs(self) -> dict[str, list[NodeInfo]]:
+        """Discover all running labs managed by this provider."""
+        return await self._run_libvirt(self._discover_labs_sync)
+
+    def _cleanup_orphan_domains_sync(
         self,
         valid_lab_ids: set[str],
-        workspace_base: Path | None = None,
+        workspace_base: Path | None,
     ) -> dict[str, list[str]]:
-        """Remove VMs for labs that no longer exist.
-
-        Discovers all Archetype-managed domains and removes those belonging
-        to labs not in the valid_lab_ids set. Also cleans up associated
-        disk overlays and VLAN allocations.
-
-        Args:
-            valid_lab_ids: Set of lab IDs that are known to be valid.
-            workspace_base: Base workspace path for disk cleanup.
-                           If None, skips disk cleanup.
-
-        Returns:
-            Dict with keys 'domains', 'disks' listing removed items.
-        """
+        """Discover and remove orphan domains — libvirt thread."""
         removed: dict[str, list[str]] = {"domains": [], "disks": []}
-
         try:
-            # Discover all labs managed by this provider
-            discovered = await self.discover_labs()
-
+            discovered = self._discover_labs_sync()
             for lab_id, nodes in discovered.items():
-                # Check if this lab_id is in the valid set
-                # Handle both exact matches and prefix matches (for truncated IDs)
                 is_orphan = lab_id not in valid_lab_ids
                 if is_orphan:
-                    # Also check for prefix matches (lab IDs may be truncated to 20 chars)
                     is_orphan = not any(
                         vid.startswith(lab_id) or lab_id.startswith(vid[:20])
                         for vid in valid_lab_ids
                     )
-
                 if not is_orphan:
                     continue
 
                 logger.info(f"Cleaning up orphan lab: {lab_id} ({len(nodes)} VMs)")
-
                 for node in nodes:
                     domain_name = self._domain_name(lab_id, node.name)
-
                     try:
                         domain = self.conn.lookupByName(domain_name)
-
-                        # Force stop if running
                         state, _ = domain.state()
                         if state == libvirt.VIR_DOMAIN_RUNNING:
                             logger.info(f"Force stopping orphan domain: {domain_name}")
                             domain.destroy()
-
-                        # Undefine domain (remove from libvirt)
                         self._undefine_domain(domain, domain_name)
                         self._clear_vm_post_boot_commands_cache(domain_name)
                         self._teardown_n9kv_poap_network(lab_id, node.name)
                         removed["domains"].append(domain_name)
                         logger.info(f"Removed orphan domain: {domain_name}")
-
                     except libvirt.libvirtError as e:
                         logger.warning(f"Error removing orphan domain {domain_name}: {e}")
 
-                # Clean up disk overlays if workspace provided
                 if workspace_base:
                     lab_workspace = workspace_base / lab_id
                     disks_dir = lab_workspace / "disks"
@@ -3924,13 +3986,11 @@ class LibvirtProvider(Provider):
                                 logger.info(f"Removed orphan disk: {disk_file}")
                             except Exception as e:
                                 logger.warning(f"Failed to remove disk {disk_file}: {e}")
-                        # Try to remove the disks directory
                         try:
                             disks_dir.rmdir()
                         except Exception:
-                            pass  # Directory may not be empty
+                            pass
 
-                # Clean up VLAN allocations (in-memory and on disk)
                 if lab_id in self._vlan_allocations:
                     del self._vlan_allocations[lab_id]
                     logger.debug(f"Freed VLAN allocations for orphan lab: {lab_id}")
@@ -3944,11 +4004,19 @@ class LibvirtProvider(Provider):
                     f"Orphan cleanup complete: removed {len(removed['domains'])} domains, "
                     f"{len(removed['disks'])} disks"
                 )
-
         except Exception as e:
             logger.error(f"Error during orphan cleanup: {e}")
-
         return removed
+
+    async def cleanup_orphan_domains(
+        self,
+        valid_lab_ids: set[str],
+        workspace_base: Path | None = None,
+    ) -> dict[str, list[str]]:
+        """Remove VMs for labs that no longer exist."""
+        return await self._run_libvirt(
+            self._cleanup_orphan_domains_sync, valid_lab_ids, workspace_base,
+        )
 
     async def cleanup_orphan_containers(
         self,
@@ -3968,92 +4036,57 @@ class LibvirtProvider(Provider):
         result = await self.cleanup_orphan_domains(valid_lab_ids)
         return result.get("domains", [])
 
-    async def cleanup_lab_orphan_domains(
+    def _cleanup_lab_orphan_domains_sync(
         self,
         lab_id: str,
         keep_node_names: set[str],
-        workspace_base: Path | None = None,
+        workspace_base: Path | None,
     ) -> dict[str, list[str]]:
-        """Remove VMs for nodes that no longer exist within a specific lab.
-
-        Used when nodes are deleted from a lab's topology. Finds all VMs for
-        this lab and removes those not in the keep_node_names set.
-
-        Args:
-            lab_id: Lab identifier to clean up.
-            keep_node_names: Set of node names that should be kept.
-            workspace_base: Base workspace path for disk cleanup.
-                           If None, skips disk cleanup.
-
-        Returns:
-            Dict with keys 'domains', 'disks' listing removed items.
-        """
+        """Remove orphan domains within a lab — libvirt thread."""
         removed: dict[str, list[str]] = {"domains": [], "disks": []}
-
         try:
-            # Get the lab prefix to find all domains for this lab
             lab_prefix = self._lab_prefix(lab_id)
-
-            # Get all domains (running and defined/stopped)
             all_domains = self.conn.listAllDomains(0)
 
             for domain in all_domains:
                 name = domain.name()
-
-                # Only process domains for this lab
                 if not name.startswith(lab_prefix + "-"):
                     continue
-
-                # Parse node name from domain name: arch-{lab_id}-{node_name}
                 parts = name.split("-", 2)
                 if len(parts) < 3:
                     continue
                 node_name = parts[2]
-
                 if node_name in keep_node_names:
                     logger.debug(f"Keeping VM {name} (node {node_name} still in topology)")
                     continue
-
-                # This VM is for a node not in topology - remove it
                 try:
                     logger.info(f"Removing orphan VM {name} (node {node_name} deleted from topology)")
-
-                    # Force stop if running
                     state, _ = domain.state()
                     if state == libvirt.VIR_DOMAIN_RUNNING:
                         logger.info(f"Force stopping orphan domain: {name}")
                         domain.destroy()
-
-                    # Undefine domain (remove from libvirt)
                     self._undefine_domain(domain, name)
                     self._clear_vm_post_boot_commands_cache(name)
                     self._teardown_n9kv_poap_network(lab_id, node_name)
                     removed["domains"].append(name)
-
-                    # Clean up VLAN allocation for this node
                     if lab_id in self._vlan_allocations:
                         if node_name in self._vlan_allocations[lab_id]:
                             del self._vlan_allocations[lab_id][node_name]
                             logger.debug(f"Freed VLAN allocations for orphan node: {node_name}")
-
                 except libvirt.libvirtError as e:
                     logger.warning(f"Error removing orphan domain {name}: {e}")
 
-            # Clean up disk overlays for removed nodes
             if workspace_base and removed["domains"]:
                 lab_workspace = workspace_base / lab_id
                 disks_dir = lab_workspace / "disks"
                 if disks_dir.exists():
-                    for domain_name in removed["domains"]:
-                        # Parse node_name from domain_name
-                        parts = domain_name.split("-", 2)
+                    for dname in removed["domains"]:
+                        parts = dname.split("-", 2)
                         if len(parts) < 3:
                             continue
-                        node_name = parts[2]
-
-                        # Look for disk files matching this node
+                        nname = parts[2]
                         for disk_file in disks_dir.iterdir():
-                            if disk_file.name.startswith(node_name):
+                            if disk_file.name.startswith(nname):
                                 try:
                                     disk_file.unlink()
                                     removed["disks"].append(str(disk_file))
@@ -4066,8 +4099,17 @@ class LibvirtProvider(Provider):
                     f"Lab orphan cleanup complete for {lab_id}: removed {len(removed['domains'])} VMs, "
                     f"{len(removed['disks'])} disks"
                 )
-
         except Exception as e:
             logger.error(f"Error during lab orphan cleanup for {lab_id}: {e}")
-
         return removed
+
+    async def cleanup_lab_orphan_domains(
+        self,
+        lab_id: str,
+        keep_node_names: set[str],
+        workspace_base: Path | None = None,
+    ) -> dict[str, list[str]]:
+        """Remove VMs for nodes that no longer exist within a specific lab."""
+        return await self._run_libvirt(
+            self._cleanup_lab_orphan_domains_sync, lab_id, keep_node_names, workspace_base,
+        )

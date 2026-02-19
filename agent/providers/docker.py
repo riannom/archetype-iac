@@ -2254,8 +2254,8 @@ event-handler IPTABLES_CLEANUP
                 f"Recovered network state for {len(recovered_vlans)} existing containers"
             )
 
-        # Validate images
-        missing_images = self._validate_images(parsed_topology)
+        # Validate images (sync Docker SDK calls, run off event loop)
+        missing_images = await asyncio.to_thread(self._validate_images, parsed_topology)
         if missing_images:
             logger.error(f"Missing images: {missing_images}")
             error_lines = ["Missing Docker images:"]

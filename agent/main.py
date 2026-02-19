@@ -4243,33 +4243,41 @@ class OVSPortInfo:
     provider: str     # "docker" or "libvirt"
 
 
-def _interface_name_to_index(interface_name: str, port_start_index: int = 0) -> int:
-    """Convert an interface name to a 0-based index for libvirt VM lookup.
+def _interface_name_to_index(interface_name: str) -> int:
+    """Convert a normalized ethN name to a 0-based data interface index.
 
-    The port_start_index parameter accounts for vendor-specific numbering:
-    - CSR1000v (port_start_index=1): eth1 -> 0, eth2 -> 1
-    - cEOS (port_start_index=0): eth0 -> 0, eth1 -> 1
+    Normalized names always use eth1 = first data port, eth2 = second, etc.
+    (eth0 is Docker management). So the index is simply number - 1.
 
-    For non-eth interfaces, the number is always treated as 1-indexed
-    (GigabitEthernet1 -> 0) regardless of port_start_index, because the
-    API normalisation layer already converts these to eth* form.
-
-    Examples (port_start_index=0):
-        eth0 -> 0, eth1 -> 1
-        GigabitEthernet1 -> 0, GigabitEthernet2 -> 1
-    Examples (port_start_index=1):
-        eth1 -> 0, eth2 -> 1
+    Examples:
+        eth1 -> 0, eth2 -> 1, eth3 -> 2
     """
     import re
     match = re.search(r"(\d+)$", interface_name)
     if not match:
         raise ValueError(f"Cannot extract interface index from '{interface_name}'")
     number = int(match.group(1))
-    # eth* interfaces: subtract port_start_index (vendor-specific offset)
-    if interface_name.lower().startswith("eth"):
-        return max(0, number - port_start_index)
-    # Non-eth interfaces (GigabitEthernet, Ethernet, etc.) are 1-indexed
     return max(0, number - 1)
+
+
+def _resolve_ifindex_sync(
+    container_name: str,
+    interface_name: str,
+) -> int | None:
+    """Read peer ifindex for a container interface — blocking Docker call."""
+    import docker as docker_lib
+    try:
+        client = docker_lib.from_env()
+        container = client.containers.get(container_name)
+        exit_code, output = container.exec_run(
+            ["cat", f"/sys/class/net/{interface_name}/iflink"],
+            demux=False,
+        )
+        if exit_code != 0:
+            return None
+        return int(output.decode().strip())
+    except Exception:
+        return None
 
 
 async def _resolve_ovs_port_via_ifindex(
@@ -4285,24 +4293,9 @@ async def _resolve_ovs_port_via_ifindex(
     Returns:
         (port_name, vlan_tag) tuple, or None if not found.
     """
-    import docker as docker_lib
-
-    try:
-        client = docker_lib.from_env()
-        container = client.containers.get(container_name)
-    except Exception:
-        return None
-
-    # Read iflink (peer ifindex on host) for the requested interface
-    try:
-        exit_code, output = container.exec_run(
-            ["cat", f"/sys/class/net/{interface_name}/iflink"],
-            demux=False,
-        )
-        if exit_code != 0:
-            return None
-        peer_ifindex = int(output.decode().strip())
-    except Exception:
+    # Run blocking Docker SDK call in thread pool
+    peer_ifindex = await asyncio.to_thread(_resolve_ifindex_sync, container_name, interface_name)
+    if peer_ifindex is None:
         return None
 
     # Find the OVS port with this ifindex
@@ -4354,7 +4347,7 @@ async def _resolve_ovs_port(
     libvirt_kind: str | None = None
     if libvirt_provider is not None:
         try:
-            libvirt_kind = libvirt_provider.get_node_kind(lab_id, node_name)
+            libvirt_kind = await libvirt_provider.get_node_kind_async(lab_id, node_name)
         except Exception:
             libvirt_kind = None
     is_libvirt_node = libvirt_kind is not None
@@ -4402,16 +4395,7 @@ async def _resolve_ovs_port(
     # --- Try libvirt (OVS/MAC introspection) ---
     if libvirt_provider is not None:
         try:
-            # Get port_start_index from the VM's device kind (stored in domain metadata)
-            port_start_index = 0
-            kind = libvirt_kind or libvirt_provider.get_node_kind(lab_id, node_name)
-            if kind:
-                from agent.vendors import get_vendor_config
-                config = get_vendor_config(kind)
-                if config:
-                    port_start_index = config.port_start_index
-
-            intf_index = _interface_name_to_index(interface_name, port_start_index)
+            intf_index = _interface_name_to_index(interface_name)
             port_name = await libvirt_provider.get_vm_interface_port(
                 lab_id, node_name, intf_index,
             )
@@ -5377,7 +5361,7 @@ async def set_interface_carrier(
     is_libvirt_node = False
     if libvirt_provider is not None:
         try:
-            is_libvirt_node = libvirt_provider.get_node_kind(lab_id, node) is not None
+            is_libvirt_node = await libvirt_provider.get_node_kind_async(lab_id, node) is not None
         except Exception:
             is_libvirt_node = False
 
@@ -5593,7 +5577,7 @@ async def get_interface_vlan(
         is_libvirt_node = False
         if libvirt_provider is not None:
             try:
-                is_libvirt_node = libvirt_provider.get_node_kind(lab_id, node) is not None
+                is_libvirt_node = await libvirt_provider.get_node_kind_async(lab_id, node) is not None
             except Exception:
                 is_libvirt_node = False
 
@@ -5631,14 +5615,14 @@ async def get_interface_vlan(
             vlan_tag = port_info.vlan_tag
             # If read_from_ovs requested, read the actual tag from OVS
             if read_from_ovs:
-                import subprocess as _sp
-                result = _sp.run(
-                    ["ovs-vsctl", "get", "port", port_info.port_name, "tag"],
-                    capture_output=True,
-                    text=True,
+                _ovs_proc = await asyncio.create_subprocess_exec(
+                    "ovs-vsctl", "get", "port", port_info.port_name, "tag",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                if result.returncode == 0:
-                    tag_str = result.stdout.strip().strip("[]")
+                _ovs_out, _ = await _ovs_proc.communicate()
+                if _ovs_proc.returncode == 0:
+                    tag_str = _ovs_out.decode().strip().strip("[]")
                     if tag_str.isdigit():
                         vlan_tag = int(tag_str)
             return PortVlanResponse(
@@ -6036,13 +6020,16 @@ async def exec_in_node(lab_id: str, node_name: str, request: Request) -> dict:
 
     container_name = docker_provider.get_container_name(lab_id, node_name)
 
-    try:
+    def _exec_sync():
         import docker as docker_lib
         client = docker_lib.from_env()
         container = client.containers.get(container_name)
         exit_code, output = container.exec_run(["sh", "-c", cmd], demux=False)
         output_str = output.decode("utf-8", errors="replace") if output else ""
         return {"exit_code": exit_code, "output": output_str}
+
+    try:
+        return await asyncio.to_thread(_exec_sync)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -6067,7 +6054,7 @@ async def verify_node_cli(
         raise HTTPException(status_code=503, detail="Libvirt provider not available")
 
     try:
-        runtime_profile = libvirt_provider.get_runtime_profile(lab_id, node_name)
+        runtime_profile = await libvirt_provider.get_runtime_profile_async(lab_id, node_name)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Libvirt node not found: {e}") from e
 
@@ -6076,7 +6063,7 @@ async def verify_node_cli(
         raise HTTPException(status_code=500, detail="Unable to resolve libvirt domain name")
 
     runtime_kind = ((runtime_profile.get("runtime") or {}).get("kind") or "").strip()
-    kind = (request.kind or runtime_kind or libvirt_provider.get_node_kind(lab_id, node_name) or "").strip()
+    kind = (request.kind or runtime_kind or await libvirt_provider.get_node_kind_async(lab_id, node_name) or "").strip()
     if not kind:
         raise HTTPException(status_code=400, detail="Unable to determine node kind for CLI verification")
 
@@ -6165,7 +6152,7 @@ async def _check_libvirt_readiness(
         }
 
     result = await libvirt_provider.check_readiness(lab_id, node_name, kind)
-    timeout = libvirt_provider.get_readiness_timeout(kind, lab_id, node_name)
+    timeout = await libvirt_provider.get_readiness_timeout_async(kind, lab_id, node_name)
 
     return {
         "is_ready": result.is_ready,
@@ -6189,7 +6176,7 @@ async def get_node_runtime_profile(
         if libvirt_provider is None:
             raise HTTPException(status_code=404, detail="Libvirt provider not available")
         try:
-            return libvirt_provider.get_runtime_profile(lab_id, node_name)
+            return await libvirt_provider.get_runtime_profile_async(lab_id, node_name)
         except Exception as e:
             raise HTTPException(status_code=404, detail=f"Libvirt node not found: {e}") from e
 

@@ -504,6 +504,9 @@ class OVSNetworkManager:
 
         Called on initialization when bridge already exists (agent restart).
         This ensures we don't try to re-create ports that already exist.
+
+        Uses batched OVS queries and direct sysfs reads to avoid spawning
+        hundreds of subprocesses (which previously took ~60s on restart).
         """
         # List all ports on the bridge
         code, stdout, _ = await self._ovs_vsctl("list-ports", self._bridge_name)
@@ -511,10 +514,47 @@ class OVSNetworkManager:
             return
 
         ports = stdout.strip().split("\n")
+        vh_ports = [p for p in ports if p.startswith("vh")]
+        if not vh_ports:
+            return
+
         discovered_count = 0
 
-        # Build one snapshot of running container interfaces keyed by host ifindex.
-        # This avoids an O(ports * containers) namespace scan on startup.
+        # --- Batch 1: Get all port VLAN tags in one OVS call ---
+        port_tags: dict[str, int] = {}
+        code, json_out, _ = await self._ovs_vsctl(
+            "--format=json", "--", "--columns=name,tag", "list", "Port",
+        )
+        if code == 0 and json_out.strip():
+            try:
+                data = json.loads(json_out)
+                for row in data.get("data", []):
+                    # Row format: [name, tag] where tag is int or ["set", []]
+                    name = row[0]
+                    tag = row[1]
+                    if isinstance(tag, int) and tag > 0:
+                        port_tags[name] = tag
+            except (json.JSONDecodeError, IndexError, TypeError) as e:
+                logger.debug(f"Failed to parse batch port tags: {e}")
+
+        # --- Batch 2: Read ifindex from sysfs directly (no subprocess) ---
+        def _read_ifindexes(port_names: list[str]) -> dict[str, str]:
+            """Read ifindex for each port from /sys/class/net/{port}/ifindex."""
+            result = {}
+            for name in port_names:
+                try:
+                    idx = Path(f"/sys/class/net/{name}/ifindex").read_text().strip()
+                    if idx:
+                        result[name] = idx
+                except (OSError, ValueError):
+                    pass
+            return result
+
+        port_ifindexes = await asyncio.to_thread(
+            _read_ifindexes, [p for p in vh_ports if p in port_tags]
+        )
+
+        # --- Build container interface map (same as before) ---
         container_ifindex_map: dict[str, tuple[str, str, str]] = {}
         try:
             def _get_containers():
@@ -560,31 +600,17 @@ class OVSNetworkManager:
         except Exception as e:
             logger.debug(f"Error building container interface map: {e}")
 
-        for port_name in ports:
-            # Only process our container veth ports (start with 'vh')
-            if not port_name.startswith("vh"):
-                continue
-
-            # Get VLAN tag for this port
-            code, tag_stdout, _ = await self._ovs_vsctl("get", "port", port_name, "tag")
-            vlan_tag = None
-            if code == 0 and tag_stdout.strip() and tag_stdout.strip() != "[]":
-                try:
-                    vlan_tag = int(tag_stdout.strip())
-                except ValueError:
-                    continue
-
+        # --- Match ports to containers using pre-fetched data ---
+        for port_name in vh_ports:
+            vlan_tag = port_tags.get(port_name)
             if vlan_tag is None:
                 continue
 
-            # Match host-side ifindex to container peer references collected above.
-            code, idx_out, _ = await self._run_cmd([
-                "cat", f"/sys/class/net/{port_name}/ifindex"
-            ])
-            if code != 0:
+            ifindex = port_ifindexes.get(port_name)
+            if not ifindex:
                 continue
 
-            match = container_ifindex_map.get(idx_out.strip())
+            match = container_ifindex_map.get(ifindex)
             if match:
                 container_name, interface_name, lab_id = match
                 port_key = f"{container_name}:{interface_name}"

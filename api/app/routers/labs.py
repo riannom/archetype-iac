@@ -14,6 +14,7 @@ from typing import Literal
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
@@ -330,7 +331,55 @@ def list_labs(
         .limit(limit)
         .all()
     )
-    return {"labs": [schemas.LabOut.model_validate(lab) for lab in labs]}
+
+    if not labs:
+        return {"labs": []}
+
+    lab_ids = [lab.id for lab in labs]
+
+    # Count total device nodes per lab (exclude external nodes)
+    node_counts = dict(
+        database.query(models.Node.lab_id, func.count(models.Node.id))
+        .filter(models.Node.lab_id.in_(lab_ids), models.Node.node_type == "device")
+        .group_by(models.Node.lab_id)
+        .all()
+    )
+
+    # Count running nodes per lab from node_states
+    running_counts = dict(
+        database.query(models.NodeState.lab_id, func.count(models.NodeState.id))
+        .filter(models.NodeState.lab_id.in_(lab_ids), models.NodeState.actual_state == "running")
+        .group_by(models.NodeState.lab_id)
+        .all()
+    )
+
+    # Determine VM vs container by device type using vendor registry
+    from agent.vendors import _get_config_by_kind
+
+    device_nodes = (
+        database.query(models.Node.lab_id, models.Node.device)
+        .filter(models.Node.lab_id.in_(lab_ids), models.Node.node_type == "device")
+        .all()
+    )
+    vm_counts: dict[str, int] = {}
+    for nlab_id, device in device_nodes:
+        if device:
+            config = _get_config_by_kind(device)
+            if config and "qcow2" in (config.supported_image_kinds or []):
+                vm_counts[nlab_id] = vm_counts.get(nlab_id, 0) + 1
+
+    result = []
+    for lab in labs:
+        lab_out = schemas.LabOut.model_validate(lab)
+        total = node_counts.get(lab.id, 0)
+        vms = vm_counts.get(lab.id, 0)
+        lab_out.node_count = total
+        lab_out.running_count = running_counts.get(lab.id, 0)
+        lab_out.vm_count = vms
+        lab_out.container_count = total - vms
+        result.append(lab_out)
+
+    return {"labs": result}
 
 
 @router.post("/labs")
@@ -2045,10 +2094,12 @@ def _canonicalize_link_endpoints(
     source_interface: str,
     target_node: str,
     target_interface: str,
+    source_device: str | None = None,
+    target_device: str | None = None,
 ) -> tuple[str, str, str, str]:
     """Normalize and sort endpoints into canonical source/target order."""
-    src_i = normalize_interface(source_interface) if source_interface else "eth0"
-    tgt_i = normalize_interface(target_interface) if target_interface else "eth0"
+    src_i = normalize_interface(source_interface, source_device) if source_interface else "eth0"
+    tgt_i = normalize_interface(target_interface, target_device) if target_interface else "eth0"
     if f"{source_node}:{src_i}" <= f"{target_node}:{tgt_i}":
         return source_node, src_i, target_node, tgt_i
     return target_node, tgt_i, source_node, src_i
@@ -2163,6 +2214,9 @@ def _upsert_link_states(
     node_name_to_host: dict[str, str | None] = {
         n.container_name: n.host_id for n in db_nodes
     }
+    node_name_to_device: dict[str, str | None] = {
+        n.container_name: n.device for n in db_nodes
+    }
 
     # Also check NodePlacement for nodes without host_id set
     placements = (
@@ -2200,6 +2254,8 @@ def _upsert_link_states(
             ep_a.ifname or "eth0",
             target_node,
             ep_b.ifname or "eth0",
+            source_device=node_name_to_device.get(source_node),
+            target_device=node_name_to_device.get(target_node),
         )
         link_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
         current_link_names.add(link_name)
@@ -3332,11 +3388,24 @@ async def hot_connect_link(
             detail=f"Lab must be running for hot-connect (current state: {lab.state})"
         )
 
+    # Look up device types for accurate interface normalization
+    _src_db_node = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id, models.Node.container_name == request.source_node)
+        .first()
+    )
+    _tgt_db_node = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id, models.Node.container_name == request.target_node)
+        .first()
+    )
     src_n, src_i, tgt_n, tgt_i = _canonicalize_link_endpoints(
         request.source_node,
         request.source_interface,
         request.target_node,
         request.target_interface,
+        source_device=_src_db_node.device if _src_db_node else None,
+        target_device=_tgt_db_node.device if _tgt_db_node else None,
     )
     link_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
     existing_states = (

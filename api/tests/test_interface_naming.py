@@ -13,9 +13,12 @@ from app.services.interface_naming import (
 # ---------------------------------------------------------------------------
 # Test data: (device_type, vendor_name, linux_name)
 # Covers every portNaming pattern in the vendor catalog.
+#
+# Docker reserves eth0 for management. Data ports start at eth1.
+# Formula: eth{vendor_index - port_start_index + 1}
 # ---------------------------------------------------------------------------
 NORMALIZE_CASES = [
-    # Arista cEOS: Ethernet, start=1
+    # Arista cEOS: Ethernet, start=1 → eth{1-1+1}=eth1
     ("ceos", "Ethernet1", "eth1"),
     ("ceos", "Ethernet16", "eth16"),
     # Nokia SR Linux: e1-, start=1
@@ -24,17 +27,17 @@ NORMALIZE_CASES = [
     # Cumulus/CVX: swp, start=1
     ("cvx", "swp1", "eth1"),
     ("cvx", "swp12", "eth12"),
-    # SONiC: Ethernet, start=0
-    ("sonic-vs", "Ethernet0", "eth0"),
-    ("sonic-vs", "Ethernet3", "eth3"),
-    # Cisco IOS-XR: GigabitEthernet0/0/0/{index}, start=0
-    ("cisco_iosxr", "GigabitEthernet0/0/0/0", "eth0"),
-    ("cisco_iosxr", "GigabitEthernet0/0/0/3", "eth3"),
+    # SONiC: Ethernet, start=0 → eth{0-0+1}=eth1
+    ("sonic-vs", "Ethernet0", "eth1"),
+    ("sonic-vs", "Ethernet3", "eth4"),
+    # Cisco IOS-XR: GigabitEthernet0/0/0/{index}, start=0 → eth{0-0+1}=eth1
+    ("cisco_iosxr", "GigabitEthernet0/0/0/0", "eth1"),
+    ("cisco_iosxr", "GigabitEthernet0/0/0/3", "eth4"),
     # Cisco XRd: GigabitEthernet0/0/0/{index}, start=0
-    ("cisco_xrd", "GigabitEthernet0/0/0/0", "eth0"),
+    ("cisco_xrd", "GigabitEthernet0/0/0/0", "eth1"),
     # Cisco IOSv: GigabitEthernet0/{index}, start=0
-    ("cisco_iosv", "GigabitEthernet0/0", "eth0"),
-    ("cisco_iosv", "GigabitEthernet0/2", "eth2"),
+    ("cisco_iosv", "GigabitEthernet0/0", "eth1"),
+    ("cisco_iosv", "GigabitEthernet0/2", "eth3"),
     # Cisco CSR1000v / C8000v: GigabitEthernet, start=1
     ("cisco_csr1000v", "GigabitEthernet1", "eth1"),
     ("c8000v", "GigabitEthernet1", "eth1"),
@@ -43,15 +46,18 @@ NORMALIZE_CASES = [
     # Cisco Cat9000v aliases: GigabitEthernet1/0/{index}, start=1
     ("cat9000v-uadp", "GigabitEthernet1/0/1", "eth1"),
     ("cat9000v-q200", "GigabitEthernet1/0/8", "eth8"),
-    # Juniper vSRX3: ge-0/0/, start=0
-    ("juniper_vsrx3", "ge-0/0/0", "eth0"),
-    ("juniper_vsrx3", "ge-0/0/3", "eth3"),
+    # Juniper vSRX3: ge-0/0/, start=0 → eth{0-0+1}=eth1
+    ("juniper_vsrx3", "ge-0/0/0", "eth1"),
+    ("juniper_vsrx3", "ge-0/0/3", "eth4"),
     # Juniper vJunos Switch: ge-0/0/, start=0
-    ("juniper_vjunosswitch", "ge-0/0/0", "eth0"),
+    ("juniper_vjunosswitch", "ge-0/0/0", "eth1"),
     # Juniper vJunos Router: ge-0/0/, start=0
-    ("juniper_vjunosrouter", "ge-0/0/0", "eth0"),
+    ("juniper_vjunosrouter", "ge-0/0/0", "eth1"),
     # Juniper vJunos Evolved: ge-0/0/, start=0
-    ("juniper_vjunosevolved", "ge-0/0/0", "eth0"),
+    ("juniper_vjunosevolved", "ge-0/0/0", "eth1"),
+    # Juniper cJunos: et-0/0/, start=0
+    ("juniper_cjunos", "et-0/0/0", "eth1"),
+    ("juniper_cjunos", "et-0/0/5", "eth6"),
     # Cisco Nexus 9000v: Ethernet1/, start=1
     ("cisco_n9kv", "Ethernet1/1", "eth1"),
     ("cisco_n9kv", "Ethernet1/8", "eth8"),
@@ -62,15 +68,15 @@ NORMALIZE_CASES = [
     ("citrix_adc", "0/1", "eth1"),
     ("citrix_adc", "0/3", "eth3"),
     # Cisco ASAv: GigabitEthernet0/, start=0
-    ("cisco_asav", "GigabitEthernet0/0", "eth0"),
-    ("cisco_asav", "GigabitEthernet0/3", "eth3"),
+    ("cisco_asav", "GigabitEthernet0/0", "eth1"),
+    ("cisco_asav", "GigabitEthernet0/3", "eth4"),
     # Fortinet FortiGate: port, start=1
     ("fortinet_fortigate", "port1", "eth1"),
     ("fortinet_fortigate", "port4", "eth4"),
     # Palo Alto VM-Series: ethernet1/, start=1
     ("paloalto_vmseries", "ethernet1/1", "eth1"),
     ("paloalto_vmseries", "ethernet1/5", "eth5"),
-    # VyOS: eth, start=0 (identity transform)
+    # VyOS: eth, start=0 (identity transform — already eth{N})
     ("vyos", "eth0", "eth0"),
     ("vyos", "eth3", "eth3"),
     # Linux: eth, start=0 (identity transform)
@@ -79,14 +85,14 @@ NORMALIZE_CASES = [
     # FRR: eth, start=0 (identity transform)
     ("frr", "eth0", "eth0"),
     # Windows: Ethernet, start=0
-    ("windows", "Ethernet0", "eth0"),
-    ("windows", "Ethernet3", "eth3"),
+    ("windows", "Ethernet0", "eth1"),
+    ("windows", "Ethernet3", "eth4"),
     # Cisco SD-WAN vEdge: ge0/, start=0
-    ("cat-sdwan-vedge", "ge0/0", "eth0"),
-    ("cat-sdwan-vedge", "ge0/2", "eth2"),
+    ("cat-sdwan-vedge", "ge0/0", "eth1"),
+    ("cat-sdwan-vedge", "ge0/2", "eth3"),
     # Cisco FTDv: GigabitEthernet0/, start=0
-    ("ftdv", "GigabitEthernet0/0", "eth0"),
-    ("ftdv", "GigabitEthernet0/2", "eth2"),
+    ("ftdv", "GigabitEthernet0/0", "eth1"),
+    ("ftdv", "GigabitEthernet0/2", "eth3"),
     # Juniper cRPD: eth, start=0 (identity)
     ("juniper_crpd", "eth0", "eth0"),
 ]
@@ -117,18 +123,24 @@ class TestNormalizeInterface:
         assert normalize_interface("mgmt0", "cisco_n9kv") == "mgmt0"
 
     def test_fallback_no_device_type(self):
-        """When device_type is None, common patterns should still work."""
+        """When device_type is None, common patterns should still work.
+
+        Juniper patterns (ge-, xe-, et-) are treated as 0-indexed in fallback
+        and get +1 offset for Docker management interface.
+        Other patterns are ambiguous without device_type and use raw index.
+        """
         assert normalize_interface("Ethernet1") == "eth1"
         assert normalize_interface("GigabitEthernet0") == "eth0"
-        assert normalize_interface("ge-0/0/3") == "eth3"
+        assert normalize_interface("ge-0/0/3") == "eth4"       # 0-indexed +1
+        assert normalize_interface("xe-0/0/5") == "eth6"       # 0-indexed +1
+        assert normalize_interface("et-0/0/0") == "eth1"       # 0-indexed +1
         assert normalize_interface("GigabitEthernet0/0/0/3") == "eth3"
-        assert normalize_interface("xe-0/0/5") == "eth5"
 
     def test_case_insensitivity_vendor_names(self):
         """Vendor names should be case-insensitive."""
         assert normalize_interface("ethernet1", "ceos") == "eth1"
         assert normalize_interface("ETHERNET1", "ceos") == "eth1"
-        assert normalize_interface("gigabitethernet0", "cisco_iosxr") == "eth0"
+        assert normalize_interface("gigabitethernet0/0/0/0", "cisco_iosxr") == "eth1"
 
 
 class TestDenormalizeInterface:
@@ -229,10 +241,11 @@ class TestIosxrBugFix:
     """
 
     def test_iosxr_gigabit_ethernet(self):
-        """GigabitEthernet0/0/0/3 should normalize to eth3, not eth0."""
-        # With device_type, uses the device-aware pattern
-        assert normalize_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth3"
+        """GigabitEthernet0/0/0/3 should normalize correctly with device_type."""
+        # With device_type, uses the device-aware pattern (0-indexed → +1)
+        assert normalize_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth4"
 
     def test_iosxr_fallback(self):
         """Even without device_type, the fallback should get this right."""
+        # Fallback uses raw index for GigE patterns (ambiguous without device_type)
         assert normalize_interface("GigabitEthernet0/0/0/3") == "eth3"
