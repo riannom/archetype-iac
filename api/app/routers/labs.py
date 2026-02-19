@@ -382,6 +382,37 @@ def list_labs(
     return {"labs": result}
 
 
+def _populate_lab_counts(database: Session, lab_out: schemas.LabOut) -> None:
+    """Populate node_count, running_count, container_count, vm_count for a single lab."""
+    from agent.vendors import _get_config_by_kind
+
+    total = (
+        database.query(func.count(models.Node.id))
+        .filter(models.Node.lab_id == lab_out.id, models.Node.node_type == "device")
+        .scalar()
+    ) or 0
+    running = (
+        database.query(func.count(models.NodeState.id))
+        .filter(models.NodeState.lab_id == lab_out.id, models.NodeState.actual_state == "running")
+        .scalar()
+    ) or 0
+    device_types = (
+        database.query(models.Node.device)
+        .filter(models.Node.lab_id == lab_out.id, models.Node.node_type == "device")
+        .all()
+    )
+    vms = 0
+    for (device,) in device_types:
+        if device:
+            config = _get_config_by_kind(device)
+            if config and "qcow2" in (config.supported_image_kinds or []):
+                vms += 1
+    lab_out.node_count = total
+    lab_out.running_count = running
+    lab_out.vm_count = vms
+    lab_out.container_count = total - vms
+
+
 @router.post("/labs")
 def create_lab(
     payload: schemas.LabCreate,
@@ -409,6 +440,7 @@ def get_lab(
     lab, role = get_lab_with_role(lab_id, database, current_user)
     out = schemas.LabOut.model_validate(lab)
     out.user_role = role.value
+    _populate_lab_counts(database, out)
     return out
 
 
