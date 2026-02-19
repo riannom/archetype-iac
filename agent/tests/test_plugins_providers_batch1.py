@@ -262,6 +262,22 @@ def test_libvirt_prepare_startup_config_non_n9kv_only_normalizes_newlines() -> N
     assert cleaned == "Router# show running-config\nhostname R1\n"
 
 
+def test_libvirt_skip_bootflash_injection_for_n9kv_when_poap_preboot_enabled(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
+
+    assert provider._skip_bootflash_injection_for_kind("cisco_n9kv") is True
+    assert provider._skip_bootflash_injection_for_kind("nxosv9000") is True
+    assert provider._skip_bootflash_injection_for_kind("cisco_iosv") is False
+
+
+def test_libvirt_skip_bootflash_injection_disabled_when_poap_preboot_disabled(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+    monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", False, raising=False)
+
+    assert provider._skip_bootflash_injection_for_kind("cisco_n9kv") is False
+
+
 def test_libvirt_undefine_domain_falls_back_to_nvram(monkeypatch) -> None:
     provider = _make_libvirt_provider()
 
