@@ -890,3 +890,30 @@
 ### Interpretation
 - Post-boot automation now successfully reaches the proven import/persist path and yields non-empty active startup-config in this run.
 - The re-entrancy guard did not trigger (`in_progress_skip=0`) in this specific cycle, indicating repeated attempts were mostly serial retries/readiness loops rather than overlapping concurrent invocations.
+
+## Console Ownership During Start-Time Post-Boot (2026-02-19)
+
+### Problem observed
+- Read-only console overlay only appeared when automation piggybacked an already-open web console.
+- If post-boot ran via direct serial automation or user connected late, UI could miss ownership state.
+
+### Change implemented
+- Added persisted per-domain console control state in `agent/console_session_registry.py`:
+  - `set_console_control_state(...)` stores/broadcasts `read_only` vs `interactive`.
+  - `register_session(...)` now replays current state to newly connected console sessions.
+- Updated post-boot executor `agent/console_extractor.py`:
+  - `run_vm_post_boot_commands(...)` claims read-only at start of automation,
+  - keeps read-only while in progress,
+  - releases to interactive on success/failure/no-op paths.
+- Updated libvirt start/deploy lifecycle `agent/providers/libvirt.py`:
+  - on VM start with vendor post-boot commands, marks console ownership pending (read-only),
+  - clears stale ownership state during cache clear/remove/error paths.
+
+### Why this matters
+- Ownership is now tied to configuration state, not just piggyback timing.
+- Users opening console during start/config windows see deterministic view-only behavior until automation is done.
+
+### Local verification
+- `pytest -q agent/tests/test_registry_transport_console.py`
+- `pytest -q agent/tests/test_events_console_logging_version_batch2.py -k "run_vm_post_boot_commands or serial_run_commands_prefers_piggyback_session"`
+- `pytest -q agent/tests/test_plugins_providers_batch1.py -k "libvirt"`

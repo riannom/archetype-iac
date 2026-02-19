@@ -165,6 +165,56 @@ def test_session_registry_register_get_unregister():
     assert session_registry.get_session("lab1") is None
 
 
+def test_session_registry_replays_persisted_console_control(monkeypatch):
+    import asyncio
+    import json
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.sent_text = []
+
+        async def send_text(self, text: str):
+            self.sent_text.append(text)
+
+    loop = asyncio.new_event_loop()
+
+    def run_coroutine_threadsafe(coro, loop):
+        loop.run_until_complete(coro)
+        return types.SimpleNamespace(result=lambda timeout=None: None)
+
+    monkeypatch.setattr(session_registry.asyncio, "run_coroutine_threadsafe", run_coroutine_threadsafe)
+
+    changed = session_registry.set_console_control_state(
+        "lab-replay",
+        state="read_only",
+        message="Config in progress",
+    )
+    assert changed is True
+
+    ws = FakeWebSocket()
+    session = session_registry.ActiveConsoleSession(
+        domain_name="lab-replay",
+        master_fd=1,
+        loop=loop,
+        websocket=ws,
+    )
+
+    try:
+        session_registry.register_session("lab-replay", session)
+        controls = [json.loads(msg) for msg in ws.sent_text]
+        assert controls[-1]["type"] == "console-control"
+        assert controls[-1]["state"] == "read_only"
+        assert controls[-1]["message"] == "Config in progress"
+    finally:
+        session_registry.unregister_session("lab-replay")
+        session_registry.set_console_control_state(
+            "lab-replay",
+            state="interactive",
+            message="Config complete",
+        )
+        loop.close()
+
+
 def test_clean_config_strips_noise():
     raw = "show running-config\r\n\x1b[31mBuilding configuration...\x1b[0m\n\nline1\nline2\n\n"
     cleaned = session_registry._clean_config(raw, "show running-config")

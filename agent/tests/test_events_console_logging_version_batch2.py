@@ -697,6 +697,64 @@ def test_run_vm_post_boot_commands_failure_retries_after_return(monkeypatch) -> 
     assert seen["calls"] == 2
 
 
+def test_run_vm_post_boot_commands_sets_and_releases_console_control(monkeypatch) -> None:
+    import agent.console_extractor as console_extractor
+
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
+    console_extractor.clear_vm_post_boot_cache()
+
+    fake_vendors = types.ModuleType("agent.vendors")
+    fake_vendors.get_vendor_config = lambda kind: SimpleNamespace(
+        post_boot_commands=["show version"]
+    )
+    fake_vendors.get_config_extraction_settings = lambda kind: SimpleNamespace(
+        user="admin",
+        password="admin",
+        enable_password="",
+        prompt_pattern=r"[>#]\s*$",
+    )
+    monkeypatch.setitem(sys.modules, "agent.vendors", fake_vendors)
+
+    control_calls: list[tuple[str, str, str]] = []
+    fake_registry = types.ModuleType("agent.console_session_registry")
+
+    def _fake_set_console_control_state(domain_name: str, *, state: str, message: str):
+        control_calls.append((domain_name, state, message))
+        return True
+
+    fake_registry.set_console_control_state = _fake_set_console_control_state
+    monkeypatch.setitem(sys.modules, "agent.console_session_registry", fake_registry)
+
+    class _FakeExtractor:
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+            self.domain_name = domain_name
+            self.libvirt_uri = libvirt_uri
+            self.timeout = timeout
+
+        def run_commands(
+            self,
+            *,
+            commands,
+            username,
+            password,
+            enable_password,
+            prompt_pattern,
+        ):
+            return console_extractor.CommandResult(
+                success=True,
+                commands_run=len(commands),
+            )
+
+    monkeypatch.setattr(console_extractor, "SerialConsoleExtractor", _FakeExtractor)
+
+    result = console_extractor.run_vm_post_boot_commands("vm1", "kind1")
+
+    assert result.success is True
+    assert control_calls[0][0] == "vm1"
+    assert control_calls[0][1] == "read_only"
+    assert control_calls[-1][1] == "interactive"
+
+
 def test_serial_run_commands_prefers_piggyback_session(monkeypatch) -> None:
     import agent.console_extractor as console_extractor
 

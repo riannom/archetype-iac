@@ -195,6 +195,101 @@ async def test_libvirt_run_post_boot_commands_runs_for_n9kv_when_preboot_disable
     assert calls["count"] == 1
 
 
+def test_libvirt_mark_post_boot_console_ownership_pending_sets_read_only(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+    calls: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(
+        libvirt_provider,
+        "get_vendor_config",
+        lambda _kind: types.SimpleNamespace(post_boot_commands=["copy running-config startup-config"]),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_set_vm_console_control_state",
+        staticmethod(
+            lambda domain_name, *, state, message: calls.append((domain_name, state, message))
+        ),
+    )
+
+    provider._mark_post_boot_console_ownership_pending("arch-lab-node1", "cisco_n9kv")
+
+    assert calls
+    assert calls[-1][0] == "arch-lab-node1"
+    assert calls[-1][1] == "read_only"
+
+
+@pytest.mark.asyncio
+async def test_libvirt_start_node_marks_post_boot_console_pending(monkeypatch, tmp_path: Path) -> None:
+    provider = _make_libvirt_provider()
+
+    class DummyLibvirt:
+        VIR_DOMAIN_RUNNING = 1
+        VIR_DOMAIN_SHUTOFF = 5
+
+        class libvirtError(Exception):
+            pass
+
+    class DummyDomain:
+        def __init__(self) -> None:
+            self.create_calls = 0
+
+        def state(self):
+            return (DummyLibvirt.VIR_DOMAIN_SHUTOFF, 0)
+
+        def create(self):
+            self.create_calls += 1
+
+    domain = DummyDomain()
+
+    class DummyConn:
+        def lookupByName(self, _name):
+            return domain
+
+    mark_calls: list[tuple[str, str | None]] = []
+    clear_calls: list[str] = []
+
+    monkeypatch.setattr(libvirt_provider, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "conn",
+        property(lambda self: DummyConn()),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_domain_name",
+        lambda self, _lab_id, _node_name: "arch-lab-node1",
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_get_domain_kind",
+        lambda self, _domain: "cisco_n9kv",
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_set_vm_tap_mtu",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_clear_vm_post_boot_commands_cache",
+        staticmethod(lambda domain_name: clear_calls.append(domain_name)),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_mark_post_boot_console_ownership_pending",
+        lambda self, domain_name, kind: mark_calls.append((domain_name, kind)),
+    )
+
+    result = await provider.start_node("lab1", "node1", tmp_path)
+
+    assert result.success is True
+    assert result.new_status == NodeStatus.RUNNING
+    assert domain.create_calls == 1
+    assert clear_calls == ["arch-lab-node1"]
+    assert mark_calls == [("arch-lab-node1", "cisco_n9kv")]
+
+
 def test_libvirt_log_name() -> None:
     assert libvirt_provider._log_name("node1", {"_display_name": "Node 1"}) == "Node 1(node1)"
     assert libvirt_provider._log_name("node1", {"_display_name": "node1"}) == "node1"

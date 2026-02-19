@@ -54,12 +54,22 @@ class ActiveConsoleSession:
 
 _registry: dict[str, ActiveConsoleSession] = {}
 _registry_lock = threading.Lock()
+_console_control_state: dict[str, tuple[str, str]] = {}
 
 
 def register_session(domain_name: str, session: ActiveConsoleSession) -> None:
+    control: Optional[tuple[str, str]] = None
     with _registry_lock:
         _registry[domain_name] = session
+        control = _console_control_state.get(domain_name)
     logger.debug(f"Registered console session for {domain_name}")
+    if control is not None:
+        state, message = control
+        _send_console_control(
+            session,
+            state=state,
+            message=message,
+        )
 
 
 def unregister_session(domain_name: str) -> None:
@@ -77,6 +87,49 @@ def list_active_domains() -> list[str]:
     """Return a snapshot of domains with active web console sessions."""
     with _registry_lock:
         return list(_registry.keys())
+
+
+def set_console_control_state(
+    domain_name: str,
+    *,
+    state: str,
+    message: str,
+) -> bool:
+    """Persist and broadcast console control mode for a domain.
+
+    Returns:
+        True when state changed, False when effective state is unchanged.
+    """
+    target_state = "read_only" if state == "read_only" else "interactive"
+
+    changed = False
+    session: Optional[ActiveConsoleSession] = None
+    with _registry_lock:
+        current = _console_control_state.get(domain_name)
+        if target_state == "read_only":
+            desired = (target_state, message)
+            if current != desired:
+                _console_control_state[domain_name] = desired
+                changed = True
+        else:
+            if current is not None:
+                _console_control_state.pop(domain_name, None)
+                changed = True
+        session = _registry.get(domain_name)
+
+    if changed and session is not None:
+        _send_console_control(
+            session,
+            state=target_state,
+            message=message,
+        )
+    return changed
+
+
+def get_console_control_state(domain_name: str) -> Optional[tuple[str, str]]:
+    """Return persisted control state for a domain, if any."""
+    with _registry_lock:
+        return _console_control_state.get(domain_name)
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +328,11 @@ def piggyback_extract(
         # --- Pause user I/O ---
         session.input_paused.clear()
         session.pty_read_paused.clear()
+        set_console_control_state(
+            domain_name,
+            state="read_only",
+            message="Configuration in progress. Console is view-only.",
+        )
 
         # Small delay to let in-flight reads drain
         import time
@@ -389,6 +447,11 @@ def piggyback_extract(
         return ExtractionResult(success=False, error=f"Unexpected error: {e}")
 
     finally:
+        set_console_control_state(
+            domain_name,
+            state="interactive",
+            message="Configuration completed. Interactive control restored.",
+        )
         # --- Resume user I/O ---
         session.input_paused.set()
         session.pty_read_paused.set()
@@ -434,8 +497,8 @@ def piggyback_run_commands(
 
         session.input_paused.clear()
         session.pty_read_paused.clear()
-        _send_console_control(
-            session,
+        set_console_control_state(
+            domain_name,
             state="read_only",
             message="Configuration in progress. Console is view-only.",
         )
@@ -534,8 +597,8 @@ def piggyback_run_commands(
         return CommandResult(success=False, error=f"Unexpected error: {e}")
 
     finally:
-        _send_console_control(
-            session,
+        set_console_control_state(
+            domain_name,
             state="interactive",
             message="Configuration completed. Interactive control restored.",
         )

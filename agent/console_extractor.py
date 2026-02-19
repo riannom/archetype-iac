@@ -1118,17 +1118,43 @@ def run_vm_post_boot_commands(
     Returns:
         CommandResult with success status
     """
+    from agent.console_session_registry import set_console_control_state
+
+    completion_message = "Configuration completed. Interactive control restored."
+    control_claimed = False
+
     with _vm_post_boot_lock:
         if domain_name in _vm_post_boot_completed:
             logger.debug(f"Post-boot commands already run for {domain_name}")
+            set_console_control_state(
+                domain_name,
+                state="interactive",
+                message="Configuration already complete. Interactive control restored.",
+            )
             return CommandResult(success=True, commands_run=0)
         if domain_name in _vm_post_boot_in_progress:
             logger.debug(f"Post-boot commands already in progress for {domain_name}")
+            set_console_control_state(
+                domain_name,
+                state="read_only",
+                message="Configuration in progress. Console is view-only.",
+            )
             return CommandResult(success=True, commands_run=0)
         _vm_post_boot_in_progress.add(domain_name)
 
     try:
+        set_console_control_state(
+            domain_name,
+            state="read_only",
+            message="Configuration in progress. Console is view-only.",
+        )
+        control_claimed = True
+
         if not PEXPECT_AVAILABLE:
+            completion_message = (
+                "Configuration automation unavailable (pexpect missing). "
+                "Interactive control restored."
+            )
             return CommandResult(
                 success=False,
                 error="pexpect package is not installed"
@@ -1141,6 +1167,7 @@ def run_vm_post_boot_commands(
             # No commands to run, mark as complete
             with _vm_post_boot_lock:
                 _vm_post_boot_completed.add(domain_name)
+            completion_message = "No post-boot configuration required. Interactive control restored."
             return CommandResult(success=True, commands_run=0)
 
         # Get extraction settings for console interaction parameters
@@ -1167,13 +1194,21 @@ def run_vm_post_boot_commands(
                 f"Post-boot commands completed for {domain_name}: "
                 f"{result.commands_run}/{len(config.post_boot_commands)} commands"
             )
+            completion_message = "Configuration completed. Interactive control restored."
         else:
             logger.warning(f"Post-boot commands failed for {domain_name}: {result.error}")
+            completion_message = "Configuration failed. Interactive control restored."
 
         return result
     finally:
         with _vm_post_boot_lock:
             _vm_post_boot_in_progress.discard(domain_name)
+        if control_claimed:
+            set_console_control_state(
+                domain_name,
+                state="interactive",
+                message=completion_message,
+            )
 
 
 def run_vm_cli_commands(
@@ -1277,6 +1312,20 @@ def clear_vm_post_boot_cache(domain_name: str | None = None) -> None:
     if domain_name:
         _vm_post_boot_completed.discard(domain_name)
         _vm_post_boot_in_progress.discard(domain_name)
+        try:
+            from agent.console_session_registry import set_console_control_state
+
+            set_console_control_state(
+                domain_name,
+                state="interactive",
+                message="Configuration state reset. Interactive control restored.",
+            )
+        except Exception:
+            logger.debug(
+                "Unable to clear console control state for %s",
+                domain_name,
+                exc_info=True,
+            )
     else:
         _vm_post_boot_completed.clear()
         _vm_post_boot_in_progress.clear()

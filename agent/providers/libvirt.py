@@ -1725,6 +1725,8 @@ class LibvirtProvider(Provider):
 
         domain.create()
         logger.info(f"Started domain {domain_name}")
+        self._clear_vm_post_boot_commands_cache(domain_name)
+        self._mark_post_boot_console_ownership_pending(domain_name, kind)
 
         # Set MTU on tap devices (they inherit bridge MTU which may be 1450)
         await self._set_vm_tap_mtu(lab_id, node_name)
@@ -1871,6 +1873,9 @@ class LibvirtProvider(Provider):
                     stdout="Domain already running",
                 )
 
+            kind = self._get_domain_kind(domain)
+            self._clear_vm_post_boot_commands_cache(domain_name)
+            self._mark_post_boot_console_ownership_pending(domain_name, kind)
             domain.create()
             await self._set_vm_tap_mtu(lab_id, node_name)
 
@@ -1882,12 +1887,14 @@ class LibvirtProvider(Provider):
             )
 
         except libvirt.libvirtError as e:
+            self._clear_vm_console_control_state(domain_name)
             return NodeActionResult(
                 success=False,
                 node_name=node_name,
                 error=f"Libvirt error: {e}",
             )
         except Exception as e:
+            self._clear_vm_console_control_state(domain_name)
             return NodeActionResult(
                 success=False,
                 node_name=node_name,
@@ -1964,6 +1971,63 @@ class LibvirtProvider(Provider):
                 domain_name,
                 exc_info=True,
             )
+        LibvirtProvider._clear_vm_console_control_state(domain_name)
+
+    @staticmethod
+    def _set_vm_console_control_state(
+        domain_name: str,
+        *,
+        state: str,
+        message: str,
+    ) -> None:
+        """Publish console ownership state for a VM domain."""
+        try:
+            from agent.console_session_registry import set_console_control_state
+
+            set_console_control_state(
+                domain_name,
+                state=state,
+                message=message,
+            )
+        except Exception:
+            logger.debug(
+                "Unable to set console control state for %s",
+                domain_name,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _clear_vm_console_control_state(domain_name: str) -> None:
+        """Clear persisted console ownership/read-only state for a VM."""
+        LibvirtProvider._set_vm_console_control_state(
+            domain_name,
+            state="interactive",
+            message="Configuration state cleared. Interactive control restored.",
+        )
+
+    def _mark_post_boot_console_ownership_pending(
+        self,
+        domain_name: str,
+        kind: str | None,
+    ) -> None:
+        """Set console read-only when start-time post-boot automation is pending."""
+        if not kind:
+            return
+
+        canonical_kind = get_kind_for_device(kind) or kind
+        config = get_vendor_config(canonical_kind)
+        if config is None or not config.post_boot_commands:
+            self._clear_vm_console_control_state(domain_name)
+            return
+
+        self._set_vm_console_control_state(
+            domain_name,
+            state="read_only",
+            message=(
+                "Configuration in progress. Console is view-only until "
+                "post-boot setup completes."
+            ),
+        )
 
     async def stop_node(
         self,
