@@ -709,6 +709,28 @@ class SerialConsoleExtractor:
         if not commands:
             return CommandResult(success=True, commands_run=0)
 
+        # If a user console session is active, temporarily pause user input and
+        # run automation through that PTY to avoid competing virsh sessions.
+        from agent.console_session_registry import piggyback_run_commands
+
+        piggyback_result = piggyback_run_commands(
+            domain_name=self.domain_name,
+            commands=commands,
+            username=username,
+            password=password,
+            enable_password=enable_password,
+            prompt_pattern=prompt_pattern,
+            timeout=self.timeout,
+        )
+        if piggyback_result is not None:
+            if piggyback_result.success:
+                return piggyback_result
+            logger.info(
+                "Piggyback post-boot commands failed for %s, falling back to direct console: %s",
+                self.domain_name,
+                piggyback_result.error,
+            )
+
         from agent.virsh_console_lock import console_lock
 
         last_result = CommandResult(success=False, error="No attempts made")

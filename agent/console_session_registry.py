@@ -13,6 +13,7 @@ I/O flow during piggybacking:
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -21,7 +22,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from agent.console_extractor import ExtractionResult
+from agent.console_extractor import CommandResult, ExtractionResult
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,30 @@ def _monotonic() -> float:
     """Wrapper for time.monotonic (makes testing easier)."""
     import time
     return time.monotonic()
+
+
+def _send_console_control(
+    session: ActiveConsoleSession,
+    *,
+    state: str,
+    message: str,
+) -> None:
+    """Send a UI control message to the active console websocket."""
+    payload = json.dumps(
+        {
+            "type": "console-control",
+            "state": state,
+            "message": message,
+        }
+    )
+    try:
+        asyncio.run_coroutine_threadsafe(
+            session.websocket.send_text(payload),
+            session.loop,
+        ).result(timeout=2)
+    except Exception:
+        # Best-effort only: websocket may have disconnected between checks.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +390,155 @@ def piggyback_extract(
 
     finally:
         # --- Resume user I/O ---
+        session.input_paused.set()
+        session.pty_read_paused.set()
+        session._lock.release()
+
+
+def piggyback_run_commands(
+    domain_name: str,
+    commands: list[str],
+    username: str = "",
+    password: str = "",
+    enable_password: str = "",
+    prompt_pattern: str = r"[>#]\s*$",
+    timeout: float = 30,
+) -> Optional[CommandResult]:
+    """Attempt to run commands via an active web console session.
+
+    While running, user input is paused (view-only mode) and restored
+    automatically when command execution finishes.
+
+    Returns:
+        CommandResult on success/failure if a session was found.
+        None if no active session exists (caller should fall back to
+        normal direct console automation).
+    """
+    if not commands:
+        return CommandResult(success=True, commands_run=0)
+
+    session = get_session(domain_name)
+    if session is None:
+        return None
+
+    if not session._lock.acquire(timeout=5):
+        logger.debug(f"Piggyback lock busy for {domain_name}, falling back")
+        return None
+
+    ws_forward: Callable[[bytes], None] = lambda _data: None
+    try:
+        if get_session(domain_name) is None:
+            return None
+
+        logger.info(f"Piggybacking command automation on web console for {domain_name}")
+
+        session.input_paused.clear()
+        session.pty_read_paused.clear()
+        _send_console_control(
+            session,
+            state="read_only",
+            message="Configuration in progress. Console is view-only.",
+        )
+
+        import time
+        time.sleep(0.2)
+
+        def _ws_forward(data: bytes) -> None:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    session.websocket.send_bytes(data),
+                    session.loop,
+                ).result(timeout=2)
+            except Exception:
+                pass
+
+        ws_forward = _ws_forward
+
+        injector = PtyInjector(
+            fd=session.master_fd,
+            ws_forward=ws_forward,
+            default_timeout=timeout,
+        )
+
+        injector.send("\x15")
+        time.sleep(0.1)
+        injector.sendline("")
+
+        prompt_text = injector.expect(prompt_pattern, timeout=10)
+        prompt_match = (getattr(injector, "last_match", "") or "").strip()
+
+        if "(config" in prompt_match or "(config" in prompt_text:
+            injector.sendline("end")
+            injector.expect(prompt_pattern, timeout=5)
+            prompt_match = (getattr(injector, "last_match", "") or "").strip()
+
+        if username and ("Username:" in prompt_text or "Login:" in prompt_text):
+            injector.sendline(username)
+            injector.expect(r"[Pp]assword:", timeout=10)
+            injector.sendline(password)
+            injector.expect(prompt_pattern, timeout=10)
+            prompt_match = (getattr(injector, "last_match", "") or "").strip()
+
+        if prompt_match.endswith(">"):
+            injector.sendline("enable")
+            try:
+                injector.expect(r"[Pp]assword:", timeout=5)
+                injector.sendline(enable_password or "")
+                injector.expect(prompt_pattern, timeout=10)
+            except TimeoutError:
+                try:
+                    injector.expect(prompt_pattern, timeout=3)
+                except TimeoutError:
+                    pass
+
+        commands_run = 0
+        for command in commands:
+            logger.info(f"Piggyback running command on {domain_name}: {command}")
+            injector.sendline(command)
+            output = injector.expect(prompt_pattern, timeout=timeout)
+            if _contains_cli_error(output):
+                return CommandResult(
+                    success=False,
+                    commands_run=commands_run,
+                    error=f"CLI rejected command: {command}",
+                )
+            commands_run += 1
+
+        ws_forward(
+            b"\r\n\x1b[93m--- Automation complete; interactive control restored ---\x1b[0m\r\n"
+        )
+        logger.info(
+            f"Piggyback command automation succeeded for {domain_name} "
+            f"({commands_run}/{len(commands)} commands)"
+        )
+        return CommandResult(success=True, commands_run=commands_run)
+
+    except TimeoutError as e:
+        ws_forward(
+            b"\r\n\x1b[91m--- Automation timed out; restoring control ---\x1b[0m\r\n"
+        )
+        logger.warning(f"Piggyback command automation timed out for {domain_name}: {e}")
+        return CommandResult(success=False, error=f"Piggyback timeout: {e}")
+
+    except OSError as e:
+        ws_forward(
+            b"\r\n\x1b[91m--- Automation failed; restoring control ---\x1b[0m\r\n"
+        )
+        logger.warning(f"Piggyback command automation PTY error for {domain_name}: {e}")
+        return CommandResult(success=False, error=f"PTY error: {e}")
+
+    except Exception as e:
+        logger.exception(
+            f"Unexpected error in piggyback command automation for {domain_name}"
+        )
+        return CommandResult(success=False, error=f"Unexpected error: {e}")
+
+    finally:
+        _send_console_control(
+            session,
+            state="interactive",
+            message="Configuration completed. Interactive control restored.",
+        )
         session.input_paused.set()
         session.pty_read_paused.set()
         session._lock.release()

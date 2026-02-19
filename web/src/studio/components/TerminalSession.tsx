@@ -14,6 +14,12 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 15000;
 
+type ConsoleControlMessage = {
+  type: 'console-control';
+  state: 'read_only' | 'interactive';
+  message?: string;
+};
+
 const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActive, isReady = true }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -29,6 +35,11 @@ const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActi
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectRef = useRef<(() => void) | null>(null);
   const cleanupRef = useRef(false);
+  const [readOnlyMode, setReadOnlyMode] = useState(false);
+  const [readOnlyMessage, setReadOnlyMessage] = useState(
+    'Configuration in progress. Console is view-only.'
+  );
+  const readOnlyModeRef = useRef(false);
 
   // Update boot warning when isReady prop changes
   useEffect(() => {
@@ -80,10 +91,27 @@ const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActi
     reconnectAttemptsRef.current = 0;
     setReconnectAttempts(0);
     setConnectionState('connecting');
+    setReadOnlyMode(false);
+    setReadOnlyMessage('Configuration in progress. Console is view-only.');
+    readOnlyModeRef.current = false;
 
     const handleMessage = (data: unknown) => {
       if (!terminalRef.current) return;
       if (typeof data === 'string') {
+        try {
+          const control = JSON.parse(data) as ConsoleControlMessage;
+          if (control?.type === 'console-control') {
+            const isReadOnly = control.state === 'read_only';
+            readOnlyModeRef.current = isReadOnly;
+            setReadOnlyMode(isReadOnly);
+            if (control.message) {
+              setReadOnlyMessage(control.message);
+            }
+            return;
+          }
+        } catch {
+          // Not a control payload; treat as terminal data.
+        }
         terminalRef.current.write(data);
         return;
       }
@@ -128,6 +156,8 @@ const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActi
         reconnectAttemptsRef.current = 0;
         setReconnectAttempts(0);
         setConnectionState('connected');
+        setReadOnlyMode(false);
+        readOnlyModeRef.current = false;
         terminalRef.current?.focus();
       };
 
@@ -156,7 +186,10 @@ const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActi
       }
       if (terminalRef.current) {
         dataDisposable = terminalRef.current.onData((data) => {
-          if (socketRef.current?.readyState === WebSocket.OPEN) {
+          if (
+            socketRef.current?.readyState === WebSocket.OPEN
+            && !readOnlyModeRef.current
+          ) {
             socketRef.current.send(data);
           }
         });
@@ -265,6 +298,14 @@ const TerminalSession: React.FC<TerminalSessionProps> = ({ labId, nodeId, isActi
                 </button>
               </>
             )}
+          </div>
+        </div>
+      )}
+      {readOnlyMode && connectionState === 'connected' && (
+        <div className="absolute top-3 right-3 z-20 pointer-events-none">
+          <div className="inline-flex items-center gap-2 rounded-md border border-amber-300/40 bg-slate-900/70 px-3 py-1.5 text-[11px] text-amber-100 shadow-sm backdrop-blur-sm">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-300 animate-pulse" />
+            <span>{readOnlyMessage}</span>
           </div>
         </div>
       )}

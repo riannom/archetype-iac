@@ -697,6 +697,55 @@ def test_run_vm_post_boot_commands_failure_retries_after_return(monkeypatch) -> 
     assert seen["calls"] == 2
 
 
+def test_serial_run_commands_prefers_piggyback_session(monkeypatch) -> None:
+    import agent.console_extractor as console_extractor
+
+    fake_registry = types.ModuleType("agent.console_session_registry")
+
+    def _fake_piggyback_run_commands(
+        *,
+        domain_name,
+        commands,
+        username,
+        password,
+        enable_password,
+        prompt_pattern,
+        timeout,
+    ):
+        assert domain_name == "vm1"
+        assert commands == ["show version", "show clock"]
+        assert username == "admin"
+        assert password == "admin"
+        return console_extractor.CommandResult(success=True, commands_run=len(commands))
+
+    fake_registry.piggyback_run_commands = _fake_piggyback_run_commands
+    monkeypatch.setitem(sys.modules, "agent.console_session_registry", fake_registry)
+
+    extractor = console_extractor.SerialConsoleExtractor.__new__(
+        console_extractor.SerialConsoleExtractor
+    )
+    extractor.domain_name = "vm1"
+    extractor.libvirt_uri = "qemu:///system"
+    extractor.timeout = 30
+
+    def _unexpected_direct(*args, **kwargs):
+        raise AssertionError("direct console path should not run when piggyback succeeds")
+
+    monkeypatch.setattr(
+        console_extractor.SerialConsoleExtractor,
+        "_run_commands_inner",
+        _unexpected_direct,
+    )
+
+    result = extractor.run_commands(
+        ["show version", "show clock"],
+        username="admin",
+        password="admin",
+    )
+    assert result.success is True
+    assert result.commands_run == 2
+
+
 def test_run_vm_cli_commands_no_pexpect(monkeypatch) -> None:
     import agent.console_extractor as console_extractor
 

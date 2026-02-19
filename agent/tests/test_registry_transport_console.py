@@ -331,6 +331,85 @@ def test_piggyback_extract_user_exec_mode_rejected(monkeypatch):
         loop.close()
 
 
+def test_piggyback_run_commands_no_session():
+    assert session_registry.piggyback_run_commands("missing", ["show version"]) is None
+
+
+def test_piggyback_run_commands_success_sets_control_mode(monkeypatch):
+    import asyncio
+    import json
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.sent_bytes = []
+            self.sent_text = []
+
+        async def send_bytes(self, data: bytes):
+            self.sent_bytes.append(data)
+
+        async def send_text(self, text: str):
+            self.sent_text.append(text)
+
+    class FakeInjector:
+        def __init__(self, fd, ws_forward=None, default_timeout=None):
+            self.ws_forward = ws_forward
+            self.calls = []
+            self.last_match = "router# "
+            self._expects = [
+                "router# ",
+                "show version\r\nok\r\n",
+                "show clock\r\nok\r\n",
+            ]
+
+        def send(self, text):
+            self.calls.append(("send", text))
+
+        def sendline(self, text):
+            self.calls.append(("sendline", text))
+
+        def expect(self, pattern, timeout=None):
+            return self._expects.pop(0)
+
+    loop = asyncio.new_event_loop()
+
+    def run_coroutine_threadsafe(coro, loop):
+        loop.run_until_complete(coro)
+        return types.SimpleNamespace(result=lambda timeout=None: None)
+
+    monkeypatch.setattr(session_registry, "PtyInjector", FakeInjector)
+    monkeypatch.setattr(session_registry.asyncio, "run_coroutine_threadsafe", run_coroutine_threadsafe)
+    import time
+
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+
+    ws = FakeWebSocket()
+    session = session_registry.ActiveConsoleSession(
+        domain_name="lab6",
+        master_fd=1,
+        loop=loop,
+        websocket=ws,
+    )
+    session_registry.register_session("lab6", session)
+    try:
+        result = session_registry.piggyback_run_commands(
+            "lab6",
+            ["show version", "show clock"],
+        )
+        assert result is not None
+        assert result.success is True
+        assert result.commands_run == 2
+        assert session.input_paused.is_set()
+        assert session.pty_read_paused.is_set()
+
+        controls = [json.loads(msg) for msg in ws.sent_text]
+        assert controls[0]["type"] == "console-control"
+        assert controls[0]["state"] == "read_only"
+        assert controls[-1]["state"] == "interactive"
+    finally:
+        session_registry.unregister_session("lab6")
+        loop.close()
+
+
 def test_console_lock_timeout(monkeypatch):
     lock = console_lock_mod._get_lock("lab-timeout")
     lock.acquire()

@@ -407,6 +407,83 @@ describe("TerminalSession", () => {
     });
   });
 
+  describe("Console Control Mode", () => {
+    it("shows subtle read-only overlay during configuration ownership", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      act(() => {
+        ws.simulateMessage(
+          JSON.stringify({
+            type: "console-control",
+            state: "read_only",
+            message: "Configuration in progress. Console is view-only.",
+          })
+        );
+      });
+
+      expect(
+        screen.getByText("Configuration in progress. Console is view-only.")
+      ).toBeInTheDocument();
+    });
+
+    it("blocks keyboard input while read-only overlay is active", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      act(() => {
+        ws.simulateMessage(
+          JSON.stringify({
+            type: "console-control",
+            state: "read_only",
+            message: "Configuration in progress. Console is view-only.",
+          })
+        );
+      });
+
+      const onDataCallback = mockTerminalOnData.mock.calls[0][0];
+      onDataCallback("user input");
+
+      expect(ws.sentMessages).not.toContain("user input");
+    });
+
+    it("restores interactive input after configuration completes", () => {
+      render(<TerminalSession labId="lab-1" nodeId="node-1" />);
+
+      const ws = mockWebSocketInstances[0];
+      ws.simulateOpen();
+
+      act(() => {
+        ws.simulateMessage(
+          JSON.stringify({
+            type: "console-control",
+            state: "read_only",
+            message: "Configuration in progress. Console is view-only.",
+          })
+        );
+      });
+
+      act(() => {
+        ws.simulateMessage(
+          JSON.stringify({
+            type: "console-control",
+            state: "interactive",
+            message: "Configuration completed. Interactive control restored.",
+          })
+        );
+      });
+
+      const onDataCallback = mockTerminalOnData.mock.calls[0][0];
+      onDataCallback("user input");
+
+      expect(ws.sentMessages).toContain("user input");
+    });
+  });
+
   describe("Active State", () => {
     it("fits and focuses terminal when isActive becomes true", () => {
       const { rerender } = render(
