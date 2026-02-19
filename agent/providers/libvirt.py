@@ -945,13 +945,16 @@ class LibvirtProvider(Provider):
             )
             for i in range(16):
                 dev = f"/dev/nbd{i}"
-                # Check if this nbd device is already in use
-                result = subprocess.run(
-                    ["lsblk", dev], capture_output=True, timeout=5,
-                )
-                if result.returncode != 0:
-                    nbd_dev = dev
-                    break
+                # Check if this nbd device has a connected disk (size > 0)
+                size_path = Path(f"/sys/block/nbd{i}/size")
+                if size_path.exists():
+                    try:
+                        size = int(size_path.read_text().strip())
+                        if size == 0:
+                            nbd_dev = dev
+                            break
+                    except (ValueError, OSError):
+                        continue
             if not nbd_dev:
                 logger.warning("No free nbd device found for vJunos SVM patch")
                 return False
