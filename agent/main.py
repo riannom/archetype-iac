@@ -6069,6 +6069,12 @@ async def verify_node_cli(
             kind=kind,
             commands=commands,
             libvirt_uri=getattr(libvirt_provider, "_uri", "qemu:///system"),
+            username=request.username,
+            password=request.password,
+            enable_password=request.enable_password,
+            prompt_pattern=request.prompt_pattern,
+            paging_disable=request.paging_disable,
+            attempt_enable=request.attempt_enable,
             timeout=request.timeout,
             retries=request.retries,
         )

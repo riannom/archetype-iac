@@ -635,6 +635,7 @@ def test_run_vm_cli_commands_uses_extraction_settings(monkeypatch) -> None:
             enable_password,
             prompt_pattern,
             paging_disable,
+            attempt_enable,
             retries,
         ):
             seen["commands"] = list(commands)
@@ -643,6 +644,7 @@ def test_run_vm_cli_commands_uses_extraction_settings(monkeypatch) -> None:
             seen["enable_password"] = enable_password
             seen["prompt_pattern"] = prompt_pattern
             seen["paging_disable"] = paging_disable
+            seen["attempt_enable"] = attempt_enable
             seen["retries"] = retries
             return console_extractor.CommandCaptureResult(
                 success=True,
@@ -678,4 +680,59 @@ def test_run_vm_cli_commands_uses_extraction_settings(monkeypatch) -> None:
     assert seen["password"] == "admin"
     assert seen["prompt_pattern"] == r"[>#]\s*$"
     assert seen["paging_disable"] == "terminal length 0"
+    assert seen["attempt_enable"] is True
     assert seen["retries"] == 3
+
+
+def test_run_vm_cli_commands_honors_overrides(monkeypatch) -> None:
+    import agent.console_extractor as console_extractor
+
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
+
+    fake_vendors = types.ModuleType("agent.vendors")
+    fake_vendors.get_config_extraction_settings = lambda kind: SimpleNamespace(
+        method="serial",
+        user="admin",
+        password="admin",
+        enable_password="enable",
+        timeout=45,
+        prompt_pattern=r"[>#]\s*$",
+        paging_disable="terminal length 0",
+    )
+    monkeypatch.setitem(sys.modules, "agent.vendors", fake_vendors)
+
+    seen: dict[str, object] = {}
+
+    class _FakeExtractor:
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+            seen["timeout"] = timeout
+
+        def run_commands_capture(self, **kwargs):
+            seen.update(kwargs)
+            return console_extractor.CommandCaptureResult(success=True, commands_run=1)
+
+    monkeypatch.setattr(console_extractor, "SerialConsoleExtractor", _FakeExtractor)
+
+    result = console_extractor.run_vm_cli_commands(
+        "vm1",
+        "kind1",
+        ["boot bootflash:nxos.bin"],
+        username="",
+        password="",
+        enable_password="",
+        prompt_pattern=r"loader >\s*$",
+        paging_disable="",
+        attempt_enable=False,
+        timeout=30,
+        retries=0,
+    )
+
+    assert result.success is True
+    assert seen["timeout"] == 30
+    assert seen["username"] == ""
+    assert seen["password"] == ""
+    assert seen["enable_password"] == ""
+    assert seen["prompt_pattern"] == r"loader >\s*$"
+    assert seen["paging_disable"] == ""
+    assert seen["attempt_enable"] is False
+    assert seen["retries"] == 0

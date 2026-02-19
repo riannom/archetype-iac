@@ -32,11 +32,31 @@ def test_cli_verify_uses_default_n9kv_commands() -> None:
     provider = _make_libvirt_provider("cisco_n9kv")
     captured: dict[str, object] = {}
 
-    def _fake_run(*, domain_name, kind, commands, libvirt_uri, timeout, retries):
+    def _fake_run(
+        *,
+        domain_name,
+        kind,
+        commands,
+        libvirt_uri,
+        username,
+        password,
+        enable_password,
+        prompt_pattern,
+        paging_disable,
+        attempt_enable,
+        timeout,
+        retries,
+    ):
         captured["domain_name"] = domain_name
         captured["kind"] = kind
         captured["commands"] = list(commands)
         captured["libvirt_uri"] = libvirt_uri
+        captured["username"] = username
+        captured["password"] = password
+        captured["enable_password"] = enable_password
+        captured["prompt_pattern"] = prompt_pattern
+        captured["paging_disable"] = paging_disable
+        captured["attempt_enable"] = attempt_enable
         captured["timeout"] = timeout
         captured["retries"] = retries
         outputs = [
@@ -60,6 +80,12 @@ def test_cli_verify_uses_default_n9kv_commands() -> None:
     assert res.commands_run == 4
     assert captured["kind"] == "cisco_n9kv"
     assert captured["libvirt_uri"] == "qemu:///system"
+    assert captured["username"] is None
+    assert captured["password"] is None
+    assert captured["enable_password"] is None
+    assert captured["prompt_pattern"] is None
+    assert captured["paging_disable"] is None
+    assert captured["attempt_enable"] is True
     assert captured["timeout"] is None
     assert captured["retries"] == 2
     assert captured["commands"] == [
@@ -89,3 +115,41 @@ def test_cli_verify_requires_kind_when_runtime_missing() -> None:
 
     assert exc.value.status_code == 400
 
+
+def test_cli_verify_forwards_override_fields() -> None:
+    provider = _make_libvirt_provider("cisco_n9kv")
+    captured: dict[str, object] = {}
+
+    def _fake_run(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(success=True, commands_run=1, outputs=[], error="")
+
+    async def _fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    req = CliVerifyRequest(
+        commands=["boot bootflash:nxos64-cs.10.5.3.F.bin"],
+        username="",
+        password="",
+        enable_password="",
+        prompt_pattern=r"loader >\s*$",
+        paging_disable="",
+        attempt_enable=False,
+        timeout=30,
+        retries=0,
+    )
+
+    with patch("agent.main.get_provider", return_value=provider):
+        with patch("agent.console_extractor.run_vm_cli_commands", side_effect=_fake_run):
+            with patch("agent.main.asyncio.to_thread", new=AsyncMock(side_effect=_fake_to_thread)):
+                res = _run(verify_node_cli("lab1", "node1", req, provider="libvirt"))
+
+    assert res.success is True
+    assert captured["username"] == ""
+    assert captured["password"] == ""
+    assert captured["enable_password"] == ""
+    assert captured["prompt_pattern"] == r"loader >\s*$"
+    assert captured["paging_disable"] == ""
+    assert captured["attempt_enable"] is False
+    assert captured["timeout"] == 30
+    assert captured["retries"] == 0

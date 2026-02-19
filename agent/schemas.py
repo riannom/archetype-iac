@@ -1088,6 +1088,12 @@ class CliVerifyRequest(BaseModel):
     """Request to run verification CLI commands on a node."""
     commands: list[str] = Field(default_factory=list)
     kind: str | None = None
+    username: str | None = None
+    password: str | None = None
+    enable_password: str | None = None
+    prompt_pattern: str | None = None
+    paging_disable: str | None = None
+    attempt_enable: bool = True
     timeout: int | None = Field(None, ge=5, le=600)
     retries: int = Field(default=2, ge=0, le=5)
 

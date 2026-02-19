@@ -744,6 +744,7 @@ class SerialConsoleExtractor:
         enable_password: str = "",
         prompt_pattern: str = r"[>#]\s*$",
         paging_disable: str = "terminal length 0",
+        attempt_enable: bool = True,
         retries: int = 2,
     ) -> CommandCaptureResult:
         """Run and capture CLI command output via serial console.
@@ -758,6 +759,7 @@ class SerialConsoleExtractor:
             enable_password: Enable mode password (empty = skip enable)
             prompt_pattern: Regex pattern to detect CLI prompt
             paging_disable: Command to disable paging (empty = skip)
+            attempt_enable: Whether to run enable-mode escalation
             retries: Number of retry attempts on failure
 
         Returns:
@@ -787,6 +789,7 @@ class SerialConsoleExtractor:
                         enable_password,
                         prompt_pattern,
                         paging_disable,
+                        attempt_enable,
                     )
             except TimeoutError:
                 last_result = CommandCaptureResult(
@@ -896,6 +899,7 @@ class SerialConsoleExtractor:
         enable_password: str,
         prompt_pattern: str,
         paging_disable: str,
+        attempt_enable: bool,
     ) -> CommandCaptureResult:
         """Core command capture logic (called with lock held)."""
         try:
@@ -941,14 +945,15 @@ class SerialConsoleExtractor:
                         error=f"Failed to get CLI prompt (buffer tail={tail!r})",
                     )
 
-            if enable_password:
-                if not self._enter_enable_mode(enable_password, prompt_pattern):
-                    return CommandCaptureResult(
-                        success=False,
-                        error="Failed to enter enable mode",
-                    )
-            else:
-                self._attempt_enable_mode(enable_password, prompt_pattern)
+            if attempt_enable:
+                if enable_password:
+                    if not self._enter_enable_mode(enable_password, prompt_pattern):
+                        return CommandCaptureResult(
+                            success=False,
+                            error="Failed to enter enable mode",
+                        )
+                else:
+                    self._attempt_enable_mode(enable_password, prompt_pattern)
 
             if paging_disable:
                 self._disable_paging(paging_disable, prompt_pattern)
@@ -1140,6 +1145,12 @@ def run_vm_cli_commands(
     kind: str,
     commands: list[str],
     libvirt_uri: str = "qemu:///system",
+    username: str | None = None,
+    password: str | None = None,
+    enable_password: str | None = None,
+    prompt_pattern: str | None = None,
+    paging_disable: str | None = None,
+    attempt_enable: bool = True,
     timeout: int | None = None,
     retries: int = 2,
 ) -> CommandCaptureResult:
@@ -1150,6 +1161,12 @@ def run_vm_cli_commands(
         kind: Device kind (e.g., "cisco_n9kv")
         commands: CLI commands to execute and capture
         libvirt_uri: Libvirt connection URI
+        username: Optional username override
+        password: Optional password override
+        enable_password: Optional enable-password override
+        prompt_pattern: Optional prompt regex override
+        paging_disable: Optional paging-disable command override
+        attempt_enable: Whether to attempt enable-mode escalation
         timeout: Optional per-command timeout override in seconds
         retries: Number of retry attempts on failure
 
@@ -1184,13 +1201,31 @@ def run_vm_cli_commands(
         timeout=effective_timeout,
     )
 
+    resolved_username = extraction_settings.user if username is None else username
+    resolved_password = extraction_settings.password if password is None else password
+    resolved_enable_password = (
+        extraction_settings.enable_password
+        if enable_password is None
+        else enable_password
+    )
+    if prompt_pattern is None:
+        resolved_prompt_pattern = extraction_settings.prompt_pattern or r"[>#]\s*$"
+    else:
+        resolved_prompt_pattern = prompt_pattern
+    resolved_paging_disable = (
+        extraction_settings.paging_disable
+        if paging_disable is None
+        else paging_disable
+    )
+
     return extractor.run_commands_capture(
         commands=commands,
-        username=extraction_settings.user,
-        password=extraction_settings.password,
-        enable_password=extraction_settings.enable_password,
-        prompt_pattern=extraction_settings.prompt_pattern,
-        paging_disable=extraction_settings.paging_disable,
+        username=resolved_username,
+        password=resolved_password,
+        enable_password=resolved_enable_password,
+        prompt_pattern=resolved_prompt_pattern,
+        paging_disable=resolved_paging_disable,
+        attempt_enable=attempt_enable,
         retries=max(0, retries),
     )
 
