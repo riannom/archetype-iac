@@ -38,9 +38,9 @@ def links_needing_reconciliation_filter():
     """Return SQLAlchemy filter for links that need reconciliation attention.
 
     This includes:
-    - Links marked as "up" (for verification)
-    - Cross-host links in "error" with desired_state "up" (for recovery,
-      including both partial attachment and VLAN tag mismatch cases)
+    - Links marked as "up" (for verification, or teardown if desired="down")
+    - Cross-host links in "error" with desired_state "up" (for recovery)
+    - Links "down"/"pending" with desired_state "up" (for creation)
 
     Returns:
         SQLAlchemy filter expression
@@ -58,6 +58,16 @@ def links_needing_reconciliation_filter():
                 (models.LinkState.actual_state == "error") &
                 (models.LinkState.is_cross_host) &
                 (models.LinkState.desired_state == "up")
+            ),
+            # Links that are down/pending but should be up — needs creation
+            (
+                (models.LinkState.actual_state.in_(["down", "pending"])) &
+                (models.LinkState.desired_state == "up")
+            ),
+            # Links that are up but should be down — needs teardown
+            (
+                (models.LinkState.actual_state == "up") &
+                (models.LinkState.desired_state == "down")
             ),
         ),
     )

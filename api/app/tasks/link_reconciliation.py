@@ -30,6 +30,7 @@ from app.services.link_reservations import reconcile_link_endpoint_reservations
 from app.services.link_reservations import get_link_endpoint_reservation_drift_counts
 from app.metrics import set_link_endpoint_reservation_metrics
 from app.utils.link import links_needing_reconciliation_filter
+from app.tasks.live_links import create_link_if_ready, teardown_link
 from app.agent_client import (
     compute_vxlan_port_name,
     declare_overlay_state_on_agent,
@@ -94,9 +95,11 @@ def _resolve_node_by_endpoint_name(
 async def reconcile_link_states(session: Session) -> dict:
     """Reconcile link_states with actual OVS configuration.
 
-    Processes two categories of links:
-    1. Links marked as "up" - verify VLAN tags match
-    2. Cross-host links in "error" state with partial attachment - attempt recovery
+    Processes links based on desired vs actual state:
+    1. Links "down"/"pending" with desired "up" - create if both nodes running
+    2. Links "up" with desired "down" - tear down
+    3. Links "up" with desired "up" - verify VLAN tags match
+    4. Cross-host links in "error" with desired "up" - attempt recovery
 
     Args:
         session: Database session
@@ -109,6 +112,8 @@ async def reconcile_link_states(session: Session) -> dict:
         "valid": 0,
         "repaired": 0,
         "recovered": 0,
+        "created": 0,
+        "torn_down": 0,
         "errors": 0,
         "skipped": 0,
     }
@@ -150,6 +155,44 @@ async def reconcile_link_states(session: Session) -> dict:
             continue
 
         try:
+            # Enforce desired state: create links that should be up
+            if link.actual_state in ("down", "pending") and link.desired_state == "up":
+                created = await create_link_if_ready(
+                    session, link.lab_id, link, host_to_agent,
+                    skip_locked=True,
+                )
+                if created:
+                    results["created"] += 1
+                    logger.info(f"Link {link.link_name} created via enforcement")
+                elif link.actual_state == "pending":
+                    results["skipped"] += 1
+                else:
+                    results["errors"] += 1
+                continue
+
+            # Enforce desired state: tear down links that should be down
+            if link.actual_state == "up" and link.desired_state == "down":
+                link_info = {
+                    "link_name": link.link_name,
+                    "is_cross_host": link.is_cross_host,
+                    "actual_state": link.actual_state,
+                    "source_host_id": link.source_host_id,
+                    "target_host_id": link.target_host_id,
+                    "source_node": link.source_node,
+                    "target_node": link.target_node,
+                    "source_interface": link.source_interface,
+                    "target_interface": link.target_interface,
+                }
+                torn_down = await teardown_link(
+                    session, link.lab_id, link_info, host_to_agent,
+                )
+                if torn_down:
+                    results["torn_down"] += 1
+                    logger.info(f"Link {link.link_name} torn down via enforcement")
+                else:
+                    results["errors"] += 1
+                continue
+
             # Handle error links needing recovery
             if link.actual_state == "error" and link.is_cross_host:
                 logger.info(
@@ -166,7 +209,7 @@ async def reconcile_link_states(session: Session) -> dict:
                     logger.error(f"Link {link.link_name} recovery failed")
                 continue
 
-            # For "up" links, verify connectivity
+            # For "up" links (desired="up"), verify connectivity
             is_valid, error = await verify_link_connected(session, link, host_to_agent)
 
             if is_valid:
@@ -781,6 +824,8 @@ async def link_reconciliation_monitor():
                             f"Link reconciliation: checked={results['checked']}, "
                             f"valid={results['valid']}, repaired={results['repaired']}, "
                             f"recovered={results['recovered']}, "
+                            f"created={results['created']}, "
+                            f"torn_down={results['torn_down']}, "
                             f"errors={results['errors']}, skipped={results['skipped']}"
                         )
 
@@ -909,7 +954,7 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
     """Reconcile links for a specific lab.
 
     This can be called on-demand (e.g., after deployment) to verify
-    all links in a lab are properly connected.
+    all links in a lab are properly connected and enforce desired state.
 
     Args:
         session: Database session
@@ -923,6 +968,8 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
         "valid": 0,
         "repaired": 0,
         "recovered": 0,
+        "created": 0,
+        "torn_down": 0,
         "errors": 0,
         "skipped": 0,
     }
@@ -965,6 +1012,44 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
             continue
 
         try:
+            # Enforce desired state: create links that should be up
+            if link.actual_state in ("down", "pending") and link.desired_state == "up":
+                created = await create_link_if_ready(
+                    session, lab_id, link, host_to_agent,
+                    skip_locked=True,
+                )
+                if created:
+                    results["created"] += 1
+                    logger.info(f"Link {link.link_name} created via enforcement")
+                elif link.actual_state == "pending":
+                    results["skipped"] += 1
+                else:
+                    results["errors"] += 1
+                continue
+
+            # Enforce desired state: tear down links that should be down
+            if link.actual_state == "up" and link.desired_state == "down":
+                link_info = {
+                    "link_name": link.link_name,
+                    "is_cross_host": link.is_cross_host,
+                    "actual_state": link.actual_state,
+                    "source_host_id": link.source_host_id,
+                    "target_host_id": link.target_host_id,
+                    "source_node": link.source_node,
+                    "target_node": link.target_node,
+                    "source_interface": link.source_interface,
+                    "target_interface": link.target_interface,
+                }
+                torn_down = await teardown_link(
+                    session, lab_id, link_info, host_to_agent,
+                )
+                if torn_down:
+                    results["torn_down"] += 1
+                    logger.info(f"Link {link.link_name} torn down via enforcement")
+                else:
+                    results["errors"] += 1
+                continue
+
             # Handle error links needing recovery
             if link.actual_state == "error" and link.is_cross_host:
                 recovered = await attempt_partial_recovery(session, link, host_to_agent)
@@ -974,7 +1059,7 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
                     results["errors"] += 1
                 continue
 
-            # For "up" links, verify connectivity
+            # For "up" links (desired="up"), verify connectivity
             is_valid, error = await verify_link_connected(session, link, host_to_agent)
 
             if is_valid:
