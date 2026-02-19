@@ -72,6 +72,8 @@ def test_interface_name_translations() -> None:
 
     assert interface_mapping.vendor_to_linux_interface("Ethernet1", "ceos") == "eth1"
     assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosswitch") == "eth2"
+    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosrouter") == "eth2"
+    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosevolved") == "eth2"
     # Previously a known bug: old regex patterns matched wrong group.
     # Now uses device-aware translation from vendor catalog — returns eth3 correctly.
     assert interface_mapping.vendor_to_linux_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth3"

@@ -41,6 +41,13 @@ VIRL2_TO_VENDOR_MAP = {
     "iosxrv9000": "cisco_iosxr",
     "nxos": "cisco_n9kv",
     "nxosv9000": "cisco_n9kv",
+    # Juniper
+    "vjunos-router": "juniper_vjunosrouter",
+    "vjunos_router": "juniper_vjunosrouter",
+    "vjunos-evolved": "juniper_vjunosevolved",
+    "vjunos_evolved": "juniper_vjunosevolved",
+    "vjunos-switch": "juniper_vjunosswitch",
+    "vjunos_switch": "juniper_vjunosswitch",
     # IOL (IOS on Linux) - binary images
     "iol-xe": "iol-xe",
     "iol-xe-serial-4eth": "iol-xe",

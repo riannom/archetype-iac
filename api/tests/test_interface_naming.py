@@ -48,6 +48,10 @@ NORMALIZE_CASES = [
     ("juniper_vsrx3", "ge-0/0/3", "eth3"),
     # Juniper vJunos Switch: ge-0/0/, start=0
     ("juniper_vjunosswitch", "ge-0/0/0", "eth0"),
+    # Juniper vJunos Router: ge-0/0/, start=0
+    ("juniper_vjunosrouter", "ge-0/0/0", "eth0"),
+    # Juniper vJunos Evolved: ge-0/0/, start=0
+    ("juniper_vjunosevolved", "ge-0/0/0", "eth0"),
     # Juniper vQFX: xe-0/0/, start=0
     ("juniper_vqfx", "xe-0/0/0", "eth0"),
     ("juniper_vqfx", "xe-0/0/5", "eth5"),

@@ -79,6 +79,24 @@ class TestDetectDeviceFromFilename:
         # vmx is not in the keyword_map, so returns None
         assert device_id is None or device_id in ("vmx", "juniper")
 
+    def test_juniper_vjunos_router_image(self):
+        """Detects Juniper vJunos Router images."""
+        device_id, version = detect_device_from_filename("vjunos-router-23.2R1.14.qcow2")
+        assert device_id == "juniper_vjunosrouter"
+        assert version is not None
+
+    def test_juniper_vjunos_evolved_image(self):
+        """Detects Juniper vJunos Evolved router images."""
+        device_id, version = detect_device_from_filename("vjunos-evolved-23.2R1.14.qcow2")
+        assert device_id == "juniper_vjunosevolved"
+        assert version is not None
+
+    def test_juniper_vjunos_switch_image(self):
+        """Detects Juniper vJunos Switch images."""
+        device_id, version = detect_device_from_filename("vjunos-switch-23.2R1.14.qcow2")
+        assert device_id == "juniper_vjunosswitch"
+        assert version is not None
+
     def test_nokia_sros_image(self):
         """Detects Nokia SR OS images."""
         device_id, version = detect_device_from_filename("sros-vm-21.10.R1.qcow2")
@@ -131,11 +149,28 @@ class TestDetectQcow2DeviceType:
         assert device_id is None and vrnetlab_path is None
 
     def test_juniper_vmx(self):
-        """vMX bundle filename doesn't match patterns (requires digit after separator)."""
+        """vMX bundle filename is recognized for vrnetlab builds."""
         device_id, vrnetlab_path = detect_qcow2_device_type("vmx-bundle-21.4R1.qcow2")
-        # Pattern requires vmx followed by optional separator then digit/dot
-        # "vmx-bundle" has a letter after separator, so no match
-        assert device_id is None and vrnetlab_path is None
+        assert device_id == "vmx"
+        assert vrnetlab_path == "juniper/vmx"
+
+    def test_juniper_vjunos_router(self):
+        """vJunos Router filenames map to the official router build profile."""
+        device_id, vrnetlab_path = detect_qcow2_device_type("vjunos-router-23.2R1.14.qcow2")
+        assert device_id == "juniper_vjunosrouter"
+        assert vrnetlab_path == "juniper/vjunos-router"
+
+    def test_juniper_vjunos_evolved(self):
+        """vJunos Evolved filenames map to dedicated evolved device ID and official build profile."""
+        device_id, vrnetlab_path = detect_qcow2_device_type("vjunos-evolved-23.2R1.14.qcow2")
+        assert device_id == "juniper_vjunosevolved"
+        assert vrnetlab_path == "juniper/vjunos-router"
+
+    def test_juniper_vjunos_switch(self):
+        """vJunos Switch filenames map to the switch build profile."""
+        device_id, vrnetlab_path = detect_qcow2_device_type("vjunos-switch-23.2R1.14.qcow2")
+        assert device_id == "juniper_vjunosswitch"
+        assert vrnetlab_path == "juniper/vjunos-switch"
 
     def test_unknown_device(self):
         """Unknown devices return None vrnetlab path."""
@@ -787,6 +822,23 @@ class TestImageMatching:
 
         assert entry["device_id"] == "frr"
         assert entry["compatible_devices"] == ["frr"]
+
+    def test_create_image_entry_unknown_device_creates_dynamic_custom_profile(self):
+        """Unknown device IDs are auto-created as custom profiles."""
+        entry = create_image_entry(
+            image_id="qcow2:acme-vrouter-1.0.qcow2",
+            kind="qcow2",
+            reference="/images/acme-vrouter-1.0.qcow2",
+            filename="acme-vrouter-1.0.qcow2",
+            device_id="acme_vrouter",
+        )
+
+        assert entry["device_id"] == "acme_vrouter"
+        devices = load_custom_devices()
+        created = next((d for d in devices if d.get("id") == "acme_vrouter"), None)
+        assert created is not None
+        assert created["type"] == "router"
+        assert created["supportedImageKinds"] == ["qcow2"]
 
 
 class TestCompatibleDevices:

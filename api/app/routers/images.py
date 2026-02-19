@@ -49,6 +49,14 @@ router = APIRouter(prefix="/images", tags=["images"])
 _upload_progress: dict[str, dict] = {}
 _upload_lock = threading.Lock()
 
+# Chunked upload session storage
+_chunk_upload_sessions: dict[str, dict] = {}
+_chunk_upload_lock = threading.Lock()
+
+DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024
+CHUNK_UPLOAD_TTL_SECONDS = 24 * 60 * 60
+_CHUNK_UPLOAD_DIR = Path(tempfile.gettempdir()) / "archetype-image-uploads"
+
 
 def _is_docker_image_tar(tar_path: str) -> bool:
     """Check if tar is a Docker image (has manifest.json) vs raw filesystem.
@@ -159,6 +167,121 @@ def _clear_progress(upload_id: str):
         _upload_progress.pop(upload_id, None)
 
 
+class ImageChunkUploadInitRequest(BaseModel):
+    """Request to initialize a chunked image upload."""
+
+    kind: str = Field(..., description="Upload kind: docker or qcow2")
+    filename: str = Field(..., description="Original filename")
+    total_size: int = Field(..., gt=0, description="Total file size in bytes")
+    chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0, description="Chunk size in bytes")
+    auto_build: bool = Field(default=True, description="Auto-build Docker image for qcow2 uploads")
+
+
+class ImageChunkUploadInitResponse(BaseModel):
+    """Response from initializing chunked image upload."""
+
+    upload_id: str
+    kind: str
+    filename: str
+    total_size: int
+    chunk_size: int
+    total_chunks: int
+
+
+class ImageChunkUploadChunkResponse(BaseModel):
+    """Response from uploading a chunk."""
+
+    upload_id: str
+    chunk_index: int
+    bytes_received: int
+    total_received: int
+    progress_percent: int
+    is_complete: bool
+
+
+class ImageChunkUploadStatusResponse(BaseModel):
+    """Status of a chunked upload session."""
+
+    upload_id: str
+    kind: str
+    filename: str
+    total_size: int
+    bytes_received: int
+    progress_percent: int
+    chunks_received: list[int]
+    status: str
+    error_message: str | None = None
+    created_at: datetime
+
+
+class ImageChunkUploadCompleteResponse(BaseModel):
+    """Response from completing a chunked upload."""
+
+    upload_id: str
+    kind: str
+    filename: str
+    status: str
+    result: dict[str, object] | None = None
+
+
+def _sanitize_upload_filename(filename: str) -> str:
+    """Sanitize uploaded filename to a safe subset."""
+    safe = "".join(c for c in filename if c.isalnum() or c in "._-")
+    return safe
+
+
+def _cleanup_chunk_upload_session_files(session: dict) -> None:
+    """Delete temporary files associated with a chunked upload session."""
+    temp_path = session.get("temp_path")
+    if isinstance(temp_path, str) and temp_path and os.path.exists(temp_path):
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+    final_path = session.get("final_path")
+    if (
+        isinstance(final_path, str)
+        and final_path
+        and session.get("kind") == "docker"
+        and session.get("status") in {"uploading", "completed", "failed", "cancelled"}
+        and os.path.exists(final_path)
+    ):
+        try:
+            os.unlink(final_path)
+        except OSError:
+            pass
+
+
+def _cleanup_expired_chunk_upload_sessions() -> None:
+    """Remove stale chunk upload sessions and their temp files."""
+    now = datetime.now(timezone.utc)
+    expired_ids: list[str] = []
+
+    with _chunk_upload_lock:
+        for upload_id, session in _chunk_upload_sessions.items():
+            created_at = session.get("created_at")
+            if not isinstance(created_at, datetime):
+                continue
+            age_seconds = (now - created_at).total_seconds()
+            if age_seconds > CHUNK_UPLOAD_TTL_SECONDS:
+                expired_ids.append(upload_id)
+
+        for upload_id in expired_ids:
+            session = _chunk_upload_sessions.pop(upload_id, None)
+            if session:
+                _cleanup_chunk_upload_session_files(session)
+
+
+def _chunk_upload_destination(kind: str, upload_id: str, safe_filename: str) -> Path:
+    """Resolve the final destination path for a chunked upload."""
+    if kind == "qcow2":
+        return qcow2_path(safe_filename)
+
+    _CHUNK_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    return _CHUNK_UPLOAD_DIR / f"{upload_id}-{safe_filename}"
+
+
 @router.get("/load/{upload_id}/progress")
 def get_upload_progress(
     upload_id: str,
@@ -229,6 +352,290 @@ def load_image(
 
     # Non-streaming mode (original behavior)
     return _load_image_sync(file)
+
+
+@router.post("/upload/init", response_model=ImageChunkUploadInitResponse)
+def init_chunk_upload(
+    request: ImageChunkUploadInitRequest,
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Initialize a chunked upload for docker/qcow2 image files."""
+    from app.services.resource_monitor import PressureLevel, ResourceMonitor
+
+    if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
+        raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
+
+    kind = (request.kind or "").strip().lower()
+    if kind not in {"docker", "qcow2"}:
+        raise HTTPException(status_code=400, detail="Upload kind must be 'docker' or 'qcow2'")
+
+    safe_filename = _sanitize_upload_filename(request.filename)
+    if not safe_filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    if kind == "qcow2" and not safe_filename.lower().endswith((".qcow2", ".qcow")):
+        raise HTTPException(status_code=400, detail="Filename must end with .qcow2 or .qcow")
+
+    _cleanup_expired_chunk_upload_sessions()
+
+    upload_id = str(uuid4())[:12]
+    final_path = _chunk_upload_destination(kind, upload_id, safe_filename)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = final_path.parent / f".upload_{upload_id}.partial"
+
+    if kind == "qcow2":
+        manifest = load_manifest()
+        potential_id = f"qcow2:{safe_filename}"
+        if find_image_by_id(manifest, potential_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Image '{safe_filename}' already exists in the library",
+            )
+        if final_path.exists():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Image '{safe_filename}' already exists on disk",
+            )
+
+    chunk_size = request.chunk_size or DEFAULT_CHUNK_SIZE
+    total_chunks = (request.total_size + chunk_size - 1) // chunk_size
+
+    with open(temp_path, "wb") as handle:
+        handle.seek(request.total_size - 1)
+        handle.write(b"\0")
+
+    with _chunk_upload_lock:
+        _chunk_upload_sessions[upload_id] = {
+            "upload_id": upload_id,
+            "kind": kind,
+            "filename": safe_filename,
+            "total_size": request.total_size,
+            "chunk_size": chunk_size,
+            "total_chunks": total_chunks,
+            "bytes_received": 0,
+            "chunks_received": [],
+            "temp_path": str(temp_path),
+            "final_path": str(final_path),
+            "status": "uploading",
+            "error_message": None,
+            "auto_build": bool(request.auto_build),
+            "user_id": str(current_user.id),
+            "created_at": datetime.now(timezone.utc),
+        }
+
+    return ImageChunkUploadInitResponse(
+        upload_id=upload_id,
+        kind=kind,
+        filename=safe_filename,
+        total_size=request.total_size,
+        chunk_size=chunk_size,
+        total_chunks=total_chunks,
+    )
+
+
+@router.post("/upload/{upload_id}/chunk", response_model=ImageChunkUploadChunkResponse)
+async def upload_chunk(
+    upload_id: str,
+    index: int = Query(..., description="Chunk index (0-based)"),
+    chunk: UploadFile = File(..., description="Chunk data"),
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Upload one chunk to an active chunked upload session."""
+    with _chunk_upload_lock:
+        session = _chunk_upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Upload session not found")
+        if session["status"] != "uploading":
+            raise HTTPException(status_code=400, detail=f"Upload is {session['status']}")
+        session = dict(session)
+
+    if index < 0 or index >= session["total_chunks"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid chunk index {index}. Valid range: 0-{session['total_chunks'] - 1}",
+        )
+
+    chunk_size = session["chunk_size"]
+    offset = index * chunk_size
+    expected_size = min(chunk_size, session["total_size"] - offset)
+
+    chunk_data = await chunk.read()
+    actual_size = len(chunk_data)
+    if actual_size != expected_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chunk size mismatch. Expected {expected_size}, got {actual_size}",
+        )
+
+    temp_path = Path(session["temp_path"])
+    try:
+        with open(temp_path, "r+b") as handle:
+            handle.seek(offset)
+            handle.write(chunk_data)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write chunk: {exc}") from exc
+
+    with _chunk_upload_lock:
+        current = _chunk_upload_sessions.get(upload_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Upload session expired")
+        if index not in current["chunks_received"]:
+            current["chunks_received"].append(index)
+            current["bytes_received"] += actual_size
+        total_received = current["bytes_received"]
+        chunks_received = len(current["chunks_received"])
+        is_complete = chunks_received == current["total_chunks"]
+
+    return ImageChunkUploadChunkResponse(
+        upload_id=upload_id,
+        chunk_index=index,
+        bytes_received=actual_size,
+        total_received=total_received,
+        progress_percent=int((total_received / session["total_size"]) * 100),
+        is_complete=is_complete,
+    )
+
+
+@router.get("/upload/{upload_id}", response_model=ImageChunkUploadStatusResponse)
+def get_chunk_upload_status(
+    upload_id: str,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Get the status of a chunked upload session."""
+    with _chunk_upload_lock:
+        session = _chunk_upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Upload session not found")
+
+        return ImageChunkUploadStatusResponse(
+            upload_id=session["upload_id"],
+            kind=session["kind"],
+            filename=session["filename"],
+            total_size=session["total_size"],
+            bytes_received=session["bytes_received"],
+            progress_percent=int((session["bytes_received"] / session["total_size"]) * 100),
+            chunks_received=sorted(session["chunks_received"]),
+            status=session["status"],
+            error_message=session.get("error_message"),
+            created_at=session["created_at"],
+        )
+
+
+@router.post("/upload/{upload_id}/complete", response_model=ImageChunkUploadCompleteResponse)
+def complete_chunk_upload(
+    upload_id: str,
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Finalize a chunked upload and trigger image processing."""
+    with _chunk_upload_lock:
+        session = _chunk_upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Upload session not found")
+        if session["status"] != "uploading":
+            raise HTTPException(status_code=400, detail=f"Upload is {session['status']}")
+        session = dict(session)
+
+    received = set(session["chunks_received"])
+    expected = set(range(session["total_chunks"]))
+    missing = expected - received
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing chunks: {sorted(missing)[:10]}{'...' if len(missing) > 10 else ''}",
+        )
+
+    temp_path = Path(session["temp_path"])
+    final_path = Path(session["final_path"])
+
+    try:
+        actual_size = temp_path.stat().st_size
+        if actual_size != session["total_size"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File size mismatch. Expected {session['total_size']}, got {actual_size}",
+            )
+        shutil.move(str(temp_path), str(final_path))
+    except HTTPException as exc:
+        with _chunk_upload_lock:
+            if upload_id in _chunk_upload_sessions:
+                _chunk_upload_sessions[upload_id]["status"] = "failed"
+                _chunk_upload_sessions[upload_id]["error_message"] = str(exc.detail)
+        raise
+    except OSError as exc:
+        with _chunk_upload_lock:
+            if upload_id in _chunk_upload_sessions:
+                _chunk_upload_sessions[upload_id]["status"] = "failed"
+                _chunk_upload_sessions[upload_id]["error_message"] = str(exc)
+        raise HTTPException(status_code=500, detail=f"Failed to finalize upload: {exc}") from exc
+
+    kind = session["kind"]
+    if kind == "qcow2":
+        with _chunk_upload_lock:
+            if upload_id in _chunk_upload_sessions:
+                _chunk_upload_sessions[upload_id]["status"] = "processing"
+
+        try:
+            result = _finalize_qcow2_upload(
+                final_path,
+                auto_build=bool(session.get("auto_build", True)),
+            )
+        except Exception as exc:
+            with _chunk_upload_lock:
+                if upload_id in _chunk_upload_sessions:
+                    _chunk_upload_sessions[upload_id]["status"] = "failed"
+                    _chunk_upload_sessions[upload_id]["error_message"] = str(exc)
+            raise
+
+        with _chunk_upload_lock:
+            if upload_id in _chunk_upload_sessions:
+                _chunk_upload_sessions[upload_id]["status"] = "completed"
+                _chunk_upload_sessions[upload_id]["final_path"] = str(final_path)
+
+        return ImageChunkUploadCompleteResponse(
+            upload_id=upload_id,
+            kind=kind,
+            filename=session["filename"],
+            status="completed",
+            result=result,
+        )
+
+    _update_progress(upload_id, "starting", "Upload received, starting import...", 5)
+    with _chunk_upload_lock:
+        if upload_id in _chunk_upload_sessions:
+            _chunk_upload_sessions[upload_id]["status"] = "processing"
+            _chunk_upload_sessions[upload_id]["final_path"] = str(final_path)
+
+    thread = threading.Thread(
+        target=_load_image_background_from_archive,
+        args=(upload_id, session["filename"], str(final_path), True),
+        daemon=True,
+    )
+    thread.start()
+
+    return ImageChunkUploadCompleteResponse(
+        upload_id=upload_id,
+        kind=kind,
+        filename=session["filename"],
+        status="processing",
+        result={"upload_id": upload_id},
+    )
+
+
+@router.delete("/upload/{upload_id}")
+def cancel_chunk_upload(
+    upload_id: str,
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Cancel and clean up a chunked upload session."""
+    with _chunk_upload_lock:
+        session = _chunk_upload_sessions.pop(upload_id, None)
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    session["status"] = "cancelled"
+    _cleanup_chunk_upload_session_files(session)
+    return {"message": "Upload cancelled"}
 
 
 def _send_sse_event(event_type: str, data: dict) -> str:
@@ -459,6 +866,201 @@ def _load_image_background(upload_id: str, filename: str, content: bytes):
         if decompressed_path and os.path.exists(decompressed_path):
             os.unlink(decompressed_path)
         if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _load_image_background_from_archive(
+    upload_id: str,
+    filename: str,
+    archive_path: str,
+    cleanup_archive: bool = True,
+):
+    """Process an uploaded Docker archive already staged on disk."""
+    temp_path = archive_path
+    load_path = temp_path
+    decompressed_path = ""
+
+    try:
+        if not os.path.exists(temp_path):
+            _update_progress(upload_id, "error", "Staged upload file no longer exists", 0, error=True)
+            with _chunk_upload_lock:
+                if upload_id in _chunk_upload_sessions:
+                    _chunk_upload_sessions[upload_id]["status"] = "failed"
+                    _chunk_upload_sessions[upload_id]["error_message"] = "Staged upload file not found"
+            return
+
+        file_size = os.path.getsize(temp_path)
+        _update_progress(upload_id, "saved", f"File saved ({_format_size(file_size)})", 30)
+
+        if filename.lower().endswith((".tar.xz", ".txz", ".xz")):
+            _update_progress(upload_id, "decompressing", "Decompressing XZ archive...", 35)
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_tar:
+                    with lzma.open(temp_path, "rb") as source:
+                        shutil.copyfileobj(source, tmp_tar)
+                    decompressed_path = tmp_tar.name
+                load_path = decompressed_path
+                _update_progress(upload_id, "decompressed", "Decompression complete", 50)
+            except lzma.LZMAError as exc:
+                _update_progress(upload_id, "error", f"Decompression failed: {exc}", 0, error=True)
+                with _chunk_upload_lock:
+                    if upload_id in _chunk_upload_sessions:
+                        _chunk_upload_sessions[upload_id]["status"] = "failed"
+                        _chunk_upload_sessions[upload_id]["error_message"] = str(exc)
+                return
+
+        _update_progress(upload_id, "detecting", "Detecting image format...", 55)
+        is_docker_image = _is_docker_image_tar(load_path)
+        loaded_images: list[str] = []
+
+        if is_docker_image:
+            _update_progress(upload_id, "loading", "Running docker load...", 60)
+            try:
+                result = subprocess.run(
+                    ["docker", "load", "-i", load_path],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=600,
+                )
+            except subprocess.TimeoutExpired:
+                _update_progress(upload_id, "error", "docker load timed out", 0, error=True)
+                with _chunk_upload_lock:
+                    if upload_id in _chunk_upload_sessions:
+                        _chunk_upload_sessions[upload_id]["status"] = "failed"
+                        _chunk_upload_sessions[upload_id]["error_message"] = "docker load timed out"
+                return
+
+            output = (result.stdout or "") + (result.stderr or "")
+            if result.returncode != 0:
+                _update_progress(upload_id, "error", output.strip() or "docker load failed", 0, error=True)
+                with _chunk_upload_lock:
+                    if upload_id in _chunk_upload_sessions:
+                        _chunk_upload_sessions[upload_id]["status"] = "failed"
+                        _chunk_upload_sessions[upload_id]["error_message"] = output.strip() or "docker load failed"
+                return
+
+            for line in output.splitlines():
+                if "Loaded image:" in line:
+                    loaded_images.append(line.split("Loaded image:", 1)[-1].strip())
+                elif "Loaded image ID:" in line:
+                    loaded_images.append(line.split("Loaded image ID:", 1)[-1].strip())
+        else:
+            base_name = Path(filename).stem
+            for ext in [".tar", ".gz", ".xz"]:
+                if base_name.lower().endswith(ext):
+                    base_name = base_name[:-len(ext)]
+            image_name = base_name.lower().replace(" ", "-").replace("_", "-")
+            image_tag = f"{image_name}:imported"
+            _update_progress(upload_id, "importing", f"Importing as {image_tag}...", 60)
+
+            try:
+                with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".out") as stdout_file:
+                    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".err") as stderr_file:
+                        stdout_path = stdout_file.name
+                        stderr_path = stderr_file.name
+
+                try:
+                    with open(stdout_path, "w") as stdout_f, open(stderr_path, "w") as stderr_f:
+                        result = subprocess.run(
+                            ["docker", "import", load_path, image_tag],
+                            stdout=stdout_f,
+                            stderr=stderr_f,
+                            timeout=600,
+                        )
+                        result_returncode = result.returncode
+
+                    with open(stdout_path, "r") as stdout_f:
+                        stdout_content = stdout_f.read()
+                    with open(stderr_path, "r") as stderr_f:
+                        stderr_content = stderr_f.read()
+                    output = stdout_content + stderr_content
+                finally:
+                    for path in [stdout_path, stderr_path]:
+                        if os.path.exists(path):
+                            os.unlink(path)
+            except subprocess.TimeoutExpired:
+                _update_progress(upload_id, "error", "docker import timed out", 0, error=True)
+                with _chunk_upload_lock:
+                    if upload_id in _chunk_upload_sessions:
+                        _chunk_upload_sessions[upload_id]["status"] = "failed"
+                        _chunk_upload_sessions[upload_id]["error_message"] = "docker import timed out"
+                return
+            except Exception as exc:
+                _update_progress(upload_id, "error", f"docker import failed: {exc}", 0, error=True)
+                with _chunk_upload_lock:
+                    if upload_id in _chunk_upload_sessions:
+                        _chunk_upload_sessions[upload_id]["status"] = "failed"
+                        _chunk_upload_sessions[upload_id]["error_message"] = str(exc)
+                return
+
+            if result_returncode != 0:
+                _update_progress(upload_id, "error", output.strip() or "docker import failed", 0, error=True)
+                with _chunk_upload_lock:
+                    if upload_id in _chunk_upload_sessions:
+                        _chunk_upload_sessions[upload_id]["status"] = "failed"
+                        _chunk_upload_sessions[upload_id]["error_message"] = output.strip() or "docker import failed"
+                return
+
+            loaded_images.append(image_tag)
+            output = f"Imported as {image_tag}"
+
+        if not loaded_images:
+            _update_progress(upload_id, "error", "No images detected", 0, error=True)
+            with _chunk_upload_lock:
+                if upload_id in _chunk_upload_sessions:
+                    _chunk_upload_sessions[upload_id]["status"] = "failed"
+                    _chunk_upload_sessions[upload_id]["error_message"] = "No images detected"
+            return
+
+        _update_progress(upload_id, "finalizing", "Updating image library...", 95)
+        manifest = load_manifest()
+        for image_ref in loaded_images:
+            potential_id = f"docker:{image_ref}"
+            if find_image_by_id(manifest, potential_id):
+                _update_progress(upload_id, "error", f"Image {image_ref} already exists", 0, error=True)
+                with _chunk_upload_lock:
+                    if upload_id in _chunk_upload_sessions:
+                        _chunk_upload_sessions[upload_id]["status"] = "failed"
+                        _chunk_upload_sessions[upload_id]["error_message"] = f"Image {image_ref} already exists"
+                return
+
+        for image_ref in loaded_images:
+            device_id, version = detect_device_from_filename(image_ref)
+            entry = create_image_entry(
+                image_id=f"docker:{image_ref}",
+                kind="docker",
+                reference=image_ref,
+                filename=filename,
+                device_id=device_id,
+                version=version,
+                size_bytes=file_size,
+            )
+            manifest["images"].append(entry)
+        save_manifest(manifest)
+
+        _update_progress(
+            upload_id,
+            "complete",
+            output or "Image loaded successfully",
+            100,
+            images=loaded_images,
+            complete=True,
+        )
+        with _chunk_upload_lock:
+            if upload_id in _chunk_upload_sessions:
+                _chunk_upload_sessions[upload_id]["status"] = "completed"
+                _chunk_upload_sessions[upload_id]["error_message"] = None
+    except Exception as exc:
+        _update_progress(upload_id, "error", str(exc), 0, error=True)
+        with _chunk_upload_lock:
+            if upload_id in _chunk_upload_sessions:
+                _chunk_upload_sessions[upload_id]["status"] = "failed"
+                _chunk_upload_sessions[upload_id]["error_message"] = str(exc)
+    finally:
+        if decompressed_path and os.path.exists(decompressed_path):
+            os.unlink(decompressed_path)
+        if cleanup_archive and temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
 
 
@@ -805,52 +1407,29 @@ def _load_image_sync(file: UploadFile) -> dict:
             os.unlink(temp_path)
 
 
-@router.post("/qcow2")
-def upload_qcow2(
-    file: UploadFile = File(...),
-    current_user: models.User = Depends(get_current_admin),
-    auto_build: bool = Query(default=True, description="Auto-trigger vrnetlab Docker build"),
-) -> dict[str, str]:
+def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dict[str, object]:
+    """Validate, register, and optionally build from a saved qcow2 image."""
+    from app.utils.image_integrity import compute_sha256, validate_qcow2
 
-    from app.services.resource_monitor import ResourceMonitor, PressureLevel
-    if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
-        raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
-
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Missing filename")
-    if not file.filename.lower().endswith((".qcow2", ".qcow")):
-        raise HTTPException(status_code=400, detail="File must be a qcow2 image")
-
-    # Check for duplicate before saving
     manifest = load_manifest()
-    potential_id = f"qcow2:{Path(file.filename).name}"
+    potential_id = f"qcow2:{destination.name}"
     if find_image_by_id(manifest, potential_id):
+        destination.unlink(missing_ok=True)
         raise HTTPException(
             status_code=409,
-            detail=f"Image '{file.filename}' already exists in the library"
+            detail=f"Image '{destination.name}' already exists in the library",
         )
 
-    destination = qcow2_path(Path(file.filename).name)
-    try:
-        with destination.open("wb") as handle:
-            shutil.copyfileobj(file.file, handle)
-    finally:
-        file.file.close()
-    # Get file size
     file_size = destination.stat().st_size if destination.exists() else None
-
-    # Validate qcow2 format before accepting
-    from app.utils.image_integrity import validate_qcow2, compute_sha256
     valid, error_msg = validate_qcow2(destination)
     if not valid:
         destination.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Invalid qcow2 image: {error_msg}")
 
-    # Compute SHA256 checksum for integrity tracking
     file_sha256 = compute_sha256(destination)
-
     device_id, version = detect_device_from_filename(destination.name)
     image_id = f"qcow2:{destination.name}"
+
     entry = create_image_entry(
         image_id=image_id,
         kind="qcow2",
@@ -864,13 +1443,12 @@ def upload_qcow2(
     manifest["images"].append(entry)
     save_manifest(manifest)
 
-    result = {"path": str(destination), "filename": destination.name}
-
-    # Auto-trigger vrnetlab build if device type is recognized
+    result: dict[str, object] = {"path": str(destination), "filename": destination.name}
     if auto_build:
         vrnetlab_device_id, vrnetlab_path = detect_qcow2_device_type(destination.name)
         if vrnetlab_path:
             from app.tasks.vrnetlab_build import build_vrnetlab_image
+
             job = queue.enqueue(
                 build_vrnetlab_image,
                 qcow2_path=str(destination),
@@ -878,14 +1456,40 @@ def upload_qcow2(
                 vrnetlab_subdir=vrnetlab_path,
                 version=version,
                 qcow2_image_id=image_id,
-                job_timeout=3600,  # 60 minutes
-                result_ttl=3600, failure_ttl=86400,
+                job_timeout=3600,
+                result_ttl=3600,
+                failure_ttl=86400,
             )
             result["build_job_id"] = job.id
             result["build_status"] = "queued"
             result["message"] = f"Building Docker image for {vrnetlab_device_id or device_id}"
 
     return result
+
+
+@router.post("/qcow2")
+def upload_qcow2(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_admin),
+    auto_build: bool = Query(default=True, description="Auto-trigger vrnetlab Docker build"),
+) -> dict[str, object]:
+
+    from app.services.resource_monitor import ResourceMonitor, PressureLevel
+    if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
+        raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+    if not file.filename.lower().endswith((".qcow2", ".qcow")):
+        raise HTTPException(status_code=400, detail="File must be a qcow2 image")
+
+    destination = qcow2_path(Path(file.filename).name)
+    try:
+        with destination.open("wb") as handle:
+            shutil.copyfileobj(file.file, handle)
+    finally:
+        file.file.close()
+    return _finalize_qcow2_upload(destination, auto_build=auto_build)
 
 
 @router.post("/iol")

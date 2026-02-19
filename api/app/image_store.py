@@ -48,10 +48,14 @@ QCOW2_DEVICE_PATTERNS: dict[str, tuple[str, str]] = {
     r"vedge[_-]?[\d\.]+.*\.qcow2": ("cat-sdwan-vedge", "cisco/sdwan"),
     r"c8000v[_-]?sdwan.*\.qcow2": ("cat-sdwan-cedge", "cisco/sdwan"),
     # Juniper
-    r"vsrx[_-]?[\d\.]+.*\.qcow2": ("vsrx", "juniper/vsrx"),
-    r"vjunos[_-]?[\d\.]+.*\.qcow2": ("vjunos-switch", "juniper/vjunos-switch"),
-    r"vmx[_-]?[\d\.]+.*\.qcow2": ("vmx", "juniper/vmx"),
-    r"vqfx[_-]?[\d\.]+.*\.qcow2": ("vqfx", "juniper/vqfx"),
+    r"vjunos[_-]?router.*\.qcow2": ("juniper_vjunosrouter", "juniper/vjunos-router"),
+    r"vjunos[_-]?evolved.*\.qcow2": ("juniper_vjunosevolved", "juniper/vjunos-router"),
+    r"vjunos[_-]?switch.*\.qcow2": ("juniper_vjunosswitch", "juniper/vjunos-switch"),
+    # Keep plain "vjunos-<version>" as switch for backward compatibility.
+    r"vjunos.*\.qcow2": ("juniper_vjunosswitch", "juniper/vjunos-switch"),
+    r"vsrx.*\.qcow2": ("juniper_vsrx3", "juniper/vsrx"),
+    r"vmx.*\.qcow2": ("vmx", "juniper/vmx"),
+    r"vqfx.*\.qcow2": ("juniper_vqfx", "juniper/vqfx"),
     # Arista
     r"veos[_-]?[\d\.]+.*\.qcow2": ("veos", "arista/veos"),
     # Nokia
@@ -113,9 +117,14 @@ DEVICE_VENDOR_MAP = {
     "iosvl2": "Cisco",
     "xrd": "Cisco",
     "vsrx": "Juniper",
+    "juniper_vsrx3": "Juniper",
     "crpd": "Juniper",
     "vjunos": "Juniper",
+    "juniper_vjunosrouter": "Juniper",
+    "juniper_vjunosevolved": "Juniper",
+    "juniper_vjunosswitch": "Juniper",
     "vqfx": "Juniper",
+    "juniper_vqfx": "Juniper",
     "srlinux": "Nokia",
     "cumulus": "NVIDIA",
     "sonic": "SONiC",
@@ -131,6 +140,22 @@ DEVICE_VENDOR_MAP = {
 DEVICE_ID_ALIASES = {
     "iosv": "cisco_iosv",
     "ceos": "eos",
+    "csr": "cisco_csr1000v",
+    "csr1000v": "cisco_csr1000v",
+    "iosxr": "cisco_iosxr",
+    "xrv9k": "cisco_iosxr",
+    "nxos": "cisco_n9kv",
+    "nxosv9000": "cisco_n9kv",
+    "n9kv": "cisco_n9kv",
+    "vjunos-router": "juniper_vjunosrouter",
+    "vjunosrouter": "juniper_vjunosrouter",
+    "vjunos-evolved": "juniper_vjunosevolved",
+    "vjunos_evolved": "juniper_vjunosevolved",
+    "vjunosevolved": "juniper_vjunosevolved",
+    "vjunos-switch": "juniper_vjunosswitch",
+    "vjunosswitch": "juniper_vjunosswitch",
+    # Historical shorthand mapped plain "vjunos" uploads to switch artifacts.
+    "vjunos": "juniper_vjunosswitch",
 }
 
 # Explicit compatibility aliases for device types that intentionally share
@@ -256,6 +281,24 @@ def _maybe_backfill_specific_linux_device(image: dict) -> str | None:
     return image.get("device_id")
 
 
+def _maybe_backfill_vjunos_evolved_device(image: dict, device_id: str | None) -> str | None:
+    """Migrate legacy vJunos Evolved assignments from router ID to evolved ID."""
+    current = normalize_default_device_scope_id(device_id)
+    if current not in {"juniper_vjunosrouter", "vjunos-router", "vjunosrouter"}:
+        return device_id
+
+    haystack = " ".join(
+        [
+            str(image.get("id") or ""),
+            str(image.get("reference") or ""),
+            str(image.get("filename") or ""),
+        ]
+    ).lower()
+    if "vjunos-evolved" in haystack or "vjunos_evolved" in haystack or "vjunosevolved" in haystack:
+        return "juniper_vjunosevolved"
+    return device_id
+
+
 def image_store_root() -> Path:
     if settings.qcow2_store:
         return Path(settings.qcow2_store)
@@ -294,6 +337,7 @@ def _normalize_manifest_images(manifest: dict) -> None:
             continue
 
         raw_device_id = _maybe_backfill_specific_linux_device(image)
+        raw_device_id = _maybe_backfill_vjunos_evolved_device(image, raw_device_id)
         raw_compatible_devices = list(image.get("compatible_devices") or [])
 
         # If a legacy Linux assignment is clearly a distinct device type and
@@ -618,22 +662,50 @@ def delete_custom_device(device_id: str) -> Optional[dict]:
     return None
 
 
-def ensure_custom_device_exists(device_id: str) -> Optional[dict]:
+def _infer_dynamic_custom_device_metadata(device_id: str) -> tuple[str, str, str, str | None]:
+    """Infer basic UI metadata for dynamically created custom devices."""
+    normalized = (device_id or "").strip().lower()
+    if not normalized:
+        return "container", "fa-box", "Compute", None
+
+    if any(token in normalized for token in ("firewall", "ftd", "asav", "panos", "forti")):
+        return "firewall", "fa-shield-halved", "Security", None
+    if any(token in normalized for token in ("switch", "qfx", "nxos", "n9k", "cat9k")):
+        return "switch", "fa-arrows-left-right-to-line", "Network", "Switches"
+    if any(token in normalized for token in ("router", "csr", "ios", "xrv", "xrd", "junos", "sdwan", "vedge")):
+        return "router", "fa-arrows-to-dot", "Network", "Routers"
+    if any(token in normalized for token in ("host", "server", "windows")):
+        return "host", "fa-server", "Compute", None
+    return "container", "fa-box", "Compute", None
+
+
+def _display_name_from_device_id(device_id: str) -> str:
+    """Generate a readable label from a machine-style device ID."""
+    pretty = re.sub(r"[_\-]+", " ", (device_id or "").strip())
+    pretty = re.sub(r"\s+", " ", pretty).strip()
+    return pretty.title() if pretty else "Custom Device"
+
+
+def ensure_custom_device_exists(
+    device_id: str,
+    preferred_image_kind: str | None = None,
+) -> Optional[dict]:
     """Ensure a custom device entry exists for a device_id.
 
     If the device_id doesn't exist as a vendor config or custom device,
-    create a custom device entry based on the canonical vendor config
-    (resolved via alias).
+    create a custom device entry based on either:
+    1) canonical vendor config (resolved via alias), or
+    2) inferred generic metadata for unknown device families.
 
     This is called during image import to ensure that device_ids like "eos"
     get proper custom device entries with portNaming, etc.
 
     Args:
         device_id: Device ID to ensure exists (e.g., "eos")
+        preferred_image_kind: Image kind that triggered creation (docker/qcow2/iol)
 
     Returns:
-        The existing or newly created custom device, or None if no
-        canonical vendor config exists
+        The existing or newly created custom device.
     """
     from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
 
@@ -652,40 +724,69 @@ def ensure_custom_device_exists(device_id: str) -> Optional[dict]:
     # Resolve alias to canonical vendor ID (e.g., "eos" -> "ceos")
     canonical_id = get_kind_for_device(device_id)
 
-    # If canonical is same as device_id and not in VENDOR_CONFIGS, no base config
-    if canonical_id not in VENDOR_CONFIGS:
-        return None
+    if canonical_id in VENDOR_CONFIGS:
+        # Get the canonical vendor config.
+        config = VENDOR_CONFIGS[canonical_id]
 
-    # Get the canonical vendor config
-    config = VENDOR_CONFIGS[canonical_id]
+        # Create custom device entry with properties from the vendor config.
+        custom_device = {
+            "id": device_id,
+            "name": config.label or f"{config.vendor} ({device_id})",
+            "type": config.device_type.value,
+            "vendor": config.vendor,
+            "icon": config.icon,
+            "versions": config.versions.copy() if config.versions else ["latest"],
+            "isActive": config.is_active,
+            "category": config.category,
+            "subcategory": config.subcategory,
+            "portNaming": config.port_naming,
+            "portStartIndex": config.port_start_index,
+            "maxPorts": config.max_ports,
+            "memory": config.memory,
+            "cpu": config.cpu,
+            "requiresImage": config.requires_image,
+            "supportedImageKinds": config.supported_image_kinds.copy() if config.supported_image_kinds else ["docker"],
+            "documentationUrl": config.documentation_url,
+            "licenseRequired": config.license_required,
+            "tags": config.tags.copy() if config.tags else [],
+            "kind": canonical_id,  # Reference to the canonical vendor for runtime config
+            "consoleShell": config.console_shell,
+            "isCustom": True,
+        }
+        return add_custom_device(custom_device)
 
-    # Create custom device entry with properties from the vendor config
-    custom_device = {
+    # Unknown device family: create an inferred custom profile so uploads remain usable.
+    dev_type, icon, category, subcategory = _infer_dynamic_custom_device_metadata(device_id)
+    image_kinds = ["docker"]
+    if preferred_image_kind and preferred_image_kind not in image_kinds:
+        image_kinds = [preferred_image_kind]
+
+    default_memory = 2048 if dev_type in {"router", "switch", "firewall", "host"} else 1024
+    default_cpu = 2 if dev_type in {"router", "switch", "firewall", "host"} else 1
+
+    dynamic_device = {
         "id": device_id,
-        "name": config.label or f"{config.vendor} ({device_id})",
-        "type": config.device_type.value,
-        "vendor": config.vendor,
-        "icon": config.icon,
-        "versions": config.versions.copy() if config.versions else ["latest"],
-        "isActive": config.is_active,
-        "category": config.category,
-        "subcategory": config.subcategory,
-        "portNaming": config.port_naming,
-        "portStartIndex": config.port_start_index,
-        "maxPorts": config.max_ports,
-        "memory": config.memory,
-        "cpu": config.cpu,
-        "requiresImage": config.requires_image,
-        "supportedImageKinds": config.supported_image_kinds.copy() if config.supported_image_kinds else ["docker"],
-        "documentationUrl": config.documentation_url,
-        "licenseRequired": config.license_required,
-        "tags": config.tags.copy() if config.tags else [],
-        "kind": canonical_id,  # Reference to the canonical vendor for runtime config
-        "consoleShell": config.console_shell,
+        "name": _display_name_from_device_id(device_id),
+        "type": dev_type,
+        "vendor": get_vendor_for_device(device_id) or "Custom",
+        "icon": icon,
+        "versions": ["latest"],
+        "isActive": True,
+        "category": category,
+        "subcategory": subcategory,
+        "portNaming": "eth",
+        "portStartIndex": 0,
+        "maxPorts": 12 if dev_type in {"router", "switch", "firewall"} else 8,
+        "memory": default_memory,
+        "cpu": default_cpu,
+        "requiresImage": True,
+        "supportedImageKinds": image_kinds,
+        "documentationUrl": None,
+        "licenseRequired": False,
+        "tags": [dev_type, "auto-generated"],
         "isCustom": True,
     }
-
-    return add_custom_device(custom_device)
+    return add_custom_device(dynamic_device)
 
 
 def _device_compatibility_tokens(device_id: str | None) -> set[str]:
@@ -777,6 +878,16 @@ def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
         "iosv": "iosv",
         "csr": "csr",
         "nxos": "nxos",
+        "vjunos-router": "juniper_vjunosrouter",
+        "vjunos_router": "juniper_vjunosrouter",
+        "vjunosrouter": "juniper_vjunosrouter",
+        "vjunos-evolved": "juniper_vjunosevolved",
+        "vjunos_evolved": "juniper_vjunosevolved",
+        "vjunosevolved": "juniper_vjunosevolved",
+        "vjunos-switch": "juniper_vjunosswitch",
+        "vjunos_switch": "juniper_vjunosswitch",
+        "vjunosswitch": "juniper_vjunosswitch",
+        "vjunos": "juniper_vjunosswitch",
         "frr": "frr",
         "haproxy": "haproxy",
         "alpine": "alpine",
@@ -866,7 +977,7 @@ def create_image_entry(
     # Ensure custom device entry exists for this device_id
     # This creates entries like "eos" with proper portNaming from the canonical "ceos" config
     if canonical_device_id:
-        ensure_custom_device_exists(canonical_device_id)
+        ensure_custom_device_exists(canonical_device_id, preferred_image_kind=kind)
 
     return {
         "id": image_id,

@@ -40,6 +40,9 @@ class TestVIRL2ToVendorMap:
         assert VIRL2_TO_VENDOR_MAP["iosxrv9000"] == "cisco_iosxr"
         assert VIRL2_TO_VENDOR_MAP["nxos"] == "cisco_n9kv"
         assert VIRL2_TO_VENDOR_MAP["nxosv9000"] == "cisco_n9kv"
+        assert VIRL2_TO_VENDOR_MAP["vjunos-router"] == "juniper_vjunosrouter"
+        assert VIRL2_TO_VENDOR_MAP["vjunos-evolved"] == "juniper_vjunosevolved"
+        assert VIRL2_TO_VENDOR_MAP["vjunos_switch"] == "juniper_vjunosswitch"
 
     def test_iol_mappings(self):
         """Test IOL device mappings."""

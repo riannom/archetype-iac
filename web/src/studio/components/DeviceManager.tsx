@@ -54,6 +54,34 @@ interface IolBuildDiagnosticsResponse extends IolBuildStatusResponse {
   recommended_action?: string | null;
 }
 
+type ChunkUploadKind = 'docker' | 'qcow2';
+
+interface ImageChunkUploadInitResponse {
+  upload_id: string;
+  kind: ChunkUploadKind;
+  filename: string;
+  total_size: number;
+  chunk_size: number;
+  total_chunks: number;
+}
+
+interface ImageChunkUploadChunkResponse {
+  upload_id: string;
+  chunk_index: number;
+  bytes_received: number;
+  total_received: number;
+  progress_percent: number;
+  is_complete: boolean;
+}
+
+interface ImageChunkUploadCompleteResponse {
+  upload_id: string;
+  kind: ChunkUploadKind;
+  filename: string;
+  status: 'completed' | 'processing' | 'failed';
+  result?: Record<string, unknown> | null;
+}
+
 interface PendingQcow2Upload {
   tempId: string;
   filename: string;
@@ -93,6 +121,7 @@ const IMAGE_LOG_CATEGORY_COLORS: Record<string, string> = {
   docker: 'text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-900/30',
   qcow2: 'text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/30',
 };
+const IMAGE_UPLOAD_CHUNK_SIZE = 10 * 1024 * 1024;
 
 function formatImageLogTime(timestamp: string): string {
   const date = new Date(timestamp);
@@ -609,49 +638,113 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     }
   }
 
+  function getAuthHeaders(): Record<string, string> {
+    const token = localStorage.getItem('token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  async function uploadFileInChunks(
+    kind: ChunkUploadKind,
+    file: File,
+    onProgress: (percent: number, message: string) => void,
+    options?: { autoBuild?: boolean }
+  ): Promise<ImageChunkUploadCompleteResponse> {
+    const headers = getAuthHeaders();
+
+    onProgress(0, 'Initializing upload...');
+    const initResponse = await fetch(`${API_BASE_URL}/images/upload/init`, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        kind,
+        filename: file.name,
+        total_size: file.size,
+        chunk_size: IMAGE_UPLOAD_CHUNK_SIZE,
+        auto_build: options?.autoBuild ?? true,
+      }),
+    });
+
+    if (!initResponse.ok) {
+      const text = await initResponse.text();
+      throw new Error(parseErrorMessage(text));
+    }
+
+    const initData = await initResponse.json() as ImageChunkUploadInitResponse;
+    const totalChunks = initData.total_chunks;
+
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * initData.chunk_size;
+      const end = Math.min(start + initData.chunk_size, file.size);
+      const chunk = file.slice(start, end);
+      const formData = new FormData();
+      formData.append('chunk', chunk);
+
+      const chunkResponse = await fetch(
+        `${API_BASE_URL}/images/upload/${initData.upload_id}/chunk?index=${i}`,
+        {
+          method: 'POST',
+          headers,
+          body: formData,
+        }
+      );
+
+      if (!chunkResponse.ok) {
+        const text = await chunkResponse.text();
+        throw new Error(parseErrorMessage(text));
+      }
+
+      const chunkData = await chunkResponse.json() as ImageChunkUploadChunkResponse;
+      onProgress(
+        Math.max(0, Math.min(100, chunkData.progress_percent)),
+        `Uploading chunk ${i + 1} of ${totalChunks}...`
+      );
+    }
+
+    onProgress(100, 'Upload complete. Finalizing...');
+    const completeResponse = await fetch(`${API_BASE_URL}/images/upload/${initData.upload_id}/complete`, {
+      method: 'POST',
+      headers,
+    });
+
+    if (!completeResponse.ok) {
+      const text = await completeResponse.text();
+      throw new Error(parseErrorMessage(text));
+    }
+
+    return await completeResponse.json() as ImageChunkUploadCompleteResponse;
+  }
+
   /**
-   * Upload file with background processing and progress polling.
-   * This provides real-time feedback during the server-side processing phase.
+   * Upload Docker archive via chunked transport, then poll import/build progress.
    */
   async function uploadImageWithPolling(
     file: File,
     onProgress: (percent: number, message: string) => void
   ): Promise<{ output?: string; images?: string[] }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const token = localStorage.getItem('token');
-    const headers: Record<string, string> = {};
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    onProgress(0, 'Uploading file...');
-
-    // Start background upload
-    const response = await fetch(`${API_BASE_URL}/images/load?background=true`, {
-      method: 'POST',
-      headers,
-      body: formData,
+    const headers = getAuthHeaders();
+    const completeData = await uploadFileInChunks('docker', file, (percent, message) => {
+      const scaled = Math.round(percent * 0.5);
+      onProgress(Math.max(0, Math.min(50, scaled)), message);
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(parseErrorMessage(text));
-    }
-
-    const { upload_id } = await response.json();
-    if (!upload_id) {
+    if (!completeData.upload_id) {
       throw new Error('No upload ID returned');
     }
 
-    onProgress(5, 'Upload started, processing...');
+    if (completeData.status !== 'processing') {
+      throw new Error('Docker upload did not start processing');
+    }
 
-    // Poll for progress
-    let lastPercent = 5;
+    onProgress(55, 'Upload complete, processing Docker archive...');
+
+    let lastPercent = 55;
     while (true) {
-      await new Promise(resolve => setTimeout(resolve, 500)); // Poll every 500ms
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
-      const progressResponse = await fetch(`${API_BASE_URL}/images/load/${upload_id}/progress`, {
+      const progressResponse = await fetch(`${API_BASE_URL}/images/load/${completeData.upload_id}/progress`, {
         headers,
       });
 
@@ -666,14 +759,14 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           });
           throw new Error('Upload not found - it may have completed or expired');
         }
-        continue; // Retry on other errors
+        continue;
       }
 
       const progress = await progressResponse.json();
-
-      if (progress.percent !== lastPercent || progress.message) {
-        lastPercent = progress.percent;
-        onProgress(progress.percent, progress.message || 'Processing...');
+      const mappedPercent = Math.max(55, Math.min(100, 50 + Math.round((Number(progress.percent) || 0) * 0.5)));
+      if (mappedPercent !== lastPercent || progress.message) {
+        lastPercent = mappedPercent;
+        onProgress(mappedPercent, progress.message || 'Processing...');
       }
 
       if (progress.error) {
@@ -691,54 +784,6 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
         return { output: progress.message, images: progress.images };
       }
     }
-  }
-
-  /**
-   * Fallback upload without streaming (for older behavior).
-   */
-  function uploadWithProgress(
-    url: string,
-    file: File,
-    onProgress: (value: number | null) => void
-  ): Promise<any> {
-    return new Promise((resolve, reject) => {
-      const formData = new FormData();
-      formData.append('file', file);
-      const token = localStorage.getItem('token');
-      const request = new XMLHttpRequest();
-      request.open('POST', url);
-      if (token) {
-        request.setRequestHeader('Authorization', `Bearer ${token}`);
-      }
-      const timeout = window.setTimeout(() => {
-        request.abort();
-        reject(
-          new Error('Upload timed out while processing the image. Large images may take several minutes.')
-        );
-      }, 10 * 60 * 1000);
-      request.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          onProgress(Math.round((event.loaded / event.total) * 100));
-        }
-      };
-      request.onerror = () => {
-        window.clearTimeout(timeout);
-        reject(new Error('Upload failed'));
-      };
-      request.onload = () => {
-        window.clearTimeout(timeout);
-        if (request.status >= 200 && request.status < 300) {
-          try {
-            resolve(JSON.parse(request.responseText));
-          } catch {
-            resolve({});
-          }
-        } else {
-          reject(new Error(parseErrorMessage(request.responseText)));
-        }
-      };
-      request.send(formData);
-    });
   }
 
   async function uploadImage(event: React.ChangeEvent<HTMLInputElement>) {
@@ -828,12 +873,12 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       setUploadStatus(`Uploading ${file.name}...`);
       setQcow2Progress(0);
       setIsQcow2PostProcessing(false);
-      await uploadWithProgress(`${API_BASE_URL}/images/qcow2`, file, (percent) => {
-        const nextPercent = Math.max(0, Math.min(100, percent ?? 0));
+      const completeData = await uploadFileInChunks('qcow2', file, (percent, message) => {
+        const nextPercent = Math.max(0, Math.min(100, percent));
         setQcow2Progress(nextPercent);
         if (nextPercent >= 100) {
           setIsQcow2PostProcessing(true);
-          setUploadStatus(`Upload complete for ${file.name}. Validating and finalizing image...`);
+          setUploadStatus(message || `Upload complete for ${file.name}. Validating and finalizing image...`);
           if (!processingLogged) {
             processingLogged = true;
             addImageManagementLog({
@@ -857,6 +902,11 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           )
         );
       });
+
+      if (completeData.status !== 'completed') {
+        throw new Error('QCOW2 upload did not complete');
+      }
+
       setIsQcow2PostProcessing(true);
       setPendingQcow2Uploads((prev) =>
         prev.map((item) =>

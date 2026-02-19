@@ -440,6 +440,149 @@ class TestUploadProgress:
         assert response.status_code == 404
 
 
+class TestChunkedImageUpload:
+    """Tests for chunked upload endpoints used by docker/qcow2 flows."""
+
+    def test_chunked_qcow2_upload_complete(
+        self,
+        test_client: TestClient,
+        admin_user: models.User,
+        admin_auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """QCOW2 chunked upload should finalize and return completion result."""
+        from app.routers import images as images_router
+
+        images_router._chunk_upload_sessions.clear()
+        images_router._upload_progress.clear()
+        monkeypatch.setattr(images_router, "qcow2_path", lambda filename: tmp_path / filename)
+
+        finalized: dict[str, object] = {}
+
+        def fake_finalize(path, *, auto_build=True):
+            finalized["path"] = str(path)
+            finalized["auto_build"] = auto_build
+            return {"path": str(path), "filename": path.name}
+
+        monkeypatch.setattr(images_router, "_finalize_qcow2_upload", fake_finalize)
+
+        init_response = test_client.post(
+            "/images/upload/init",
+            json={
+                "kind": "qcow2",
+                "filename": "vjunos-router-25.4R1.12.qcow2",
+                "total_size": 5,
+                "chunk_size": 5,
+            },
+            headers=admin_auth_headers,
+        )
+        assert init_response.status_code == 200
+        upload_id = init_response.json()["upload_id"]
+
+        chunk_response = test_client.post(
+            f"/images/upload/{upload_id}/chunk",
+            params={"index": 0},
+            files={"chunk": ("chunk.bin", b"hello", "application/octet-stream")},
+            headers=admin_auth_headers,
+        )
+        assert chunk_response.status_code == 200
+        assert chunk_response.json()["progress_percent"] == 100
+
+        complete_response = test_client.post(
+            f"/images/upload/{upload_id}/complete",
+            headers=admin_auth_headers,
+        )
+        assert complete_response.status_code == 200
+        complete_data = complete_response.json()
+        assert complete_data["status"] == "completed"
+        assert complete_data["kind"] == "qcow2"
+        assert complete_data["result"]["filename"] == "vjunos-router-25.4R1.12.qcow2"
+        assert finalized["auto_build"] is True
+
+        final_path = tmp_path / "vjunos-router-25.4R1.12.qcow2"
+        assert final_path.exists()
+        assert final_path.read_bytes() == b"hello"
+
+    def test_chunked_docker_upload_starts_processing(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        admin_user: models.User,
+        admin_auth_headers: dict,
+        monkeypatch,
+    ):
+        """Docker chunked upload should trigger background processing using upload_id."""
+        from app.routers import images as images_router
+
+        images_router._chunk_upload_sessions.clear()
+        images_router._upload_progress.clear()
+
+        def fake_loader(upload_id: str, filename: str, archive_path: str, cleanup_archive: bool = True):
+            images_router._update_progress(
+                upload_id,
+                "complete",
+                "Image loaded successfully",
+                100,
+                images=["test:image"],
+                complete=True,
+            )
+            with images_router._chunk_upload_lock:
+                if upload_id in images_router._chunk_upload_sessions:
+                    images_router._chunk_upload_sessions[upload_id]["status"] = "completed"
+
+        class ImmediateThread:
+            def __init__(self, target, args=(), daemon=None):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                self.target(*self.args)
+
+        monkeypatch.setattr(images_router, "_load_image_background_from_archive", fake_loader)
+        monkeypatch.setattr(images_router.threading, "Thread", ImmediateThread)
+
+        init_response = test_client.post(
+            "/images/upload/init",
+            json={
+                "kind": "docker",
+                "filename": "test-image.tar",
+                "total_size": 4,
+                "chunk_size": 4,
+            },
+            headers=admin_auth_headers,
+        )
+        assert init_response.status_code == 200
+        upload_id = init_response.json()["upload_id"]
+
+        chunk_response = test_client.post(
+            f"/images/upload/{upload_id}/chunk",
+            params={"index": 0},
+            files={"chunk": ("chunk.bin", b"data", "application/octet-stream")},
+            headers=admin_auth_headers,
+        )
+        assert chunk_response.status_code == 200
+
+        complete_response = test_client.post(
+            f"/images/upload/{upload_id}/complete",
+            headers=admin_auth_headers,
+        )
+        assert complete_response.status_code == 200
+        complete_data = complete_response.json()
+        assert complete_data["status"] == "processing"
+        assert complete_data["kind"] == "docker"
+        assert complete_data["upload_id"] == upload_id
+
+        progress_response = test_client.get(
+            f"/images/load/{upload_id}/progress",
+            headers=auth_headers,
+        )
+        assert progress_response.status_code == 200
+        progress_data = progress_response.json()
+        assert progress_data.get("complete") is True
+        assert progress_data.get("images") == ["test:image"]
+
+
 class TestImageHostsAndSync:
     """Tests for image synchronization endpoints."""
 
