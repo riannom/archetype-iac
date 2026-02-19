@@ -592,6 +592,111 @@ def test_run_vm_post_boot_commands_no_commands(monkeypatch) -> None:
     assert second.commands_run == 0
 
 
+def test_run_vm_post_boot_commands_skips_reentrant_call(monkeypatch) -> None:
+    import agent.console_extractor as console_extractor
+
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
+    console_extractor.clear_vm_post_boot_cache()
+
+    fake_vendors = types.ModuleType("agent.vendors")
+    fake_vendors.get_vendor_config = lambda kind: SimpleNamespace(
+        post_boot_commands=["show version"]
+    )
+    fake_vendors.get_config_extraction_settings = lambda kind: SimpleNamespace(
+        user="admin",
+        password="admin",
+        enable_password="",
+        prompt_pattern=r"[>#]\s*$",
+    )
+    monkeypatch.setitem(sys.modules, "agent.vendors", fake_vendors)
+
+    reentrant: dict[str, object] = {}
+
+    class _FakeExtractor:
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+            self.domain_name = domain_name
+            self.libvirt_uri = libvirt_uri
+            self.timeout = timeout
+
+        def run_commands(
+            self,
+            *,
+            commands,
+            username,
+            password,
+            enable_password,
+            prompt_pattern,
+        ):
+            reentrant["result"] = console_extractor.run_vm_post_boot_commands(
+                self.domain_name,
+                "kind1",
+                libvirt_uri=self.libvirt_uri,
+            )
+            return console_extractor.CommandResult(
+                success=True,
+                commands_run=len(commands),
+            )
+
+    monkeypatch.setattr(console_extractor, "SerialConsoleExtractor", _FakeExtractor)
+
+    result = console_extractor.run_vm_post_boot_commands("vm1", "kind1")
+    assert result.success is True
+    assert result.commands_run == 1
+
+    nested = reentrant["result"]
+    assert isinstance(nested, console_extractor.CommandResult)
+    assert nested.success is True
+    assert nested.commands_run == 0
+
+
+def test_run_vm_post_boot_commands_failure_retries_after_return(monkeypatch) -> None:
+    import agent.console_extractor as console_extractor
+
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
+    console_extractor.clear_vm_post_boot_cache()
+
+    fake_vendors = types.ModuleType("agent.vendors")
+    fake_vendors.get_vendor_config = lambda kind: SimpleNamespace(
+        post_boot_commands=["show version"]
+    )
+    fake_vendors.get_config_extraction_settings = lambda kind: SimpleNamespace(
+        user="admin",
+        password="admin",
+        enable_password="",
+        prompt_pattern=r"[>#]\s*$",
+    )
+    monkeypatch.setitem(sys.modules, "agent.vendors", fake_vendors)
+
+    seen = {"calls": 0}
+
+    class _FakeExtractor:
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+            self.domain_name = domain_name
+            self.libvirt_uri = libvirt_uri
+            self.timeout = timeout
+
+        def run_commands(
+            self,
+            *,
+            commands,
+            username,
+            password,
+            enable_password,
+            prompt_pattern,
+        ):
+            seen["calls"] += 1
+            return console_extractor.CommandResult(success=False, error="failed")
+
+    monkeypatch.setattr(console_extractor, "SerialConsoleExtractor", _FakeExtractor)
+
+    first = console_extractor.run_vm_post_boot_commands("vm1", "kind1")
+    second = console_extractor.run_vm_post_boot_commands("vm1", "kind1")
+
+    assert first.success is False
+    assert second.success is False
+    assert seen["calls"] == 2
+
+
 def test_run_vm_cli_commands_no_pexpect(monkeypatch) -> None:
     import agent.console_extractor as console_extractor
 

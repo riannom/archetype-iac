@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import signal
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -1073,6 +1074,8 @@ def extract_vm_config(
 
 # Track which VMs have had post-boot commands executed (idempotency)
 _vm_post_boot_completed: set[str] = set()
+_vm_post_boot_in_progress: set[str] = set()
+_vm_post_boot_lock = threading.Lock()
 
 
 def run_vm_post_boot_commands(
@@ -1093,52 +1096,62 @@ def run_vm_post_boot_commands(
     Returns:
         CommandResult with success status
     """
-    # Check if already completed
-    if domain_name in _vm_post_boot_completed:
-        logger.debug(f"Post-boot commands already run for {domain_name}")
-        return CommandResult(success=True, commands_run=0)
+    with _vm_post_boot_lock:
+        if domain_name in _vm_post_boot_completed:
+            logger.debug(f"Post-boot commands already run for {domain_name}")
+            return CommandResult(success=True, commands_run=0)
+        if domain_name in _vm_post_boot_in_progress:
+            logger.debug(f"Post-boot commands already in progress for {domain_name}")
+            return CommandResult(success=True, commands_run=0)
+        _vm_post_boot_in_progress.add(domain_name)
 
-    if not PEXPECT_AVAILABLE:
-        return CommandResult(
-            success=False,
-            error="pexpect package is not installed"
+    try:
+        if not PEXPECT_AVAILABLE:
+            return CommandResult(
+                success=False,
+                error="pexpect package is not installed"
+            )
+
+        from agent.vendors import get_config_extraction_settings, get_vendor_config
+
+        config = get_vendor_config(kind)
+        if config is None or not config.post_boot_commands:
+            # No commands to run, mark as complete
+            with _vm_post_boot_lock:
+                _vm_post_boot_completed.add(domain_name)
+            return CommandResult(success=True, commands_run=0)
+
+        # Get extraction settings for console interaction parameters
+        extraction_settings = get_config_extraction_settings(kind)
+
+        extractor = SerialConsoleExtractor(
+            domain_name=domain_name,
+            libvirt_uri=libvirt_uri,
+            timeout=30,  # Shorter timeout for simple commands
         )
 
-    from agent.vendors import get_config_extraction_settings, get_vendor_config
-
-    config = get_vendor_config(kind)
-    if config is None or not config.post_boot_commands:
-        # No commands to run, mark as complete
-        _vm_post_boot_completed.add(domain_name)
-        return CommandResult(success=True, commands_run=0)
-
-    # Get extraction settings for console interaction parameters
-    extraction_settings = get_config_extraction_settings(kind)
-
-    extractor = SerialConsoleExtractor(
-        domain_name=domain_name,
-        libvirt_uri=libvirt_uri,
-        timeout=30,  # Shorter timeout for simple commands
-    )
-
-    result = extractor.run_commands(
-        commands=config.post_boot_commands,
-        username=extraction_settings.user,
-        password=extraction_settings.password,
-        enable_password=extraction_settings.enable_password,
-        prompt_pattern=extraction_settings.prompt_pattern,
-    )
-
-    if result.success:
-        _vm_post_boot_completed.add(domain_name)
-        logger.info(
-            f"Post-boot commands completed for {domain_name}: "
-            f"{result.commands_run}/{len(config.post_boot_commands)} commands"
+        result = extractor.run_commands(
+            commands=config.post_boot_commands,
+            username=extraction_settings.user,
+            password=extraction_settings.password,
+            enable_password=extraction_settings.enable_password,
+            prompt_pattern=extraction_settings.prompt_pattern,
         )
-    else:
-        logger.warning(f"Post-boot commands failed for {domain_name}: {result.error}")
 
-    return result
+        if result.success:
+            with _vm_post_boot_lock:
+                _vm_post_boot_completed.add(domain_name)
+            logger.info(
+                f"Post-boot commands completed for {domain_name}: "
+                f"{result.commands_run}/{len(config.post_boot_commands)} commands"
+            )
+        else:
+            logger.warning(f"Post-boot commands failed for {domain_name}: {result.error}")
+
+        return result
+    finally:
+        with _vm_post_boot_lock:
+            _vm_post_boot_in_progress.discard(domain_name)
 
 
 def run_vm_cli_commands(
@@ -1241,5 +1254,7 @@ def clear_vm_post_boot_cache(domain_name: str | None = None) -> None:
     """
     if domain_name:
         _vm_post_boot_completed.discard(domain_name)
+        _vm_post_boot_in_progress.discard(domain_name)
     else:
         _vm_post_boot_completed.clear()
+        _vm_post_boot_in_progress.clear()
