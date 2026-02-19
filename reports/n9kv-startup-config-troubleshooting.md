@@ -797,3 +797,42 @@
   - `pytest -q agent/tests/test_n9kv_poap_endpoints.py`
   - `pytest -q agent/tests/test_auth_middleware.py -k poap`
   - `pytest -q agent/tests/test_n9kv_vendor_config.py`
+
+## Forced-POAP Experiment (2026-02-19, commit `c110bd2`)
+
+### Change under test
+- Updated libvirt create path to skip N9Kv bootflash injection when pre-boot POAP is enabled:
+  - `Config injection: skipped=poap_preboot_enabled`
+- Goal: force first boot to execute POAP script path instead of relying on staged bootflash files.
+
+### Clean-cycle execution
+- Host: `10.14.23.181`
+- Node: `cisco_n9kv_4`
+- Lab: `52c138e7-de39-4b4a-8daa-d75014ffe2e0`
+- Cycle:
+  1. destroy/undefine domain + remove overlay,
+  2. `create` (`03:06:29Z`) returned `status=stopped` with injection skipped,
+  3. `start` (`03:06:35Z`) returned `status=running`.
+
+### What was observed
+- POAP network and DHCP boot options remained present in domain/network XML (`ap-poap-e9d5a7f014`, bootfile `script.py`, option 66/67 set).
+- Agent logs since cycle start showed **no** POAP endpoint traffic:
+  - no `POAP script request`,
+  - no `POAP startup-config request`,
+  - no `/poap/...` access entries.
+- On-box checks via `cli-verify`:
+  - `show startup-config` -> `No startup configuration`
+  - `dir bootflash: | i startup-config` -> empty
+  - `show file bootflash:poap_archetype_debug.log` -> file not found
+  - `show boot | i POAP` -> `Boot POAP Disabled`
+
+### Interpretation
+- In this image/path, skipping disk injection did **not** trigger POAP script execution.
+- Evidence indicates POAP is not being entered in first boot for this VM state (or is bypassed before script fetch), so the new POAP script sequence cannot run.
+
+### Practical implication
+- A pure POAP-script solution is still not proven workable in this environment.
+- The currently proven path remains:
+  - reach CLI,
+  - `copy bootflash:startup-config running-config`,
+  - verify/save startup-config as needed.
