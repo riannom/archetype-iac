@@ -425,51 +425,54 @@ class SerialConsoleExtractor:
             r"Wrong Password,\s*Reason:",
         ]
 
-        try:
-            for _ in range(40):
-                index = self.child.expect(patterns, timeout=self.timeout)
+        step_timeout = max(2, min(self.timeout, 8))
+        for _ in range(40):
+            try:
+                index = self.child.expect(patterns, timeout=step_timeout)
+            except pexpect.TIMEOUT:
+                # Keep nudging the console while the device transitions through
+                # boot/onboarding states.
+                self.child.send("\r")
+                continue
 
-                # Existing CLI prompt.
-                if index < len(prompt_patterns):
-                    return True
+            # Existing CLI prompt.
+            if index < len(prompt_patterns):
+                return True
 
-                action = index - len(prompt_patterns)
+            action = index - len(prompt_patterns)
 
-                if action in (0, 1):  # Username/login prompt
-                    self.child.sendline(username)
-                    continue
+            if action in (0, 1):  # Username/login prompt
+                self.child.sendline(username)
+                continue
 
-                if action == 2:  # Password prompt after username/login
-                    self.child.sendline(password or bootstrap_password)
-                    continue
+            if action == 2:  # Password prompt after username/login
+                self.child.sendline(password or bootstrap_password)
+                continue
 
-                if action == 3:  # POAP abort
-                    self.child.sendline("yes")
-                    continue
+            if action == 3:  # POAP abort
+                self.child.sendline("yes")
+                continue
 
-                if action == 4:  # Basic/initial config dialog
-                    self.child.sendline("no")
-                    continue
+            if action == 4:  # Basic/initial config dialog
+                self.child.sendline("no")
+                continue
 
-                if action == 5:  # Enforce secure password standard
-                    self.child.sendline("yes")
-                    continue
+            if action == 5:  # Enforce secure password standard
+                self.child.sendline("yes")
+                continue
 
-                if action in (6, 7):  # Enter/confirm admin password
-                    self.child.sendline(bootstrap_password)
-                    continue
+            if action in (6, 7):  # Enter/confirm admin password
+                self.child.sendline(bootstrap_password)
+                continue
 
-                if action == 8:
-                    # If the configured password is weak, we may see this once
-                    # before switching to the strong fallback.
-                    bootstrap_password = "Archetype123!"
-                    continue
+            if action == 8:
+                # If the configured password is weak, we may see this once
+                # before switching to the strong fallback.
+                bootstrap_password = "Archetype123!"
+                continue
 
-            logger.warning("Login prompt handling exceeded maximum attempts")
-            return False
-        except pexpect.TIMEOUT:
-            logger.warning("Timeout during login")
-            return False
+        logger.warning("Login prompt handling exceeded maximum attempts")
+        return False
 
     def _enter_enable_mode(self, enable_password: str, prompt_pattern: str) -> bool:
         """Enter privileged EXEC mode."""
@@ -900,9 +903,9 @@ class SerialConsoleExtractor:
                 )
 
             if not self._prime_console_for_prompt(prompt_pattern):
-                return CommandCaptureResult(
-                    success=False,
-                    error="Failed to wake console prompt",
+                logger.info(
+                    "Initial prompt priming failed for %s, continuing with login flow",
+                    self.domain_name,
                 )
 
             if username:
