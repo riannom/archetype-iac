@@ -618,3 +618,34 @@
 ### Remaining check
 - We now have direct runtime fetch evidence, but still need one explicit final verification that on-box active startup-config is populated without manual intervention:
   - `show startup-config` should no longer be empty after boot settles.
+
+## POAP Bypass Clarification + Hardening (2026-02-19)
+
+### Clarification: what "bypass POAP" flag exists
+- No external libvirt/QEMU "skip POAP" boot flag has been identified for this N9Kv image path.
+- The practical bypass control is in-guest NX-OS config:
+  - `system no poap`
+- Implication:
+  - we still need one successful bootstrap path on first bring-up (POAP script or manual/automated console bootstrap),
+  - then persist `system no poap` so subsequent boots of the same VM state do not re-enter POAP.
+
+### Code hardening added
+- Updated POAP script generator (`agent/n9kv_poap.py`) to run:
+  - `configure terminal ; system no poap ; end`
+  - before copy/import/apply/save steps.
+- Expanded N9Kv post-boot fallback commands (`agent/vendors.py`) to:
+  - set `system no poap`,
+  - copy `bootflash:startup-config` to `startup-config`,
+  - apply startup to running,
+  - save running back to startup.
+
+### Validation status (local)
+- Targeted test runs passed:
+  - `pytest -q agent/tests/test_n9kv_poap_endpoints.py agent/tests/test_n9kv_vendor_config.py`
+  - `pytest -q agent/tests/test_plugins_providers_batch1.py agent/tests/test_libvirt_preflight_default_network.py`
+
+### Remaining field validation
+- Deploy and run one clean N9Kv create/start cycle, then verify on-box:
+  - `show startup-config` is populated,
+  - `show boot` reflects POAP disabled after bootstrap/save.
+- Reboot same VM instance and confirm no POAP abort/password wizard path is presented.

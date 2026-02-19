@@ -60,6 +60,7 @@ def main():
         handle.write(content)
     _append_debug("wrote /bootflash/startup-config")
 
+    _run("configure terminal ; system no poap ; end")
     _run("copy bootflash:startup-config startup-config")
     _run("copy startup-config running-config")
     _run("copy running-config startup-config")
