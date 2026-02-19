@@ -49,3 +49,33 @@
 **Fix**: Introduced `DOCKER_DATA_PORT_START = 1` constant. Normalize formula changed from `eth{vendor_index}` to `eth{vendor_index - port_start_index + 1}`. Denormalize formula updated with inverse. Also added `et-` to Juniper fallback regex pattern.
 
 **Rule**: When translating vendor port indices to Docker interface numbers, always account for Docker's eth0 management reservation. The formula must map the first data port to eth1, not eth0, regardless of whether the vendor starts numbering at 0 or 1.
+
+## 2026-02-19: Deploy pre-flight rejects entire batch on ANY host CPU oversubscription
+
+**Bug**: Deploy batch job (`sync:batch`) failed with "Insufficient resources for deployment: agent-01 - CPU: Need 25 cores, projected 156%" even though local-agent had spare capacity.
+
+**Impact**: None of the 14 nodes in the lab could deploy, even those on the non-oversubscribed host.
+
+**Fix**: Rebalanced topology by moving 7 container nodes from agent-01 to local-agent, keeping only 5 VMs on agent-01 (which requires libvirt). Re-ran deploy.
+
+**Rule**: Check node placement vs host capacity before deploying large labs. The resource pre-flight check is all-or-nothing per batch — one oversubscribed host blocks the entire deployment.
+
+## 2026-02-19: _validate_images only checked Docker store, not filesystem
+
+**Bug**: `DockerProvider._validate_images()` called `self.docker.images.get(image)` for all images, but qcow2/img files exist on the filesystem (used by libvirt), not in Docker's image store. Deploy failed with "Missing images" for valid VM images.
+
+**Impact**: Labs with mixed Docker containers and libvirt VMs couldn't deploy through the Docker provider's validation path.
+
+**Fix**: Added file extension/path prefix detection: if image starts with `/` or ends with `.qcow2`/`.img`/`.iol`, check `os.path.exists()` instead of Docker image store.
+
+**Rule**: Image validation must be provider-aware. File-based images (qcow2, img, iol) live on the filesystem, not in Docker's image store. Check both paths.
+
+## 2026-02-19: Single-entity endpoints must match list endpoints for computed fields
+
+**Bug**: `GET /labs/{id}` returned `node_count=0, running_count=0` because the detail endpoint didn't compute these fields (only the list endpoint did).
+
+**Impact**: Frontend lab detail view showed 0 nodes despite having 14 deployed nodes.
+
+**Fix**: Extracted `_populate_lab_counts()` helper, called from both list and detail endpoints.
+
+**Rule**: When computed fields exist on a schema (not stored in DB), ensure ALL endpoints returning that schema populate the fields. If the list endpoint computes something, the detail endpoint must too.
