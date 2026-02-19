@@ -920,15 +920,25 @@ class SerialConsoleExtractor:
 
             if username:
                 if not self._handle_login(username, password, prompt_pattern):
+                    tail = ""
+                    try:
+                        tail = (self.child.before or "")[-240:]
+                    except Exception:
+                        tail = ""
                     return CommandCaptureResult(
                         success=False,
-                        error="Failed to login",
+                        error=f"Failed to login (buffer tail={tail!r})",
                     )
             else:
                 if not self._wait_for_prompt(prompt_pattern):
+                    tail = ""
+                    try:
+                        tail = (self.child.before or "")[-240:]
+                    except Exception:
+                        tail = ""
                     return CommandCaptureResult(
                         success=False,
-                        error="Failed to get CLI prompt",
+                        error=f"Failed to get CLI prompt (buffer tail={tail!r})",
                     )
 
             if enable_password:
