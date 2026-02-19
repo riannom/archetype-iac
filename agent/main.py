@@ -155,6 +155,9 @@ from agent.schemas import (
     StartNodeResponse,
     StopNodeResponse,
     DestroyNodeResponse,
+    CliVerifyRequest,
+    CliVerifyResponse,
+    CliCommandOutput,
     # Interface provisioning
     InterfaceProvisionRequest,
     InterfaceProvisionResponse,
@@ -6010,6 +6013,85 @@ async def exec_in_node(lab_id: str, node_name: str, request: Request) -> dict:
         return {"exit_code": exit_code, "output": output_str}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/labs/{lab_id}/nodes/{node_name}/cli-verify")
+async def verify_node_cli(
+    lab_id: str,
+    node_name: str,
+    request: CliVerifyRequest,
+    provider: str = "libvirt",
+) -> CliVerifyResponse:
+    """Run verification CLI commands and capture output.
+
+    This endpoint is designed for post-boot troubleshooting checks where
+    stable, structured command output is needed from VM consoles.
+    """
+    if provider != "libvirt":
+        raise HTTPException(status_code=400, detail="cli-verify currently supports provider=libvirt only")
+
+    libvirt_provider = get_provider("libvirt")
+    if libvirt_provider is None:
+        raise HTTPException(status_code=503, detail="Libvirt provider not available")
+
+    try:
+        runtime_profile = libvirt_provider.get_runtime_profile(lab_id, node_name)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Libvirt node not found: {e}") from e
+
+    domain_name = runtime_profile.get("domain_name")
+    if not domain_name:
+        raise HTTPException(status_code=500, detail="Unable to resolve libvirt domain name")
+
+    runtime_kind = ((runtime_profile.get("runtime") or {}).get("kind") or "").strip()
+    kind = (request.kind or runtime_kind or libvirt_provider.get_node_kind(lab_id, node_name) or "").strip()
+    if not kind:
+        raise HTTPException(status_code=400, detail="Unable to determine node kind for CLI verification")
+
+    commands = [cmd.strip() for cmd in request.commands if isinstance(cmd, str) and cmd.strip()]
+    if not commands:
+        if kind == "cisco_n9kv":
+            commands = [
+                "show running-config | include system no poap",
+                "show startup-config | include system no poap",
+                "show startup-config | include hostname",
+                "show boot | include POAP",
+            ]
+        else:
+            raise HTTPException(status_code=400, detail="No commands provided for CLI verification")
+
+    from agent.console_extractor import run_vm_cli_commands
+
+    try:
+        result = await asyncio.to_thread(
+            run_vm_cli_commands,
+            domain_name=domain_name,
+            kind=kind,
+            commands=commands,
+            libvirt_uri=getattr(libvirt_provider, "_uri", "qemu:///system"),
+            timeout=request.timeout,
+            retries=request.retries,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"CLI verification execution failed: {e}") from e
+
+    return CliVerifyResponse(
+        success=result.success,
+        provider="libvirt",
+        node_name=node_name,
+        domain_name=domain_name,
+        commands_run=result.commands_run,
+        outputs=[
+            CliCommandOutput(
+                command=item.command,
+                success=item.success,
+                output=item.output,
+                error=item.error or None,
+            )
+            for item in result.outputs
+        ],
+        error=result.error or None,
+    )
 
 
 async def _check_libvirt_readiness(

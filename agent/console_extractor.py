@@ -9,7 +9,7 @@ import os
 import re
 import signal
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,24 @@ class CommandResult:
     """Result of running commands on a VM."""
     success: bool
     commands_run: int = 0
+    error: str = ""
+
+
+@dataclass
+class CommandOutput:
+    """Captured output for a single CLI command."""
+    command: str
+    success: bool
+    output: str = ""
+    error: str = ""
+
+
+@dataclass
+class CommandCaptureResult:
+    """Result of running and capturing CLI commands on a VM."""
+    success: bool
+    commands_run: int = 0
+    outputs: list[CommandOutput] = field(default_factory=list)
     error: str = ""
 
 
@@ -705,6 +723,69 @@ class SerialConsoleExtractor:
 
         return last_result
 
+    def run_commands_capture(
+        self,
+        commands: list[str],
+        username: str = "",
+        password: str = "",
+        enable_password: str = "",
+        prompt_pattern: str = r"[>#]\s*$",
+        paging_disable: str = "terminal length 0",
+        retries: int = 2,
+    ) -> CommandCaptureResult:
+        """Run and capture CLI command output via serial console.
+
+        Acquires a per-domain console lock to prevent concurrent access,
+        and retries on transient failures with exponential backoff.
+
+        Args:
+            commands: List of commands to execute
+            username: Login username (empty = skip login)
+            password: Login password
+            enable_password: Enable mode password (empty = skip enable)
+            prompt_pattern: Regex pattern to detect CLI prompt
+            paging_disable: Command to disable paging (empty = skip)
+            retries: Number of retry attempts on failure
+
+        Returns:
+            CommandCaptureResult with per-command output
+        """
+        if not commands:
+            return CommandCaptureResult(success=True, commands_run=0, outputs=[])
+
+        from agent.virsh_console_lock import console_lock
+
+        last_result = CommandCaptureResult(success=False, error="No attempts made")
+        for attempt in range(1 + retries):
+            if attempt > 0:
+                delay = 2 ** attempt
+                logger.info(
+                    f"Retrying CLI command capture for {self.domain_name} "
+                    f"(attempt {attempt + 1}/{1 + retries}) after {delay}s"
+                )
+                time.sleep(delay)
+
+            try:
+                with console_lock(self.domain_name, timeout=60):
+                    last_result = self._run_commands_capture_inner(
+                        commands,
+                        username,
+                        password,
+                        enable_password,
+                        prompt_pattern,
+                        paging_disable,
+                    )
+            except TimeoutError:
+                last_result = CommandCaptureResult(
+                    success=False,
+                    error="Console is locked by another session",
+                )
+
+            if last_result.success:
+                return last_result
+
+        return last_result
+
     def _run_commands_inner(
         self,
         commands: list[str],
@@ -790,6 +871,116 @@ class SerialConsoleExtractor:
             return CommandResult(
                 success=False,
                 error=str(e)
+            )
+        finally:
+            self._cleanup()
+
+    def _run_commands_capture_inner(
+        self,
+        commands: list[str],
+        username: str,
+        password: str,
+        enable_password: str,
+        prompt_pattern: str,
+        paging_disable: str,
+    ) -> CommandCaptureResult:
+        """Core command capture logic (called with lock held)."""
+        try:
+            cmd = f"virsh -c {self.libvirt_uri} console --force {self.domain_name}"
+            logger.debug(f"Starting console for CLI capture: {cmd}")
+            self.child = pexpect.spawn(cmd, timeout=self.timeout, encoding='utf-8')
+
+            try:
+                self.child.expect(r"Connected to domain", timeout=10)
+                logger.debug("Connected to domain console")
+            except pexpect.TIMEOUT:
+                return CommandCaptureResult(
+                    success=False,
+                    error="Timeout waiting for console connection",
+                )
+
+            if not self._prime_console_for_prompt(prompt_pattern):
+                return CommandCaptureResult(
+                    success=False,
+                    error="Failed to wake console prompt",
+                )
+
+            if username:
+                if not self._handle_login(username, password, prompt_pattern):
+                    return CommandCaptureResult(
+                        success=False,
+                        error="Failed to login",
+                    )
+            else:
+                if not self._wait_for_prompt(prompt_pattern):
+                    return CommandCaptureResult(
+                        success=False,
+                        error="Failed to get CLI prompt",
+                    )
+
+            if enable_password:
+                if not self._enter_enable_mode(enable_password, prompt_pattern):
+                    return CommandCaptureResult(
+                        success=False,
+                        error="Failed to enter enable mode",
+                    )
+            else:
+                self._attempt_enable_mode(enable_password, prompt_pattern)
+
+            if paging_disable:
+                self._disable_paging(paging_disable, prompt_pattern)
+
+            commands_run = 0
+            outputs: list[CommandOutput] = []
+            for command in commands:
+                logger.info(f"Running CLI capture command on {self.domain_name}: {command}")
+                raw_output = self._execute_command(command, prompt_pattern)
+                if raw_output is None:
+                    outputs.append(
+                        CommandOutput(
+                            command=command,
+                            success=False,
+                            error="Timeout waiting for command output",
+                        )
+                    )
+                    continue
+
+                outputs.append(
+                    CommandOutput(
+                        command=command,
+                        success=True,
+                        output=self._clean_config(raw_output, command),
+                    )
+                )
+                commands_run += 1
+
+            success = commands_run == len(commands)
+            error = ""
+            if not success:
+                failed = len(commands) - commands_run
+                error = f"{failed} command(s) failed"
+            return CommandCaptureResult(
+                success=success,
+                commands_run=commands_run,
+                outputs=outputs,
+                error=error,
+            )
+
+        except pexpect.TIMEOUT:
+            return CommandCaptureResult(
+                success=False,
+                error="Timeout waiting for console response",
+            )
+        except pexpect.EOF:
+            return CommandCaptureResult(
+                success=False,
+                error="Console connection closed unexpectedly",
+            )
+        except Exception as e:
+            logger.exception(f"CLI capture commands error: {e}")
+            return CommandCaptureResult(
+                success=False,
+                error=str(e),
             )
         finally:
             self._cleanup()
@@ -919,6 +1110,66 @@ def run_vm_post_boot_commands(
         logger.warning(f"Post-boot commands failed for {domain_name}: {result.error}")
 
     return result
+
+
+def run_vm_cli_commands(
+    domain_name: str,
+    kind: str,
+    commands: list[str],
+    libvirt_uri: str = "qemu:///system",
+    timeout: int | None = None,
+    retries: int = 2,
+) -> CommandCaptureResult:
+    """Run and capture arbitrary CLI commands on a VM via serial console.
+
+    Args:
+        domain_name: Libvirt domain name
+        kind: Device kind (e.g., "cisco_n9kv")
+        commands: CLI commands to execute and capture
+        libvirt_uri: Libvirt connection URI
+        timeout: Optional per-command timeout override in seconds
+        retries: Number of retry attempts on failure
+
+    Returns:
+        CommandCaptureResult with per-command outputs.
+    """
+    if not commands:
+        return CommandCaptureResult(success=True, commands_run=0, outputs=[])
+
+    if not PEXPECT_AVAILABLE:
+        return CommandCaptureResult(
+            success=False,
+            error="pexpect package is not installed",
+        )
+
+    from agent.vendors import get_config_extraction_settings
+
+    extraction_settings = get_config_extraction_settings(kind)
+    if extraction_settings.method == "none":
+        return CommandCaptureResult(
+            success=False,
+            error=f"Config extraction not supported for device type: {kind}",
+        )
+
+    effective_timeout = extraction_settings.timeout
+    if isinstance(timeout, int) and timeout > 0:
+        effective_timeout = timeout
+
+    extractor = SerialConsoleExtractor(
+        domain_name=domain_name,
+        libvirt_uri=libvirt_uri,
+        timeout=effective_timeout,
+    )
+
+    return extractor.run_commands_capture(
+        commands=commands,
+        username=extraction_settings.user,
+        password=extraction_settings.password,
+        enable_password=extraction_settings.enable_password,
+        prompt_pattern=extraction_settings.prompt_pattern,
+        paging_disable=extraction_settings.paging_disable,
+        retries=max(0, retries),
+    )
 
 
 def clear_vm_post_boot_cache(domain_name: str | None = None) -> None:

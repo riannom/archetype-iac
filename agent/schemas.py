@@ -1084,6 +1084,33 @@ class DestroyNodeResponse(BaseModel):
     duration_ms: int | None = None
 
 
+class CliVerifyRequest(BaseModel):
+    """Request to run verification CLI commands on a node."""
+    commands: list[str] = Field(default_factory=list)
+    kind: str | None = None
+    timeout: int | None = Field(None, ge=5, le=600)
+    retries: int = Field(default=2, ge=0, le=5)
+
+
+class CliCommandOutput(BaseModel):
+    """Single CLI command capture result."""
+    command: str
+    success: bool
+    output: str = ""
+    error: str | None = None
+
+
+class CliVerifyResponse(BaseModel):
+    """Response from node CLI verification command execution."""
+    success: bool
+    provider: str
+    node_name: str
+    domain_name: str | None = None
+    commands_run: int = 0
+    outputs: list[CliCommandOutput] = Field(default_factory=list)
+    error: str | None = None
+
+
 # --- Endpoint Repair ---
 
 class RepairEndpointsRequest(BaseModel):

@@ -551,3 +551,92 @@ def test_run_vm_post_boot_commands_no_commands(monkeypatch) -> None:
     second = console_extractor.run_vm_post_boot_commands("vm1", "kind1")
     assert second.success is True
     assert second.commands_run == 0
+
+
+def test_run_vm_cli_commands_no_pexpect(monkeypatch) -> None:
+    import agent.console_extractor as console_extractor
+
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", False)
+    result = console_extractor.run_vm_cli_commands("vm1", "kind1", ["show clock"])
+    assert result.success is False
+    assert "pexpect package is not installed" in result.error
+
+
+def test_run_vm_cli_commands_uses_extraction_settings(monkeypatch) -> None:
+    import agent.console_extractor as console_extractor
+
+    monkeypatch.setattr(console_extractor, "PEXPECT_AVAILABLE", True)
+
+    fake_vendors = types.ModuleType("agent.vendors")
+    fake_vendors.get_config_extraction_settings = lambda kind: SimpleNamespace(
+        method="serial",
+        user="admin",
+        password="admin",
+        enable_password="",
+        timeout=45,
+        prompt_pattern=r"[>#]\s*$",
+        paging_disable="terminal length 0",
+    )
+    monkeypatch.setitem(sys.modules, "agent.vendors", fake_vendors)
+
+    seen: dict[str, object] = {}
+
+    class _FakeExtractor:
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+            seen["domain_name"] = domain_name
+            seen["libvirt_uri"] = libvirt_uri
+            seen["timeout"] = timeout
+
+        def run_commands_capture(
+            self,
+            *,
+            commands,
+            username,
+            password,
+            enable_password,
+            prompt_pattern,
+            paging_disable,
+            retries,
+        ):
+            seen["commands"] = list(commands)
+            seen["username"] = username
+            seen["password"] = password
+            seen["enable_password"] = enable_password
+            seen["prompt_pattern"] = prompt_pattern
+            seen["paging_disable"] = paging_disable
+            seen["retries"] = retries
+            return console_extractor.CommandCaptureResult(
+                success=True,
+                commands_run=len(commands),
+                outputs=[
+                    console_extractor.CommandOutput(
+                        command=cmd,
+                        success=True,
+                        output=f"ok:{cmd}",
+                    )
+                    for cmd in commands
+                ],
+            )
+
+    monkeypatch.setattr(console_extractor, "SerialConsoleExtractor", _FakeExtractor)
+
+    result = console_extractor.run_vm_cli_commands(
+        "vm1",
+        "kind1",
+        ["show clock", "show version"],
+        libvirt_uri="qemu:///test",
+        timeout=120,
+        retries=3,
+    )
+
+    assert result.success is True
+    assert result.commands_run == 2
+    assert seen["domain_name"] == "vm1"
+    assert seen["libvirt_uri"] == "qemu:///test"
+    assert seen["timeout"] == 120
+    assert seen["commands"] == ["show clock", "show version"]
+    assert seen["username"] == "admin"
+    assert seen["password"] == "admin"
+    assert seen["prompt_pattern"] == r"[>#]\s*$"
+    assert seen["paging_disable"] == "terminal length 0"
+    assert seen["retries"] == 3
