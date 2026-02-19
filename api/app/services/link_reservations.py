@@ -6,14 +6,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models
-from app.services.interface_naming import normalize_interface
+from app.services.interface_naming import normalize_for_node
 
 
-def _reservation_endpoints(link_state: models.LinkState) -> list[tuple[str, str]]:
+def _reservation_endpoints(session: Session, link_state: models.LinkState) -> list[tuple[str, str]]:
     """Return canonical endpoint tuples for a LinkState row."""
     return [
-        (link_state.source_node, normalize_interface(link_state.source_interface or "")),
-        (link_state.target_node, normalize_interface(link_state.target_interface or "")),
+        (link_state.source_node, normalize_for_node(session, link_state.lab_id, link_state.source_node, link_state.source_interface or "")),
+        (link_state.target_node, normalize_for_node(session, link_state.lab_id, link_state.target_node, link_state.target_interface or "")),
     ]
 
 
@@ -114,8 +114,8 @@ def _find_legacy_conflicts(
     conflicts: set[str] = set()
     for candidate in candidates:
         candidate_endpoints = {
-            (candidate.source_node, normalize_interface(candidate.source_interface or "")),
-            (candidate.target_node, normalize_interface(candidate.target_interface or "")),
+            (candidate.source_node, normalize_for_node(session, candidate.lab_id, candidate.source_node, candidate.source_interface or "")),
+            (candidate.target_node, normalize_for_node(session, candidate.lab_id, candidate.target_node, candidate.target_interface or "")),
         }
         if endpoint_set.intersection(candidate_endpoints):
             conflicts.add(candidate.link_name)
@@ -132,7 +132,7 @@ def claim_link_endpoints(
         (True, []) on success
         (False, [conflicting_link_names...]) on conflict
     """
-    endpoints = _reservation_endpoints(link_state)
+    endpoints = _reservation_endpoints(session, link_state)
     expected = set(endpoints)
 
     existing = {
@@ -240,7 +240,7 @@ def get_link_endpoint_reservation_drift_counts(session: Session) -> dict[str, in
 
     expected: set[tuple[str, str, str]] = set()
     for link in desired_up_links:
-        for node_name, iface_name in _reservation_endpoints(link):
+        for node_name, iface_name in _reservation_endpoints(session, link):
             expected.add((link.lab_id, node_name, iface_name))
 
     actual_rows = session.query(models.LinkEndpointReservation).all()
@@ -279,7 +279,7 @@ def get_link_endpoint_reservation_health_snapshot(
 
     expected_rows: list[dict[str, str]] = []
     for link in desired_up_links:
-        for node_name, iface_name in _reservation_endpoints(link):
+        for node_name, iface_name in _reservation_endpoints(session, link):
             expected_rows.append(
                 {
                     "lab_id": link.lab_id,

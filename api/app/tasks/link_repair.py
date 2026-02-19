@@ -12,7 +12,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
-from app.services.interface_naming import normalize_interface
+from app.services.interface_naming import normalize_for_node
 from app.services.link_validator import verify_link_connected
 from app.services.link_operational_state import recompute_link_oper_state
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
@@ -75,8 +75,8 @@ async def attempt_partial_recovery(
     if not link.vni:
         link.vni = allocate_vni(link.lab_id, link.link_name)
 
-    interface_a = normalize_interface(link.source_interface) if link.source_interface else ""
-    interface_b = normalize_interface(link.target_interface) if link.target_interface else ""
+    interface_a = normalize_for_node(session, link.lab_id, link.source_node, link.source_interface or "")
+    interface_b = normalize_for_node(session, link.lab_id, link.target_node, link.target_interface or "")
 
     source_ok = link.source_vxlan_attached
     target_ok = link.target_vxlan_attached
@@ -218,8 +218,8 @@ async def _repair_same_host_vlan(
     if not agent:
         return False
 
-    source_iface = normalize_interface(link.source_interface) if link.source_interface else ""
-    target_iface = normalize_interface(link.target_interface) if link.target_interface else ""
+    source_iface = normalize_for_node(session, link.lab_id, link.source_node, link.source_interface or "")
+    target_iface = normalize_for_node(session, link.lab_id, link.target_node, link.target_interface or "")
 
     # Read current VLAN tags from OVS (ground truth)
     source_vlan = await agent_client.get_interface_vlan_from_agent(
@@ -292,7 +292,7 @@ async def _repair_cross_host_vlan(
             continue
 
         # Discover container's OVS port name via port-state (fresh, not IM)
-        iface_norm = normalize_interface(iface) if iface else ""
+        iface_norm = normalize_for_node(session, link.lab_id, node, iface or "")
         ports = await agent_client.get_lab_port_state(agent, link.lab_id)
         container_port = None
         if ports:

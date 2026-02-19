@@ -28,6 +28,7 @@ async def _detach_overlay_endpoint(
     node: str,
     iface: str | None,
     link_id: str,
+    device_type: str | None = None,
 ) -> tuple[bool, str | None]:
     """Detach one overlay endpoint and return (success, error)."""
     try:
@@ -35,7 +36,7 @@ async def _detach_overlay_endpoint(
             agent,
             lab_id=lab_id,
             container_name=node,
-            interface_name=normalize_interface(iface) if iface else "",
+            interface_name=normalize_interface(iface, device_type) if iface else "",
             link_id=link_id,
         )
         if isinstance(result, dict) and not result.get("success", False):
@@ -218,10 +219,21 @@ async def cleanup_orphaned_link_states(session: Session) -> int:
         )
         if tunnel:
             deferred_reasons: list[str] = []
+            # Resolve device types for accurate interface normalization
+            _src_dev = (
+                session.query(models.Node.device)
+                .filter(models.Node.lab_id == ls.lab_id, models.Node.container_name == ls.source_node)
+                .scalar()
+            )
+            _tgt_dev = (
+                session.query(models.Node.device)
+                .filter(models.Node.lab_id == ls.lab_id, models.Node.container_name == ls.target_node)
+                .scalar()
+            )
             # Tear down VXLAN ports on both agents
-            for agent_id, node, iface in [
-                (tunnel.agent_a_id, ls.source_node, ls.source_interface),
-                (tunnel.agent_b_id, ls.target_node, ls.target_interface),
+            for agent_id, node, iface, dev_type in [
+                (tunnel.agent_a_id, ls.source_node, ls.source_interface, _src_dev),
+                (tunnel.agent_b_id, ls.target_node, ls.target_interface, _tgt_dev),
             ]:
                 agent = host_to_agent.get(agent_id)
                 if agent:
@@ -231,6 +243,7 @@ async def cleanup_orphaned_link_states(session: Session) -> int:
                         node,
                         iface,
                         ls.link_name,
+                        device_type=dev_type,
                     )
                     if ok:
                         logger.info(
@@ -325,9 +338,20 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
 
         if link_state:
             deferred_reasons: list[str] = []
-            for agent_id, node, iface in [
-                (tunnel.agent_a_id, link_state.source_node, link_state.source_interface),
-                (tunnel.agent_b_id, link_state.target_node, link_state.target_interface),
+            # Resolve device types for accurate interface normalization
+            _src_dev = (
+                session.query(models.Node.device)
+                .filter(models.Node.lab_id == link_state.lab_id, models.Node.container_name == link_state.source_node)
+                .scalar()
+            )
+            _tgt_dev = (
+                session.query(models.Node.device)
+                .filter(models.Node.lab_id == link_state.lab_id, models.Node.container_name == link_state.target_node)
+                .scalar()
+            )
+            for agent_id, node, iface, dev_type in [
+                (tunnel.agent_a_id, link_state.source_node, link_state.source_interface, _src_dev),
+                (tunnel.agent_b_id, link_state.target_node, link_state.target_interface, _tgt_dev),
             ]:
                 agent = host_to_agent.get(agent_id)
                 if agent:
@@ -337,6 +361,7 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
                         node,
                         iface,
                         link_state.link_name,
+                        device_type=dev_type,
                     )
                     if ok:
                         logger.info(

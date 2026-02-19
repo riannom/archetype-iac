@@ -101,9 +101,20 @@ async def create_deployment_links(
             .first()
         )
         if tunnel:
-            for agent_id, node, iface in [
-                (tunnel.agent_a_id, ls.source_node, ls.source_interface),
-                (tunnel.agent_b_id, ls.target_node, ls.target_interface),
+            # Resolve device types for accurate interface normalization
+            _src_dev = (
+                session.query(models.Node.device)
+                .filter(models.Node.lab_id == lab_id, models.Node.container_name == ls.source_node)
+                .scalar()
+            )
+            _tgt_dev = (
+                session.query(models.Node.device)
+                .filter(models.Node.lab_id == lab_id, models.Node.container_name == ls.target_node)
+                .scalar()
+            )
+            for agent_id, node, iface, dev_type in [
+                (tunnel.agent_a_id, ls.source_node, ls.source_interface, _src_dev),
+                (tunnel.agent_b_id, ls.target_node, ls.target_interface, _tgt_dev),
             ]:
                 agent = host_to_agent.get(agent_id)
                 if agent:
@@ -112,7 +123,7 @@ async def create_deployment_links(
                             agent,
                             lab_id=lab_id,
                             container_name=node,
-                            interface_name=normalize_interface(iface) if iface else "",
+                            interface_name=normalize_interface(iface, dev_type) if iface else "",
                             link_id=ls.link_name,
                         )
                         logger.info(

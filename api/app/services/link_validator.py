@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.services import interface_mapping as mapping_service
-from app.services.interface_naming import normalize_interface
+from app.services.interface_naming import normalize_for_node
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,8 @@ async def verify_same_host_link(
         return False, f"Agent not found for host {link_state.source_host_id}"
 
     # Normalize interface names (Ethernet1 -> eth1) for agent queries
-    source_iface = normalize_interface(link_state.source_interface) if link_state.source_interface else ""
-    target_iface = normalize_interface(link_state.target_interface) if link_state.target_interface else ""
+    source_iface = normalize_for_node(session, link_state.lab_id, link_state.source_node, link_state.source_interface or "")
+    target_iface = normalize_for_node(session, link_state.lab_id, link_state.target_node, link_state.target_interface or "")
 
     # Get VLAN tags from agent (read directly from OVS for ground truth)
     source_vlan = await agent_client.get_interface_vlan_from_agent(
@@ -157,8 +157,8 @@ async def verify_cross_host_link(
         return False, f"Target agent not found for host {link_state.target_host_id}"
 
     # Normalize interface names (Ethernet1 -> eth1) for agent queries
-    source_iface = normalize_interface(link_state.source_interface) if link_state.source_interface else ""
-    target_iface = normalize_interface(link_state.target_interface) if link_state.target_interface else ""
+    source_iface = normalize_for_node(session, link_state.lab_id, link_state.source_node, link_state.source_interface or "")
+    target_iface = normalize_for_node(session, link_state.lab_id, link_state.target_node, link_state.target_interface or "")
 
     # Verify each endpoint has a VLAN tag on its OVS port
     source_vlan = await agent_client.get_interface_vlan_from_agent(

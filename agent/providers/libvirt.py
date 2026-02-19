@@ -3059,6 +3059,12 @@ class LibvirtProvider(Provider):
             kind = self._get_domain_kind(domain)
             if self._node_uses_dedicated_mgmt_interface(kind) and self._domain_has_dedicated_mgmt_interface(domain):
                 mac_index = interface_index + 1
+            # Account for reserved (dummy) NICs between management and data
+            # interfaces (e.g., XRv9k has reserved_nics=2 for ctrl-dummy + dev-dummy).
+            if kind:
+                config = get_vendor_config(kind)
+                if config:
+                    mac_index += config.reserved_nics
         except Exception:
             pass
 

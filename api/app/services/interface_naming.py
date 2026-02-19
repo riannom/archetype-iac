@@ -224,3 +224,22 @@ def denormalize_interface(iface: str, device_type: str | None = None) -> str:
         return port_naming.replace("{index}", str(vendor_index))
     else:
         return f"{port_naming}{vendor_index}"
+
+
+def normalize_for_node(session, lab_id: str, node_name: str, iface: str) -> str:
+    """Normalize interface name with device-type lookup from DB.
+
+    Convenience wrapper around :func:`normalize_interface` that resolves the
+    device type for *node_name* from the ``nodes`` table so callers don't need
+    to duplicate the query.
+    """
+    if not iface:
+        return iface
+    from app import models
+
+    device = (
+        session.query(models.Node.device)
+        .filter(models.Node.lab_id == lab_id, models.Node.container_name == node_name)
+        .scalar()
+    )
+    return normalize_interface(iface, device)
