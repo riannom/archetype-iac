@@ -426,7 +426,8 @@ class SerialConsoleExtractor:
         ]
 
         step_timeout = max(2, min(self.timeout, 8))
-        for _ in range(40):
+        deadline = time.time() + max(5, self.timeout)
+        while time.time() < deadline:
             try:
                 index = self.child.expect(patterns, timeout=step_timeout)
             except pexpect.TIMEOUT:
@@ -471,7 +472,7 @@ class SerialConsoleExtractor:
                 bootstrap_password = "Archetype123!"
                 continue
 
-        logger.warning("Login prompt handling exceeded maximum attempts")
+        logger.warning("Login prompt handling timed out")
         return False
 
     def _enter_enable_mode(self, enable_password: str, prompt_pattern: str) -> bool:
