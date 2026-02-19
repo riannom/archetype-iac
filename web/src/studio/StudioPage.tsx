@@ -43,6 +43,10 @@ interface LabSummary {
   id: string;
   name: string;
   created_at?: string;
+  node_count?: number;
+  running_count?: number;
+  container_count?: number;
+  vm_count?: number;
 }
 
 interface NodeReadinessHint {
@@ -1721,7 +1725,7 @@ const StudioPage: React.FC = () => {
   const handleDownloadBundle = async (lab: LabSummary) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/v1/labs/${lab.id}/download-bundle`, {
+      const response = await fetch(`${API_BASE_URL}/labs/${lab.id}/download-bundle`, {
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
