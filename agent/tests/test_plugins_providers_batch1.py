@@ -154,7 +154,7 @@ def _make_libvirt_provider() -> libvirt_provider.LibvirtProvider:
 
 
 @pytest.mark.asyncio
-async def test_libvirt_run_post_boot_commands_skips_n9kv_when_poap_preboot_enabled(monkeypatch) -> None:
+async def test_libvirt_run_post_boot_commands_runs_for_n9kv_when_poap_preboot_enabled(monkeypatch) -> None:
     provider = _make_libvirt_provider()
     import agent.console_extractor as console_extractor
 
@@ -171,7 +171,7 @@ async def test_libvirt_run_post_boot_commands_skips_n9kv_when_poap_preboot_enabl
     result = await provider._run_post_boot_commands("arch-lab-node1", "cisco_n9kv")
 
     assert result is True
-    assert calls["count"] == 0
+    assert calls["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -260,22 +260,6 @@ def test_libvirt_prepare_startup_config_non_n9kv_only_normalizes_newlines() -> N
     cleaned = provider._prepare_startup_config_for_injection("cisco_iosv", raw)
 
     assert cleaned == "Router# show running-config\nhostname R1\n"
-
-
-def test_libvirt_skip_bootflash_injection_for_n9kv_when_poap_preboot_enabled(monkeypatch) -> None:
-    provider = _make_libvirt_provider()
-    monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
-
-    assert provider._skip_bootflash_injection_for_kind("cisco_n9kv") is True
-    assert provider._skip_bootflash_injection_for_kind("nxosv9000") is True
-    assert provider._skip_bootflash_injection_for_kind("cisco_iosv") is False
-
-
-def test_libvirt_skip_bootflash_injection_disabled_when_poap_preboot_disabled(monkeypatch) -> None:
-    provider = _make_libvirt_provider()
-    monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", False, raising=False)
-
-    assert provider._skip_bootflash_injection_for_kind("cisco_n9kv") is False
 
 
 def test_libvirt_undefine_domain_falls_back_to_nvram(monkeypatch) -> None:

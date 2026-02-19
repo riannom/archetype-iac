@@ -209,10 +209,12 @@ def test_n9kv_config_inject_path():
     assert config.config_inject_path == "/startup-config"
 
 
-def test_n9kv_post_boot_commands_seed_startup_config():
-    """N9Kv should copy staged bootflash config into startup-config after boot."""
+def test_n9kv_post_boot_commands_seed_and_persist_startup_config():
+    """N9Kv post-boot commands should import and persist staged startup config."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
-    assert "copy bootflash:startup-config startup-config" in config.post_boot_commands
+    assert "configure terminal ; system no poap ; end" in config.post_boot_commands
+    assert "copy bootflash:startup-config running-config" in config.post_boot_commands
+    assert "copy running-config startup-config" in config.post_boot_commands
 
 
 def test_default_device_has_no_config_injection():

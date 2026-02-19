@@ -2173,31 +2173,24 @@ class LibvirtProvider(Provider):
                 )
 
             if startup_config and libvirt_config.config_inject_method == "bootflash":
-                if self._skip_bootflash_injection_for_kind(kind):
-                    inject_summary = "skipped=poap_preboot_enabled"
-                    logger.info(
-                        "Skipping bootflash startup-config injection for %s while N9Kv pre-boot POAP is enabled",
-                        node_name,
-                    )
+                from agent.providers.bootflash_inject import inject_startup_config
+                inject_diag: dict[str, Any] = {}
+                inject_ok = await asyncio.to_thread(
+                    inject_startup_config,
+                    overlay_path,
+                    startup_config,
+                    partition=libvirt_config.config_inject_partition,
+                    fs_type=libvirt_config.config_inject_fs_type,
+                    config_path=libvirt_config.config_inject_path,
+                    diagnostics=inject_diag,
+                )
+                inject_summary = self._format_injection_diagnostics(inject_ok, inject_diag)
+                if inject_summary:
+                    logger.info("Config injection details for %s: %s", node_name, inject_summary)
+                if inject_ok:
+                    logger.info("Injected startup config for %s (%d bytes)", node_name, len(startup_config))
                 else:
-                    from agent.providers.bootflash_inject import inject_startup_config
-                    inject_diag: dict[str, Any] = {}
-                    inject_ok = await asyncio.to_thread(
-                        inject_startup_config,
-                        overlay_path,
-                        startup_config,
-                        partition=libvirt_config.config_inject_partition,
-                        fs_type=libvirt_config.config_inject_fs_type,
-                        config_path=libvirt_config.config_inject_path,
-                        diagnostics=inject_diag,
-                    )
-                    inject_summary = self._format_injection_diagnostics(inject_ok, inject_diag)
-                    if inject_summary:
-                        logger.info("Config injection details for %s: %s", node_name, inject_summary)
-                    if inject_ok:
-                        logger.info("Injected startup config for %s (%d bytes)", node_name, len(startup_config))
-                    else:
-                        logger.warning("Config injection failed for %s; VM will boot without config", node_name)
+                    logger.warning("Config injection failed for %s; VM will boot without config", node_name)
 
             # Create config ISO for platforms that read config from CD-ROM (e.g., IOS-XR CVAC)
             config_iso_path: Path | None = None
@@ -2357,13 +2350,6 @@ class LibvirtProvider(Provider):
         if normalized and not normalized.endswith("\n"):
             normalized += "\n"
         return normalized
-
-    @staticmethod
-    def _skip_bootflash_injection_for_kind(kind: str) -> bool:
-        """Return True when N9Kv pre-boot POAP should own config import."""
-        vendor = get_vendor_config(kind)
-        canonical_kind = vendor.kind if vendor else get_kind_for_device(kind)
-        return canonical_kind == "cisco_n9kv" and settings.n9kv_poap_preboot_enabled
 
     def _format_injection_diagnostics(self, inject_ok: bool, diag: dict[str, Any]) -> str:
         """Render compact bootflash injection diagnostics for callback logs."""
@@ -3055,10 +3041,9 @@ class LibvirtProvider(Provider):
         canonical_kind = get_kind_for_device(kind) or kind
         if canonical_kind == "cisco_n9kv" and settings.n9kv_poap_preboot_enabled:
             logger.info(
-                "Skipping post-boot console automation for %s while N9Kv pre-boot POAP is enabled",
+                "Running N9Kv post-boot console automation for %s (pre-boot POAP enabled)",
                 domain_name,
             )
-            return True
 
         from agent.console_extractor import run_vm_post_boot_commands, PEXPECT_AVAILABLE
 

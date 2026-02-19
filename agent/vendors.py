@@ -664,6 +664,50 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_pattern=r"login:",
         readiness_timeout=300,
     ),
+    "juniper_cjunosevolved": VendorConfig(
+        kind="juniper_cjunosevolved",
+        vendor="Juniper",
+        console_shell="cli",
+        default_image="cjunosevolved:latest",
+        aliases=["cjunos", "cjunosevolved", "cjunos-evolved", "cjunos_evolved"],
+        device_type=DeviceType.ROUTER,
+        category="Network",
+        subcategory="Routers",
+        label="Juniper cJunos Evolved",
+        icon="fa-arrows-to-dot",
+        versions=[],
+        is_active=True,
+        notes="Containerized Junos Evolved — runs KVM VM inside Docker. Requires /dev/kvm.",
+        port_naming="et-0/0/",
+        port_start_index=0,
+        max_ports=12,
+        memory=8192,
+        cpu=4,
+        requires_image=True,
+        supported_image_kinds=["docker"],
+        documentation_url="https://www.juniper.net/documentation/product/us/en/cjunos-evolved/",
+        license_required=True,
+        tags=["routing", "bgp", "mpls", "evpn", "evolved", "container"],
+        readiness_probe="log_pattern",
+        readiness_pattern=r"EVO FLAVORS|login:",
+        readiness_timeout=600,
+        config_extract_method="docker",
+        config_extract_command="cli -c 'show configuration | display set'",
+        config_extract_timeout=30,
+        environment={
+            "CPTX_COSIM": "BT|BX",
+        },
+        capabilities=["NET_ADMIN", "SYS_ADMIN", "NET_RAW"],
+        privileged=True,
+        binds=[
+            "/dev/kvm:/dev/kvm",
+            "/dev/net/tun:/dev/net/tun",
+        ],
+        sysctls={
+            "net.ipv4.ip_forward": "1",
+            "net.ipv6.conf.all.disable_ipv6": "0",
+        },
+    ),
 
     # =========================================================================
     # NETWORK DEVICES - Switches
@@ -979,10 +1023,18 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_password="admin",
         config_extract_timeout=60,
         config_extract_paging_disable="terminal length 0",
-        # Post-boot recovery: when NX-OS boots into POAP and ignores staged
-        # bootflash startup-config, copy it into startup-config explicitly.
+        # Post-boot recovery for this environment:
+        # import staged bootflash config into running, persist to startup,
+        # and ensure POAP stays disabled on this VM state.
         post_boot_commands=[
+            "configure terminal ; system no poap ; end",
+            "copy bootflash:startup-config running-config",
+            "copy running-config startup-config",
+            # Compatibility fallback path for images that do not accept the
+            # direct bootflash->running import in one command.
             "copy bootflash:startup-config startup-config",
+            "copy startup-config running-config",
+            "copy running-config startup-config",
         ],
         # Config injection: write startup-config to bootflash partition before boot
         config_inject_method="bootflash",
