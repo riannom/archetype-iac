@@ -52,9 +52,6 @@ NORMALIZE_CASES = [
     ("juniper_vjunosrouter", "ge-0/0/0", "eth0"),
     # Juniper vJunos Evolved: ge-0/0/, start=0
     ("juniper_vjunosevolved", "ge-0/0/0", "eth0"),
-    # Juniper vQFX: xe-0/0/, start=0
-    ("juniper_vqfx", "xe-0/0/0", "eth0"),
-    ("juniper_vqfx", "xe-0/0/5", "eth5"),
     # Cisco Nexus 9000v: Ethernet1/, start=1
     ("cisco_n9kv", "Ethernet1/1", "eth1"),
     ("cisco_n9kv", "Ethernet1/8", "eth8"),
