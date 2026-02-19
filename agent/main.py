@@ -610,29 +610,36 @@ async def get_resource_usage() -> dict:
     return await asyncio.to_thread(_sync_get_resource_usage)
 
 
+_cached_local_ip: str | None = None
+_local_ip_detected: bool = False
+
+
 def _detect_local_ip() -> str | None:
-    """Auto-detect local IP address from default route interface."""
-    import subprocess
+    """Return cached auto-detected local IP (populated at startup)."""
+    return _cached_local_ip
+
+
+async def _async_detect_local_ip() -> str | None:
+    """Auto-detect local IP address from default route interface (non-blocking)."""
+    global _cached_local_ip, _local_ip_detected
+    if _local_ip_detected:
+        return _cached_local_ip
     try:
-        # Get the IP of the interface with the default route
-        result = subprocess.run(
-            ["ip", "route", "get", "1.1.1.1"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
+        from agent.network.cmd import run_cmd as _async_run_cmd
+        code, stdout, _ = await _async_run_cmd(["ip", "route", "get", "1.1.1.1"])
+        if code == 0:
             # Output: "1.1.1.1 via X.X.X.X dev ethX src Y.Y.Y.Y uid 0"
-            parts = result.stdout.split()
+            parts = stdout.split()
             if "src" in parts:
                 src_idx = parts.index("src")
                 if src_idx + 1 < len(parts):
                     ip = parts[src_idx + 1]
                     logger.info(f"Auto-detected local IP: {ip}")
-                    return ip
+                    _cached_local_ip = ip
     except Exception as e:
         logger.warning(f"Failed to auto-detect local IP: {e}")
-    return None
+    _local_ip_detected = True
+    return _cached_local_ip
 
 
 def get_agent_info() -> AgentInfo:
@@ -721,11 +728,17 @@ async def _bootstrap_transport_config() -> None:
     configured, it provisions the interface locally and sets the
     data_plane_ip for VXLAN operations.
     """
-    import subprocess
+    from agent.network.cmd import run_cmd as _async_run_cmd
     from agent.network.transport import set_data_plane_ip
 
     if not _registered:
         return
+
+    async def _ip_cmd(*args: str) -> None:
+        """Run an ip command asynchronously, raise on failure."""
+        code, _, stderr = await _async_run_cmd(["ip", *args])
+        if code != 0:
+            raise RuntimeError(f"ip {' '.join(args)} failed: {stderr}")
 
     try:
         async with httpx.AsyncClient() as client:
@@ -758,30 +771,30 @@ async def _bootstrap_transport_config() -> None:
                 iface_name = f"{parent}.{vlan_id}"
                 logger.info(f"Bootstrap: provisioning transport subinterface {iface_name}")
 
-                # Use the local provisioning endpoint logic directly
-                proc = subprocess.run(["ip", "link", "show", iface_name], capture_output=True)
-                if proc.returncode != 0:
+                # Check if subinterface exists
+                code, _, _ = await _async_run_cmd(["ip", "link", "show", iface_name])
+                if code != 0:
                     # Create the subinterface
-                    subprocess.run([
-                        "ip", "link", "add", "link", parent,
+                    await _ip_cmd(
+                        "link", "add", "link", parent,
                         "name", iface_name, "type", "vlan", "id", str(vlan_id),
-                    ], check=True)
+                    )
 
                 # Set parent MTU if needed
                 try:
                     with open(f"/sys/class/net/{parent}/mtu") as f:
                         parent_mtu = int(f.read().strip())
                     if parent_mtu < mtu:
-                        subprocess.run(["ip", "link", "set", parent, "mtu", str(mtu)], check=True)
+                        await _ip_cmd("link", "set", parent, "mtu", str(mtu))
                 except (FileNotFoundError, ValueError):
                     pass
 
                 # Set MTU, IP, bring up
-                subprocess.run(["ip", "link", "set", iface_name, "mtu", str(mtu)], check=True)
+                await _ip_cmd("link", "set", iface_name, "mtu", str(mtu))
                 if ip_cidr:
-                    subprocess.run(["ip", "addr", "flush", "dev", iface_name], check=True)
-                    subprocess.run(["ip", "addr", "add", ip_cidr, "dev", iface_name], check=True)
-                subprocess.run(["ip", "link", "set", iface_name, "up"], check=True)
+                    await _ip_cmd("addr", "flush", "dev", iface_name)
+                    await _ip_cmd("addr", "add", ip_cidr, "dev", iface_name)
+                await _ip_cmd("link", "set", iface_name, "up")
 
                 # Extract IP and set as data plane IP
                 if ip_cidr:
@@ -801,11 +814,11 @@ async def _bootstrap_transport_config() -> None:
                 logger.info(f"Bootstrap: configuring dedicated transport interface {dp_iface}")
 
                 # Configure existing interface
-                subprocess.run(["ip", "link", "set", dp_iface, "mtu", str(mtu)], check=True)
+                await _ip_cmd("link", "set", dp_iface, "mtu", str(mtu))
                 if ip_cidr:
-                    subprocess.run(["ip", "addr", "flush", "dev", dp_iface], check=True)
-                    subprocess.run(["ip", "addr", "add", ip_cidr, "dev", dp_iface], check=True)
-                subprocess.run(["ip", "link", "set", dp_iface, "up"], check=True)
+                    await _ip_cmd("addr", "flush", "dev", dp_iface)
+                    await _ip_cmd("addr", "add", ip_cidr, "dev", dp_iface)
+                await _ip_cmd("link", "set", dp_iface, "up")
 
                 if ip_cidr:
                     dp_ip = ip_cidr.split("/")[0]
@@ -955,6 +968,9 @@ async def lifespan(app: FastAPI):
         logger.info("Periodic image cleanup started (interval: 5 minutes)")
     except Exception as e:
         logger.warning(f"Failed to start image cleanup: {e}")
+
+    # Pre-detect local IP asynchronously (caches result for get_agent_info)
+    await _async_detect_local_ip()
 
     # Try initial registration (will notify controller if this is a restart)
     await register_with_controller()
@@ -2764,8 +2780,11 @@ async def attach_container(request: AttachContainerRequest) -> AttachContainerRe
     # cEOS uses INTFTYPE=eth, meaning CLI "Ethernet1" maps to Linux "eth1"
     interface_name = request.interface_name
     try:
-        container = provider.docker.containers.get(full_container_name)
-        env_vars = container.attrs.get("Config", {}).get("Env", [])
+        def _get_container_env() -> list[str]:
+            c = provider.docker.containers.get(full_container_name)
+            return c.attrs.get("Config", {}).get("Env", [])
+
+        env_vars = await asyncio.to_thread(_get_container_env)
         intftype = None
         for env in env_vars:
             if env.startswith("INTFTYPE="):
@@ -3114,13 +3133,44 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
         if docker_provider is None:
             return PortStateResponse(ports=[])
 
-        # Step 1: Get all running containers for this lab
-        import docker as docker_lib
-        client = docker_lib.from_env()
-        containers = client.containers.list(
-            filters={"label": f"archetype.lab_id={lab_id}"},
-        )
-        if not containers:
+        # Step 1: Collect per-container interface->iflink data via Docker SDK
+        # in a worker thread so we do not block the asyncio event loop.
+        def _collect_container_iflinks() -> list[tuple[str, str]]:
+            import docker as docker_lib
+
+            client = docker_lib.from_env(timeout=settings.docker_client_timeout)
+            containers = client.containers.list(
+                filters={"label": f"archetype.lab_id={lab_id}"},
+            )
+            if not containers:
+                return []
+
+            results: list[tuple[str, str]] = []
+            for container in containers:
+                cname = container.name or ""
+                try:
+                    exit_code, output = container.exec_run(
+                        [
+                            "sh",
+                            "-c",
+                            "for iface in /sys/class/net/eth*; do "
+                            "name=$(basename $iface); "
+                            "iflink=$(cat $iface/iflink 2>/dev/null); "
+                            "echo $name:$iflink; done",
+                        ],
+                        demux=False,
+                    )
+                except Exception:
+                    continue
+
+                if exit_code != 0:
+                    continue
+                results.append((cname, output.decode("utf-8", errors="replace")))
+
+            return results
+
+        container_iflinks = await asyncio.to_thread(_collect_container_iflinks)
+        if not container_iflinks:
             return PortStateResponse(ports=[])
 
         # Step 2: Build ifindex -> ovs_port_name map from OVS
@@ -3157,30 +3207,13 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
 
         # Step 3: For each container, read interface iflinks and match
         ports = []
-        for container in containers:
+        for cname, iface_output in container_iflinks:
             # Extract node name
-            cname = container.name or ""
             match = re.match(
                 r'archetype-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9-]+-(.+)$',
                 cname,
             )
             node_name = match.group(1) if match else cname
-
-            # Get all ethN interfaces and their peer iflinks
-            try:
-                exit_code, output = container.exec_run(
-                    ["sh", "-c",
-                     "for iface in /sys/class/net/eth*; do "
-                     "name=$(basename $iface); "
-                     "iflink=$(cat $iface/iflink 2>/dev/null); "
-                     "echo $name:$iflink; done"],
-                    demux=False,
-                )
-                if exit_code != 0:
-                    continue
-                iface_output = output.decode("utf-8", errors="replace")
-            except Exception:
-                continue
 
             for line in iface_output.strip().split("\n"):
                 if ":" not in line:
@@ -4164,8 +4197,12 @@ async def list_node_linux_interfaces(lab_id: str, node_name: str) -> dict:
     try:
         provider = get_provider_for_request()
         container_name = provider.get_container_name(lab_id, node_name)
-        container = provider.docker.containers.get(container_name)
-        pid = container.attrs.get("State", {}).get("Pid")
+
+        def _get_container_pid() -> int | None:
+            c = provider.docker.containers.get(container_name)
+            return c.attrs.get("State", {}).get("Pid")
+
+        pid = await asyncio.to_thread(_get_container_pid)
         if not pid:
             return {"container": container_name, "interfaces": [], "error": "Container not running"}
 
