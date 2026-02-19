@@ -412,6 +412,15 @@ class SerialConsoleExtractor:
         """Handle login and first-boot onboarding prompts."""
         prompt_patterns = self._prompt_patterns(prompt_pattern)
         bootstrap_password = self._bootstrap_admin_password(password)
+        password_candidates: list[str] = []
+        configured_password = (password or "").strip()
+        if configured_password:
+            password_candidates.append(configured_password)
+        if bootstrap_password and bootstrap_password not in password_candidates:
+            password_candidates.append(bootstrap_password)
+        if "" not in password_candidates:
+            password_candidates.append("")
+        password_index = 0
         patterns = [
             *prompt_patterns,
             r"[Uu]sername:",
@@ -447,7 +456,8 @@ class SerialConsoleExtractor:
                 continue
 
             if action == 2:  # Password prompt after username/login
-                self.child.sendline(password or bootstrap_password)
+                candidate = password_candidates[min(password_index, len(password_candidates) - 1)]
+                self.child.sendline(candidate)
                 continue
 
             if action == 3:  # POAP abort
@@ -467,9 +477,8 @@ class SerialConsoleExtractor:
                 continue
 
             if action == 8:
-                # If the configured password is weak, we may see this once
-                # before switching to the strong fallback.
-                bootstrap_password = "Archetype123!"
+                if password_index < len(password_candidates) - 1:
+                    password_index += 1
                 continue
 
         logger.warning("Login prompt handling timed out")
