@@ -683,3 +683,54 @@
 ### Remaining gap
 - Automated serial probe did not reach a stable CLI prompt in this cycle (`prompt_ok=False`), so direct on-box `show running-config/startup-config` confirmation is still pending.
 - A dedicated, stable console capture/interaction method is still needed for final CLI-level proof.
+
+## Agent CLI-Verify Path + Live Evidence (2026-02-19)
+
+### New implementation
+- Added a dedicated libvirt CLI verification API path:
+  - `POST /labs/{lab_id}/nodes/{node_name}/cli-verify?provider=libvirt`
+- Purpose:
+  - run serial-console commands through agent-managed lock/retry flow,
+  - return structured per-command output (instead of ad-hoc interactive virsh sessions).
+- Core commits:
+  - `ad6fb95` — initial endpoint + serial capture plumbing + tests
+  - `dce2b3e` — resilient login loop behavior
+  - `add0750` — bound login retries to timeout budget
+  - `5aaf44a` — password fallback sequencing
+  - `6d1e979` — include serial buffer tail in failure details
+  - `6fd35ca` — request overrides (prompt/credentials/enable/paging) for loader/advanced cases
+  - `b558d6a` — treat `Login incorrect` as password fallback signal
+
+### Loader-state diagnosis confirmed by endpoint
+- Initial `cli-verify` attempts failed with error tail showing:
+  - `loader >`
+- This provided direct proof that prior failures were not only POAP-related; VM was in loader state in this cycle.
+
+### Loader recovery command attempt via endpoint overrides
+- Used override-capable `cli-verify` request with:
+  - `prompt_pattern=loader >\\s*$`
+  - `attempt_enable=false`
+  - command: `boot bootflash:nxos64-cs.10.5.3.F.bin`
+- Result:
+  - command execution did not return to prompt before timeout (consistent with boot handoff behavior).
+
+### Post-recovery CLI capture succeeded
+- Subsequent normal `cli-verify` returned successful command capture (`commands_run=4/4` then `3/3` on extended checks).
+- Key outputs captured:
+  - `show version`:
+    - NX-OS up (`version 10.5(3)`), uptime ~5 minutes, image `bootflash:///nxos64-cs.10.5.3.F.bin`.
+  - `show running-config`:
+    - full running config present (including user/feature/interface sections).
+  - `show startup-config`:
+    - `No startup configuration`
+  - `show boot | i POAP` (and earlier `show boot | include POAP`):
+    - `Boot POAP Disabled`
+    - `System-wide POAP is disabled using exec command 'system no poap'`
+
+### What this establishes now
+- We now have stable, repeatable API-driven CLI evidence without manual interactive console handling.
+- In this environment, a contradictory NX-OS state is visible:
+  - running config exists,
+  - startup config remains empty,
+  - POAP is reported disabled system-wide.
+- This explains why relying solely on `show startup-config` as persistence proof remains insufficient for this image/path.
