@@ -734,3 +734,66 @@
   - startup config remains empty,
   - POAP is reported disabled system-wide.
 - This explains why relying solely on `show startup-config` as persistence proof remains insufficient for this image/path.
+
+## Copy/Import Behavior Clarified (2026-02-19)
+
+### Scope and intent
+- Goal in this pass:
+  - validate the minimal pre-handoff flow (no extraction, no reboot) needed to place N9Kv in desired state,
+  - determine exactly what `copy` step causes `startup-config` to become populated.
+
+### Live sequence and evidence
+- Node/runtime:
+  - lab `52c138e7-de39-4b4a-8daa-d75014ffe2e0`
+  - node `cisco_n9kv_4`
+  - image `bootflash:///nxos64-cs.10.5.3.F.bin` (`show version`)
+- Baseline before copy/import:
+  - `show startup-config` -> `No startup configuration`
+- Executed command:
+  - `copy bootflash:startup-config running-config`
+- Returned output from NX-OS:
+  - `Copy complete, now saving to disk (please wait)...`
+  - `Copy complete.`
+- Post-command verification:
+  - `show running-config` -> full intended config present
+  - `show startup-config` -> full config present with
+    - `!Startup config saved at: Thu Feb 19 01:38:51 2026`
+  - `show boot | i POAP` -> `Boot POAP Disabled`
+
+### Interpretation
+- In this NX-OS path, `copy bootflash:startup-config running-config` is not just an in-memory merge; it also triggers save-to-disk behavior (as indicated by the command output and populated `show startup-config` immediately after).
+- This explains why manual copy/import appears to "fix boot state" in ways simple file staging alone does not.
+
+### Practical handoff flow (no reboot, no extraction)
+- If extraction is deferred and immediate runtime state is the handoff objective:
+  1. get past POAP/first-login prompts,
+  2. run `copy bootflash:startup-config running-config`,
+  3. verify `show startup-config` is non-empty.
+- `copy running-config startup-config` can be kept as an explicit safeguard, but current evidence indicates the bootflash->running copy already persisted startup on this image/build.
+
+### Additional operational note
+- Agent `stop` for libvirt is destructive in this branch:
+  - it destroys/undefines the domain and removes overlay disks.
+- Therefore `stop`/`start` is not equivalent to same-VM reboot for persistence checks; use in-guest reload or hypervisor reset/reboot if true same-state validation is required.
+
+## POAP Script Sequence Update (2026-02-19)
+
+### Change implemented
+- Updated `agent/n9kv_poap.py` script generator to execute the proven command path first and fail loudly on command errors:
+  1. `configure terminal ; system no poap ; end`
+  2. `copy bootflash:startup-config running-config` (preferred path)
+  3. `copy running-config startup-config` (explicit persistence)
+- Added compatibility fallback if direct copy fails:
+  - `copy bootflash:startup-config startup-config`
+  - `copy startup-config running-config`
+  - then `copy running-config startup-config`
+
+### Why this matters
+- Prior script behavior swallowed command exceptions, which could mask failed import/apply steps and still continue POAP flow.
+- New behavior raises on command failure, and uses the import sequence that was validated live to populate active startup-config on this image path.
+
+### Local verification
+- Tests updated/passed:
+  - `pytest -q agent/tests/test_n9kv_poap_endpoints.py`
+  - `pytest -q agent/tests/test_auth_middleware.py -k poap`
+  - `pytest -q agent/tests/test_n9kv_vendor_config.py`

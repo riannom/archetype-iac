@@ -40,6 +40,20 @@ def _run(command):
         _log("command completed: %s" % command)
     except Exception as exc:
         _log("command failed '%s': %s" % (command, exc))
+        raise
+
+
+def _load_and_persist_startup():
+    try:
+        # Preferred path validated in lab:
+        # this imports bootflash startup into running and (on this image path)
+        # also triggers save-to-disk behavior.
+        _run("copy bootflash:startup-config running-config")
+    except Exception as exc:
+        _log("direct copy failed, using compatibility sequence: %s" % exc)
+        _run("copy bootflash:startup-config startup-config")
+        _run("copy startup-config running-config")
+    _run("copy running-config startup-config")
 
 
 def main():
@@ -61,10 +75,8 @@ def main():
     _append_debug("wrote /bootflash/startup-config")
 
     _run("configure terminal ; system no poap ; end")
-    _run("copy bootflash:startup-config startup-config")
-    _run("copy startup-config running-config")
-    _run("copy running-config startup-config")
-    _log("startup-config applied")
+    _load_and_persist_startup()
+    _log("startup-config applied and persisted")
     return 0
 
 
