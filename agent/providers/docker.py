@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -743,6 +744,12 @@ class DockerProvider(Provider):
             config = get_config_by_device(node.kind)
             image = node.image or (config.default_image if config else None)
             if not image:
+                continue
+
+            # File-based images (qcow2/img) — check filesystem, not Docker
+            if image.startswith("/") or image.endswith((".qcow2", ".img", ".iol")):
+                if not os.path.exists(image):
+                    missing.append((node_name, image))
                 continue
 
             try:
@@ -2258,7 +2265,7 @@ event-handler IPTABLES_CLEANUP
         missing_images = await asyncio.to_thread(self._validate_images, parsed_topology)
         if missing_images:
             logger.error(f"Missing images: {missing_images}")
-            error_lines = ["Missing Docker images:"]
+            error_lines = ["Missing images:"]
             for node_name, image in missing_images:
                 log_name = parsed_topology.log_name(node_name)
                 error_lines.append(f"  • Node '{log_name}' requires: {image}")
@@ -2267,7 +2274,7 @@ event-handler IPTABLES_CLEANUP
             error_msg = "\n".join(error_lines)
             return DeployResult(
                 success=False,
-                error=f"Missing {len(missing_images)} Docker image(s)",
+                error=f"Missing {len(missing_images)} image(s)",
                 stderr=error_msg,
             )
 
