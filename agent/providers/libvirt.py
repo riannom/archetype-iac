@@ -922,6 +922,104 @@ class LibvirtProvider(Provider):
         )
         return "kvm"
 
+    @staticmethod
+    def _patch_vjunos_svm_compat(overlay_path: Path) -> bool:
+        """Patch vJunos overlay disk to support AMD SVM for nested virtualization.
+
+        vJunos images check /proc/cpuinfo for 'vmx' (Intel) only. On AMD hosts,
+        the CPU flag is 'svm'. This patches start-junos.sh to accept both flags.
+        Uses qemu-nbd to mount the overlay, patch in-place, and unmount.
+
+        Returns True if patched (or already patched), False on error.
+        """
+        import subprocess
+        import tempfile
+
+        nbd_dev = None
+        mount_dir = None
+        try:
+            # Find a free nbd device
+            subprocess.run(
+                ["modprobe", "nbd", "max_part=8"],
+                capture_output=True, timeout=10,
+            )
+            for i in range(16):
+                dev = f"/dev/nbd{i}"
+                # Check if this nbd device is already in use
+                result = subprocess.run(
+                    ["lsblk", dev], capture_output=True, timeout=5,
+                )
+                if result.returncode != 0:
+                    nbd_dev = dev
+                    break
+            if not nbd_dev:
+                logger.warning("No free nbd device found for vJunos SVM patch")
+                return False
+
+            # Connect the overlay disk
+            result = subprocess.run(
+                ["qemu-nbd", "--connect", nbd_dev, str(overlay_path)],
+                capture_output=True, timeout=30,
+            )
+            if result.returncode != 0:
+                logger.warning("qemu-nbd connect failed: %s", result.stderr.decode())
+                nbd_dev = None
+                return False
+
+            # Wait for partitions to appear
+            subprocess.run(["partprobe", nbd_dev], capture_output=True, timeout=10)
+            import time
+            time.sleep(1)
+
+            # Mount partition 2 (Linux root)
+            part2 = f"{nbd_dev}p2"
+            mount_dir = tempfile.mkdtemp(prefix="vjunos-patch-")
+            result = subprocess.run(
+                ["mount", part2, mount_dir],
+                capture_output=True, timeout=30,
+            )
+            if result.returncode != 0:
+                logger.warning("Failed to mount %s: %s", part2, result.stderr.decode())
+                return False
+
+            # Find and patch start-junos.sh
+            script_path = Path(mount_dir) / "home" / "pfe" / "junos" / "start-junos.sh"
+            if not script_path.exists():
+                logger.info("start-junos.sh not found at %s; skipping SVM patch", script_path)
+                return True  # Not a vJunos image, nothing to patch
+
+            content = script_path.read_text()
+            old_check = "grep -ci vmx"
+            new_check = 'grep -ciE "vmx|svm"'
+            if "svm" in content:
+                logger.info("start-junos.sh already patched for SVM support")
+                return True
+            if old_check not in content:
+                logger.warning("start-junos.sh has unexpected vmx check; skipping patch")
+                return True
+
+            content = content.replace(old_check, new_check)
+            script_path.write_text(content)
+            logger.info("Patched start-junos.sh for AMD SVM compatibility")
+            return True
+
+        except Exception as e:
+            logger.warning("vJunos SVM patch failed: %s", e)
+            return False
+        finally:
+            # Clean up: unmount and disconnect
+            if mount_dir:
+                subprocess.run(["umount", mount_dir], capture_output=True, timeout=10)
+                try:
+                    Path(mount_dir).rmdir()
+                except OSError:
+                    pass
+            if nbd_dev:
+                subprocess.run(
+                    ["qemu-nbd", "--disconnect", nbd_dev],
+                    capture_output=True, timeout=10,
+                )
+
     def _generate_domain_xml(
         self,
         name: str,
@@ -1468,6 +1566,7 @@ class LibvirtProvider(Provider):
                 "smbios_product": libvirt_config.smbios_product,
                 "reserved_nics": libvirt_config.reserved_nics,
                 "cpu_sockets": libvirt_config.cpu_sockets,
+                "needs_nested_vmx": libvirt_config.needs_nested_vmx,
                 "interface_count": interface_count,
                 "_display_name": display_name,
             }
@@ -1574,6 +1673,10 @@ class LibvirtProvider(Provider):
         overlay_path = disks_dir / f"{node_name}.qcow2"
         if not await self._create_overlay_disk(base_image, overlay_path):
             raise RuntimeError(f"Failed to create overlay disk for {node_name}")
+
+        # Patch vJunos images for AMD SVM compatibility (Intel hosts unaffected)
+        if node_config.get("needs_nested_vmx", False):
+            await asyncio.to_thread(self._patch_vjunos_svm_compat, overlay_path)
 
         # Check if data volume is needed
         data_volume_path = None
@@ -2013,6 +2116,7 @@ class LibvirtProvider(Provider):
                 "smbios_product": libvirt_config.smbios_product,
                 "reserved_nics": libvirt_config.reserved_nics,
                 "cpu_sockets": libvirt_config.cpu_sockets,
+                "needs_nested_vmx": libvirt_config.needs_nested_vmx,
                 "data_volume_gb": data_volume_gb if data_volume_gb is not None else libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
@@ -2049,6 +2153,10 @@ class LibvirtProvider(Provider):
                     node_name=node_name,
                     error=f"Failed to create overlay disk for {node_name}",
                 )
+
+            # Patch vJunos images for AMD SVM compatibility (Intel hosts unaffected)
+            if libvirt_config.needs_nested_vmx:
+                await asyncio.to_thread(self._patch_vjunos_svm_compat, overlay_path)
 
             # Inject startup-config into bootflash if supported
             inject_summary = ""

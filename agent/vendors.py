@@ -104,6 +104,7 @@ class VendorConfig:
     force_stop: bool = True      # Skip ACPI graceful shutdown (most network VMs don't support it)
     reserved_nics: int = 0        # Dummy NICs inserted after management, before data (XRv9k needs 2)
     cpu_sockets: int = 0          # If >0, explicit SMP topology: sockets=N, cores=cpu/N, threads=1
+    needs_nested_vmx: bool = False  # Force VMX CPU flag (vJunos checks /proc/cpuinfo for vmx even on AMD)
 
     # Image requirements
     requires_image: bool = True
@@ -619,8 +620,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="ge-0/0/",
         port_start_index=0,
         max_ports=12,
-        memory=4096,  # 4GB required
-        cpu=2,
+        memory=5120,  # 5GB per Juniper's reference XML
+        cpu=4,        # 4 vCPU per Juniper's reference XML
+        cpu_sockets=0,
+        needs_nested_vmx=True,  # vJunos runs nested VM requiring VMX CPU emulation
         requires_image=True,
         supported_image_kinds=["qcow2", "docker"],
         documentation_url="https://www.juniper.net/documentation/product/us/en/vjunos-router/",
@@ -648,8 +651,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="ge-0/0/",
         port_start_index=0,
         max_ports=12,
-        memory=4096,  # 4GB required
-        cpu=2,
+        memory=8192,  # 8GB per Juniper's vJunosEvolved reference XML
+        cpu=4,        # 4 vCPU per Juniper's reference XML
+        cpu_sockets=0,
+        needs_nested_vmx=True,  # vJunos runs nested VM requiring VMX CPU emulation
         requires_image=True,
         supported_image_kinds=["qcow2", "docker"],
         documentation_url="https://www.juniper.net/documentation/product/us/en/vjunos-evolved/",
@@ -888,8 +893,10 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="ge-0/0/",
         port_start_index=0,
         max_ports=12,
-        memory=4096,  # 4GB required
-        cpu=2,
+        memory=5120,  # 5GB per Juniper's reference XML
+        cpu=4,        # 4 vCPU per Juniper's reference XML
+        cpu_sockets=0,
+        needs_nested_vmx=True,  # vJunos runs nested VM requiring VMX CPU emulation
         requires_image=True,
         supported_image_kinds=["qcow2", "docker"],
         documentation_url="https://www.juniper.net/documentation/product/us/en/vjunos-switch/",
@@ -1899,6 +1906,7 @@ class LibvirtRuntimeConfig:
     force_stop: bool = True  # Skip ACPI shutdown (most network VMs don't support it)
     reserved_nics: int = 0  # Dummy NICs after management, before data interfaces
     cpu_sockets: int = 0    # If >0, explicit SMP topology: sockets=N, cores=cpu/N
+    needs_nested_vmx: bool = False  # Force VMX CPU flag for AMD hosts (vJunos compat)
     config_inject_method: str = "none"    # "none", "bootflash", or "iso"
     config_inject_partition: int = 0      # 0 = auto-detect via blkid (bootflash only)
     config_inject_fs_type: str = "ext2"   # Expected filesystem of bootflash
@@ -1998,6 +2006,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         force_stop=config.force_stop,
         reserved_nics=config.reserved_nics,
         cpu_sockets=config.cpu_sockets,
+        needs_nested_vmx=config.needs_nested_vmx,
         config_inject_method=config.config_inject_method,
         config_inject_partition=config.config_inject_partition,
         config_inject_fs_type=config.config_inject_fs_type,
