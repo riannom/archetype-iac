@@ -24,6 +24,7 @@ from app.services.link_manager import LinkManager
 from app.services.link_validator import verify_link_connected, update_interface_mappings
 from app.services.topology import TopologyService
 from app.services.interface_naming import normalize_interface
+from app.utils.link import generate_link_name
 
 logger = logging.getLogger(__name__)
 
@@ -205,17 +206,27 @@ async def create_deployment_links(
             continue
 
         # Get or create LinkState for regular links
+        # Normalize interface names using device_type for consistent storage
+        src_iface = normalize_interface(link.source_interface, source_node.device) if link.source_interface else ""
+        tgt_iface = normalize_interface(link.target_interface, target_node.device) if link.target_interface else ""
+        norm_link_name = generate_link_name(
+            source_node.container_name, src_iface,
+            target_node.container_name, tgt_iface,
+        )
+
         if link.link_name in existing_states:
             link_state = existing_states[link.link_name]
+        elif norm_link_name in existing_states:
+            link_state = existing_states[norm_link_name]
         else:
             link_state = models.LinkState(
                 lab_id=lab_id,
                 link_definition_id=link.id,
-                link_name=link.link_name,
+                link_name=norm_link_name,
                 source_node=source_node.container_name,
-                source_interface=link.source_interface,
+                source_interface=src_iface,
                 target_node=target_node.container_name,
-                target_interface=link.target_interface,
+                target_interface=tgt_iface,
                 desired_state="up",
                 actual_state="pending",
             )

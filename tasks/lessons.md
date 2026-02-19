@@ -79,3 +79,43 @@
 **Fix**: Extracted `_populate_lab_counts()` helper, called from both list and detail endpoints.
 
 **Rule**: When computed fields exist on a schema (not stored in DB), ensure ALL endpoints returning that schema populate the fields. If the list endpoint computes something, the detail endpoint must too.
+
+## 2026-02-19: Link reconciliation had no enforcement — only verified existing links
+
+**Bug**: Link reconciliation only checked already-up links for VLAN drift and repaired them. Links with `desired_state=up` but `actual_state=down` were never created. Links with `desired_state=down` but `actual_state=up` were never torn down. This gap meant cross-host links that failed initial creation were never retried.
+
+**Impact**: Two cross-host links stuck in `down` state indefinitely despite `desired_state=up`. Manual intervention required.
+
+**Fix**: Added enforcement branches to `reconcile_link_states()` that call `create_link_if_ready()` for down/pending→up and `teardown_link()` for up→down. Extended `links_needing_reconciliation_filter()` to include these cases.
+
+**Rule**: Reconciliation loops should enforce desired state in BOTH directions (create and destroy), not just verify existing state. If there's a desired_state field, every mismatch should have a corrective path.
+
+## 2026-02-19: Feature flags with safe defaults can silently block safe operations
+
+**Bug**: N9kv POAP skip (sending "yes" to an interactive prompt) was gated behind `n9kv_boot_modifications_enabled` which defaults to `False`. The flag was intended to gate invasive loader recovery, but POAP skip was bundled under it.
+
+**Impact**: N9kv VMs stuck at POAP DHCP discovery indefinitely, never reaching usable state.
+
+**Fix**: Separated POAP skip (safe, ungated) from loader recovery (invasive, gated). Different risk levels deserve different gates.
+
+**Rule**: Don't gate safe operations behind the same flag as invasive ones. Classify operations by risk level and gate accordingly.
+
+## 2026-02-19: Duplicate link_states from inconsistent normalize_interface calls
+
+**Bug**: Two code paths created LinkState records with different interface name formats: `_upsert_link_states()` used `_canonicalize_link_endpoints()` WITH device_type, but `create_deployment_links()` used raw `link.source_interface` from the Link model. Also, `normalize_links_for_lab()` called `normalize_interface()` WITHOUT device_type, so vendors with non-standard patterns (e.g., Juniper `et-0/0/0`) were never normalized.
+
+**Impact**: Duplicate LinkState rows per link (one with `eth1`, one with `Ethernet1` or `et-0/0/0`). Reconciliation confused by conflicting records.
+
+**Fix**: (1) Pass device_type in `normalize_links_for_lab()`. (2) Thread `node_device_map` through `_link_state_endpoint_key()` and all callers. (3) Normalize interfaces in `create_deployment_links()` before creating LinkState records.
+
+**Rule**: Every code path that creates or matches records with interface names must normalize using device_type. If a dedup function calls normalize_interface, it needs device context — pass a device map from the caller rather than querying inside.
+
+## 2026-02-19: Domain XML metadata locks in vendor defaults, blocking future config updates
+
+**Bug**: Domain XML generation stored ALL resolved readiness settings (probe, pattern, timeout) in `<archetype:*>` metadata, including vendor defaults like `readiness_probe="none"`. When vendor configs were later updated, the stale domain XML values took precedence in the probe lookup chain.
+
+**Impact**: N9kv VMs had `is_ready=false` indefinitely because a stale `log_pattern` override in domain XML overrode the vendor's `readiness_probe="none"`.
+
+**Fix**: Compare each readiness value against vendor defaults from `get_vendor_config(kind)` before storing in domain XML. Only true user/image overrides are persisted.
+
+**Rule**: When baking configuration into persistent storage (domain XML, config files), only store overrides that differ from defaults. Storing defaults locks them in and prevents the default source from being updated independently.

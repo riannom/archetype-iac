@@ -2150,23 +2150,35 @@ def _canonicalize_link_endpoints(
     return target_node, tgt_i, source_node, src_i
 
 
-def _link_state_endpoint_key(link_state: models.LinkState) -> tuple[str, str, str, str]:
+def _link_state_endpoint_key(
+    link_state: models.LinkState,
+    node_device_map: dict[str, str | None] | None = None,
+) -> tuple[str, str, str, str]:
     """Return canonical endpoint tuple for an existing LinkState row."""
+    src_dev = (node_device_map or {}).get(link_state.source_node)
+    tgt_dev = (node_device_map or {}).get(link_state.target_node)
     return _canonicalize_link_endpoints(
         link_state.source_node,
         link_state.source_interface,
         link_state.target_node,
         link_state.target_interface,
+        source_device=src_dev,
+        target_device=tgt_dev,
     )
 
 
-def _choose_preferred_link_state(states: list[models.LinkState]) -> models.LinkState:
+def _choose_preferred_link_state(
+    states: list[models.LinkState],
+    node_device_map: dict[str, str | None] | None = None,
+) -> models.LinkState:
     """Choose one row to keep when duplicate endpoint records exist."""
     def _is_canonical_row(state: models.LinkState) -> bool:
-        src_n, src_i, tgt_n, tgt_i = _link_state_endpoint_key(state)
+        src_n, src_i, tgt_n, tgt_i = _link_state_endpoint_key(state, node_device_map)
         canonical_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
-        stored_src_i = normalize_interface(state.source_interface)
-        stored_tgt_i = normalize_interface(state.target_interface)
+        src_dev = (node_device_map or {}).get(state.source_node)
+        tgt_dev = (node_device_map or {}).get(state.target_node)
+        stored_src_i = normalize_interface(state.source_interface, src_dev)
+        stored_tgt_i = normalize_interface(state.target_interface, tgt_dev)
         return (
             state.link_name == canonical_name
             and state.source_node == src_n
@@ -2191,13 +2203,14 @@ def _find_matching_link_state(
     src_i: str,
     tgt_n: str,
     tgt_i: str,
+    node_device_map: dict[str, str | None] | None = None,
 ) -> tuple[models.LinkState | None, list[models.LinkState]]:
     """Find matching LinkState rows by canonical endpoints."""
     key = (src_n, src_i, tgt_n, tgt_i)
-    matches = [s for s in states if _link_state_endpoint_key(s) == key]
+    matches = [s for s in states if _link_state_endpoint_key(s, node_device_map) == key]
     if not matches:
         return None, []
-    preferred = _choose_preferred_link_state(matches)
+    preferred = _choose_preferred_link_state(matches, node_device_map)
     return preferred, [s for s in matches if s.id != preferred.id]
 
 
@@ -2305,7 +2318,7 @@ def _upsert_link_states(
         link_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
         current_link_names.add(link_name)
 
-        existing, duplicates = _find_matching_link_state(existing_states, src_n, src_i, tgt_n, tgt_i)
+        existing, duplicates = _find_matching_link_state(existing_states, src_n, src_i, tgt_n, tgt_i, node_name_to_device)
         # Old naming variants can collide to the same canonical endpoints.
         # Keep one record and mark duplicates for deletion.
         for duplicate in duplicates:
@@ -3458,8 +3471,13 @@ async def hot_connect_link(
         .filter(models.LinkState.lab_id == lab_id)
         .all()
     )
+    _device_map: dict[str, str | None] = {}
+    if _src_db_node:
+        _device_map[_src_db_node.container_name] = _src_db_node.device
+    if _tgt_db_node:
+        _device_map[_tgt_db_node.container_name] = _tgt_db_node.device
     link_state, duplicate_states = _find_matching_link_state(
-        existing_states, src_n, src_i, tgt_n, tgt_i
+        existing_states, src_n, src_i, tgt_n, tgt_i, _device_map
     )
     for duplicate in duplicate_states:
         duplicate.desired_state = "deleted"
@@ -3585,11 +3603,15 @@ async def hot_disconnect_link(
         .filter(models.LinkState.lab_id == lab_id)
         .all()
     )
+    _del_device_map: dict[str, str | None] = {
+        n.container_name: n.device
+        for n in database.query(models.Node).filter(models.Node.lab_id == lab_id).all()
+    }
     parsed = _parse_link_id_endpoints(link_id)
     link_state = None
     if parsed:
         src_n, src_i, tgt_n, tgt_i = parsed
-        link_state, _ = _find_matching_link_state(link_states, src_n, src_i, tgt_n, tgt_i)
+        link_state, _ = _find_matching_link_state(link_states, src_n, src_i, tgt_n, tgt_i, _del_device_map)
 
     if link_state is None:
         # Backward compatibility with exact legacy IDs.

@@ -1224,6 +1224,23 @@ class LibvirtProvider(Provider):
             readiness_probe = node_config.get("readiness_probe")
             readiness_pattern = node_config.get("readiness_pattern")
             readiness_timeout = node_config.get("readiness_timeout")
+
+            # Only store readiness overrides in domain XML that differ from
+            # vendor defaults.  This prevents stale vendor defaults from being
+            # locked into domain XML across vendor config updates.
+            vendor_cfg = get_vendor_config(kind)
+            if vendor_cfg:
+                if readiness_probe == vendor_cfg.readiness_probe:
+                    readiness_probe = None
+                if readiness_pattern == vendor_cfg.readiness_pattern:
+                    readiness_pattern = None
+                if readiness_timeout is not None:
+                    try:
+                        if int(readiness_timeout) == vendor_cfg.readiness_timeout:
+                            readiness_timeout = None
+                    except (TypeError, ValueError):
+                        pass
+
             readiness_xml = ""
             if readiness_probe:
                 readiness_xml += f"\n      <archetype:readiness_probe>{xml_escape(str(readiness_probe))}</archetype:readiness_probe>"

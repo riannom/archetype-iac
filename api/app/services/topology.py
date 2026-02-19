@@ -1336,8 +1336,8 @@ class TopologyService:
             old_link_name = link.link_name
             old_source_iface = link.source_interface or ""
             old_target_iface = link.target_interface or ""
-            src_iface_norm = normalize_interface(old_source_iface) if old_source_iface else ""
-            tgt_iface_norm = normalize_interface(old_target_iface) if old_target_iface else ""
+            src_iface_norm = normalize_interface(old_source_iface, source_node.device if source_node else None) if old_source_iface else ""
+            tgt_iface_norm = normalize_interface(old_target_iface, target_node.device if target_node else None) if old_target_iface else ""
 
             source_name = source_node.container_name
             target_name = target_node.container_name
