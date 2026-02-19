@@ -185,6 +185,8 @@ class LibvirtProvider(Provider):
     }
     # One-shot guard for loader recovery per VM lifecycle.
     _n9kv_loader_recovery_attempted: set[str] = set()
+    # One-shot guard for POAP skip per VM lifecycle.
+    _n9kv_poap_skip_attempted: set[str] = set()
 
     def __init__(self):
         if not LIBVIRT_AVAILABLE:
@@ -2030,6 +2032,7 @@ class LibvirtProvider(Provider):
                 exc_info=True,
             )
         LibvirtProvider._n9kv_loader_recovery_attempted.discard(domain_name)
+        LibvirtProvider._n9kv_poap_skip_attempted.discard(domain_name)
         LibvirtProvider._clear_vm_console_control_state(domain_name)
 
     @staticmethod
@@ -3308,6 +3311,67 @@ class LibvirtProvider(Provider):
         )
         return status
 
+    async def _run_n9kv_poap_skip(
+        self,
+        domain_name: str,
+        kind: str,
+    ) -> str:
+        """Send 'yes' to POAP abort prompt to skip POAP and continue normal setup."""
+        if domain_name in LibvirtProvider._n9kv_poap_skip_attempted:
+            return "skipped_already_attempted"
+
+        LibvirtProvider._n9kv_poap_skip_attempted.add(domain_name)
+
+        from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
+
+        if not PEXPECT_AVAILABLE:
+            logger.warning(
+                "Skipping N9Kv POAP skip for %s: pexpect unavailable",
+                domain_name,
+            )
+            return "skipped_pexpect_unavailable"
+
+        try:
+            result = await asyncio.to_thread(
+                run_vm_cli_commands,
+                domain_name=domain_name,
+                kind=kind,
+                commands=["yes"],
+                libvirt_uri=self._uri,
+                prompt_pattern=r"\(yes/no\)\[no\]:\s*$",
+                paging_disable="",
+                attempt_enable=False,
+                timeout=30,
+                retries=0,
+            )
+        except Exception as e:
+            logger.warning(
+                "N9Kv POAP skip failed for %s: %s",
+                domain_name,
+                e,
+            )
+            return "error"
+
+        status = "sent" if result.success else "failed"
+        if not result.success:
+            first_error = ""
+            if result.outputs:
+                first_error = (result.outputs[0].error or "").strip()
+            overall_error = (result.error or "").strip()
+            if "Timeout waiting for command output" in first_error:
+                status = "sent_handoff_timeout"
+            elif "Console connection closed unexpectedly" in overall_error:
+                status = "sent_console_closed"
+
+        logger.info(
+            "N9Kv POAP skip for %s: status=%s commands_run=%s error=%s",
+            domain_name,
+            status,
+            result.commands_run,
+            result.error,
+        )
+        return status
+
     def _check_readiness_domain_sync(self, domain_name: str) -> tuple[int, dict] | None:
         """Lookup domain state and readiness overrides — runs on libvirt thread.
 
@@ -3397,13 +3461,10 @@ class LibvirtProvider(Provider):
         result = await probe.check(node_name)
 
         canonical_kind = self._canonical_kind(kind)
-        if (
-            canonical_kind == "cisco_n9kv"
-            and settings.n9kv_boot_modifications_enabled
-            and not result.is_ready
-        ):
+        if canonical_kind == "cisco_n9kv" and not result.is_ready:
             markers = self._extract_probe_markers(result.details)
-            if "loader_prompt" in markers:
+            # Loader recovery is invasive (boots a specific image) — gate behind flag
+            if "loader_prompt" in markers and settings.n9kv_boot_modifications_enabled:
                 recovery_status = await self._run_n9kv_loader_recovery(
                     domain_name,
                     kind,
@@ -3416,6 +3477,20 @@ class LibvirtProvider(Provider):
                 )
                 if recovery_status.startswith("sent"):
                     result.message = "Boot recovery in progress (loader prompt observed)"
+            # POAP skip is safe — just answers "yes" at the standard abort prompt
+            elif "poap_abort_prompt" in markers or "poap_failure" in markers:
+                skip_status = await self._run_n9kv_poap_skip(
+                    domain_name,
+                    kind,
+                )
+                skip_note = f"poap_skip={skip_status}"
+                result.details = (
+                    f"{result.details}; {skip_note}"
+                    if result.details
+                    else skip_note
+                )
+                if skip_status.startswith("sent"):
+                    result.message = "POAP skip in progress (skipping to normal setup)"
 
         # If ready, run post-boot commands (idempotent - only runs once)
         if result.is_ready:
