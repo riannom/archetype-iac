@@ -447,6 +447,17 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 <i className="fa-solid fa-terminal opacity-50"></i>
               </button>
             </div>
+            {model?.defaultCredentials && (
+              <div className="flex flex-col gap-1.5 p-3 rounded-lg border border-stone-600/40 dark:border-stone-600/50 bg-stone-500/10 dark:bg-stone-800/50 backdrop-blur-md">
+                <div className="flex items-center gap-2 text-[10px] font-bold text-sage-600 dark:text-sage-400 uppercase tracking-tight">
+                  <i className="fa-solid fa-key"></i>
+                  <span>Default Credentials</span>
+                </div>
+                <p className="text-[11px] text-stone-700 dark:text-stone-400 leading-relaxed font-mono">
+                  {model.defaultCredentials}
+                </p>
+              </div>
+            )}
           </div>
         )}
 

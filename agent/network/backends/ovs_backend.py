@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from typing import Any
 
 from agent.config import settings
@@ -14,6 +16,34 @@ import subprocess
 
 
 logger = logging.getLogger(__name__)
+
+
+def _start_event_loop_watchdog(
+    done: threading.Event,
+    loop: asyncio.AbstractEventLoop,
+    interval: float = 10.0,
+) -> threading.Thread:
+    """Watchdog thread that nudges the asyncio event loop if startup stalls.
+
+    With pid:host, asyncio subprocess child-reaping can miss SIGCHLD,
+    leaving the event loop stuck in epoll_wait.  Periodically calling
+    call_soon_threadsafe writes to the loop's self-pipe and forces
+    epoll_wait to return, unblocking any stalled subprocess awaits.
+    """
+
+    def _run() -> None:
+        while not done.wait(timeout=interval):
+            logger.warning(
+                "OVS plugin startup stalled (>%.0fs), nudging event loop", interval
+            )
+            try:
+                loop.call_soon_threadsafe(lambda: None)
+            except RuntimeError:
+                break
+
+    t = threading.Thread(target=_run, daemon=True, name="ovs-startup-watchdog")
+    t.start()
+    return t
 
 
 class OVSBackend(NetworkBackend):
@@ -56,7 +86,18 @@ class OVSBackend(NetworkBackend):
             info["vlans_recovered"] = await self._ovs.recover_allocations()
 
         if settings.enable_docker and settings.enable_ovs_plugin:
-            self._plugin_runner = await self._plugin.start()
+            # Watchdog: with pid:host, asyncio subprocess can stall in
+            # epoll_wait during plugin startup.  The watchdog thread
+            # nudges the event loop every 10s to unblock it.
+            startup_done = threading.Event()
+            watchdog = _start_event_loop_watchdog(
+                startup_done, asyncio.get_running_loop()
+            )
+            try:
+                self._plugin_runner = await self._plugin.start()
+            finally:
+                startup_done.set()
+                watchdog.join(timeout=1)
             info["ovs_plugin_started"] = True
 
         return info

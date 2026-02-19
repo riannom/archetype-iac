@@ -72,6 +72,7 @@ export interface DeviceModel {
   readinessPattern?: string;
   readinessTimeout?: number;
   vendorOptions?: Record<string, unknown>;
+  defaultCredentials?: string;
   isCustom?: boolean;
 }
 

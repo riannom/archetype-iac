@@ -132,6 +132,9 @@ class VendorConfig:
     console_user: str = "admin"  # Username for SSH console access
     console_password: str = "admin"  # Password for SSH console access
 
+    # Display-only hint for UI, e.g. "admin / admin"
+    default_credentials: str = ""
+
     # ==========================================================================
     # Configuration extraction settings (used by console_extractor.py)
     # These settings control how running configs are extracted from devices
@@ -264,6 +267,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "net.ipv4.ip_forward": "1",
             "net.ipv6.conf.all.forwarding": "1",
         },
+        default_credentials="vyos / vyos",
     ),
     "cisco_iosxr": VendorConfig(
         kind="cisco_iosxr",
@@ -319,6 +323,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_inject_method="iso",
         config_inject_iso_volume_label="config-1",
         config_inject_iso_filename="iosxr_config.txt",
+        default_credentials="cisco / cisco",
     ),
     "cisco_xrd": VendorConfig(
         kind="cisco_xrd",
@@ -342,6 +347,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/cisco8000/xrd/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "segment-routing", "container"],
+        default_credentials="cisco / cisco",
     ),
     "cisco_iosv": VendorConfig(
         kind="cisco_iosv",
@@ -574,6 +580,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.juniper.net/documentation/product/us/en/crpd/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "container", "kubernetes"],
+        default_credentials="root / (no password)",
     ),
     "juniper_vsrx3": VendorConfig(
         kind="juniper_vsrx3",
@@ -602,6 +609,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
+        default_credentials="root / (no password)",
     ),
     "juniper_vjunosrouter": VendorConfig(
         kind="juniper_vjunosrouter",
@@ -632,6 +640,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
+        default_credentials="root / (no password)",
     ),
     "juniper_vjunosevolved": VendorConfig(
         kind="juniper_vjunosevolved",
@@ -663,6 +672,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
+        default_credentials="root / (no password)",
     ),
     "juniper_cjunos": VendorConfig(
         kind="juniper_cjunos",
@@ -707,6 +717,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "net.ipv4.ip_forward": "1",
             "net.ipv6.conf.all.disable_ipv6": "0",
         },
+        default_credentials="root / (no password)",
     ),
 
     # =========================================================================
@@ -833,6 +844,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             # instead of the older `no errdisable detect cause link-flap`.
             "FastCli -p 15 -c 'configure\nno errdisable flap-setting cause link-flap\nerrdisable recovery cause link-flap\nerrdisable recovery interval 30\nend'",
         ],
+        default_credentials="admin / (no password)",
     ),
     "nokia_srlinux": VendorConfig(
         kind="nokia_srlinux",
@@ -877,6 +889,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "net.ipv6.conf.all.accept_dad": "0",
             "net.ipv6.conf.default.accept_dad": "0",
         },
+        default_credentials="admin / NokiaSrl1!",
     ),
     "cvx": VendorConfig(
         kind="cvx",
@@ -949,6 +962,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
+        default_credentials="root / (no password)",
     ),
     "cisco_n9kv": VendorConfig(
         kind="cisco_n9kv",
@@ -1013,6 +1027,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_inject_partition=0,  # auto-detect via blkid
         config_inject_fs_type="ext2",
         config_inject_path="/startup-config",
+        default_credentials="admin / (no password)",
     ),
 
     # =========================================================================
@@ -2209,6 +2224,8 @@ def get_vendors_for_ui() -> list[dict]:
             "notes": config.notes,
             # Vendor-specific options
             "vendorOptions": _get_vendor_options(config),
+            # Default credentials hint
+            "defaultCredentials": config.default_credentials,
         })
 
     # Convert to output format
