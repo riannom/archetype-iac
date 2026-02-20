@@ -437,15 +437,21 @@ def _check_update_completion(
                 f"Update job {job.id} completed: agent re-registered with "
                 f"version={new_version} commit={new_commit[:8] if new_commit else 'N/A'}"
             )
-        elif job.status == "restarting":
-            # Agent restarted but version doesn't match - check if timed out
-            if job.started_at and (now - job.started_at).total_seconds() > 600:
+        else:
+            # Agent re-registered but version doesn't match — expire if stale
+            started = job.started_at or job.created_at
+            age = (now - started).total_seconds() if started else 0
+            if age > 300:  # 5 minutes
                 job.status = "failed"
-                job.error_message = "Agent did not re-register with expected version after update"
+                job.error_message = (
+                    f"Expired: agent re-registered with version={new_version} "
+                    f"but job expected {job.to_version} (stuck {int(age)}s in '{job.status}')"
+                )
                 job.completed_at = now
                 logger.warning(
-                    f"Update job {job.id} failed: agent re-registered with "
-                    f"version={new_version} but expected {job.to_version}"
+                    f"Update job {job.id} expired: agent has "
+                    f"version={new_version} commit={new_commit[:8] if new_commit else 'N/A'}, "
+                    f"expected {job.to_version}"
                 )
 
     if active_jobs:
@@ -1082,6 +1088,8 @@ async def trigger_agent_update(
     The agent reports progress via callbacks.
     """
     import httpx
+    import logging
+    logger = logging.getLogger(__name__)
 
     host = database.get(models.Host, agent_id)
     if not host:
@@ -1097,7 +1105,7 @@ async def trigger_agent_update(
             detail="Docker agents use rebuild, not update. Use POST /agents/{agent_id}/rebuild"
         )
 
-    # Check for concurrent update
+    # Check for concurrent update — expire stale jobs automatically
     active_job = (
         database.query(models.AgentUpdateJob)
         .filter(
@@ -1107,10 +1115,22 @@ async def trigger_agent_update(
         .first()
     )
     if active_job:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Update already in progress (job {active_job.id})"
+        age_seconds = (
+            (datetime.now(timezone.utc) - active_job.started_at).total_seconds()
+            if active_job.started_at
+            else (datetime.now(timezone.utc) - active_job.created_at).total_seconds()
         )
+        if age_seconds > 300:  # 5 minutes
+            active_job.status = "failed"
+            active_job.error_message = f"Expired: stuck in '{active_job.status}' for {int(age_seconds)}s"
+            active_job.completed_at = datetime.now(timezone.utc)
+            database.commit()
+            logger.info(f"Auto-expired stale update job {active_job.id} for agent {agent_id}")
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Update already in progress (job {active_job.id})"
+            )
 
     # Determine target version and checkout ref (for git)
     target_version = (request.target_version if request else None) or get_latest_agent_version()
