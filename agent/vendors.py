@@ -1263,15 +1263,16 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         filename_patterns=[r"n9kv[_-]?[\d\.]+.*\.qcow2", r"nexus9[_-]?[\d\.]+.*\.qcow2", r"nxosv[_-]?[\d\.]+.*\.qcow2"],
         filename_keywords=["nxos"],
         vrnetlab_subdir="cisco/n9kv",
-        # NX-OSv commonly provides no usable serial output in this topology.
         # Treat VM runtime state as readiness signal to avoid permanent booting.
         readiness_probe="none",
         readiness_pattern=None,
         readiness_timeout=600,  # N9Kv takes a long time to boot
-        console_method="ssh",
+        # Serial (virsh) console for NX-OS CLI access.
+        # SSH hits the Wind Linux underlay (bash), not NX-OS.
+        console_method="virsh",
         console_user="admin",
         console_password="admin",
-        # Config extraction via serial console (no management IP available for SSH)
+        # Config extraction also via serial console
         config_extract_method="serial",
         config_extract_command="show running-config",
         config_extract_user="admin",
