@@ -3525,20 +3525,27 @@ class LibvirtProvider(Provider):
                 )
                 if recovery_status.startswith("sent"):
                     result.message = "Boot recovery in progress (loader prompt observed)"
-            # POAP skip is safe — just answers "yes" at the standard abort prompt
+            # POAP skip is safe — just answers "yes" at the standard abort prompt.
+            # When POAP preboot is enabled we WANT POAP to run (download script
+            # from TFTP, apply startup config), so only skip on explicit failure.
             elif "poap_abort_prompt" in markers or "poap_failure" in markers:
-                skip_status = await self._run_n9kv_poap_skip(
-                    domain_name,
-                    kind,
-                )
-                skip_note = f"poap_skip={skip_status}"
-                result.details = (
-                    f"{result.details}; {skip_note}"
-                    if result.details
-                    else skip_note
-                )
-                if skip_status.startswith("sent"):
-                    result.message = "POAP skip in progress (skipping to normal setup)"
+                if settings.n9kv_poap_preboot_enabled and "poap_failure" not in markers:
+                    # Let POAP proceed — the DHCP/TFTP/HTTP pipeline will deliver
+                    # the startup config via the staged script.py.
+                    result.message = "POAP provisioning in progress"
+                else:
+                    skip_status = await self._run_n9kv_poap_skip(
+                        domain_name,
+                        kind,
+                    )
+                    skip_note = f"poap_skip={skip_status}"
+                    result.details = (
+                        f"{result.details}; {skip_note}"
+                        if result.details
+                        else skip_note
+                    )
+                    if skip_status.startswith("sent"):
+                        result.message = "POAP skip in progress (skipping to normal setup)"
 
         # If ready, run post-boot commands (idempotent - only runs once)
         if result.is_ready:
